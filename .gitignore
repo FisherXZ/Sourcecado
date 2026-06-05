@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.sourcyavo/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
