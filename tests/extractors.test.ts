@@ -78,6 +78,107 @@ describe("CSV extractor", () => {
     expect(candidates.some((candidate) => candidate.evidenceText.includes("Jane"))).toBe(false);
     expect(candidates.some((candidate) => candidate.evidenceText.includes("Anthropic"))).toBe(false);
   });
+
+  it("extracts Apollo contact export rows into people, organizations, and contact facts", () => {
+    const csv = [
+      "First Name,Last Name,Title,Company Name,Email,Email Status,Departments",
+      "Ada,Lovelace,Engineering Manager,OpenAI,ada@example.com,Verified,Engineering"
+    ].join("\n");
+
+    const candidates = extractCsvCandidates({
+      sourceId: "source-apollo",
+      sourcePath: "OpenAI.csv",
+      sourceType: "csv",
+      content: csv
+    });
+
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "entity",
+          subject: "Ada Lovelace",
+          entityType: "person"
+        }),
+        expect.objectContaining({
+          kind: "entity",
+          subject: "OpenAI",
+          entityType: "organization"
+        }),
+        expect.objectContaining({
+          kind: "relationship",
+          subject: "Ada Lovelace",
+          relationshipType: "works_at",
+          object: "OpenAI"
+        }),
+        expect.objectContaining({
+          kind: "semantic_fact",
+          subject: "Ada Lovelace",
+          predicate: "email",
+          object: "ada@example.com"
+        }),
+        expect.objectContaining({
+          kind: "semantic_fact",
+          subject: "Ada Lovelace",
+          predicate: "title",
+          object: "Engineering Manager"
+        }),
+        expect.objectContaining({
+          kind: "semantic_fact",
+          subject: "Ada Lovelace",
+          predicate: "email_status",
+          object: "Verified"
+        })
+      ])
+    );
+  });
+
+  it("extracts sourcing spreadsheet status, interest, notes, and follow-up state", () => {
+    const csv = [
+      "Cody POCs,Company,POC First Name,POC Last Name,POC Title,POC Email,Status,Interest,Notes",
+      "Victoria,Perplexity,Grace,Hopper,Partnerships,grace@example.com,Responded,High,Needs follow-up after build night"
+    ].join("\n");
+
+    const candidates = extractCsvCandidates({
+      sourceId: "source-sourcing-sheet",
+      sourcePath: "Fall 2025 Sourcing Spreadsheet - Leads.csv",
+      sourceType: "csv",
+      content: csv
+    });
+
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "entity",
+          subject: "Grace Hopper",
+          entityType: "person"
+        }),
+        expect.objectContaining({
+          kind: "semantic_fact",
+          subject: "Grace Hopper",
+          predicate: "status",
+          object: "Responded"
+        }),
+        expect.objectContaining({
+          kind: "semantic_fact",
+          subject: "Grace Hopper",
+          predicate: "interest",
+          object: "High"
+        }),
+        expect.objectContaining({
+          kind: "relationship",
+          subject: "Grace Hopper",
+          relationshipType: "responded",
+          object: "Perplexity"
+        }),
+        expect.objectContaining({
+          kind: "relationship",
+          subject: "Grace Hopper",
+          relationshipType: "needs_follow_up",
+          object: "Needs follow-up after build night"
+        })
+      ])
+    );
+  });
 });
 
 describe("mock extractor", () => {

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseCsvRecords, serializeCsvRecord } from "./csv.js";
 
 export interface TextChunk {
   chunkIndex: number;
@@ -33,6 +34,27 @@ export function chunkText(text: string): TextChunk[] {
     text: chunk,
     chunkHash: sha256(chunk)
   }));
+}
+
+export function chunkCsvRows(text: string): TextChunk[] {
+  const [headers, ...rows] = parseCsvRecords(text);
+  if (!headers) {
+    throw new Error("CSV file has no header row");
+  }
+
+  const dataRows = rows.filter((row) => row.some((value) => value.trim()));
+  if (dataRows.length === 0) {
+    throw new Error("CSV file has no data rows");
+  }
+
+  return dataRows.map((row, index) => {
+    const chunk = [serializeCsvRecord(headers), serializeCsvRecord(row)].join("\n");
+    return {
+      chunkIndex: index,
+      text: chunk,
+      chunkHash: sha256(chunk)
+    };
+  });
 }
 
 export function sha256(text: string): string {

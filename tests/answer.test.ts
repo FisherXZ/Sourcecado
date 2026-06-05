@@ -60,7 +60,7 @@ describe("sourcing memory answers", () => {
     expect(output).toContain("Miguel Alvarez");
     expect(output).toContain("needs follow-up");
     expect(output).toContain("Evidence:");
-    expect(output).toContain("tracker.csv#chunk-");
+    expect(output).toContain("tracker.csv#row-1");
     expect(output).toContain("Gaps:");
     expect(output).toContain("Next Action:");
     db.close();
@@ -87,6 +87,76 @@ describe("sourcing memory answers", () => {
     expect(output).not.toContain("Alex Rivera needs follow-up");
     expect(output).toContain("Follow up with Miguel Alvarez");
     expect(output).not.toContain("Follow up with Alex Rivera");
+    db.close();
+  });
+
+  it("answers responded questions from response status facts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sourcyavo-answer-responded-"));
+    tempDirs.push(dir);
+    writeFileSync(
+      join(dir, "tracker.csv"),
+      [
+        "contact,organization,domain,status,outcome,notes,needs_follow_up,reason",
+        "Priya Shah,Robotics Guild,robotics,Responded,interested,Asked for the project brief,no,",
+        "Alex Rivera,Open Robotics Collective,robotics,Contacted,pending,No response yet,no,"
+      ].join("\n")
+    );
+    const db = openMemoryDatabase(join(dir, ".sourcyavo", "memory.db"));
+    ingestFolder(db, dir);
+    await refreshMemory(db);
+
+    const output = buildSourcingMemoryAnswer(db, "Who responded?");
+
+    expect(output).toContain("Priya Shah status is Responded");
+    expect(output).toContain("tracker.csv#row-1");
+    expect(output).not.toContain("Alex Rivera");
+    db.close();
+  });
+
+  it("answers no-response questions from ghosted or rejected status facts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sourcyavo-answer-no-response-"));
+    tempDirs.push(dir);
+    writeFileSync(
+      join(dir, "tracker.csv"),
+      [
+        "contact,organization,domain,status,outcome,notes,needs_follow_up,reason",
+        "Annette Lapham,Design Partner,design,Rejected/ghosted,not a fit,No reply after follow-up,no,",
+        "Priya Shah,Robotics Guild,robotics,Responded,interested,Asked for the project brief,no,"
+      ].join("\n")
+    );
+    const db = openMemoryDatabase(join(dir, ".sourcyavo", "memory.db"));
+    ingestFolder(db, dir);
+    await refreshMemory(db);
+
+    const output = buildSourcingMemoryAnswer(db, "Who did not respond?");
+
+    expect(output).toContain("Annette Lapham status is Rejected/ghosted");
+    expect(output).toContain("tracker.csv#row-1");
+    expect(output).not.toContain("Priya Shah");
+    db.close();
+  });
+
+  it("does not treat owner or interest metadata as prior Codeology collaboration", () => {
+    const db = openMemoryDatabase(tempDbPath());
+    db.prepare(
+      "insert into source_records (path, title, source_type, content_hash, raw_text) values (?, ?, ?, ?, ?)"
+    ).run("apollo.csv", "Apollo", "csv", "hash", "Alex Duffy codeology owner is Rohan Gulati.");
+    db.prepare(
+      "insert into memory_chunks (source_record_id, chunk_index, text, chunk_hash, citation) values (?, ?, ?, ?, ?)"
+    ).run(1, 0, "Alex Duffy codeology owner is Rohan Gulati.", "chunk", "apollo.csv#row-1");
+    db.prepare(
+      "insert into semantic_facts (subject, predicate, object, source_record_id, source_chunk_id, confidence, status) values (?, ?, ?, ?, ?, ?, ?)"
+    ).run("Alex Duffy", "codeology_owner", "Rohan Gulati", 1, 1, 0.86, "accepted");
+    db.prepare(
+      "insert into semantic_facts (subject, predicate, object, source_record_id, source_chunk_id, confidence, status) values (?, ?, ?, ?, ?, ?, ?)"
+    ).run("Alex Duffy", "interest", "Client project", 1, 1, 0.86, "accepted");
+
+    const output = buildSourcingMemoryAnswer(db, "Who worked with Codeology before?");
+
+    expect(output).toContain("I do not have accepted sourcing facts");
+    expect(output).not.toContain("codeology owner");
+    expect(output).not.toContain("Client project");
+    expect(output).not.toContain("Rohan Gulati");
     db.close();
   });
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -82,8 +82,47 @@ describe("ingestFolder", () => {
     expect(chunks.length).toBeGreaterThanOrEqual(4);
     expect(chunks.every((chunk) => /^[a-f0-9]{64}$/.test(chunk.chunk_hash))).toBe(true);
     expect(chunks.every((chunk) => Array.isArray(JSON.parse(chunk.embedding)))).toBe(true);
-    expect(chunks.every((chunk) => chunk.citation.includes("#chunk-"))).toBe(true);
+    expect(chunks.every((chunk) => /#(chunk|row)-\d+$/.test(chunk.citation))).toBe(true);
+    expect(chunks.every((chunk) => !chunk.citation.startsWith(dir))).toBe(true);
     expect(errors).toEqual([]);
+
+    db.close();
+  });
+
+  it("recursively ingests nested CSV files and keeps each CSV row intact", () => {
+    const dir = tempDir();
+    const nested = join(dir, "Spring 2026", "Cold Emailing");
+    rmSync(nested, { recursive: true, force: true });
+    writeFileSync(join(dir, "root.txt"), "Root note should be indexed.");
+    mkdirRecursive(nested);
+    writeFileSync(
+      join(nested, "apollo.csv"),
+      [
+        "First Name,Last Name,Title,Company Name,Email",
+        ...Array.from(
+          { length: 40 },
+          (_, index) => `First${index + 1},Last${index + 1},Engineer,Company${index + 1},p${index + 1}@example.com`
+        )
+      ].join("\n")
+    );
+
+    const db = tempDb(dir);
+    const result = ingestFolder(db, dir);
+
+    const sources = getRows<{ id: number; path: string; source_type: string }>(db, "source_records");
+    const csvSource = sources.find((source) => basename(source.path) === "apollo.csv");
+    const csvChunks = db
+      .prepare("select text, citation from memory_chunks where source_record_id = ? order by chunk_index")
+      .all(csvSource?.id) as Array<{ text: string; citation: string }>;
+
+    expect(result).toEqual({ processed: 2, skipped: 0 });
+    expect(sources).toHaveLength(2);
+    expect(csvChunks).toHaveLength(40);
+    expect(csvChunks[0].text).toContain("First Name,Last Name,Title,Company Name,Email");
+    expect(csvChunks[0].text).toContain("First1,Last1,Engineer,Company1,p1@example.com");
+    expect(csvChunks[39].text).toContain("First40,Last40,Engineer,Company40,p40@example.com");
+    expect(csvChunks[0].citation).toBe("Spring 2026/Cold Emailing/apollo.csv#row-1");
+    expect(csvChunks[39].citation).toBe("Spring 2026/Cold Emailing/apollo.csv#row-40");
 
     db.close();
   });
@@ -150,3 +189,7 @@ describe("ingestFolder", () => {
     db.close();
   });
 });
+
+function mkdirRecursive(path: string): void {
+  mkdirSync(path, { recursive: true });
+}

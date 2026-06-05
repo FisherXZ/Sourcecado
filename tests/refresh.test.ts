@@ -256,6 +256,75 @@ describe("refreshMemory", () => {
     db.close();
   });
 
+  it("does not reuse stale CSV cache entries from older extractor versions", async () => {
+    const dir = tempDir();
+    const db = tempDb(dir);
+    writeFileSync(
+      join(dir, "apollo.csv"),
+      [
+        "First Name,Last Name,Title,Company Name,Email",
+        "Ada,Lovelace,Engineer,OpenAI,ada@example.com"
+      ].join("\n")
+    );
+    ingestFolder(db, dir);
+
+    const chunk = db
+      .prepare("select id, chunk_hash from memory_chunks where citation = ?")
+      .get("apollo.csv#row-1") as { id: number; chunk_hash: string };
+    db.prepare(
+      [
+        "insert into extraction_runs (",
+        "source_chunk_id, cache_key, chunk_hash, extractor_type, extractor_version,",
+        "prompt_hash, schema_version, model_name, raw_output, parsed_candidates_json, status, error",
+        ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      ].join(" ")
+    ).run(
+      chunk.id,
+      `${chunk.chunk_hash}:csv:1:none:1:local`,
+      chunk.chunk_hash,
+      "csv",
+      "1",
+      "none",
+      "1",
+      "local",
+      JSON.stringify([]),
+      JSON.stringify([
+        {
+          kind: "semantic_fact",
+          subject: "Stale Cache",
+          predicate: "status",
+          object: "old",
+          confidence: 0.9,
+          evidenceText: "old"
+        }
+      ]),
+      "succeeded",
+      null
+    );
+
+    const result = await refreshMemory(db);
+
+    expect(result).toMatchObject({ extracted: 1, reused: 0, failed: 0 });
+    expect(
+      getRows<{ subject: string; predicate: string; object: string }>(
+        db,
+        "select subject, predicate, object from semantic_facts where subject in ('Ada Lovelace', 'Stale Cache') order by subject, predicate"
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        { subject: "Ada Lovelace", predicate: "email", object: "ada@example.com" },
+        { subject: "Ada Lovelace", predicate: "title", object: "Engineer" }
+      ])
+    );
+    expect(
+      getRows<{ subject: string }>(
+        db,
+        "select subject from semantic_facts where subject = 'Stale Cache'"
+      )
+    ).toEqual([]);
+    db.close();
+  });
+
   it("does not force non-person relationship subjects into person entities", async () => {
     const dir = tempDir();
     const db = tempDb(dir);

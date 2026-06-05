@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import type { MemoryDatabase } from "./db.js";
-import { chunkText, sha256 } from "./chunk.js";
+import { chunkCsvRows, chunkText, sha256, type TextChunk } from "./chunk.js";
 import { serializeEmbedding } from "./embeddings.js";
 import { isSupportedSourcePath, parseSourceFile } from "./frontmatter.js";
 
@@ -16,26 +16,17 @@ interface SourceRecordInsertResult {
 
 export function ingestFolder(db: MemoryDatabase, folderPath: string): IngestResult {
   const folder = resolve(folderPath);
-  const entries = readdirSync(folder, { withFileTypes: true }).sort((a, b) =>
-    a.name.localeCompare(b.name)
-  );
   const result: IngestResult = { processed: 0, skipped: 0 };
 
-  for (const entry of entries) {
-    if (entry.isDirectory() || entry.name === ".sourcyavo") {
-      continue;
-    }
-
-    const filePath = join(folder, entry.name);
-
+  for (const filePath of walkFiles(folder)) {
     if (!isSupportedSourcePath(filePath)) {
-      logIngestError(db, filePath, `Unsupported file extension: ${entry.name}`);
+      logIngestError(db, filePath, `Unsupported file extension: ${filePath}`);
       result.skipped += 1;
       continue;
     }
 
     try {
-      ingestFile(db, filePath);
+      ingestFile(db, filePath, folder);
       result.processed += 1;
     } catch (error) {
       logIngestError(db, filePath, formatIngestError(error));
@@ -46,12 +37,13 @@ export function ingestFolder(db: MemoryDatabase, folderPath: string): IngestResu
   return result;
 }
 
-function ingestFile(db: MemoryDatabase, filePath: string): void {
+function ingestFile(db: MemoryDatabase, filePath: string, rootFolder: string): void {
   const runInTransaction = db.transaction((path: string) => {
     const content = readSourceFile(path);
     const parsed = parseSourceFile(path, content);
-    const chunks = chunkText(parsed.rawText);
+    const chunks = chunkSourceText(parsed.sourceType, parsed.rawText);
     const contentHash = sha256(parsed.rawText);
+    const citationLabel = sourceLabel(rootFolder, path);
 
     const sourceId = upsertSourceRecord(db, {
       path,
@@ -74,12 +66,48 @@ function ingestFile(db: MemoryDatabase, filePath: string): void {
         chunk.text,
         chunk.chunkHash,
         serializeEmbedding(chunk.text),
-        `${path}#chunk-${chunk.chunkIndex + 1}`
+        citationForChunk(citationLabel, parsed.sourceType, chunk)
       );
     }
   });
 
   runInTransaction(filePath);
+}
+
+function walkFiles(folder: string): string[] {
+  const entries = readdirSync(folder, { withFileTypes: true }).sort((a, b) =>
+    a.name.localeCompare(b.name)
+  );
+  const files: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.name === ".sourcyavo") {
+      continue;
+    }
+
+    const entryPath = join(folder, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...walkFiles(entryPath));
+    } else {
+      files.push(entryPath);
+    }
+  }
+
+  return files;
+}
+
+function chunkSourceText(sourceType: string, rawText: string): TextChunk[] {
+  return sourceType === "csv" ? chunkCsvRows(rawText) : chunkText(rawText);
+}
+
+function citationForChunk(source: string, sourceType: string, chunk: TextChunk): string {
+  const anchor = sourceType === "csv" ? "row" : "chunk";
+  return `${source}#${anchor}-${chunk.chunkIndex + 1}`;
+}
+
+function sourceLabel(rootFolder: string, filePath: string): string {
+  const label = relative(rootFolder, filePath) || filePath;
+  return label.split(sep).join("/");
 }
 
 function readSourceFile(filePath: string): string {
