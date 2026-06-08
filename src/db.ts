@@ -202,9 +202,12 @@ function addIngestErrorCategory(db: MemoryDatabase): void {
 }
 
 // Deterministic slug of a stable relative path: lowercase, non-alphanumeric runs
-// collapse to '-', path separators are preserved.
+// collapse to '-', path separators are preserved. Windows backslash separators
+// are normalized to '/' first so the same logical path yields the same id on
+// every platform.
 export function slugifySourceId(relativeLabel: string): string {
   return relativeLabel
+    .replace(/\\/g, "/")
     .toLowerCase()
     .split("/")
     .map((segment) =>
