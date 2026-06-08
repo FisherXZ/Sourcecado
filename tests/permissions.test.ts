@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDatabase, type MemoryDatabase } from "../src/db.js";
-import { resolveAccessContext } from "../src/read-service.js";
+import { resolveAccessContext, type ActorType } from "../src/read-service.js";
 
 const tempDirs: string[] = [];
 
@@ -18,11 +18,10 @@ function tempDb(): MemoryDatabase {
 // exactly one place.
 function resolveAllowedSourceIds(
   db: MemoryDatabase,
-  actorType: string,
+  actorType: ActorType,
   actorId: string
 ): string[] {
-  return resolveAccessContext(db, { actorType: actorType as never, actorId })
-    .allowedSourceIds;
+  return resolveAccessContext(db, { actorType, actorId }).allowedSourceIds;
 }
 
 function grant(
