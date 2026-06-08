@@ -72,9 +72,10 @@ export interface StressHarnessOptions {
   // Override the cases to run. Defaults to the committed benchmark set.
   cases?: readonly BenchmarkCase[];
   // Source ids the stress client is granted read access to. Defaults to the
-  // committed non-restricted allowlist. An empty array models a permission
-  // gap; `null` models S2 being unavailable (no grants written at all).
-  allowedSourceIds?: readonly string[] | null;
+  // committed non-restricted allowlist. An empty array models a permission gap
+  // (client present, zero grants). S2 being unavailable is modeled separately
+  // by simulateMissingPermissions.
+  allowedSourceIds?: readonly string[];
   // Forwarded to refreshMemory so a test can inject a deterministic extractor
   // (e.g. one that yields nothing) to seed an extraction miss. No LLM is ever
   // called by the default path.
