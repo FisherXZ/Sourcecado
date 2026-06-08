@@ -1,10 +1,12 @@
 import { extname, basename } from "node:path";
+import { IngestError } from "./ingest-error.js";
 import { SOURCE_TYPES, type SourceType } from "./types.js";
 
 export interface ParsedSource {
   title: string;
   sourceType: SourceType;
   rawText: string;
+  sourceId?: string;
 }
 
 const EXTENSION_SOURCE_TYPES = new Map<string, SourceType>([
@@ -25,23 +27,28 @@ export function defaultSourceTypeForPath(filePath: string): SourceType | undefin
 export function parseSourceFile(filePath: string, content: string): ParsedSource {
   const sourceTypeFromExtension = defaultSourceTypeForPath(filePath);
   if (!sourceTypeFromExtension) {
-    throw new Error(`Unsupported file extension: ${extname(filePath) || "(none)"}`);
+    throw new IngestError(
+      "unsupported-type",
+      `Unsupported file extension: ${extname(filePath) || "(none)"}`
+    );
   }
 
   const { metadata, body } =
     sourceTypeFromExtension === "markdown" ? parseFrontmatter(content) : { metadata: {}, body: content };
   const sourceType = parseSourceType(metadata.source_type) ?? sourceTypeFromExtension;
   const title = metadata.title?.trim() || basename(filePath, extname(filePath));
+  const sourceId = metadata.source_id?.trim() || undefined;
   const rawText = body.trim();
 
   if (!rawText) {
-    throw new Error("File is empty after parsing");
+    throw new IngestError("empty", "File is empty after parsing");
   }
 
   return {
     title,
     sourceType,
-    rawText
+    rawText,
+    sourceId
   };
 }
 
@@ -54,7 +61,7 @@ function parseFrontmatter(content: string): { metadata: Record<string, string>; 
   const closingFence = `${newline}---${newline}`;
   const closingIndex = content.indexOf(closingFence, 3);
   if (closingIndex === -1) {
-    throw new Error("Malformed frontmatter: missing closing fence");
+    throw new IngestError("parse-error", "Malformed frontmatter: missing closing fence");
   }
 
   const metadataText = content.slice(3 + newline.length, closingIndex);
@@ -76,7 +83,7 @@ function parseMetadata(metadataText: string): Record<string, string> {
 
     const separatorIndex = trimmed.indexOf(":");
     if (separatorIndex === -1) {
-      throw new Error(`Malformed frontmatter line: ${trimmed}`);
+      throw new IngestError("parse-error", `Malformed frontmatter line: ${trimmed}`);
     }
 
     const key = trimmed.slice(0, separatorIndex).trim();
@@ -109,5 +116,5 @@ function parseSourceType(value: string | undefined): SourceType | undefined {
     return value as SourceType;
   }
 
-  throw new Error(`Unsupported source_type metadata: ${value}`);
+  throw new IngestError("parse-error", `Unsupported source_type metadata: ${value}`);
 }

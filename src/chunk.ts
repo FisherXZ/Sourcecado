@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { parseCsvRecords, serializeCsvRecord } from "./csv.js";
+import { IngestError } from "./ingest-error.js";
 
 export interface TextChunk {
   chunkIndex: number;
@@ -26,7 +27,7 @@ export function chunkText(text: string): TextChunk[] {
   }
 
   if (chunks.length === 0) {
-    throw new Error("No chunks created");
+    throw new IngestError("parse-error", "No chunks created");
   }
 
   return chunks.map((chunk, index) => ({
@@ -39,12 +40,12 @@ export function chunkText(text: string): TextChunk[] {
 export function chunkCsvRows(text: string): TextChunk[] {
   const [headers, ...rows] = parseCsvRecords(text);
   if (!headers) {
-    throw new Error("CSV file has no header row");
+    throw new IngestError("parse-error", "CSV file has no header row");
   }
 
   const dataRows = rows.filter((row) => row.some((value) => value.trim()));
   if (dataRows.length === 0) {
-    throw new Error("CSV file has no data rows");
+    throw new IngestError("parse-error", "CSV file has no data rows");
   }
 
   return dataRows.map((row, index) => {

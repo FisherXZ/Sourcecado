@@ -1,5 +1,6 @@
 import type { MemoryDatabase } from "./db.js";
 import { cosineSimilarity, deserializeEmbedding, embedText } from "./embeddings.js";
+import { sourceIdInClause, type SourceScope } from "./read-service.js";
 
 interface FactRow {
   subject: string;
@@ -18,8 +19,12 @@ interface ChunkRow {
 
 type QuestionIntent = "follow_up" | "responded" | "no_response" | "worked_with" | "uncertainty" | "generic";
 
-export function buildSourcingMemoryAnswer(db: MemoryDatabase, question: string): string {
-  const sourceCount = getSourceRecordCount(db);
+export function buildSourcingMemoryAnswer(
+  db: MemoryDatabase,
+  question: string,
+  scope: SourceScope
+): string {
+  const sourceCount = getSourceRecordCount(db, scope);
   const questionLine = question.trim() ? ` for "${question.trim()}"` : "";
   const intent = questionIntent(question);
 
@@ -27,9 +32,9 @@ export function buildSourcingMemoryAnswer(db: MemoryDatabase, question: string):
     return noMemoryAnswer(questionLine);
   }
 
-  const acceptedFacts = loadFacts(db, "accepted", question, intent);
-  const gapFacts = loadGapFacts(db, question);
-  const chunks = retrieveRelevantChunks(db, question);
+  const acceptedFacts = loadFacts(db, "accepted", question, intent, scope);
+  const gapFacts = loadGapFacts(db, question, scope);
+  const chunks = retrieveRelevantChunks(db, question, scope);
 
   if (acceptedFacts.length === 0 && chunks.length === 0) {
     return noRelevantMemoryAnswer(questionLine, gapFacts);
@@ -57,8 +62,14 @@ export function buildSourcingMemoryAnswer(db: MemoryDatabase, question: string):
 
 export const buildNoMemoryAnswer = buildSourcingMemoryAnswer;
 
-function getSourceRecordCount(db: MemoryDatabase): number {
-  const row = db.prepare("select count(*) as count from source_records").get() as { count: number };
+function getSourceRecordCount(db: MemoryDatabase, scope: SourceScope): number {
+  if (scope.allowedSourceIds.length === 0) {
+    return 0;
+  }
+  const { sql, params } = sourceIdInClause(scope, "source_records");
+  const row = db
+    .prepare(`select count(*) as count from source_records where ${sql}`)
+    .get(...params) as { count: number };
   return row.count;
 }
 
@@ -99,38 +110,49 @@ function loadFacts(
   db: MemoryDatabase,
   status: string,
   question: string,
-  intent: QuestionIntent
+  intent: QuestionIntent,
+  scope: SourceScope
 ): FactRow[] {
+  if (scope.allowedSourceIds.length === 0) {
+    return [];
+  }
+  const { sql: scopeSql, params: scopeParams } = sourceIdInClause(scope, "sr");
   const rows = db
     .prepare(
       [
         "select semantic_facts.subject, semantic_facts.predicate, semantic_facts.object,",
         "semantic_facts.confidence, semantic_facts.status, memory_chunks.citation",
         "from semantic_facts",
+        "join source_records sr on sr.id = semantic_facts.source_record_id",
         "left join memory_chunks on memory_chunks.id = semantic_facts.source_chunk_id",
-        "where semantic_facts.status = ?",
+        `where semantic_facts.status = ? and ${scopeSql}`,
         "order by semantic_facts.confidence desc, semantic_facts.subject"
       ].join(" ")
     )
-    .all(status) as FactRow[];
+    .all(status, ...scopeParams) as FactRow[];
 
   const ranked = rankRows(rows, question, intent, (row) => `${row.subject} ${row.predicate} ${row.object}`);
   return ranked.slice(0, 6);
 }
 
-function loadGapFacts(db: MemoryDatabase, question: string): FactRow[] {
+function loadGapFacts(db: MemoryDatabase, question: string, scope: SourceScope): FactRow[] {
+  if (scope.allowedSourceIds.length === 0) {
+    return [];
+  }
+  const { sql: scopeSql, params: scopeParams } = sourceIdInClause(scope, "sr");
   const rows = db
     .prepare(
       [
         "select semantic_facts.subject, semantic_facts.predicate, semantic_facts.object,",
         "semantic_facts.confidence, semantic_facts.status, memory_chunks.citation",
         "from semantic_facts",
+        "join source_records sr on sr.id = semantic_facts.source_record_id",
         "left join memory_chunks on memory_chunks.id = semantic_facts.source_chunk_id",
-        "where semantic_facts.status in ('candidate', 'conflicted', 'stale')",
+        `where semantic_facts.status in ('candidate', 'conflicted', 'stale') and ${scopeSql}`,
         "order by semantic_facts.status, semantic_facts.subject"
       ].join(" ")
     )
-    .all() as FactRow[];
+    .all(...scopeParams) as FactRow[];
 
   if (asksForUncertainty(question)) {
     return rows.slice(0, 6);
@@ -139,10 +161,22 @@ function loadGapFacts(db: MemoryDatabase, question: string): FactRow[] {
   return rankRows(rows, question, "generic", (row) => `${row.subject} ${row.predicate} ${row.object}`).slice(0, 6);
 }
 
-function retrieveRelevantChunks(db: MemoryDatabase, question: string): ChunkRow[] {
+function retrieveRelevantChunks(db: MemoryDatabase, question: string, scope: SourceScope): ChunkRow[] {
+  if (scope.allowedSourceIds.length === 0) {
+    return [];
+  }
+  const { sql: scopeSql, params: scopeParams } = sourceIdInClause(scope, "sr");
   const chunks = db
-    .prepare("select text, citation, embedding from memory_chunks order by id")
-    .all() as ChunkRow[];
+    .prepare(
+      [
+        "select memory_chunks.text, memory_chunks.citation, memory_chunks.embedding",
+        "from memory_chunks",
+        "join source_records sr on sr.id = memory_chunks.source_record_id",
+        `where ${scopeSql}`,
+        "order by memory_chunks.id"
+      ].join(" ")
+    )
+    .all(...scopeParams) as ChunkRow[];
   const queryEmbedding = embedText(question);
 
   return chunks

@@ -30,6 +30,7 @@ describe("SQLite memory schema", () => {
       .map((row) => (row as { name: string }).name);
 
     expect(tables).toEqual([
+      "audit_events",
       "entities",
       "entity_aliases",
       "extraction_runs",
@@ -37,6 +38,7 @@ describe("SQLite memory schema", () => {
       "memory_chunks",
       "relationships",
       "semantic_facts",
+      "source_permissions",
       "source_records"
     ]);
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
@@ -93,6 +95,59 @@ describe("SQLite memory schema", () => {
     ).toThrow();
 
     db.close();
+  });
+
+  it("enforces a unique source_id across source records", () => {
+    const db = openMemoryDatabase(tempDbPath());
+
+    db.prepare(
+      "insert into source_records (path, source_id, title, source_type, content_hash, raw_text) values (?, ?, ?, ?, ?, ?)"
+    ).run("seed-data/a.md", "seed-data/a", "A", "markdown", "hash-a", "hello");
+    expect(() =>
+      db
+        .prepare(
+          "insert into source_records (path, source_id, title, source_type, content_hash, raw_text) values (?, ?, ?, ?, ?, ?)"
+        )
+        .run("seed-data/b.md", "seed-data/a", "B", "markdown", "hash-b", "world")
+    ).toThrow();
+
+    db.close();
+  });
+
+  it("enforces source_permissions uniqueness per principal and source", () => {
+    const db = openMemoryDatabase(tempDbPath());
+
+    db.prepare(
+      "insert into source_permissions (principal_type, principal_id, source_id) values (?, ?, ?)"
+    ).run("user", "alice", "seed-data/a");
+    expect(() =>
+      db
+        .prepare(
+          "insert into source_permissions (principal_type, principal_id, source_id) values (?, ?, ?)"
+        )
+        .run("user", "alice", "seed-data/a")
+    ).toThrow();
+
+    db.close();
+  });
+
+  it("re-opens an existing database file without throwing (idempotent migrate)", () => {
+    const dbPath = tempDbPath();
+
+    const first = openMemoryDatabase(dbPath);
+    first.prepare(
+      "insert into source_records (path, source_id, title, source_type, content_hash, raw_text) values (?, ?, ?, ?, ?, ?)"
+    ).run("seed-data/a.md", "seed-data/a", "A", "markdown", "hash-a", "hello");
+    first.close();
+
+    expect(() => {
+      const second = openMemoryDatabase(dbPath);
+      const rows = second
+        .prepare("select source_id from source_records")
+        .all() as Array<{ source_id: string }>;
+      expect(rows).toEqual([{ source_id: "seed-data/a" }]);
+      second.close();
+    }).not.toThrow();
   });
 
   it("enforces chunk and relationship foreign keys", () => {

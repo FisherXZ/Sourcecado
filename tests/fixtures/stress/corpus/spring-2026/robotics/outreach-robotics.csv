@@ -1,0 +1,5 @@
+contact,company,domain,status,outcome,notes,needs_follow_up,reason,owner
+Renzo Calderon,Gearbox Robotics Guild,robotics,responded,interested,"Wants to co-host a build night next month.",no,,Marcus Lyoung
+Hadley Stern,Tin Owl Automation,robotics education,ghosted,no response,"Cold email bounced around, no reply after follow-up.",yes,Try a different contact at the org,Marcus Lyoung
+Bao Tran,Pivot Arm Systems,industrial robotics,needs follow-up,pending,"Interested but waiting on internal approval.",yes,Awaiting internal approval,Marcus Lyoung
+Galen Whitfield,Lodestar Mechatronics,robotics,locked in,signed,"Signed on as a demo-night partner.",no,,Marcus Lyoung
