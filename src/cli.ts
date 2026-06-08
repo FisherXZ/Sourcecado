@@ -104,12 +104,14 @@ function parseClientFlag(args: string[]): { client: string | null; rest: string[
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--client") {
-      client = args[index + 1] ?? null;
+      const next = args[index + 1] ?? null;
+      client = next && !next.startsWith("-") ? next : null;
       index += 1;
       continue;
     }
     if (arg.startsWith("--client=")) {
-      client = arg.slice("--client=".length) || null;
+      const value = arg.slice("--client=".length);
+      client = value && !value.startsWith("-") ? value : null;
       continue;
     }
     rest.push(arg);
