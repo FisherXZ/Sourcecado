@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDatabase, type MemoryDatabase } from "../src/db.js";
-import { ingestFolder } from "../src/ingest.js";
+import { formatIngestReport, ingestFolder } from "../src/ingest.js";
 
 const tempDirs: string[] = [];
 
@@ -65,7 +65,7 @@ describe("ingestFolder", () => {
     }>(db, "memory_chunks");
     const errors = getRows<{ path: string; reason: string }>(db, "ingest_errors");
 
-    expect(result).toEqual({ processed: 4, skipped: 0 });
+    expect(result).toMatchObject({ processed: 4, skipped: 0, skippedFiles: [] });
     expect(sources).toHaveLength(4);
     expect(sources.map((source) => source.source_type).sort()).toEqual([
       "csv",
@@ -115,7 +115,7 @@ describe("ingestFolder", () => {
       .prepare("select text, citation from memory_chunks where source_record_id = ? order by chunk_index")
       .all(csvSource?.id) as Array<{ text: string; citation: string }>;
 
-    expect(result).toEqual({ processed: 2, skipped: 0 });
+    expect(result).toMatchObject({ processed: 2, skipped: 0 });
     expect(sources).toHaveLength(2);
     expect(csvChunks).toHaveLength(40);
     expect(csvChunks[0].text).toContain("First Name,Last Name,Title,Company Name,Email");
@@ -137,12 +137,13 @@ describe("ingestFolder", () => {
 
     const sources = getRows<{ path: string }>(db, "source_records");
     const chunks = getRows<{ text: string }>(db, "memory_chunks");
-    const errors = getRows<{ path: string; reason: string }>(db, "ingest_errors");
+    const errors = getRows<{ path: string; category: string; reason: string }>(db, "ingest_errors");
 
-    expect(result).toEqual({ processed: 1, skipped: 1 });
+    expect(result).toMatchObject({ processed: 1, skipped: 1 });
     expect(sources).toHaveLength(1);
     expect(chunks).toHaveLength(1);
     expect(basename(errors[0].path)).toBe("image.png");
+    expect(errors[0].category).toBe("unsupported-type");
     expect(errors[0].reason).toContain("Unsupported file extension");
 
     db.close();
@@ -155,11 +156,11 @@ describe("ingestFolder", () => {
     const db = tempDb(dir);
     const result = ingestFolder(db, dir);
 
-    expect(result).toEqual({ processed: 0, skipped: 1 });
+    expect(result).toMatchObject({ processed: 0, skipped: 1 });
     expect(getRows(db, "source_records")).toEqual([]);
     expect(getRows(db, "memory_chunks")).toEqual([]);
-    expect(getRows<{ path: string; reason: string }>(db, "ingest_errors")).toMatchObject([
-      { reason: "File is empty after parsing" }
+    expect(getRows<{ path: string; category: string; reason: string }>(db, "ingest_errors")).toMatchObject([
+      { category: "empty", reason: "File is empty after parsing" }
     ]);
 
     db.close();
@@ -178,17 +179,138 @@ describe("ingestFolder", () => {
     const result = ingestFolder(db, dir);
 
     const sources = getRows<{ path: string; title: string }>(db, "source_records");
-    const errors = getRows<{ path: string; reason: string }>(db, "ingest_errors");
+    const errors = getRows<{ path: string; category: string; reason: string }>(db, "ingest_errors");
 
-    expect(result).toEqual({ processed: 1, skipped: 1 });
+    expect(result).toMatchObject({ processed: 1, skipped: 1 });
     expect(sources).toHaveLength(1);
     expect(sources[0].title).toBe("after");
     expect(basename(errors[0].path)).toBe("broken.txt");
+    expect(errors[0].category).toBe("unreadable");
     expect(errors[0].reason).toContain("Failed to read file");
 
     db.close();
   });
+
+  it("classifies a mixed batch and leaves no orphan rows for skipped files", () => {
+    const dir = writeMixedBatch();
+
+    const db = tempDb(dir);
+    const result = ingestFolder(db, dir);
+
+    const sources = getRows<{ path: string }>(db, "source_records");
+    const errors = getRows<{ path: string; category: string; reason: string }>(db, "ingest_errors");
+
+    // good md + good csv processed; the rest skipped.
+    expect(result).toMatchObject({ processed: 2, skipped: 5 });
+    expect(sources).toHaveLength(2);
+    expect(sources.map((source) => basename(source.path)).sort()).toEqual(["good.csv", "good.md"]);
+
+    // No orphan source/chunk rows for any skipped file.
+    const skippedNames = result.skippedFiles.map((skipped) => basename(skipped.path));
+    for (const name of skippedNames) {
+      expect(sources.some((source) => basename(source.path) === name)).toBe(false);
+    }
+
+    const categoryByName = new Map(
+      errors.map((error) => [basename(error.path), error.category] as const)
+    );
+    expect(categoryByName.get("unsupported.png")).toBe("unsupported-type");
+    expect(categoryByName.get("empty.md")).toBe("empty");
+    expect(categoryByName.get("broken.txt")).toBe("unreadable");
+    expect(categoryByName.get("header-only.csv")).toBe("parse-error");
+    expect(categoryByName.get("bad-frontmatter.md")).toBe("parse-error");
+    expect(errors).toHaveLength(5);
+
+    db.close();
+  });
+
+  it("renders a report that names skipped files with a tally and no absolute paths", () => {
+    const dir = writeMixedBatch();
+
+    const db = tempDb(dir);
+    const result = ingestFolder(db, dir);
+    const report = formatIngestReport(result, dir);
+
+    expect(report).toContain("Ingested 2 source files; skipped 5.");
+    expect(report).toContain("Skipped files:");
+    expect(report).toContain("unsupported.png [unsupported-type]");
+    expect(report).toContain("empty.md [empty]");
+    expect(report).toContain("broken.txt [unreadable]");
+    expect(report).toContain("header-only.csv [parse-error]");
+    expect(report).toContain("bad-frontmatter.md [parse-error]");
+    expect(report).toContain("Skipped by category:");
+    expect(report).toContain("parse-error: 2");
+    expect(report).toContain("empty: 1");
+    expect(report).toContain("unreadable: 1");
+    expect(report).toContain("unsupported-type: 1");
+    expect(report).not.toContain(dir);
+
+    db.close();
+  });
+
+  it("prints only the summary line when nothing was skipped", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "ok.txt"), "Supported note.");
+
+    const db = tempDb(dir);
+    const result = ingestFolder(db, dir);
+    const report = formatIngestReport(result, dir);
+
+    expect(report).toBe("Ingested 1 source file; skipped 0.");
+
+    db.close();
+  });
+
+  it("keeps ingesting neighbors after a skipped file regardless of ordering", () => {
+    const dir = tempDir();
+    // Names chosen so a failing file sorts between two good files.
+    writeFileSync(join(dir, "a-before.txt"), "Indexed before the failure.");
+    writeFileSync(join(dir, "m-empty.md"), "   \n\t");
+    writeFileSync(join(dir, "z-after.txt"), "Indexed after the failure.");
+
+    const db = tempDb(dir);
+    const result = ingestFolder(db, dir);
+
+    const sources = getRows<{ path: string }>(db, "source_records");
+
+    expect(result).toMatchObject({ processed: 2, skipped: 1 });
+    expect(sources.map((source) => basename(source.path)).sort()).toEqual([
+      "a-before.txt",
+      "z-after.txt"
+    ]);
+    expect(result.skippedFiles.map((skipped) => basename(skipped.path))).toEqual(["m-empty.md"]);
+
+    db.close();
+  });
+
+  // The current deterministic hashing embedder cannot throw, so there is no
+  // honest way to exercise the embedding-error path without faking it.
+  it.todo("classifies embedding failures as embedding-error");
 });
+
+function writeMixedBatch(): string {
+  const dir = tempDir();
+  writeFileSync(
+    join(dir, "good.md"),
+    ["---", "title: Good Note", "---", "Jane Doe needs follow-up."].join("\n")
+  );
+  writeFileSync(join(dir, "good.csv"), "name,status\nJane,contacted\n");
+  writeFileSync(join(dir, "unsupported.png"), "not really an image");
+  writeFileSync(join(dir, "empty.md"), "  \n\t");
+  writeFileSync(join(dir, "header-only.csv"), "name,status\n");
+  writeFileSync(
+    join(dir, "bad-frontmatter.md"),
+    ["---", "title: Missing closing fence", "Body without a closing fence."].join("\n")
+  );
+
+  const brokenTarget = join(dir, "missing-target.txt");
+  const brokenLink = join(dir, "broken.txt");
+  if (!existsSync(brokenTarget)) {
+    symlinkSync(brokenTarget, brokenLink);
+  }
+
+  return dir;
+}
 
 function mkdirRecursive(path: string): void {
   mkdirSync(path, { recursive: true });

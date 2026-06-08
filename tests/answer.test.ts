@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildSourcingMemoryAnswer } from "../src/answer.js";
-import { openMemoryDatabase } from "../src/db.js";
+import { openMemoryDatabase, type MemoryDatabase } from "../src/db.js";
 import { ingestFolder } from "../src/ingest.js";
+import type { SourceScope } from "../src/read-service.js";
 import { refreshMemory } from "../src/refresh.js";
 
 const tempDirs: string[] = [];
@@ -13,6 +14,15 @@ function tempDbPath(): string {
   const dir = mkdtempSync(join(tmpdir(), "sourcyavo-answer-test-"));
   tempDirs.push(dir);
   return join(dir, ".sourcyavo", "memory.db");
+}
+
+// Full-scope helper: grant every indexed source so these legacy tests stay
+// scope-agnostic and keep exercising the ranking/answer logic.
+function fullScope(db: MemoryDatabase): SourceScope {
+  const rows = db
+    .prepare("select source_id from source_records where source_id is not null")
+    .all() as Array<{ source_id: string }>;
+  return { allowedSourceIds: rows.map((row) => row.source_id) };
 }
 
 afterEach(() => {
@@ -24,7 +34,7 @@ afterEach(() => {
 describe("no-memory answer path", () => {
   it("returns all required sections with clear no-source language", () => {
     const db = openMemoryDatabase(tempDbPath());
-    const output = buildSourcingMemoryAnswer(db, "Who needs follow-up?");
+    const output = buildSourcingMemoryAnswer(db, "Who needs follow-up?", fullScope(db));
 
     expect(output).toContain("Answer:");
     expect(output).toContain("Evidence:");
@@ -54,7 +64,7 @@ describe("sourcing memory answers", () => {
     ingestFolder(db, dir);
     await refreshMemory(db);
 
-    const output = buildSourcingMemoryAnswer(db, "Who needs follow-up for AI safety?");
+    const output = buildSourcingMemoryAnswer(db, "Who needs follow-up for AI safety?", fullScope(db));
 
     expect(output).toContain("Answer:");
     expect(output).toContain("Miguel Alvarez");
@@ -81,7 +91,7 @@ describe("sourcing memory answers", () => {
     ingestFolder(db, dir);
     await refreshMemory(db);
 
-    const output = buildSourcingMemoryAnswer(db, "Who needs follow-up for AI safety?");
+    const output = buildSourcingMemoryAnswer(db, "Who needs follow-up for AI safety?", fullScope(db));
 
     expect(output).toContain("Miguel Alvarez needs follow-up");
     expect(output).not.toContain("Alex Rivera needs follow-up");
@@ -105,7 +115,7 @@ describe("sourcing memory answers", () => {
     ingestFolder(db, dir);
     await refreshMemory(db);
 
-    const output = buildSourcingMemoryAnswer(db, "Who responded?");
+    const output = buildSourcingMemoryAnswer(db, "Who responded?", fullScope(db));
 
     expect(output).toContain("Priya Shah status is Responded");
     expect(output).toContain("tracker.csv#row-1");
@@ -128,7 +138,7 @@ describe("sourcing memory answers", () => {
     ingestFolder(db, dir);
     await refreshMemory(db);
 
-    const output = buildSourcingMemoryAnswer(db, "Who did not respond?");
+    const output = buildSourcingMemoryAnswer(db, "Who did not respond?", fullScope(db));
 
     expect(output).toContain("Annette Lapham status is Rejected/ghosted");
     expect(output).toContain("tracker.csv#row-1");
@@ -139,8 +149,8 @@ describe("sourcing memory answers", () => {
   it("does not treat owner or interest metadata as prior Codeology collaboration", () => {
     const db = openMemoryDatabase(tempDbPath());
     db.prepare(
-      "insert into source_records (path, title, source_type, content_hash, raw_text) values (?, ?, ?, ?, ?)"
-    ).run("apollo.csv", "Apollo", "csv", "hash", "Alex Duffy codeology owner is Rohan Gulati.");
+      "insert into source_records (path, source_id, title, source_type, content_hash, raw_text) values (?, ?, ?, ?, ?, ?)"
+    ).run("apollo.csv", "apollo", "Apollo", "csv", "hash", "Alex Duffy codeology owner is Rohan Gulati.");
     db.prepare(
       "insert into memory_chunks (source_record_id, chunk_index, text, chunk_hash, citation) values (?, ?, ?, ?, ?)"
     ).run(1, 0, "Alex Duffy codeology owner is Rohan Gulati.", "chunk", "apollo.csv#row-1");
@@ -151,7 +161,7 @@ describe("sourcing memory answers", () => {
       "insert into semantic_facts (subject, predicate, object, source_record_id, source_chunk_id, confidence, status) values (?, ?, ?, ?, ?, ?, ?)"
     ).run("Alex Duffy", "interest", "Client project", 1, 1, 0.86, "accepted");
 
-    const output = buildSourcingMemoryAnswer(db, "Who worked with Codeology before?");
+    const output = buildSourcingMemoryAnswer(db, "Who worked with Codeology before?", fullScope(db));
 
     expect(output).toContain("I do not have accepted sourcing facts");
     expect(output).not.toContain("codeology owner");
@@ -163,8 +173,8 @@ describe("sourcing memory answers", () => {
   it("surfaces candidate and conflicted facts under gaps", () => {
     const db = openMemoryDatabase(tempDbPath());
     db.prepare(
-      "insert into source_records (path, title, source_type, content_hash, raw_text) values (?, ?, ?, ?, ?)"
-    ).run("memory.csv", "Memory", "csv", "hash", "raw");
+      "insert into source_records (path, source_id, title, source_type, content_hash, raw_text) values (?, ?, ?, ?, ?, ?)"
+    ).run("memory.csv", "memory", "Memory", "csv", "hash", "raw");
     db.prepare(
       "insert into memory_chunks (source_record_id, chunk_index, text, chunk_hash, citation) values (?, ?, ?, ?, ?)"
     ).run(1, 0, "Noor may be interested. Maya has conflicting status.", "chunk", "memory.csv#chunk-1");
@@ -175,7 +185,7 @@ describe("sourcing memory answers", () => {
       "insert into semantic_facts (subject, predicate, object, source_record_id, source_chunk_id, confidence, status) values (?, ?, ?, ?, ?, ?, ?)"
     ).run("Maya Chen", "status", "contacted", 1, 1, 0.9, "conflicted");
 
-    const output = buildSourcingMemoryAnswer(db, "What is uncertain?");
+    const output = buildSourcingMemoryAnswer(db, "What is uncertain?", fullScope(db));
 
     expect(output).toContain("Gaps:");
     expect(output).toContain("Noor Patel");
@@ -199,7 +209,7 @@ describe("sourcing memory answers", () => {
     ingestFolder(db, dir);
     await refreshMemory(db);
 
-    const output = buildSourcingMemoryAnswer(db, "What happened with quantum hardware?");
+    const output = buildSourcingMemoryAnswer(db, "What happened with quantum hardware?", fullScope(db));
 
     expect(output).toContain("I do not have accepted sourcing facts");
     expect(output).not.toContain("Miguel Alvarez outcome is interested");

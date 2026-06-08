@@ -25,6 +25,7 @@ function migrate(db: MemoryDatabase): void {
     create table if not exists source_records (
       id integer primary key autoincrement,
       path text not null unique,
+      source_id text,
       title text not null,
       source_type text not null,
       content_hash text not null,
@@ -113,8 +114,104 @@ function migrate(db: MemoryDatabase): void {
     create table if not exists ingest_errors (
       id integer primary key autoincrement,
       path text not null,
+      category text,
       reason text not null,
       created_at text not null default (datetime('now'))
     );
+
+    create table if not exists source_permissions (
+      id integer primary key autoincrement,
+      principal_type text not null,
+      principal_id text not null,
+      source_id text not null,
+      access text not null default 'read',
+      created_at text not null default (datetime('now')),
+      unique (principal_type, principal_id, source_id)
+    );
+
+    create table if not exists audit_events (
+      id integer primary key autoincrement,
+      actor_type text not null,
+      actor_id text not null,
+      action text not null,
+      source_id text,
+      created_at text not null default (datetime('now'))
+    );
   `);
+
+  backfillSourceIds(db);
+  addIngestErrorCategory(db);
+
+  db.exec(`
+    create unique index if not exists idx_source_records_source_id
+      on source_records(source_id);
+    create index if not exists idx_source_permissions_principal
+      on source_permissions(principal_type, principal_id, source_id);
+    create index if not exists idx_memory_chunks_source_record
+      on memory_chunks(source_record_id);
+    create index if not exists idx_semantic_facts_source_status
+      on semantic_facts(source_record_id, status);
+    create index if not exists idx_audit_events_actor
+      on audit_events(actor_type, actor_id, created_at);
+  `);
+}
+
+interface ColumnInfo {
+  name: string;
+}
+
+interface SourceRecordRow {
+  id: number;
+  path: string;
+}
+
+// For pre-existing DBs created before source_id existed: add the column and
+// backfill a deterministic unique slug derived from each row's stored path,
+// all before the unique index is created. Idempotent across re-opens.
+function backfillSourceIds(db: MemoryDatabase): void {
+  const columns = db.prepare("pragma table_info(source_records)").all() as ColumnInfo[];
+  const hasSourceId = columns.some((column) => column.name === "source_id");
+  if (hasSourceId) {
+    return;
+  }
+
+  const run = db.transaction(() => {
+    db.exec("alter table source_records add column source_id text");
+
+    const rows = db.prepare("select id, path from source_records").all() as SourceRecordRow[];
+    const update = db.prepare("update source_records set source_id = ? where id = ?");
+    for (const row of rows) {
+      update.run(slugifySourceId(row.path), row.id);
+    }
+  });
+
+  run();
+}
+
+// For pre-existing DBs created before ingest_errors.category existed: add the
+// column. Existing rows keep a null category and fall back to 'internal-error'
+// at read time. Idempotent across re-opens.
+function addIngestErrorCategory(db: MemoryDatabase): void {
+  const columns = db.prepare("pragma table_info(ingest_errors)").all() as ColumnInfo[];
+  const hasCategory = columns.some((column) => column.name === "category");
+  if (hasCategory) {
+    return;
+  }
+
+  db.exec("alter table ingest_errors add column category text");
+}
+
+// Deterministic slug of a stable relative path: lowercase, non-alphanumeric runs
+// collapse to '-', path separators are preserved.
+export function slugifySourceId(relativeLabel: string): string {
+  return relativeLabel
+    .toLowerCase()
+    .split("/")
+    .map((segment) =>
+      segment
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+    )
+    .filter((segment) => segment.length > 0)
+    .join("/");
 }

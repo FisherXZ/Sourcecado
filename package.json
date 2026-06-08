@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "stress": "tsx scripts/stress.ts",
     "sourcyavo": "node dist/src/cli.js"
   },
   "dependencies": {

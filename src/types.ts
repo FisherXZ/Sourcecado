@@ -30,6 +30,21 @@ export const SEMANTIC_FACT_STATUSES = [
 ] as const;
 export type SemanticFactStatus = (typeof SEMANTIC_FACT_STATUSES)[number];
 
+export const PRINCIPAL_TYPES = ["user", "oauth_client", "test_client"] as const;
+export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
+
+export const ACCESS_LEVELS = ["read"] as const;
+export type AccessLevel = (typeof ACCESS_LEVELS)[number];
+
+export const AUDIT_ACTIONS = [
+  "ask",
+  "search_memory",
+  "get_source",
+  "list_gaps",
+  "denied_read"
+] as const;
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
 export type ExtractedCandidateKind = "entity" | "relationship" | "semantic_fact";
 
 export interface ExtractedCandidate {

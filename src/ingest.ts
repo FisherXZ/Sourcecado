@@ -1,13 +1,25 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
-import type { MemoryDatabase } from "./db.js";
+import { slugifySourceId, type MemoryDatabase } from "./db.js";
 import { chunkCsvRows, chunkText, sha256, type TextChunk } from "./chunk.js";
 import { serializeEmbedding } from "./embeddings.js";
 import { isSupportedSourcePath, parseSourceFile } from "./frontmatter.js";
+import {
+  IngestError,
+  classifyIngestError,
+  type IngestErrorCategory
+} from "./ingest-error.js";
+
+export interface SkippedFile {
+  path: string;
+  category: IngestErrorCategory;
+  reason: string;
+}
 
 export interface IngestResult {
   processed: number;
   skipped: number;
+  skippedFiles: SkippedFile[];
 }
 
 interface SourceRecordInsertResult {
@@ -16,12 +28,16 @@ interface SourceRecordInsertResult {
 
 export function ingestFolder(db: MemoryDatabase, folderPath: string): IngestResult {
   const folder = resolve(folderPath);
-  const result: IngestResult = { processed: 0, skipped: 0 };
+  const result: IngestResult = { processed: 0, skipped: 0, skippedFiles: [] };
 
   for (const filePath of walkFiles(folder)) {
     if (!isSupportedSourcePath(filePath)) {
-      logIngestError(db, filePath, `Unsupported file extension: ${filePath}`);
-      result.skipped += 1;
+      recordSkip(
+        db,
+        result,
+        filePath,
+        new IngestError("unsupported-type", `Unsupported file extension: ${filePath}`)
+      );
       continue;
     }
 
@@ -29,12 +45,24 @@ export function ingestFolder(db: MemoryDatabase, folderPath: string): IngestResu
       ingestFile(db, filePath, folder);
       result.processed += 1;
     } catch (error) {
-      logIngestError(db, filePath, formatIngestError(error));
-      result.skipped += 1;
+      recordSkip(db, result, filePath, error);
     }
   }
 
   return result;
+}
+
+function recordSkip(
+  db: MemoryDatabase,
+  result: IngestResult,
+  filePath: string,
+  error: unknown
+): void {
+  const category = classifyIngestError(error);
+  const reason = errorMessage(error);
+  logIngestError(db, filePath, category, reason);
+  result.skipped += 1;
+  result.skippedFiles.push({ path: filePath, category, reason });
 }
 
 function ingestFile(db: MemoryDatabase, filePath: string, rootFolder: string): void {
@@ -43,17 +71,20 @@ function ingestFile(db: MemoryDatabase, filePath: string, rootFolder: string): v
     const parsed = parseSourceFile(path, content);
     const chunks = chunkSourceText(parsed.sourceType, parsed.rawText);
     const contentHash = sha256(parsed.rawText);
-    const citationLabel = sourceLabel(rootFolder, path);
+    const relativeLabel = sourceLabel(rootFolder, path);
+    const citationLabel = relativeLabel;
+    const sourceId = parsed.sourceId ?? slugifySourceId(relativeLabel);
 
-    const sourceId = upsertSourceRecord(db, {
+    const sourceRowId = upsertSourceRecord(db, {
       path,
+      sourceId,
       title: parsed.title,
       sourceType: parsed.sourceType,
       contentHash,
       rawText: parsed.rawText
     });
 
-    db.prepare("delete from memory_chunks where source_record_id = ?").run(sourceId);
+    db.prepare("delete from memory_chunks where source_record_id = ?").run(sourceRowId);
 
     const insertChunk = db.prepare(
       "insert into memory_chunks (source_record_id, chunk_index, text, chunk_hash, embedding, citation) values (?, ?, ?, ?, ?, ?)"
@@ -61,11 +92,11 @@ function ingestFile(db: MemoryDatabase, filePath: string, rootFolder: string): v
 
     for (const chunk of chunks) {
       insertChunk.run(
-        sourceId,
+        sourceRowId,
         chunk.chunkIndex,
         chunk.text,
         chunk.chunkHash,
-        serializeEmbedding(chunk.text),
+        embedChunk(chunk),
         citationForChunk(citationLabel, parsed.sourceType, chunk)
       );
     }
@@ -114,7 +145,15 @@ function readSourceFile(filePath: string): string {
   try {
     return readFileSync(filePath, "utf8");
   } catch (error) {
-    throw new Error(`Failed to read file: ${errorMessage(error)}`);
+    throw new IngestError("unreadable", `Failed to read file: ${errorMessage(error)}`);
+  }
+}
+
+function embedChunk(chunk: TextChunk): string {
+  try {
+    return serializeEmbedding(chunk.text);
+  } catch (error) {
+    throw new IngestError("embedding-error", `Failed to embed chunk: ${errorMessage(error)}`);
   }
 }
 
@@ -122,16 +161,19 @@ function upsertSourceRecord(
   db: MemoryDatabase,
   source: {
     path: string;
+    sourceId: string;
     title: string;
     sourceType: string;
     contentHash: string;
     rawText: string;
   }
 ): number {
+  // source_id is intentionally NOT updated on conflict: identity is preserved
+  // across reimports even when frontmatter source_id changes.
   db.prepare(
     [
-      "insert into source_records (path, title, source_type, content_hash, raw_text)",
-      "values (?, ?, ?, ?, ?)",
+      "insert into source_records (path, source_id, title, source_type, content_hash, raw_text)",
+      "values (?, ?, ?, ?, ?, ?)",
       "on conflict(path) do update set",
       "title = excluded.title,",
       "source_type = excluded.source_type,",
@@ -139,7 +181,14 @@ function upsertSourceRecord(
       "raw_text = excluded.raw_text,",
       "updated_at = datetime('now')"
     ].join(" ")
-  ).run(source.path, source.title, source.sourceType, source.contentHash, source.rawText);
+  ).run(
+    source.path,
+    source.sourceId,
+    source.title,
+    source.sourceType,
+    source.contentHash,
+    source.rawText
+  );
 
   const row = db.prepare("select id from source_records where path = ?").get(source.path) as
     | SourceRecordInsertResult
@@ -151,12 +200,50 @@ function upsertSourceRecord(
   return row.id;
 }
 
-function logIngestError(db: MemoryDatabase, filePath: string, reason: string): void {
-  db.prepare("insert into ingest_errors (path, reason) values (?, ?)").run(filePath, reason);
+function logIngestError(
+  db: MemoryDatabase,
+  filePath: string,
+  category: IngestErrorCategory,
+  reason: string
+): void {
+  db.prepare("insert into ingest_errors (path, category, reason) values (?, ?, ?)").run(
+    filePath,
+    category,
+    reason
+  );
 }
 
-function formatIngestError(error: unknown): string {
-  return errorMessage(error);
+export function formatIngestReport(result: IngestResult, rootFolder: string): string {
+  const summary = `Ingested ${result.processed} source file${
+    result.processed === 1 ? "" : "s"
+  }; skipped ${result.skipped}.`;
+
+  if (result.skipped === 0) {
+    return summary;
+  }
+
+  const root = resolve(rootFolder);
+  const lines = [summary, "", "Skipped files:"];
+  for (const skipped of result.skippedFiles) {
+    // Use the relative label only; raw reasons may embed absolute paths.
+    lines.push(`  - ${sourceLabel(root, skipped.path)} [${skipped.category}]`);
+  }
+
+  lines.push("", "Skipped by category:");
+  for (const [category, count] of tallyByCategory(result.skippedFiles)) {
+    lines.push(`  ${category}: ${count}`);
+  }
+
+  return lines.join("\n");
+}
+
+function tallyByCategory(skippedFiles: SkippedFile[]): Array<[IngestErrorCategory, number]> {
+  const tally = new Map<IngestErrorCategory, number>();
+  for (const skipped of skippedFiles) {
+    tally.set(skipped.category, (tally.get(skipped.category) ?? 0) + 1);
+  }
+
+  return [...tally.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 }
 
 function errorMessage(error: unknown): string {

@@ -1,0 +1,5 @@
+First Name,Last Name,Title,Company Name,Email,Email Status,Status,Notes,Needs Follow Up,Reason,Contact Owner
+Camila,Rosario,Head of Partnerships,Verdant Biolabs,camila@verdantbiolabs.example,verified,responded,"Replied and asked about lab tour logistics.",no,,Dana Okafor
+Felix,Nakamura,Research Lead,Helix Commons,felix@helixcommons.example,verified,ghosted,"No reply after two outreach attempts.",yes,Re-send with a referral,Dana Okafor
+Wren,Adesanya,Program Director,Mycelia Bioworks,wren@myceliabioworks.example,guessed,needs follow-up,"Asked us to follow up after their grant decision.",yes,Grant decision pending,Dana Okafor
+Soren,Halvorsen,Founder,Tideglass Genomics,soren@tideglass.example,verified,locked in,"Committed as a biotech track sponsor.",no,,Dana Okafor
