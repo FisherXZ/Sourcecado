@@ -57,7 +57,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     try {
       const result = ingestFolder(db, folder);
       console.log(formatIngestReport(result, folder));
-      return 0;
+      return result.skipped > 0 ? 1 : 0;
     } catch (error) {
       console.error(`Ingest failed: ${errorMessage(error)}`);
       return 1;

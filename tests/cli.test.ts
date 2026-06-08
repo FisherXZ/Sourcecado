@@ -68,6 +68,28 @@ describe("sourcyavo CLI", () => {
     expect(output).toContain("Evidence:");
   });
 
+  it("exits 1 when ingest skips a file but still reports it", async () => {
+    const dir = tempDir();
+    const seedData = join(dir, "seed-data");
+    mkdirSync(seedData);
+    writeFileSync(
+      join(seedData, "good.csv"),
+      [
+        "contact,organization,domain,status,outcome,notes,needs_follow_up,reason",
+        "Miguel Alvarez,Civic Data Lab,AI safety,contacted,interested,Asked for intro.,yes,Need intro"
+      ].join("\n")
+    );
+    writeFileSync(join(seedData, "empty.md"), "   \n");
+    process.chdir(dir);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(Promise.resolve(main(["ingest", "seed-data"]))).resolves.toBe(1);
+
+    const output = log.mock.calls.flat().join("\n");
+    expect(output).toContain("empty.md");
+  });
+
   it("refuses an ask without --client and exits 1", async () => {
     const dir = tempDir();
     process.chdir(dir);
