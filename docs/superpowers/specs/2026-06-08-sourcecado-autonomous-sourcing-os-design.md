@@ -17,12 +17,14 @@ The two-month product target is a hosted app that runs a weekly sourcing loop:
    instruction box.
 2. Sourcecado pulls or imports candidate contacts.
 3. Sourcecado enriches and researches those contacts.
-4. Sourcecado ranks which contacts should be worked this week.
-5. Sourcecado creates personalized Gmail drafts and sourcing artifacts.
-6. The Sourcing Director reviews, edits, accepts, rejects, or annotates the
+4. Sourcecado records sourcing signals for those contacts.
+5. Sourcecado resolves contacts into one profile per person where possible.
+6. Sourcecado ranks which contacts should be worked this week.
+7. Sourcecado creates personalized Gmail drafts and sourcing artifacts.
+8. The Sourcing Director reviews, edits, accepts, rejects, or annotates the
    work. In this phase, acceptance means the draft/recommendation is useful;
    it does not trigger sending.
-7. Sourcecado writes the run outputs and human feedback back into memory.
+9. Sourcecado writes the run outputs and human feedback back into memory.
 
 This design keeps the strong club-brain goal, but the end product is broader:
 a memory-grounded sourcing operator for Codeology.
@@ -75,6 +77,13 @@ dataset and real integrations where practical:
 - Gmail output: create Gmail drafts first. Actual sending and approve-to-send
   workflow are deferred.
 - Routine configuration: simple form plus freeform instruction box.
+- Sourcing signals: make them a first-class v1 primitive.
+- Identity resolution: build it early enough that contacts do not fragment
+  across Apollo, Gmail, Notion, Drive, web research, and human notes.
+- Usage: record Apollo credits, web calls, Apify runs, Gmail quota-sensitive
+  actions, and model usage in the run ledger.
+- First UI: keep it to routine setup, run result, and run contact. Gmail draft
+  review can be a popup, and memory can live under settings.
 - Memory inputs: all connector outputs, agent actions, director feedback,
   source imports, draft artifacts, and outcomes.
 - Human feedback loop: approvals, rejections, edits, notes, outcome labels,
@@ -84,6 +93,22 @@ dataset and real integrations where practical:
   decision rationale summaries.
 - Curriculum emphasis: balanced, but weighted toward agent/tool orchestration
   and memory architecture. Full-stack app polish is secondary.
+
+## V1 Scope Adjustment
+
+The first build should prove the weekly sourcing loop without turning into a
+large revenue platform. V1 should be practical and visible:
+
+- build sourcing signals as simple records with source references;
+- build identity resolution with deterministic matching and human review for
+  ambiguous cases;
+- build usage tracking into the run ledger from the beginning;
+- keep the UI to three primary pages: routine setup, run result, and run
+  contact.
+
+Defer formal routine/agent versioning, test contact suites, and eval prep to
+v2. Keep the future need documented, but do not let it block the first useful
+agent loop.
 
 ## Important Audit Boundary
 
@@ -107,7 +132,17 @@ tools and sources.
 
 ## User Experience
 
-### Director Routine Setup
+The v1 UI should stay intentionally narrow. The first application should have
+three primary pages:
+
+- routine setup page;
+- run result page;
+- run contact page.
+
+Gmail draft review can appear as a popup from the run contact page. Memory can
+live under settings instead of becoming a primary navigation area.
+
+### Routine Setup Page
 
 The first routine setup surface should be intentionally narrow:
 
@@ -124,18 +159,33 @@ The first routine setup surface should be intentionally narrow:
 This avoids a large workflow builder while still letting the director steer the
 agent.
 
-### Weekly Run Review
+### Run Result Page
 
 After a routine runs, the director should see:
 
 - ranked contacts;
 - why each contact was selected;
+- visible sourcing signals;
 - source citations and research notes;
 - proposed outreach angle;
 - Gmail draft status;
+- usage summary;
 - gaps or risks;
 - actions available: accept, reject, edit, add note, override priority, mark
   outcome.
+
+### Run Contact Page
+
+Each ranked contact should have a focused detail page:
+
+- canonical contact profile;
+- identities and aliases found across sources;
+- sourcing signals;
+- supporting evidence;
+- research notes and memory;
+- outreach angle;
+- draft popup entry point;
+- feedback actions.
 
 ### Gmail Draft Output
 
@@ -166,9 +216,12 @@ Hosted Team App
   -> Routine configuration
   -> Agent runtime service
       -> Run ledger
+      -> Usage ledger
       -> Scoped tool registry
       -> Connector adapters
       -> Memory read/write service
+      -> Identity resolution service
+      -> Signal extraction and scoring service
       -> Artifact service
   -> Review surfaces
       -> ranked contacts
@@ -187,12 +240,15 @@ Memory
   -> source records
   -> chunks
   -> contacts
+  -> contact identities
   -> organizations
+  -> sourcing signals
   -> outreach attempts
   -> draft artifacts
   -> outcomes
   -> human feedback
   -> run-derived observations
+  -> usage events
 ```
 
 The important boundary is that Sourcecado owns sourcing truth. OpenClaw and
@@ -211,7 +267,7 @@ trigger
   -> create agent_run
   -> compile source scope and tool scope
   -> execute sourcing workflow
-  -> record steps, tool calls, artifacts, gaps, and rationales
+  -> record steps, tool calls, usage, artifacts, gaps, and rationales
   -> write selected outputs to memory
   -> present review surface
 ```
@@ -262,6 +318,19 @@ tool_calls
   output_ref
   status
   error
+  created_at
+
+run_usage_events
+  id
+  run_id
+  step_id
+  tool_call_id
+  usage_type
+  connector
+  quantity
+  unit
+  estimated_cost
+  budget_limit
   created_at
 
 run_artifacts
@@ -366,6 +435,113 @@ Deferred:
 
 - LinkedIn/Apify v2 sourcing workflow.
 
+## Sourcing Signals V1
+
+A sourcing signal is a reason a contact may be worth action now. It should be
+a first-class record, not a loose note embedded in a summary.
+
+Examples:
+
+- prior Codeology relationship;
+- recent funding;
+- recent job change;
+- AI safety relevance;
+- warm intro path;
+- prior non-response;
+- director note;
+- Gmail reply;
+- Notion task.
+
+V1 should keep the model deliberately simple:
+
+```text
+sourcing_signals
+  id
+  workspace_id
+  contact_id
+  organization_id
+  signal_type
+  signal_label
+  signal_summary
+  source_record_id
+  source_ref_json
+  confidence
+  observed_at
+  expires_at
+  created_by_actor_id
+  created_by_run_id
+```
+
+Signals should be created from connector observations and human actions:
+
+- Apollo creates funding, role, company, and profile-data signals where the
+  source supports it.
+- Gmail creates reply, prior outreach, non-response, and relationship signals.
+- Notion and Drive create task, note, relationship, and institutional-memory
+  signals.
+- Web research creates public-news and relevance signals with URL citations.
+- Human notes create director-note, priority, exclusion, and warm-intro
+  signals.
+
+Ranking can start with explicit weights rather than a learned model. For
+example, a warm intro path and recent reply can raise priority, while prior
+non-response or do-not-contact notes can lower priority or block drafting.
+
+## Identity Resolution V1
+
+Identity resolution means Sourcecado should keep one contact profile per
+person even when that person appears in Apollo, Gmail, Notion, Drive, web
+research, and human notes.
+
+V1 should avoid a complex ML identity system. Use deterministic matching first:
+
+- exact email match;
+- Apollo person id match;
+- Gmail sender/recipient email match;
+- exact LinkedIn/profile URL match when available;
+- normalized name plus organization/domain match;
+- human-confirmed merge.
+
+Recommended records:
+
+```text
+contacts
+  id
+  workspace_id
+  canonical_name
+  primary_email
+  primary_organization_id
+  current_title
+  confidence_summary
+  created_at
+  updated_at
+
+contact_identities
+  id
+  workspace_id
+  contact_id
+  provider
+  external_id
+  email
+  profile_url
+  display_name
+  organization_name
+  confidence
+  source_record_id
+  first_seen_at
+  last_seen_at
+```
+
+The identity resolver should take new source records and either:
+
+- attach the observation to an existing contact when the match is strong;
+- create a new contact when no strong match exists;
+- create a merge candidate when the match is plausible but not safe.
+
+Ambiguous matches should go to human review instead of being auto-merged.
+This keeps the memory layer clean without making identity resolution a large
+project on day one.
+
 ## Memory Model Direction
 
 The current local memory layer already has source records, chunks, entities,
@@ -373,7 +549,9 @@ relationships, semantic facts, citations, gaps, and refresh. The hosted product
 should extend that into a sourcing-specific memory model:
 
 - contacts;
+- contact identities;
 - organizations;
+- sourcing signals;
 - source records;
 - source chunks;
 - contact aliases;
@@ -416,6 +594,23 @@ Feedback should influence future ranking, drafting, and gap analysis. The first
 implementation can use explicit rules before learning a sophisticated scoring
 model.
 
+## Usage And Limits
+
+Usage should be built into the run ledger from v1. The director should be able
+to see what a run consumed and where it spent scarce resources.
+
+Track at least:
+
+- Apollo credit-sensitive calls;
+- web search calls;
+- Apify runs when Apify is used;
+- Gmail draft creation and quota-sensitive Gmail calls;
+- model input/output tokens and estimated model cost.
+
+The first version can use simple per-run and per-workspace counters. Hard
+budget enforcement can start with warnings and stop-rules for obvious limits,
+then become more sophisticated later.
+
 ## Weekly Sourcing Workflow
 
 The first autonomous workflow should be:
@@ -424,8 +619,10 @@ The first autonomous workflow should be:
 load routine
   -> gather existing memory
   -> find/import contacts from Apollo
+  -> resolve contact identities
   -> enrich contacts
   -> research contacts with web/Drive/Notion/Gmail context
+  -> extract sourcing signals
   -> score and rank contacts
   -> generate outreach angles
   -> create Gmail drafts
@@ -480,6 +677,8 @@ than become the center of the project.
 
 - Sending Gmail messages.
 - Fully automated approve-to-send.
+- Formal routine/agent versioning.
+- Test contact suites and eval preparation.
 - MCP runtime integration.
 - Making OpenClaw or Hermes the core harness.
 - LinkedIn/Apify v2 workflow.
@@ -499,9 +698,12 @@ Core checks:
 - routine setup creates a durable routine;
 - weekly run creates a run ledger entry;
 - Apollo search/enrichment produces contact candidates;
+- identity resolution attaches repeated observations to one contact profile;
+- sourcing signals are recorded with source references;
 - web/Drive/Notion/Gmail context can be attached as cited source material;
 - ranking output references evidence;
 - Gmail drafts are created and linked back to run/contact/artifact records;
+- usage summary records connector/API/model consumption;
 - director feedback updates memory;
 - a later run can use previous feedback;
 - unauthorized tools are unavailable for a run;
@@ -520,9 +722,9 @@ Core checks:
 - Storing useful rationales without exposing hidden scratchpad text requires a
   deliberate rationale schema.
 
-## Review Questions
+## Current Decisions To Carry Into Timeline
 
-Before writing the week-by-week timeline, confirm:
+Carry these into the week-by-week timeline:
 
 1. The two-month build is draft-only for Gmail, with no send action.
 2. Apollo API is a required real integration.
@@ -530,5 +732,10 @@ Before writing the week-by-week timeline, confirm:
    than full workspace sync.
 4. Apify exists as an adapter boundary, while LinkedIn/Apify v2 is deferred.
 5. Sourcecado owns the runtime and uses OpenClaw/Hermes as design references.
-6. The run ledger stores execution traces and rationale summaries, not raw
-   hidden chain-of-thought.
+6. Sourcing signals and identity resolution are v1 primitives.
+7. Usage tracking is built into the run ledger from v1.
+8. Formal routine/agent versioning, test contacts, and eval preparation are v2.
+9. The v1 UI is routine setup, run result, and run contact. Gmail drafts can be
+   a popup, and memory can live under settings.
+10. The run ledger stores execution traces and rationale summaries, not raw
+    hidden chain-of-thought.
