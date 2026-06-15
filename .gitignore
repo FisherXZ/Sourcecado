@@ -5,3 +5,5 @@ dist/
 *.db-shm
 *.db-wal
 .DS_Store
+.superpowers/
+prove-and-plain-english-skills.zip
