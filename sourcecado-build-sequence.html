@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sourcecado — Build Sequence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#16191e;
+    --ink-soft:#5a626d;
+    --ink-faint:#9aa1ab;
+    --paper:#ffffff;
+    --line:#e6e8ec;
+    --line-strong:#d2d6dd;
+    --blue:#2f49c9;
+    --blue-wash:#eef1fe;
+    --afk:#1d8a64;
+    --afk-wash:#e8f5ef;
+    --hitl:#bd6a12;
+    --hitl-wash:#fbf0e2;
+    --rail-f:#16191e;
+    --rail-a:#2f49c9;
+    --rail-b:#0f8aa6;
+    --rail-c:#0f8aa6;
+    --rail-d:#7a3fb0;
+    --rail-e:#b0573f;
+    --rail-g:#1d8a64;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:"IBM Plex Sans",sans-serif;
+    font-weight:450;
+    line-height:1.5;
+    padding:64px 40px 120px;
+  }
+  .wrap{max-width:1080px;margin:0 auto}
+  .mono{font-family:"IBM Plex Mono",monospace}
+
+  /* ---------- Masthead ---------- */
+  header{
+    border-bottom:1.5px solid var(--ink);
+    padding-bottom:28px;margin-bottom:8px;
+  }
+  .kicker{
+    font-family:"IBM Plex Mono",monospace;
+    font-size:11px;letter-spacing:.32em;text-transform:uppercase;
+    color:var(--blue);font-weight:500;
+  }
+  h1{
+    font-family:"Fraunces",serif;
+    font-weight:500;
+    font-size:clamp(38px,6vw,68px);
+    line-height:.98;letter-spacing:-.015em;
+    margin:14px 0 16px;
+  }
+  h1 em{font-style:italic;color:var(--ink-soft);font-weight:400}
+  .sub{
+    max-width:620px;color:var(--ink-soft);font-size:15.5px;line-height:1.55;
+  }
+  .meta-row{
+    display:flex;flex-wrap:wrap;gap:0;margin-top:26px;
+    border:1px solid var(--line-strong);border-radius:3px;overflow:hidden;
+  }
+  .stat{
+    flex:1 1 0;min-width:140px;padding:16px 20px;
+    border-right:1px solid var(--line);
+  }
+  .stat:last-child{border-right:none}
+  .stat .n{font-family:"Fraunces",serif;font-size:30px;font-weight:500;line-height:1;letter-spacing:-.02em}
+  .stat .l{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-top:7px}
+
+  /* ---------- Legend ---------- */
+  .legend{
+    display:flex;flex-wrap:wrap;gap:22px;align-items:center;
+    margin:20px 0 4px;padding:13px 18px;
+    background:#fafbfc;border:1px solid var(--line);border-radius:3px;
+    font-size:12.5px;color:var(--ink-soft);
+  }
+  .legend .grp{display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  .dot.afk{background:var(--afk)}
+  .dot.hitl{background:var(--hitl)}
+  .swatch{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500}
+  .legend b{color:var(--ink);font-weight:600}
+
+  /* ---------- Flow scaffold ---------- */
+  .flow{margin-top:14px}
+  .connector{
+    height:46px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    position:relative;
+  }
+  .connector .ln{width:1.5px;height:100%;background:var(--line-strong)}
+  .connector .tag{
+    position:absolute;background:var(--paper);padding:3px 11px;
+    font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-faint);border:1px solid var(--line);border-radius:999px;
+  }
+  .chev{position:absolute;bottom:-1px;width:8px;height:8px;border-right:1.5px solid var(--line-strong);border-bottom:1.5px solid var(--line-strong);transform:rotate(45deg)}
+
+  /* ---------- Stage card ---------- */
+  .stage{
+    display:grid;grid-template-columns:210px 1fr;
+    border:1px solid var(--line-strong);border-radius:5px;
+    background:var(--paper);overflow:hidden;
+    box-shadow:0 1px 0 rgba(20,25,30,.02), 0 10px 24px -20px rgba(20,25,30,.35);
+  }
+  .rail{
+    padding:24px 22px;color:#fff;position:relative;
+    display:flex;flex-direction:column;
+  }
+  .rail .badge{
+    font-family:"Fraunces",serif;font-size:46px;font-weight:500;line-height:.9;letter-spacing:-.02em;
+    opacity:.95;
+  }
+  .rail .nm{
+    font-family:"IBM Plex Sans",sans-serif;font-weight:600;font-size:16px;
+    line-height:1.2;margin-top:14px;letter-spacing:-.01em;
+  }
+  .rail .ph{
+    font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+    opacity:.72;margin-top:8px;
+  }
+  .rail .counts{
+    margin-top:auto;padding-top:20px;display:flex;gap:16px;
+    font-family:"IBM Plex Mono",monospace;font-size:11px;
+  }
+  .rail .counts span{opacity:.9}
+  .rail .counts b{font-weight:600}
+
+  .slices{padding:10px 8px}
+  .slice{
+    display:flex;align-items:flex-start;gap:14px;
+    padding:12px 16px;border-radius:4px;
+  }
+  .slice + .slice{border-top:1px solid var(--line)}
+  .slice:hover{background:#fafbfc}
+  .sid{
+    font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:600;
+    color:var(--ink);width:30px;flex:none;padding-top:1px;
+  }
+  .sbody{flex:1;min-width:0}
+  .stitle{font-size:14.5px;font-weight:500;color:var(--ink);line-height:1.35}
+  .sblock{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-faint);
+    margin-top:3px;
+  }
+  .sblock b{color:var(--ink-soft);font-weight:500}
+  .smeta{display:flex;align-items:center;gap:10px;flex:none;padding-top:2px}
+  .tasks{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500;
+    background:var(--blue-wash);color:var(--blue);
+    padding:3px 9px;border-radius:999px;white-space:nowrap;
+  }
+  .tag-type{
+    font-family:"IBM Plex Mono",monospace;font-size:10px;font-weight:600;letter-spacing:.06em;
+    padding:3px 8px;border-radius:3px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;
+  }
+  .tag-type.afk{background:var(--afk-wash);color:var(--afk)}
+  .tag-type.hitl{background:var(--hitl-wash);color:var(--hitl)}
+
+  .demo{
+    grid-column:1 / -1;
+    border-top:1px dashed var(--line-strong);
+    padding:11px 22px;background:#fcfcfd;
+    font-size:12.5px;color:var(--ink-soft);
+    display:flex;gap:9px;align-items:baseline;
+  }
+  .demo .pin{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--afk);font-weight:600;flex:none}
+
+  /* parallel lane */
+  .lane{display:grid;grid-template-columns:1fr 1fr;gap:20px;position:relative}
+  .lane::before{
+    content:"PARALLEL AFTER A";
+    position:absolute;top:-34px;left:50%;transform:translateX(-50%);
+    font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.14em;color:var(--ink-faint);
+    background:var(--paper);padding:0 10px;
+  }
+  .lane .stage{grid-template-columns:150px 1fr}
+  .lane .rail .badge{font-size:38px}
+
+  /* ---------- expandable sub-tasks ---------- */
+  .slice.clickable{cursor:pointer}
+  .exp{
+    width:16px;height:16px;flex:none;position:relative;margin-left:2px;
+    transition:transform .22s cubic-bezier(.2,.7,.2,1);color:var(--ink-faint);
+  }
+  .exp::before{
+    content:"";position:absolute;top:3px;left:5px;
+    width:6px;height:6px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;
+    transform:rotate(45deg);
+  }
+  .slice.open .exp{transform:rotate(90deg);color:var(--blue)}
+  .subtasks{
+    display:none;padding:4px 18px 14px 60px;background:#fafbfd;
+    border-top:1px solid var(--line);
+  }
+  .subtasks.open{display:block;animation:fade .26s ease both}
+  .subtasks + .slice{border-top:1px solid var(--line)}
+  @keyframes fade{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .subhdr{
+    font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink-faint);padding:10px 0 4px;
+  }
+  .subtask{
+    display:flex;align-items:baseline;gap:13px;padding:8px 0;
+    border-bottom:1px dashed var(--line);
+  }
+  .subtask:last-child{border-bottom:none}
+  .st-id{font-family:"IBM Plex Mono",monospace;font-size:11.5px;font-weight:600;color:var(--blue);width:40px;flex:none}
+  .st-title{flex:1;font-size:13.5px;color:var(--ink);line-height:1.4}
+  .st-est{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-faint);flex:none;width:42px;text-align:right}
+  .st-type{
+    font-family:"IBM Plex Mono",monospace;font-size:9.5px;font-weight:600;letter-spacing:.05em;
+    padding:2px 6px;border-radius:3px;flex:none;width:42px;text-align:center;
+  }
+  .st-type.afk{background:var(--afk-wash);color:var(--afk)}
+  .st-type.hitl{background:var(--hitl-wash);color:var(--hitl)}
+  .expand-all{
+    margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:11px;
+    background:var(--paper);border:1px solid var(--line-strong);border-radius:999px;
+    padding:6px 14px;color:var(--ink-soft);cursor:pointer;transition:all .15s;
+  }
+  .expand-all:hover{border-color:var(--blue);color:var(--blue)}
+
+  footer{
+    margin-top:54px;padding-top:22px;border-top:1px solid var(--line);
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;
+    font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-faint);
+  }
+  footer a{color:var(--blue);text-decoration:none}
+
+  /* entrance */
+  .stage,.connector,.legend,.meta-row{animation:rise .6s cubic-bezier(.2,.7,.2,1) both}
+  .flow > *:nth-child(1){animation-delay:.05s}
+  .flow > *:nth-child(2){animation-delay:.10s}
+  .flow > *:nth-child(3){animation-delay:.15s}
+  .flow > *:nth-child(4){animation-delay:.20s}
+  .flow > *:nth-child(5){animation-delay:.25s}
+  .flow > *:nth-child(6){animation-delay:.30s}
+  .flow > *:nth-child(7){animation-delay:.35s}
+  .flow > *:nth-child(8){animation-delay:.40s}
+  .flow > *:nth-child(9){animation-delay:.45s}
+  .flow > *:nth-child(10){animation-delay:.50s}
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+  @media (max-width:760px){
+    body{padding:40px 18px 80px}
+    .stage,.lane .stage{grid-template-columns:1fr}
+    .rail{flex-direction:row;align-items:center;gap:18px}
+    .rail .badge{font-size:34px}
+    .rail .nm{margin-top:0}
+    .rail .counts{margin:0 0 0 auto;padding:0}
+    .lane{grid-template-columns:1fr;gap:46px}
+    .smeta{flex-wrap:wrap}
+  }
+  @media print{
+    body{padding:0}
+    .stage,.connector,.legend,.meta-row{animation:none}
+    .stage{box-shadow:none;break-inside:avoid}
+    .connector{height:30px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="kicker">Sourcecado · Full Agent Stack</div>
+    <h1>Build&nbsp;Sequence <em>top&#8209;down</em></h1>
+    <p class="sub">A minimal spine first, then each capability as its own vertical slice. Schema grows per feature, no big&#8209;bang design. Every task is ~1&ndash;2 hours of engineer&#8209;with&#8209;Claude&#8209;Code work; every slice is demoable on its own.</p>
+    <div class="meta-row">
+      <div class="stat"><div class="n">7</div><div class="l">Stages</div></div>
+      <div class="stat"><div class="n">28</div><div class="l">Slices</div></div>
+      <div class="stat"><div class="n">~74</div><div class="l">Tasks · 1–2h ea</div></div>
+      <div class="stat"><div class="n">5</div><div class="l">HITL gates</div></div>
+      <div class="stat"><div class="n">~2mo</div><div class="l">Target</div></div>
+    </div>
+  </header>
+
+  <div class="legend">
+    <div class="grp"><span class="dot afk"></span><b>AFK</b>&nbsp;build &amp; merge, no human gate</div>
+    <div class="grp"><span class="dot hitl"></span><b>HITL</b>&nbsp;needs a decision / design review</div>
+    <div class="grp"><span class="swatch" style="color:var(--blue)">[n tasks]</span>&nbsp;1–2h chunks in the slice</div>
+    <div class="grp"><span class="mono" style="color:var(--ink-faint)">↳ blocked by</span>&nbsp;dependency</div>
+    <button class="expand-all" id="toggleAll">▸ expand all</button>
+  </div>
+
+  <div class="flow">
+
+    <!-- FOUNDATION -->
+    <div class="stage">
+      <div class="rail" style="background:var(--rail-f)">
+        <div class="badge">F</div>
+        <div class="nm">Foundation Cluster</div>
+        <div class="ph">The spine · enables all</div>
+        <div class="counts"><span><b>5</b> slices</span><span><b>15</b> tasks</span></div>
+      </div>
+      <div class="slices">
+        <div class="slice"><div class="sid">F1</div><div class="sbody"><div class="stitle">App shell runs locally</div><div class="sblock"><b>↳</b> none</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">F2</div><div class="sbody"><div class="stitle">Postgres + pgvector available locally</div><div class="sblock"><b>↳</b> none</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">F3</div><div class="sbody"><div class="stitle">Model Gateway with usage logging <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0004</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">F4</div><div class="sbody"><div class="stitle">Run Ledger spine <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0002</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="tasks">4 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">F5</div><div class="sbody"><div class="stitle">Agent Harness ReAct loop + tool registry</div><div class="sblock"><b>↳</b> F3, F4</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+      </div>
+      <div class="demo"><span class="pin">demo</span><span>Type a question → harness runs a traced multi-step loop calling the model + echo tool, full trace lands in the Run Ledger. Spine works, nothing sourcing-specific yet.</span></div>
+    </div>
+
+    <div class="connector"><div class="ln"></div><div class="chev"></div></div>
+
+    <!-- A -->
+    <div class="stage">
+      <div class="rail" style="background:var(--rail-a)">
+        <div class="badge">A</div>
+        <div class="nm">Cited Sourcing Memory Answer</div>
+        <div class="ph">Port the brain · highest risk</div>
+        <div class="counts"><span><b>7</b> slices</span><span><b>17</b> tasks</span></div>
+      </div>
+      <div class="slices">
+        <div class="slice"><div class="sid">A1</div><div class="sbody"><div class="stitle">Memory schema + ingest → Postgres/pgvector</div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">A2</div><div class="sbody"><div class="stitle">Embeddings + cited retrieval ported <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0001</span></div><div class="sblock"><b>↳</b> A1</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">A3</div><div class="sbody"><div class="stitle">Answer logic ported &mdash; with parity test</div><div class="sblock"><b>↳</b> A2 &nbsp;·&nbsp; <span style="color:var(--hitl)">SQLite-vs-Postgres sign-off</span></div></div><div class="smeta"><span class="tasks">4 tasks</span><span class="tag-type hitl">HITL</span></div></div>
+        <div class="slice"><div class="sid">A4</div><div class="sbody"><div class="stitle">File / export memory import path</div><div class="sblock"><b>↳</b> A1</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">A5</div><div class="sbody"><div class="stitle">search_memory tool</div><div class="sblock"><b>↳</b> A2, F5</div></div><div class="smeta"><span class="tasks">1 task</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">A6</div><div class="sbody"><div class="stitle">Research Chat answers from memory</div><div class="sblock"><b>↳</b> A3, A5, F1 &nbsp;·&nbsp; <span style="color:var(--hitl)">chat design review</span></div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type hitl">HITL</span></div></div>
+        <div class="slice"><div class="sid">A7</div><div class="sbody"><div class="stitle">Memory management page (add / correct)</div><div class="sblock"><b>↳</b> A3</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
+      </div>
+      <div class="demo"><span class="pin">demo</span><span>Import notes → ask a question in chat → cited answer with gaps → inspect the run → correct memory.</span></div>
+    </div>
+
+    <div class="connector"><div class="ln"></div><div class="tag">splits into 2 lanes</div><div class="chev"></div></div>
+
+    <!-- B + C parallel -->
+    <div class="lane">
+      <div class="stage">
+        <div class="rail" style="background:var(--rail-b)">
+          <div class="badge">B</div>
+          <div class="nm">Sourcing State Model</div>
+          <div class="ph">Act like a director</div>
+          <div class="counts"><span><b>5</b></span><span><b>11</b>t</span></div>
+        </div>
+        <div class="slices">
+          <div class="slice"><div class="sid">B1</div><div class="sbody"><div class="stitle">Organizations &amp; Contacts</div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="tasks">2</span><span class="tag-type afk">AFK</span></div></div>
+          <div class="slice"><div class="sid">B2</div><div class="sbody"><div class="stitle">Target Personas</div><div class="sblock"><b>↳</b> B1</div></div><div class="smeta"><span class="tasks">1</span><span class="tag-type afk">AFK</span></div></div>
+          <div class="slice"><div class="sid">B3</div><div class="sbody"><div class="stitle">Outreach History / Outcomes / Follow-Up</div><div class="sblock"><b>↳</b> B1</div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type afk">AFK</span></div></div>
+          <div class="slice"><div class="sid">B4</div><div class="sbody"><div class="stitle">Contact / Organization detail page</div><div class="sblock"><b>↳</b> B3 · <span style="color:var(--hitl)">design</span></div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type hitl">HITL</span></div></div>
+          <div class="slice"><div class="sid">B5</div><div class="sbody"><div class="stitle">Manual Reply Capture</div><div class="sblock"><b>↳</b> B3</div></div><div class="smeta"><span class="tasks">2</span><span class="tag-type afk">AFK</span></div></div>
+        </div>
+      </div>
+      <div class="stage">
+        <div class="rail" style="background:var(--rail-c)">
+          <div class="badge">C</div>
+          <div class="nm">Enrichment</div>
+          <div class="ph">Provenance + usage</div>
+          <div class="counts"><span><b>2</b></span><span><b>6</b>t</span></div>
+        </div>
+        <div class="slices">
+          <div class="slice"><div class="sid">C1</div><div class="sbody"><div class="stitle">Apollo search / enrich tools</div><div class="sblock"><b>↳</b> F5, B1</div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type afk">AFK</span></div></div>
+          <div class="slice"><div class="sid">C2</div><div class="sbody"><div class="stitle">Web Enrichment tools (Apify provider)</div><div class="sblock"><b>↳</b> F5, B1</div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type afk">AFK</span></div></div>
+          <div class="slice" style="opacity:.55"><div class="sid">—</div><div class="sbody"><div class="stitle" style="font-weight:450;color:var(--ink-soft)">No LinkedIn-specific enrichment (out of scope)</div></div></div>
+        </div>
+        <div class="demo"><span class="pin">demo</span><span>Research an Org, enrich Contacts with citations, see Apollo/web usage in the Ledger.</span></div>
+      </div>
+    </div>
+
+    <div class="connector"><div class="ln"></div><div class="tag">lanes merge → needs A + B + C</div><div class="chev"></div></div>
+
+    <!-- D -->
+    <div class="stage">
+      <div class="rail" style="background:var(--rail-d)">
+        <div class="badge">D</div>
+        <div class="nm">Sourcing Artifact Generation</div>
+        <div class="ph">The review-ready output</div>
+        <div class="counts"><span><b>4</b> slices</span><span><b>12</b> tasks</span></div>
+      </div>
+      <div class="slices">
+        <div class="slice"><div class="sid">D1</div><div class="sbody"><div class="stitle">Artifact system + panel</div><div class="sblock"><b>↳</b> A6, F4 &nbsp;·&nbsp; <span style="color:var(--hitl)">artifact shape + panel design</span></div></div><div class="smeta"><span class="tasks">4 tasks</span><span class="tag-type hitl">HITL</span></div></div>
+        <div class="slice"><div class="sid">D2</div><div class="sbody"><div class="stitle">Validation: citation checker + duplicate Contact check</div><div class="sblock"><b>↳</b> D1, B1</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">D3</div><div class="sbody"><div class="stitle">Research Brief / Persona Brief / Lead List generators</div><div class="sblock"><b>↳</b> D1, D2, C1, C2, B2</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">D4</div><div class="sbody"><div class="stitle">Strategy / Standing / Run Summary generators</div><div class="sblock"><b>↳</b> D1, B3</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+      </div>
+      <div class="demo"><span class="pin">demo</span><span>Produce the committed artifact set from memory + enrichment, with citations and duplicate checks, all savable and traceable.</span></div>
+    </div>
+
+    <div class="connector"><div class="ln"></div><div class="chev"></div></div>
+
+    <!-- E -->
+    <div class="stage">
+      <div class="rail" style="background:var(--rail-e)">
+        <div class="badge">E</div>
+        <div class="nm">Routines &amp; Manual Runs</div>
+        <div class="ph">Manual-first · ADR-0003</div>
+        <div class="counts"><span><b>2</b> slices</span><span><b>5</b> tasks</span></div>
+      </div>
+      <div class="slices">
+        <div class="slice"><div class="sid">E1</div><div class="sbody"><div class="stitle">Routine + Playbook model</div><div class="sblock"><b>↳</b> F5</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">E2</div><div class="sbody"><div class="stitle">Routine page + manual run</div><div class="sblock"><b>↳</b> E1, D3 &nbsp;·&nbsp; <span style="color:var(--hitl)">routine-page design</span></div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type hitl">HITL</span></div></div>
+      </div>
+      <div class="demo"><span class="pin">demo</span><span>Save a repeatable Routine, run it manually, see results + artifacts in chat and the Ledger.</span></div>
+    </div>
+
+    <div class="connector"><div class="ln"></div><div class="chev"></div></div>
+
+    <!-- G -->
+    <div class="stage">
+      <div class="rail" style="background:var(--rail-g)">
+        <div class="badge">G</div>
+        <div class="nm">Feedback Loop &amp; Demo Hardening</div>
+        <div class="ph">Close the loop · needs A–E</div>
+        <div class="counts"><span><b>3</b> slices</span><span><b>8</b> tasks</span></div>
+      </div>
+      <div class="slices">
+        <div class="slice"><div class="sid">G1</div><div class="sbody"><div class="stitle">Human feedback → memory / state write-back</div><div class="sblock"><b>↳</b> D1, A7</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">G2</div><div class="sbody"><div class="stitle">Service usage &amp; run status visibility</div><div class="sblock"><b>↳</b> F4, C1, C2</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice"><div class="sid">G3</div><div class="sbody"><div class="stitle">Seeded demo + end-to-end smoke path</div><div class="sblock"><b>↳</b> all above</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+      </div>
+      <div class="demo"><span class="pin">final</span><span>The full sourcing loop: imported memory → chat/routine run → enrichment → artifacts → review → outcome/feedback → memory update. Dependable and repeatable from a clean DB.</span></div>
+    </div>
+
+  </div>
+
+  <footer>
+    <span>Source · docs/superpowers/plans/2026-06-15-sourcecado-full-agent-stack-task-breakdown.md</span>
+    <span>Decisions locked · ADR 0001–0004 · vocab in CONTEXT.md</span>
+  </footer>
+
+</div>
+
+<script>
+const TASKS = {
+  F1:[["F1.1","Scaffold Next.js app shell + base layout / nav","1h","afk"],["F1.2","Add /chat placeholder route + /health route","1h","afk"]],
+  F2:[["F2.1","docker-compose Postgres + pgvector + .env.example","1h","afk"],["F2.2","DB client / access layer + connection config","1h","afk"],["F2.3","Migration runner + baseline migration","1.5h","afk"]],
+  F3:[["F3.1","model_calls migration (task, prompt/version, usage, status, error)","1h","afk"],["F3.2","callModel() with named tasks + prompt/version naming","1.5h","afk"],["F3.3","Structured-output parse + error capture + usage counters","1.5h","afk"]],
+  F4:[["F4.1","runs + run_steps + tool_calls migrations","1.5h","afk"],["F4.2","Run create + step/tool/model logging write path","1.5h","afk"],["F4.3","Run status + error capture on the run","1h","afk"],["F4.4","Run inspector view (read-only trace render)","1.5h","afk"]],
+  F5:[["F5.1","ReAct loop (observation → model → tool → repeat, stop cond.)","2h","afk"],["F5.2","Tool registry + permission classes + class enforcement","1.5h","afk"],["F5.3","echo reference tool + wire loop end-to-end to ledger","1h","afk"]],
+
+  A1:[["A1.1","source_records + memory_chunks migration: pgvector + permission cols","1.5h","afk"],["A1.2","Port ingest (source records, content hashing, dedupe)","2h","afk"],["A1.3","Port chunking + citation construction","1.5h","afk"]],
+  A2:[["A2.1","Embedding generation through Model Gateway → pgvector column","2h","afk"],["A2.2","pgvector similarity query with pre-retrieval permission filter","2h","afk"]],
+  A3:[["A3.1","Port intent classification + fact selection","2h","afk"],["A3.2","Port gap-fact handling + no-memory / no-relevant-memory paths","1.5h","afk"],["A3.3","Parity harness: question set + SQLite-vs-Postgres diff report","2h","afk"],["A3.4","Parity review gate + log accepted deltas","1h","hitl"]],
+  A4:[["A4.1","Import endpoint + source-record creation from upload","2h","afk"],["A4.2","Import result UI with per-file status / skip reasons","1.5h","afk"]],
+  A5:[["A5.1","search_memory tool wrapping retrieval + register it","1.5h","afk"]],
+  A6:[["A6.1","Research Chat UI: message list + input + run trigger","2h","afk"],["A6.2","Inline run status + cited answer + gaps render","1.5h","afk"],["A6.3","Chat-layout design review pass","1h","hitl"]],
+  A7:[["A7.1","add_memory_note tool + write path","1.5h","afk"],["A7.2","Memory management page: list + add + correct","2h","afk"]],
+
+  B1:[["B1.1","organizations + contacts migration","1.5h","afk"],["B1.2","get_contact + get_organization tools + register","1.5h","afk"]],
+  B2:[["B2.1","target_personas migration + association","1.5h","afk"]],
+  B3:[["B3.1","outreach_history + outreach_outcomes migrations","1.5h","afk"],["B3.2","followup_sequence state migration","1h","afk"],["B3.3","list_outreach_history + record_outreach_outcome + update_followup_sequence tools","2h","afk"]],
+  B4:[["B4.1","Detail page data loaders + layout","2h","afk"],["B4.2","History / outcomes / artifacts panels","2h","afk"],["B4.3","Detail-page design review pass","1h","hitl"]],
+  B5:[["B5.1","Manual Reply Capture form + write to outcomes / state","1.5h","afk"],["B5.2","Reply → next-action suggestion run trigger","1.5h","afk"]],
+
+  C1:[["C1.1","Apollo client + usage tracking plumbing","2h","afk"],["C1.2","search_apollo tool + citation records","1.5h","afk"],["C1.3","enrich_apollo_contact tool + write to Contact with provenance","2h","afk"]],
+  C2:[["C2.1","Web provider client (Apify) + usage tracking","2h","afk"],["C2.2","web_enrich_company tool + citations","1.5h","afk"],["C2.3","web_enrich_contact tool + citations","1.5h","afk"]],
+
+  D1:[["D1.1","artifacts migration + create / revise / save tools","2h","afk"],["D1.2","Artifact panel UI + draft / revise / save flow","2h","afk"],["D1.3","Save-artifact-to-memory path","1h","afk"],["D1.4","Artifact shape + panel design review","1h","hitl"]],
+  D2:[["D2.1","Citation checker over artifact claims","2h","afk"],["D2.2","Duplicate Contact check","1.5h","afk"]],
+  D3:[["D3.1","Organization Research Brief generator","2h","afk"],["D3.2","Target Persona Brief generator","1.5h","afk"],["D3.3","Sourcing Lead List generator + dup check wiring","2h","afk"]],
+  D4:[["D4.1","Outreach Strategy generator","2h","afk"],["D4.2","Current Sourcing Standing Summary generator","2h","afk"],["D4.3","Run Summary generator from ledger","1.5h","afk"]],
+
+  E1:[["E1.1","routines + playbooks migration","1.5h","afk"],["E1.2","configure_routine tool","1.5h","afk"]],
+  E2:[["E2.1","Routine setup page (config form)","2h","afk"],["E2.2","Manual “Run now” → harness run + results in chat","2h","afk"],["E2.3","Routine-page design review","1h","hitl"]],
+
+  G1:[["G1.1","human_feedback migration + accept / reject / edit / note capture","2h","afk"],["G1.2","Feedback → memory / state write-back","2h","afk"],["G1.3","flag_knowledge_gap tool + surface in answers","1.5h","afk"]],
+  G2:[["G2.1","Usage rollup query over the ledger","1.5h","afk"],["G2.2","Usage + run-status UI surface","1.5h","afk"]],
+  G3:[["G3.1","Demo seed / fixture dataset","2h","afk"],["G3.2","End-to-end smoke test of the full loop","2h","afk"],["G3.3","Demo runbook + reset script","1h","afk"]]
+};
+
+document.querySelectorAll('.slice').forEach(slice => {
+  const sidEl = slice.querySelector('.sid');
+  if(!sidEl) return;
+  const sid = sidEl.textContent.trim();
+  const rows = TASKS[sid];
+  if(!rows) return;
+
+  slice.classList.add('clickable');
+  const exp = document.createElement('span');
+  exp.className = 'exp';
+  (slice.querySelector('.smeta') || slice).appendChild(exp);
+
+  const panel = document.createElement('div');
+  panel.className = 'subtasks';
+  panel.innerHTML = '<div class="subhdr">' + rows.length + ' task' + (rows.length>1?'s':'') + ' · ~1–2h each</div>' +
+    rows.map(r =>
+      '<div class="subtask">' +
+        '<span class="st-id">'+r[0]+'</span>' +
+        '<span class="st-title">'+r[1]+'</span>' +
+        '<span class="st-est">~'+r[2]+'</span>' +
+        '<span class="st-type '+r[3]+'">'+r[3].toUpperCase()+'</span>' +
+      '</div>'
+    ).join('');
+  slice.insertAdjacentElement('afterend', panel);
+
+  slice.addEventListener('click', () => {
+    const open = slice.classList.toggle('open');
+    panel.classList.toggle('open', open);
+  });
+});
+
+const btn = document.getElementById('toggleAll');
+let allOpen = false;
+btn.addEventListener('click', () => {
+  allOpen = !allOpen;
+  document.querySelectorAll('.slice.clickable').forEach(s => s.classList.toggle('open', allOpen));
+  document.querySelectorAll('.subtasks').forEach(p => p.classList.toggle('open', allOpen));
+  btn.textContent = allOpen ? '▾ collapse all' : '▸ expand all';
+});
+</script>
+</body>
+</html>

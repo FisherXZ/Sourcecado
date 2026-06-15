@@ -1,0 +1,49 @@
+<h2>Proposed Architecture</h2>
+<p class="subtitle">One memory layer, multiple surfaces. No duplicated retrieval logic.</p>
+
+<div class="mockup">
+  <div class="mockup-header">SourcyAvo Architecture After Roadmap</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr;gap:16px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="placeholder">
+          <strong>CLI Admin</strong><br />
+          ingest<br />refresh<br />verify
+        </div>
+        <div class="placeholder">
+          <strong>MCP Read Tools</strong><br />
+          ask<br />search<br />sources<br />gaps
+        </div>
+        <div class="placeholder">
+          <strong>Research Chat</strong><br />
+          same read API<br />simple UX
+        </div>
+      </div>
+
+      <div class="placeholder" style="background:#f7f3e8">
+        <strong>Shared Read Service</strong><br />
+        sourceScope + temporal filters + retrieval + answer contract
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        <div class="placeholder">Source Records</div>
+        <div class="placeholder">Chunks</div>
+        <div class="placeholder">Entities / Relationships</div>
+        <div class="placeholder">Temporal Facts</div>
+      </div>
+
+      <div class="placeholder" style="background:#eef7f0">
+        <strong>Real Codeology Source Material</strong><br />
+        Notion exports, Sheets, Drive docs, email exports
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <p class="label">Borrowed Patterns</p>
+  <ul>
+    <li><strong>GBrain:</strong> MCP read surface and source-scoped retrieval helper.</li>
+    <li><strong>Graphiti:</strong> validity windows and invalidation instead of deleting history.</li>
+  </ul>
+</div>
