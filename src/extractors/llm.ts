@@ -10,7 +10,6 @@ import {
 } from "../types.js";
 import {
   ExtractionError,
-  type ExtractionInput,
   type Extractor
 } from "./types.js";
 
