@@ -25,8 +25,6 @@ Ping this endpoint to confirm the app is up.
 npm test
 ```
 
-Tests use mocked extraction and never make live model calls.
-
 ## Project structure
 
 - `src/app/` — Next.js 15 app router pages and layouts
