@@ -12,9 +12,15 @@ const variants = {
   ghost: "bg-transparent border border-border text-text hover:border-accent hover:text-accent-deep",
 };
 
+// Exposed so non-<button> elements (e.g. a Next.js <Link> used as a CTA) can wear
+// the button look without nesting an interactive element inside another.
+export function buttonClasses(variant: "primary" | "ghost" = "primary", className = "") {
+  return `${base} ${variants[variant]} ${className}`;
+}
+
 export function Button({ variant = "primary", children, className = "", ...rest }: Props) {
   return (
-    <button className={`${base} ${variants[variant]} ${className}`} {...rest}>
+    <button type={rest.type ?? "button"} className={buttonClasses(variant, className)} {...rest}>
       {children}
     </button>
   );

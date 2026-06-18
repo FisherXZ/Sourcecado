@@ -27,7 +27,7 @@ Establish the token layer and load the two typefaces. This is the foundation eve
 **Files:**
 - Modify: `src/app/globals.css` (replace entirely)
 - Modify: `src/app/layout.tsx`
-- Create: `src/app/fonts/GeneralSans-Variable.woff2` (downloaded asset)
+- Create: `src/app/fonts/GeneralSans-{400,500,600,700}.woff2` (downloaded assets)
 - Modify: `package.json` (add `geist` dependency)
 
 **Interfaces:**
@@ -41,15 +41,22 @@ npm install geist
 ```
 Expected: `geist` added to `dependencies` in `package.json`.
 
-- [ ] **Step 2: Download the General Sans variable font**
+- [ ] **Step 2: Download the General Sans weights**
 
-Download the variable woff2 from Fontshare into the fonts dir:
+Fontshare's CSS API serves four static weight files (400/500/600/700), not a single
+variable file — so self-host all four. Fetch the API CSS, extract the woff2 URLs (in
+weight order), and download each:
 ```bash
 mkdir -p src/app/fonts
-curl -fsSL "https://fontshare-cdn.b-cdn.net/fonts/general-sans/fonts/GeneralSans-Variable.woff2" -o src/app/fonts/GeneralSans-Variable.woff2
-ls -la src/app/fonts/GeneralSans-Variable.woff2
+curl -fsSL "https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap" -o /tmp/gs.css
+urls=($(grep -oE "//cdn.fontshare.com/[^']+\.woff2" /tmp/gs.css))
+i=0; for w in 400 500 600 700; do
+  curl -fsSL "https:${urls[$i]}" -o "src/app/fonts/GeneralSans-${w}.woff2"; i=$((i+1));
+done
+ls -la src/app/fonts/   # expect four ~23KB woff2 files
 ```
-Expected: a non-empty `.woff2` file (~60–120KB). If that URL 404s, download `GeneralSans-Variable.woff2` from https://www.fontshare.com/fonts/general-sans (Download family → extract the `Fonts/variable/` woff2) and place it at the same path. Verify the file is > 10KB before continuing.
+Expected: `GeneralSans-400.woff2` … `GeneralSans-700.woff2`, each > 10KB. (A single
+variable woff2 is not exposed by the API; the four-weight self-host is the supported path.)
 
 - [ ] **Step 3: Replace `globals.css` with the token layer**
 
@@ -131,9 +138,13 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 const generalSans = localFont({
-  src: "./fonts/GeneralSans-Variable.woff2",
+  src: [
+    { path: "./fonts/GeneralSans-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/GeneralSans-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/GeneralSans-600.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/GeneralSans-700.woff2", weight: "700", style: "normal" },
+  ],
   variable: "--font-general-sans",
-  weight: "400 700",
   display: "swap",
 });
 
@@ -172,7 +183,7 @@ grep -c "GeistMono" src/app/layout.tsx        # expect 1
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/app/globals.css src/app/layout.tsx src/app/fonts/GeneralSans-Variable.woff2 package.json package-lock.json
+git add src/app/globals.css src/app/layout.tsx src/app/fonts/ package.json package-lock.json
 git commit -m "feat(fd): wire Warm Operator design tokens + General Sans/Geist Mono fonts"
 ```
 
@@ -1024,9 +1035,13 @@ import { AppShell } from "@/components/ui";
 import { NAV } from "@/lib/nav";
 
 const generalSans = localFont({
-  src: "./fonts/GeneralSans-Variable.woff2",
+  src: [
+    { path: "./fonts/GeneralSans-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/GeneralSans-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/GeneralSans-600.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/GeneralSans-700.woff2", weight: "700", style: "normal" },
+  ],
   variable: "--font-general-sans",
-  weight: "400 700",
   display: "swap",
 });
 

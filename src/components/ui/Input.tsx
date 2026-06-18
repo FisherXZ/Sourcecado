@@ -16,7 +16,7 @@ export function Toggle({
 }: {
   on: boolean;
   onToggle?: () => void;
-  label?: string;
+  label: string; // required: a switch must have an accessible name
 }) {
   return (
     <button

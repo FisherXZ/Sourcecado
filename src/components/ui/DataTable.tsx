@@ -29,17 +29,32 @@ export function DataTable<T>({
         <thead>
           <tr>
             {onToggleRow && <th className="sticky top-0 w-[34px] bg-surface" />}
-            {columns.map((col) => (
-              <th
-                key={col.key}
-                onClick={col.sortable && onSort ? () => onSort(col.key) : undefined}
-                className={`sticky top-0 whitespace-nowrap border-b border-border bg-surface px-3.5 py-2.5 text-[11px] font-medium uppercase tracking-wide text-muted ${
-                  col.numeric ? "text-right" : "text-left"
-                } ${col.sortable ? "cursor-pointer hover:text-accent-deep" : ""}`}
-              >
-                {col.header}
-              </th>
-            ))}
+            {columns.map((col) => {
+              const sortable = col.sortable && onSort;
+              return (
+                <th
+                  key={col.key}
+                  aria-sort={sortable ? "none" : undefined}
+                  className={`sticky top-0 whitespace-nowrap border-b border-border bg-surface px-3.5 py-2.5 text-[11px] font-medium uppercase tracking-wide text-muted ${
+                    col.numeric ? "text-right" : "text-left"
+                  }`}
+                >
+                  {sortable ? (
+                    <button
+                      type="button"
+                      onClick={() => onSort(col.key)}
+                      className={`-mx-1 rounded-[4px] px-1 uppercase tracking-wide hover:text-accent-deep focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-tint ${
+                        col.numeric ? "w-full text-right" : "text-left"
+                      }`}
+                    >
+                      {col.header}
+                    </button>
+                  ) : (
+                    col.header
+                  )}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -50,13 +65,16 @@ export function DataTable<T>({
               <tr
                 key={id}
                 onClick={onToggleRow ? () => onToggleRow(id) : undefined}
-                className={`cursor-pointer border-b border-border ${
-                  selected ? "bg-accent-tint" : "hover:bg-raised"
-                }`}
+                className={`border-b border-border ${
+                  onToggleRow ? "cursor-pointer" : ""
+                } ${selected ? "bg-accent-tint" : onToggleRow ? "hover:bg-raised" : ""}`}
               >
                 {onToggleRow && (
                   <td className="px-3.5">
                     <span
+                      role="checkbox"
+                      aria-checked={!!selected}
+                      aria-label={selected ? "Deselect row" : "Select row"}
                       className={`inline-block h-[15px] w-[15px] rounded-[4px] border ${
                         selected ? "border-accent bg-accent" : "border-border"
                       }`}

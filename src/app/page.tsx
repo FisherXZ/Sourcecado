@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Button } from "@/components/ui";
+import { buttonClasses } from "@/components/ui";
 
 export default function Home() {
   return (
@@ -9,8 +9,8 @@ export default function Home() {
         Hosted sourcing operating system for Codeology. Ask questions about contacts,
         outreach history, and sourcing context — with cited answers.
       </p>
-      <Link href="/chat">
-        <Button>Open Research Chat</Button>
+      <Link href="/chat" className={buttonClasses()}>
+        Open Research Chat
       </Link>
     </div>
   );

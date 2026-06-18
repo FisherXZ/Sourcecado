@@ -12,6 +12,7 @@ import {
   DataTable,
   type Column,
 } from "@/components/ui";
+import { NAV } from "@/lib/nav";
 
 type Row = { id: string; name: string; company: string; fit: number; status: "go" | "draft" | "reply" };
 const rows: Row[] = [
@@ -98,7 +99,7 @@ export default function Styleguide() {
           <h2 className="font-mono text-[11px] uppercase tracking-wider text-muted">AppShell (live nav)</h2>
           <div className="overflow-hidden rounded-[12px] border border-border">
             <AppShell
-              nav={[{ label: "Research Chat", href: "/chat" }]}
+              nav={NAV}
               activeHref="/chat"
               user={{ name: "Fisher X", role: "Sourcing Director" }}
               inspector={<div className="text-[13px] text-muted">Inspector pane</div>}

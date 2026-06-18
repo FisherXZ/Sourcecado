@@ -1,4 +1,4 @@
-export { Button } from "./Button";
+export { Button, buttonClasses } from "./Button";
 export { StatusPill, Tag } from "./StatusPill";
 export { Input, Toggle } from "./Input";
 export { Card } from "./Card";

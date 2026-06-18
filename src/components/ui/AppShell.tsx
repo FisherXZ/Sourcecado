@@ -1,5 +1,7 @@
+"use client";
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { AvocadoMark } from "./AvocadoMark";
 
 export type NavItem = { label: string; href: string; icon?: ReactNode };
@@ -17,6 +19,10 @@ export function AppShell({
   inspector?: ReactNode;
   children: ReactNode;
 }) {
+  // Derive the active route from the URL when the caller doesn't pass one
+  // explicitly (the common case from the server-rendered root layout).
+  const pathname = usePathname();
+  const current = activeHref ?? pathname;
   return (
     <div
       className={`grid min-h-screen grid-cols-1 ${
@@ -40,7 +46,7 @@ export function AppShell({
         </Link>
         <nav className="flex flex-col gap-0.5">
           {nav.map((item) => {
-            const active = item.href === activeHref;
+            const active = item.href === current;
             return (
               <Link
                 key={item.href}
