@@ -1,41 +1,39 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
+import localFont from "next/font/local";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
+import { AppShell } from "@/components/ui";
+import { NAV } from "@/lib/nav";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+const generalSans = localFont({
+  src: [
+    { path: "./fonts/GeneralSans-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/GeneralSans-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/GeneralSans-600.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/GeneralSans-700.woff2", weight: "700", style: "normal" },
+  ],
+  variable: "--font-general-sans",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "SourcyAvo",
-  description: "Sourcing memory system for Codeology",
+  title: "Sourcecado",
+  description: "Hosted team sourcing operating system for Codeology",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      data-theme="light"
+      className={`${generalSans.variable} ${GeistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-white text-gray-900">
-        <nav className="border-b border-gray-200 px-6 py-3 flex items-center gap-6 text-sm">
-          <span className="font-semibold tracking-tight">SourcyAvo</span>
-          <Link href="/chat" className="text-gray-500 hover:text-gray-900">
-            Research Chat
-          </Link>
-        </nav>
-        <main className="flex-1">{children}</main>
+      <body className="min-h-full bg-canvas text-text font-sans">
+        <AppShell nav={NAV} user={{ name: "Sourcing Director", role: "Codeology" }}>
+          {children}
+        </AppShell>
       </body>
     </html>
   );

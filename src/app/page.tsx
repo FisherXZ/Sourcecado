@@ -1,18 +1,16 @@
 import Link from "next/link";
+import { Button } from "@/components/ui";
 
 export default function Home() {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 text-center px-6">
-      <h1 className="text-3xl font-semibold tracking-tight">SourcyAvo</h1>
-      <p className="text-gray-500 max-w-sm">
-        Sourcing memory system for Codeology. Ask questions about contacts,
-        outreach history, and sourcing context.
+    <div className="mx-auto flex min-h-[60vh] max-w-[640px] flex-col items-center justify-center gap-4 px-6 text-center">
+      <h1 className="text-[32px] font-semibold tracking-tight">Sourcecado</h1>
+      <p className="max-w-sm text-muted">
+        Hosted sourcing operating system for Codeology. Ask questions about contacts,
+        outreach history, and sourcing context — with cited answers.
       </p>
-      <Link
-        href="/chat"
-        className="mt-2 px-5 py-2 rounded-full bg-gray-900 text-white text-sm hover:bg-gray-700 transition-colors"
-      >
-        Open Research Chat
+      <Link href="/chat">
+        <Button>Open Research Chat</Button>
       </Link>
     </div>
   );

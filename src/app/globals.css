@@ -1,26 +1,64 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --canvas: #FAF8F3;
+  --surface: #FEFDFB;
+  --raised: #F5F2EA;
+  --text: #2B2722;
+  --muted: #6B6259;
+  --border: #E7E3DA;
+  --accent: #5B8C2A;
+  --accent-tint: #EBF1DF;
+  --accent-deep: #3E5E1C;
+  --pit: #C2703D;
+  --pit-tint: #F7EADF;
+  --warn-bg: #FBEFD8;
+  --warn-tx: #92591B;
+  --neg-bg: #FBE6E1;
+  --neg-tx: #9B3B2E;
+}
+
+[data-theme="dark"] {
+  --canvas: #1A1815;
+  --surface: #232019;
+  --raised: #2C2821;
+  --text: #F0EBE2;
+  --muted: #A8A096;
+  --border: #3A352D;
+  --accent: #8FBF5C;
+  --accent-tint: #2C3320;
+  --accent-deep: #B7DC8C;
+  --pit: #D98A57;
+  --pit-tint: #36281D;
+  --warn-bg: #3A2E16;
+  --warn-tx: #E0B062;
+  --neg-bg: #3A211B;
+  --neg-tx: #E08A77;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-tint: var(--accent-tint);
+  --color-accent-deep: var(--accent-deep);
+  --color-pit: var(--pit);
+  --color-pit-tint: var(--pit-tint);
+  --color-warn-bg: var(--warn-bg);
+  --color-warn-tx: var(--warn-tx);
+  --color-neg-bg: var(--neg-bg);
+  --color-neg-tx: var(--neg-tx);
+  --font-sans: var(--font-general-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans, Arial, Helvetica, sans-serif);
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }

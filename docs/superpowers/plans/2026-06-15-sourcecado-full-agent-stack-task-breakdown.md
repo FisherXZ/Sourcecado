@@ -65,13 +65,13 @@ Type: AFK · Blocked by: none
 route placeholder and a health page. No agent logic yet.
 
 **Acceptance criteria:**
-- [ ] `npm run dev` serves the app locally
-- [ ] `/chat` renders a placeholder; `/health` returns OK
-- [ ] README updated with run instructions
+- [x] `npm run dev` serves the app locally
+- [x] `/chat` renders a placeholder; `/health` returns OK
+- [x] README updated with run instructions
 
 **Tasks:**
-- [ ] F1.1 Scaffold Next.js app shell + base layout/nav (~1h) · AFK
-- [ ] F1.2 Add `/chat` placeholder route + `/health` route (~1h) · AFK
+- [x] F1.1 Scaffold Next.js app shell + base layout/nav (~1h) · AFK
+- [x] F1.2 Add `/chat` placeholder route + `/health` route (~1h) · AFK
 
 ## F2 — Postgres + pgvector available locally
 Type: AFK · Blocked by: none
@@ -80,14 +80,38 @@ Type: AFK · Blocked by: none
 access layer and a migration runner that later slices add migrations to.
 
 **Acceptance criteria:**
-- [ ] `docker compose up` starts Postgres with the `vector` extension enabled
-- [ ] App connects via env-configured connection string
-- [ ] Migration runner applies an empty baseline migration and is idempotent
+- [x] `docker compose up` starts Postgres with the `vector` extension enabled
+- [x] App connects via env-configured connection string
+- [x] Migration runner applies an empty baseline migration and is idempotent
 
 **Tasks:**
-- [ ] F2.1 docker-compose Postgres + pgvector + `.env.example` (~1h) · AFK
-- [ ] F2.2 DB client/access layer + connection config (~1h) · AFK
-- [ ] F2.3 Migration runner + baseline migration (~1.5h) · AFK
+- [x] F2.1 docker-compose Postgres + pgvector + `.env.example` (~1h) · AFK
+- [x] F2.2 DB client/access layer + connection config (~1h) · AFK
+- [x] F2.3 Migration runner + baseline migration (~1.5h) · AFK
+
+## FD — Design Foundation (Warm Operator)
+Type: AFK · Blocked by: F1 · Done: 2026-06-18
+
+**What to build:** Wire DESIGN.md ("Warm Operator") into the app — Tailwind v4 tokens
++ self-hosted General Sans / Geist Mono, a reusable primitive kit
+(`src/components/ui`: AppShell, Button, StatusPill/Tag, DataTable, Input/Toggle, Card,
+EmptyState), retrofit of the F1 shell, and a `/styleguide` catalog. All later UI slices
+build on these primitives instead of restyling. See
+`docs/superpowers/plans/2026-06-18-design-foundation-retrofit.md`.
+
+**Acceptance criteria:**
+- [x] DESIGN.md tokens are the single source; no raw hex in `src/components` or `src/app/*.tsx`
+- [x] Primitive kit exists with render tests; existing backend suite stays green
+- [x] F1 shell renders on AppShell; UI renamed to Sourcecado; `/styleguide` matches the approved preview
+
+**Tasks:**
+- [x] FD.1 Design tokens + font wiring (~1h) · AFK
+- [x] FD.2 UI test infra + Button/StatusPill (~1.5h) · AFK
+- [x] FD.3 Input/Toggle/Card/EmptyState (~1h) · AFK
+- [x] FD.4 DataTable (~1.5h) · AFK
+- [x] FD.5 AppShell (~1.5h) · AFK
+- [x] FD.6 F1 retrofit + Sourcecado rename (~1h) · AFK
+- [x] FD.7 /styleguide catalog page (~1h) · AFK
 
 ## F3 — Model Gateway with usage logging
 Type: AFK · Blocked by: F2
@@ -122,7 +146,7 @@ the trace for one run.
 - [ ] F4.1 `runs` + `run_steps` + `tool_calls` migrations (~1.5h) · AFK
 - [ ] F4.2 Run create + step/tool/model logging write path (~1.5h) · AFK
 - [ ] F4.3 Run status + error capture on the run (~1h) · AFK
-- [ ] F4.4 Run inspector view (read-only trace render) (~1.5h) · AFK
+- [ ] F4.4 Run inspector view (read-only trace render) (~1.5h) · AFK (build with src/components/ui primitives)
 
 ## F5 — Agent Harness ReAct loop
 Type: AFK · Blocked by: F3, F4
@@ -216,7 +240,7 @@ Imported sources become source records with citations.
 
 **Tasks:**
 - [ ] A4.1 Import endpoint + source-record creation from upload (~2h) · AFK
-- [ ] A4.2 Import result UI with per-file status/skip reasons (~1.5h) · AFK
+- [ ] A4.2 Import result UI with per-file status/skip reasons (~1.5h) · AFK (build with src/components/ui primitives)
 
 ## A5 — search_memory tool
 Type: AFK · Blocked by: A2, F5
@@ -244,9 +268,9 @@ design review.
 - [ ] A link opens the run inspector for that answer
 
 **Tasks:**
-- [ ] A6.1 Research Chat UI: message list + input + run trigger (~2h) · AFK
+- [ ] A6.1 Research Chat UI: message list + input + run trigger (~2h) · AFK (build with src/components/ui primitives)
 - [ ] A6.2 Inline run status + cited answer + gaps render (~1.5h) · AFK
-- [ ] A6.3 Chat-layout design review pass (~1h) · HITL
+- [ ] A6.3 Verify Research Chat matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL
 
 ## A7 — Memory management page (add/correct)
 Type: AFK · Blocked by: A3
@@ -260,7 +284,7 @@ memory (the memory-correction path from `src/`).
 
 **Tasks:**
 - [ ] A7.1 `add_memory_note` tool + write path (~1.5h) · AFK
-- [ ] A7.2 Memory management page: list + add + correct (~2h) · AFK
+- [ ] A7.2 Memory management page: list + add + correct (~2h) · AFK (build with src/components/ui primitives)
 
 **FEATURE A DEMO:** import sourcing notes, ask a question in chat, get a cited answer
 with gaps, inspect the run, and correct memory.
@@ -327,9 +351,9 @@ and artifacts. HITL for one design review.
 - [ ] Page links to the runs that produced those artifacts
 
 **Tasks:**
-- [ ] B4.1 Detail page data loaders + layout (~2h) · AFK
-- [ ] B4.2 History/outcomes/artifacts panels (~2h) · AFK
-- [ ] B4.3 Detail-page design review pass (~1h) · HITL
+- [ ] B4.1 Detail page data loaders + layout (~2h) · AFK (build with src/components/ui primitives)
+- [ ] B4.2 History/outcomes/artifacts panels (~2h) · AFK (build with src/components/ui primitives)
+- [ ] B4.3 Verify Contact/Org detail matches DESIGN.md + uses primitives (~1h) · HITL
 
 ## B5 — Manual Reply Capture
 Type: AFK · Blocked by: B3
@@ -409,9 +433,9 @@ decision.
 
 **Tasks:**
 - [ ] D1.1 `artifacts` migration + create/revise/save tools (~2h) · AFK
-- [ ] D1.2 Artifact panel UI + draft/revise/save flow (~2h) · AFK
+- [ ] D1.2 Artifact panel UI + draft/revise/save flow (~2h) · AFK (build with src/components/ui primitives)
 - [ ] D1.3 Save-artifact-to-memory path (~1h) · AFK
-- [ ] D1.4 Artifact shape + panel design review (~1h) · HITL
+- [ ] D1.4 Verify artifact panel matches DESIGN.md + uses primitives; confirm artifact shape (~1h) · HITL
 
 ## D2 — Validation: citation checker + duplicate Contact check
 Type: AFK · Blocked by: D1, B1
@@ -494,9 +518,9 @@ harness; results show in Research Chat + the Run Ledger. HITL for routine-page d
 - [ ] The routine run is fully recorded in the Run Ledger
 
 **Tasks:**
-- [ ] E2.1 Routine setup page (config form) (~2h) · AFK
+- [ ] E2.1 Routine setup page (config form) (~2h) · AFK (build with src/components/ui primitives)
 - [ ] E2.2 Manual "Run now" → harness run + results in chat (~2h) · AFK
-- [ ] E2.3 Routine-page design review (~1h) · HITL
+- [ ] E2.3 Verify Routine setup page matches DESIGN.md + uses primitives (~1h) · HITL
 
 ---
 
@@ -532,7 +556,7 @@ calls, model usage) from the Run Ledger in the UI.
 
 **Tasks:**
 - [ ] G2.1 Usage rollup query over the ledger (~1.5h) · AFK
-- [ ] G2.2 Usage + run-status UI surface (~1.5h) · AFK
+- [ ] G2.2 Usage + run-status UI surface (~1.5h) · AFK (build with src/components/ui primitives)
 
 ## G3 — Seeded demo + end-to-end smoke path
 Type: AFK · Blocked by: all above
