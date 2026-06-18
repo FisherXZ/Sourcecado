@@ -11,6 +11,21 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) to see the app. Navigate to `/chat` for the Research Chat interface.
 
+## Database (local Postgres + pgvector)
+
+The app uses Postgres with the `vector` extension. `DATABASE_URL` is read from the
+environment (there is no `.env` auto-loading yet), so export it before running migrations
+or DB-backed tests.
+
+```bash
+docker compose up -d          # Postgres + pgvector on :5432
+export DATABASE_URL=postgresql://sourcecado:sourcecado@localhost:5432/sourcecado
+npm run migrate               # enables pgvector + applies the baseline migration
+```
+
+`.env.example` documents the connection variables. Migrations live in `src/migrations/`
+and are applied in filename order; `npm run migrate` is idempotent.
+
 ## Health check
 
 ```
@@ -24,6 +39,11 @@ Ping this endpoint to confirm the app is up.
 ```bash
 npm test
 ```
+
+The DB-backed tests (`tests/db-client.test.ts`, `tests/migrate.test.ts`) require Postgres
+running and `DATABASE_URL` exported (see [Database](#database-local-postgres--pgvector)).
+The legacy SQLite CLI suite is currently broken (`better-sqlite3` native bindings — see
+[TODOS.md](TODOS.md)); the web app tests are unaffected.
 
 ## Project structure
 

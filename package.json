@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
+    "migrate": "tsx scripts/migrate.ts",
     "stress": "tsx scripts/stress.ts"
   },
   "dependencies": {
