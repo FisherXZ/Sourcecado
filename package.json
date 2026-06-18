@@ -1,20 +1,30 @@
 {
   "name": "sourcecado",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
     "test": "vitest run",
-    "stress": "tsx scripts/stress.ts",
-    "sourcyavo": "node dist/src/cli.js"
+    "stress": "tsx scripts/stress.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^11.9.1"
+    "better-sqlite3": "^11.9.1",
+    "next": "15.3.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.13.10",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "15.3.3",
+    "tailwindcss": "^4",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2",
     "vitest": "^3.0.8"
