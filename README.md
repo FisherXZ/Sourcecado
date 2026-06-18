@@ -1,58 +1,46 @@
 # Sourcecado
 
-SourcyAvo is a local-first sourcing memory CLI for Codeology sourcing context. It ingests exported source files, refreshes structured memory, and answers sourcing-history questions with citations, gaps, and next actions.
+Sourcecado is a hosted team sourcing operating system for Codeology. It preserves contacts, sourcing history, source citations, knowledge gaps, outcomes, and human feedback — and surfaces an autonomous sourcing agent that tells Sourcing Directors what to do next.
 
-This MVP is single-user local memory. It does not enforce app-level permissions. Only ingest files you are allowed to use.
-
-## Install
+## Getting started
 
 ```bash
 npm install
-npm run build
+npm run dev
 ```
 
-## Commands
+Open [http://localhost:3000](http://localhost:3000) to see the app. Navigate to `/chat` for the Research Chat interface.
 
-```bash
-npm run sourcyavo -- ingest seed-data/
-npm run sourcyavo -- refresh
-npm run sourcyavo -- ask "Who needs follow-up for AI safety?"
+## Health check
+
+```
+GET /api/health → { "status": "ok" }
 ```
 
-The local SQLite database lives at `.sourcyavo/memory.db`.
+Ping this endpoint to confirm the app is up.
 
-## Source Formats
-
-`ingest` accepts exported `.md`, `.txt`, `.csv`, and `.eml` files.
-
-CSV extraction is deterministic and works locally without an API key. Markdown, text, and email refresh use the LLM extractor:
-
-```bash
-export OPENAI_API_KEY="..."
-export SOURCYAVO_LLM_MODEL="<model>"
-npm run sourcyavo -- refresh
-```
-
-Tests use mocked extraction and never make live model calls.
-
-## Answer Contract
-
-Every answer uses four sections:
-
-- `Answer`: direct sourcing-memory synthesis.
-- `Evidence`: source citations for factual claims.
-- `Gaps`: missing, candidate, conflicted, or stale memory.
-- `Next Action`: the next sourcing step to take.
-
-## Local Verification
+## Run tests
 
 ```bash
 npm test
-npm run build
-rm -rf .sourcyavo
-npm run sourcyavo -- ingest tests/fixtures/seed-data
-npm run sourcyavo -- refresh
-npm run sourcyavo -- ask "Who needs follow-up for AI safety?"
 ```
 
-If the fixture folder includes markdown or email files, `refresh` requires `OPENAI_API_KEY` and `SOURCYAVO_LLM_MODEL`. For CSV-only local verification without LLM config, copy only CSV fixtures into a temp folder and run the same three CLI commands.
+## Project structure
+
+- `src/app/` — Next.js 15 app router pages and layouts
+- `src/app/api/health/` — health endpoint
+- `src/app/chat/` — Research Chat page
+- `tests/` — Vitest test suite
+- `docs/` — design specs, ADRs, and roadmap documents
+
+## Documentation
+
+- [AGENTS.md](AGENTS.md) — product direction, roadmap guardrails, and agent architecture
+- [CHANGELOG.md](CHANGELOG.md) — version history
+- [CONTEXT.md](CONTEXT.md) — domain language and sourcing terminology
+- [TODOS.md](TODOS.md) — open work items and known issues
+- [docs/superpowers/specs/](docs/superpowers/specs/) — full design specs
+
+## Legacy CLI
+
+The original `sourcyavo` CLI (ingest / refresh / ask) is not available in v0.2.0.0. The `better-sqlite3` native bindings require a rebuild; see TODOS.md. The web app is the primary interface going forward.
