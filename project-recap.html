@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sourcecado / SourcyAvo Project Recap</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17211b;
+        --muted: #5f6b63;
+        --paper: #fbfaf5;
+        --panel: #ffffff;
+        --line: #d9dfd6;
+        --green: #2f6f4e;
+        --green-soft: #e7f2eb;
+        --blue: #315d8c;
+        --blue-soft: #e7eef7;
+        --gold: #8b6724;
+        --gold-soft: #f5ecd6;
+        --red: #8a3c37;
+        --red-soft: #f5e4e2;
+        --shadow: 0 18px 48px rgba(23, 33, 27, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        line-height: 1.55;
+      }
+
+      main {
+        width: min(1120px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 56px;
+      }
+
+      header {
+        padding: 42px 0 28px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: var(--green);
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        line-height: 1.1;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        max-width: 860px;
+        font-size: clamp(2.3rem, 6vw, 5rem);
+      }
+
+      h2 {
+        font-size: clamp(1.5rem, 3vw, 2.2rem);
+      }
+
+      h3 {
+        font-size: 1.05rem;
+      }
+
+      p {
+        margin: 0;
+      }
+
+      .lede {
+        max-width: 820px;
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 1.1rem;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 24px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 7px 11px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.7);
+        color: var(--muted);
+        font-size: 0.88rem;
+        font-weight: 650;
+      }
+
+      section {
+        margin-top: 34px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 16px;
+      }
+
+      .grid.three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid.two {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .card {
+        min-width: 0;
+        padding: 20px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .card h3 {
+        margin-bottom: 8px;
+      }
+
+      .card p,
+      li {
+        color: var(--muted);
+      }
+
+      .stat {
+        color: var(--ink);
+        font-size: 2rem;
+        font-weight: 850;
+        line-height: 1;
+      }
+
+      .stat-label {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 0.94rem;
+      }
+
+      .timeline {
+        position: relative;
+        display: grid;
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .timeline-item {
+        display: grid;
+        grid-template-columns: 138px 1fr;
+        gap: 18px;
+        padding: 18px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .date {
+        color: var(--green);
+        font-weight: 800;
+      }
+
+      .tag {
+        display: inline-flex;
+        margin: 0 6px 6px 0;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 0.78rem;
+        font-weight: 750;
+      }
+
+      .tag.green {
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .tag.blue {
+        background: var(--blue-soft);
+        color: var(--blue);
+      }
+
+      .tag.gold {
+        background: var(--gold-soft);
+        color: var(--gold);
+      }
+
+      .tag.red {
+        background: var(--red-soft);
+        color: var(--red);
+      }
+
+      ul {
+        margin: 12px 0 0;
+        padding-left: 1.2rem;
+      }
+
+      li + li {
+        margin-top: 7px;
+      }
+
+      code {
+        padding: 2px 5px;
+        border-radius: 5px;
+        background: #eef1eb;
+        color: #26392e;
+        font-family:
+          "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-size: 0.92em;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 14px 0 0;
+        padding: 14px;
+        border-radius: 8px;
+        background: #17211b;
+        color: #f6f7f2;
+        font-size: 0.9rem;
+      }
+
+      pre code {
+        padding: 0;
+        background: transparent;
+        color: inherit;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .flow-step {
+        min-height: 116px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .flow-step strong {
+        display: block;
+        margin-bottom: 7px;
+      }
+
+      .flow-step span {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .callout {
+        padding: 18px 20px;
+        border-left: 5px solid var(--green);
+        border-radius: 8px;
+        background: var(--green-soft);
+      }
+
+      .callout.warning {
+        border-color: var(--gold);
+        background: var(--gold-soft);
+      }
+
+      .footer-note {
+        margin-top: 34px;
+        padding-top: 22px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      @media (max-width: 880px) {
+        .grid.three,
+        .grid.two,
+        .flow {
+          grid-template-columns: 1fr;
+        }
+
+        .timeline-item {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">Project recap</p>
+        <h1>Sourcecado / SourcyAvo so far</h1>
+        <p class="lede">
+          We shaped SourcyAvo from an idea into a local-first sourcing memory
+          CLI for Codeology. The project now has domain language, architecture
+          docs, a tested TypeScript implementation, procedure memory, fixtures,
+          and a hardened CSV ingestion path.
+        </p>
+        <div class="meta" aria-label="Project metadata">
+          <span class="pill">Generated: 2026-06-07</span>
+          <span class="pill">Repo: Sourcecado</span>
+          <span class="pill">Branch: main</span>
+          <span class="pill">Latest commit: 7deed8d</span>
+        </div>
+      </header>
+
+      <section aria-labelledby="snapshot-heading">
+        <h2 id="snapshot-heading">Snapshot</h2>
+        <div class="grid three" style="margin-top: 16px">
+          <article class="card">
+            <div class="stat">40</div>
+            <p class="stat-label">Vitest tests passing across 8 test files</p>
+          </article>
+          <article class="card">
+            <div class="stat">3</div>
+            <p class="stat-label">CLI commands: ingest, refresh, ask</p>
+          </article>
+          <article class="card">
+            <div class="stat">4</div>
+            <p class="stat-label">Source formats: markdown, text, CSV, email</p>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="story-heading">
+        <h2 id="story-heading">How The Project Took Shape</h2>
+        <div class="timeline">
+          <article class="timeline-item">
+            <div class="date">Initial setup</div>
+            <div>
+              <h3>Sourcecado repo started</h3>
+              <p>
+                The repository began as the home for SourcyAvo, a sourcing
+                memory system for Codeology rather than a generic chatbot or
+                document-search demo.
+              </p>
+              <p style="margin-top: 8px">
+                <span class="tag blue">commit 383add3</span>
+                <span class="tag blue">commit 8d72ac2</span>
+              </p>
+            </div>
+          </article>
+
+          <article class="timeline-item">
+            <div class="date">2026-06-04</div>
+            <div>
+              <h3>Product framing and domain language</h3>
+              <p>
+                We defined the SourcyAvo vocabulary in <code>CONTEXT.md</code>:
+                Contact, Sourcing Lead, Source Material, Source Citation,
+                Knowledge Gap, Memory Refresh, Research Chat, Officer Context,
+                and Restricted Sourcing Context.
+              </p>
+              <ul>
+                <li>Sourcing means external-facing relationship work, not applicant recruiting.</li>
+                <li>The first user is the Codeology Sourcing Director.</li>
+                <li>The first interface is Research Chat; dashboards and CRM workflows are deferred.</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="timeline-item">
+            <div class="date">2026-06-04</div>
+            <div>
+              <h3>Architecture designed around a teachable memory layer</h3>
+              <p>
+                We chose the "Teachable Club Brain" path: keep source records,
+                chunks, citations, entities, relationships, semantic facts,
+                knowledge gaps, and memory refresh while avoiding a full GBrain
+                clone.
+              </p>
+              <p style="margin-top: 8px">
+                <span class="tag green">source-grounded answers</span>
+                <span class="tag green">relationship graph</span>
+                <span class="tag green">gap analysis</span>
+                <span class="tag gold">local-first MVP</span>
+              </p>
+            </div>
+          </article>
+
+          <article class="timeline-item">
+            <div class="date">Planning</div>
+            <div>
+              <h3>Implementation plan reviewed and tightened</h3>
+              <p>
+                The plan locked the CLI milestone around TypeScript, Node.js,
+                SQLite, Vitest, deterministic hashed embeddings, deterministic
+                CSV extraction, mocked test extraction, and LLM extraction for
+                markdown/email behind an interface.
+              </p>
+              <ul>
+                <li>Permission enforcement was explicitly deferred from the MVP.</li>
+                <li>The ADR kept the future direction: permission boundaries must be enforced before retrieval, not by prompt alone.</li>
+                <li>The plan required non-hardcoded fixtures and failure-mode tests.</li>
+              </ul>
+            </div>
+          </article>
+
+          <article class="timeline-item">
+            <div class="date">Main build</div>
+            <div>
+              <h3>Local sourcing memory CLI implemented</h3>
+              <p>
+                The first major implementation landed in commit
+                <code>f89fd9d</code>, adding the full CLI, database schema,
+                ingestion, extraction, refresh, answer synthesis, procedures,
+                fixtures, tests, and README.
+              </p>
+              <p style="margin-top: 8px">
+                <span class="tag blue">TypeScript</span>
+                <span class="tag blue">better-sqlite3</span>
+                <span class="tag blue">Vitest</span>
+              </p>
+            </div>
+          </article>
+
+          <article class="timeline-item">
+            <div class="date">Hardening</div>
+            <div>
+              <h3>CSV sourcing ingest hardened</h3>
+              <p>
+                The latest commit, <code>7deed8d</code>, improved CSV parsing
+                and sourcing extraction so quoted fields, commas, line breaks,
+                owner metadata, status semantics, and stale facts are handled
+                more carefully.
+              </p>
+              <p style="margin-top: 8px">
+                <span class="tag green">src/csv.ts</span>
+                <span class="tag green">stronger answer tests</span>
+                <span class="tag green">stale fact coverage</span>
+              </p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="built-heading">
+        <h2 id="built-heading">What Is Built</h2>
+        <div class="flow" aria-label="SourcyAvo memory flow">
+          <div class="flow-step">
+            <strong>1. Ingest</strong>
+            <span>Read exported markdown, text, CSV, and email files into source records and chunks.</span>
+          </div>
+          <div class="flow-step">
+            <strong>2. Chunk</strong>
+            <span>Create citation-backed memory chunks with hashes and deterministic embeddings.</span>
+          </div>
+          <div class="flow-step">
+            <strong>3. Extract</strong>
+            <span>Use deterministic CSV extraction or LLM-backed structured extraction for unstructured files.</span>
+          </div>
+          <div class="flow-step">
+            <strong>4. Refresh</strong>
+            <span>Cache extraction runs, merge aliases, dedupe facts, flag conflicts, and mark stale memory.</span>
+          </div>
+          <div class="flow-step">
+            <strong>5. Ask</strong>
+            <span>Answer sourcing-history questions with Answer, Evidence, Gaps, and Next Action.</span>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="implementation-heading">
+        <h2 id="implementation-heading">Implementation Inventory</h2>
+        <div class="grid two" style="margin-top: 16px">
+          <article class="card">
+            <h3>Core source files</h3>
+            <ul>
+              <li><code>src/db.ts</code>: SQLite database creation, migrations, WAL, foreign keys.</li>
+              <li><code>src/ingest.ts</code>: folder ingestion with per-file errors and source/chunk writes.</li>
+              <li><code>src/chunk.ts</code>: text and CSV chunking behavior.</li>
+              <li><code>src/csv.ts</code>: CSV parser/serializer for quoted-field-safe row handling.</li>
+              <li><code>src/embeddings.ts</code>: deterministic local vector embedding for retrieval tests.</li>
+              <li><code>src/refresh.ts</code>: learn/clean loop, cache reuse, alias merge, dedupe, conflicts, stale facts.</li>
+              <li><code>src/answer.ts</code>: retrieval and four-section sourcing answer formatting.</li>
+              <li><code>src/cli.ts</code>: <code>ingest</code>, <code>refresh</code>, and <code>ask</code> commands.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Extractor layer</h3>
+            <ul>
+              <li><code>src/extractors/types.ts</code>: shared extracted-candidate contract.</li>
+              <li><code>src/extractors/csv.ts</code>: deterministic sourcing tracker extraction.</li>
+              <li><code>src/extractors/llm.ts</code>: OpenAI-compatible structured extraction wrapper for markdown/email.</li>
+              <li><code>src/extractors/mock.ts</code>: test extractor so tests do not make live model calls.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Procedure memory</h3>
+            <ul>
+              <li><code>procedures/SOURCYAVO.md</code>: SourcyAvo operating context.</li>
+              <li><code>procedures/answer-format.md</code>: required answer sections.</li>
+              <li><code>procedures/citation-rules.md</code>: citation discipline.</li>
+              <li><code>procedures/gap-analysis.md</code>: how to surface uncertainty and missing context.</li>
+              <li><code>procedures/outreach-tone.md</code>: sourcing answer tone.</li>
+              <li><code>procedures/memory-refresh.md</code>: refresh behavior notes.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Tests and fixtures</h3>
+            <ul>
+              <li>Schema, type, procedure, ingestion, extractor, refresh, answer, and CLI smoke tests.</li>
+              <li>Fixtures cover CSV sourcing trackers, duplicate aliases, conflicting statuses, markdown notes, and email threads.</li>
+              <li>Latest verification: <strong>8 test files passed, 40 tests passed</strong>.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="contracts-heading">
+        <h2 id="contracts-heading">Key Contracts</h2>
+        <div class="grid two" style="margin-top: 16px">
+          <article class="card">
+            <h3>Answer contract</h3>
+            <p>Every sourcing answer must include these four sections:</p>
+            <ul>
+              <li><strong>Answer:</strong> direct sourcing-memory synthesis.</li>
+              <li><strong>Evidence:</strong> source citations for factual claims.</li>
+              <li><strong>Gaps:</strong> missing, candidate, conflicted, or stale memory.</li>
+              <li><strong>Next Action:</strong> the next useful sourcing step.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Extraction cache contract</h3>
+            <p>
+              Extraction runs are cached by chunk hash plus extractor type,
+              extractor version, prompt hash, schema version, and model name.
+              This lets unchanged chunks reuse previous extraction outputs
+              while invalidating stale extractor behavior.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Clean memory rules</h3>
+            <ul>
+              <li>High-confidence non-conflicting facts become accepted.</li>
+              <li>Low-confidence facts stay candidate.</li>
+              <li>Same subject and predicate with different objects become conflicted.</li>
+              <li>Previously accepted facts missing in later refreshes become stale gaps.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Local-only boundary</h3>
+            <p>
+              The MVP is single-user local memory. It does not enforce app-level
+              permissions yet, so source material should only be ingested when
+              the user is already allowed to use it.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="commands-heading">
+        <h2 id="commands-heading">How It Runs</h2>
+        <div class="card" style="margin-top: 16px">
+          <p>The documented local workflow is:</p>
+          <pre><code>npm install
+npm run build
+npm run sourcyavo -- ingest seed-data/
+npm run sourcyavo -- refresh
+npm run sourcyavo -- ask "Who needs follow-up for AI safety?"</code></pre>
+          <p style="margin-top: 14px">
+            The local SQLite database lives at <code>.sourcyavo/memory.db</code>.
+            CSV-only refresh works locally without model configuration.
+            Markdown, text, and email refresh use the LLM extractor and require
+            <code>OPENAI_API_KEY</code> plus <code>SOURCYAVO_LLM_MODEL</code>.
+          </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="verification-heading">
+        <h2 id="verification-heading">Verification</h2>
+        <div class="grid two" style="margin-top: 16px">
+          <article class="card">
+            <h3>Passing checks</h3>
+            <ul>
+              <li><code>vitest run</code>: 8 test files passed, 40 tests passed.</li>
+              <li><code>tsc -p tsconfig.json</code>: passed.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Runtime note</h3>
+            <p>
+              The default Codex bundled Node 24 runtime could not load the
+              existing <code>better-sqlite3</code> native binary because it was
+              built for Node ABI 131. Verification passed under the Homebrew
+              Node 23.7.0 runtime that matches the installed native module.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="open-heading">
+        <h2 id="open-heading">Open Work</h2>
+        <div class="grid two" style="margin-top: 16px">
+          <article class="card">
+            <h3>Deferred by design</h3>
+            <ul>
+              <li>Permissioned multi-user memory layer.</li>
+              <li>Live Notion, Drive, Gmail, Sheets, or Messenger connectors.</li>
+              <li>Agent tools over the memory layer.</li>
+              <li>Thin Research Chat web app.</li>
+              <li>Production embedding provider and LLM extraction evals.</li>
+              <li>Autonomous outreach or message sending.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h3>Decisions still worth resolving</h3>
+            <ul>
+              <li>Canonical naming: <code>Sourcecado</code> repo versus <code>SourcyAvo</code> product.</li>
+              <li>Exact first real source materials from Codeology Notion, Drive, Sheets, and email.</li>
+              <li>Whether Messenger data can be used safely at all.</li>
+              <li>Which agent harness should consume the memory layer first.</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="status-heading">
+        <h2 id="status-heading">Current Repo Status</h2>
+        <div class="callout warning" style="margin-top: 16px">
+          <p>
+            The working tree has one untracked file:
+            <code>prove-and-plain-english-skills.zip</code>. This recap also
+            adds <code>project-recap.html</code>. No existing project files were
+            changed while generating this recap.
+          </p>
+        </div>
+      </section>
+
+      <p class="footer-note">
+        Source artifacts used for this recap: <code>README.md</code>,
+        <code>CONTEXT.md</code>, <code>docs/designs/2026-06-04-sourcyavo-office-hours-design.md</code>,
+        <code>docs/superpowers/specs/2026-06-04-sourcyavo-architecture-design.md</code>,
+        <code>docs/superpowers/plans/2026-06-04-sourcyavo-memory-layer-cli.md</code>,
+        <code>docs/adr/0001-permissioned-memory-layer.md</code>, source files,
+        tests, and git history through <code>7deed8d</code>.
+      </p>
+    </main>
+  </body>
+</html>

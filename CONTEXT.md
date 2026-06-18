@@ -16,6 +16,30 @@ _Avoid_: Lead, prospect, account
 A Contact currently worth considering for outreach because there is a timely reason Codeology may want to build or renew the relationship. A Sourcing Lead is a state of a Contact, not a separate kind of record.
 _Avoid_: Prospect, target, recommended Contact
 
+**Organization**:
+A company, lab, school, fund, nonprofit, or other group that Codeology may want to research or contact. Organizations are Contacts when Codeology relates to the group itself, and they can also contain individual Contacts.
+_Avoid_: Account, company account, buyer account
+
+**Target Persona**:
+A role or profile pattern worth finding within an Organization, such as engineering manager, university recruiter, founder, PM, alumni contact, or technical decision-maker. Target Personas guide sourcing; they are not individual Contacts.
+_Avoid_: Buyer, lead type, ICP persona
+
+**Follow-Up Sequence**:
+The planned outreach cadence for a Contact after initial outreach, including timing, draft strategy, stop conditions, and outcome tracking. The sequence prepares follow-up work but does not imply automatic sending.
+_Avoid_: Sales sequence, drip campaign, automated send
+
+**Manual Reply Capture**:
+The Sourcing Director's act of recording reply text, reply notes, or an outreach outcome inside Sourcecado. Manual Reply Capture lets the agent classify the response and suggest next actions without requiring email inbox integration.
+_Avoid_: Inbox sync, automatic reply handling, email monitoring
+
+**Web Enrichment**:
+The agent's use of public web research providers to gather recent company, contact, and market context with source citations. Web Enrichment can use providers such as search APIs or Apify, but LinkedIn-specific enrichment is outside the committed build.
+_Avoid_: LinkedIn scraping, uncited research, data exhaust
+
+**Outreach Outcome**:
+The result of a sourcing attempt with a Contact, such as replied, no response, interested, not a fit, needs follow-up, met, or booked. Outreach Outcomes update memory and can change the Contact's Follow-Up Sequence.
+_Avoid_: CRM status, disposition, pipeline stage
+
 **Sourcing Memory System**:
 The sourcing-specific memory layer that helps Codeology remember relationships, past decisions, internal context, sourcing outcomes, and useful patterns across semesters. SourcyAvo is the sourcing-facing product experience built on this memory system and connected to a capable agent harness.
 _Avoid_: Chatbot, document search, generic RAG
@@ -25,12 +49,40 @@ A synthesized answer from the Sourcing Memory System that directly responds to a
 _Avoid_: Search result, raw retrieval, generated response
 
 **Research Chat**:
-The first user-facing SourcyAvo interface where a Sourcing Director asks sourcing questions and receives Sourcing Memory Answers. Dedicated dashboards, browsing panels, and management pages are deferred until after the MVP.
+The real-time interactive surface where a Sourcing Director talks with the agent, asks sourcing questions, gives one-off instructions, and receives grounded answers or artifacts. Recurring or background agent processes are configured on a separate routine surface, not inside chat.
 _Avoid_: Dashboard, admin panel, CRM
 
+**Playbook**:
+A reusable sourcing instruction set that tells the agent how to perform a class of sourcing work, including targets, personas, tone, exclusions, and follow-up rules. A Playbook can be used by chat or by a Routine, but it is not the recurring process itself.
+_Avoid_: Workflow builder, automation platform, campaign
+
+**Routine**:
+A configured recurring or background agent process that runs a Playbook on a schedule or saved trigger. Routines are managed outside Research Chat, though their results can be discussed and inspected in chat.
+_Avoid_: Workflow sync, Codex loop, automation platform
+
 **Agent Harness**:
-The runtime that connects SourcyAvo's Sourcing Memory System to a capable agent experience. The memory system should be portable enough to work with OpenClaw-, Hermes-, Codex-, or Claude-style agent harnesses rather than being trapped inside one chat UI.
+The runtime boundary centered on the ReAct-style tool-use loop that calls models, executes tools, observes results, and continues until it produces an answer, artifact, or failure. It also records runs and connects Sourcecado's Sourcing Memory System to sourcing work; its runtime primitives can be generic, but its memory and tool use should remain grounded in Sourcecado's sourcing domain.
 _Avoid_: Chat wrapper, app shell, model
+
+**Run Ledger**:
+Sourcecado's durable record of what happened during a sourcing agent run, including the work performed, evidence used, artifacts produced, failures encountered, and human feedback received. It is the product-owned observability spine; external tracing can support debugging, but should not replace it.
+_Avoid_: Chat transcript, hidden reasoning log, generic trace
+
+**Artifact**:
+A durable output produced or saved during chat, a Routine, or another sourcing run, such as research notes, outreach strategy, draft content, or a run summary. Chat messages are not memory by default, but accepted or saved artifacts can become source-backed memory.
+_Avoid_: Message, scratchpad, transcript
+
+**Draft Artifact**:
+A Sourcecado-owned outreach draft saved for review, including its intended Contact, Organization, evidence, personalization claims, and follow-up context. Draft Artifacts are internal outputs; creating or sending Gmail messages is outside the committed build.
+_Avoid_: Sent email, Gmail draft, automated outreach
+
+**Review-Ready Artifact**:
+An Artifact that has enough citation support and duplicate-contact checking for a Sourcing Director to inspect and decide whether to use it. Review-ready does not mean automatically approved, legally compliant, or safe to send without human judgment.
+_Avoid_: Auto-approved output, compliance-cleared output, send-ready message
+
+**Model Gateway**:
+The Sourcecado boundary for using models in product workflows, including extraction, embeddings, reranking, synthesis, drafting, and evaluation. It is not transformer infrastructure; it is the product-facing layer that chooses and observes model calls.
+_Avoid_: Transformer layer, model internals, LLM wrapper
 
 **Source Citation**:
 A reference to the specific source record behind a claim in a Sourcing Memory Answer. Source Citations help Sourcing Directors verify where SourcyAvo's understanding came from.
@@ -87,10 +139,6 @@ _Avoid_: Partner, connection, worked-with person
 **Outreach History**:
 The record of who Codeology contacted, why they were contacted, what was sent, who responded, who needed follow-up, and what ultimately happened. Outreach History includes both successes and misses so Sourcing Directors can learn what worked and what did not.
 _Avoid_: Message log, email archive, CRM data
-
-**Outreach Outcome**:
-The result of a sourcing attempt with a Contact, such as responded, did not respond, needs follow-up, worth researching more, worked with Codeology, or not a fit.
-_Avoid_: Status, result, disposition
 
 **Sourcing Director**:
 A Codeology officer responsible for finding, prioritizing, and contacting potential people, organizations, alumni, sponsors, speakers, or partners for club-related outreach.
