@@ -30,8 +30,10 @@ export async function runMigrations(db: postgres.Sql): Promise<void> {
     `;
     if (already.length > 0) continue;
 
-    const sql = await readFile(join(migrationsDir, file), "utf8");
-    await db.unsafe(sql);
-    await db`INSERT INTO schema_migrations (name) VALUES (${file})`;
+    const migrationSql = await readFile(join(migrationsDir, file), "utf8");
+    await db.begin(async (tx) => {
+      await tx.unsafe(migrationSql);
+      await tx`INSERT INTO schema_migrations (name) VALUES (${file})`;
+    });
   }
 }

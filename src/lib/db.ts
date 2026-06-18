@@ -10,3 +10,10 @@ export function getDb(): postgres.Sql {
   }
   return _db;
 }
+
+export async function closeDb(): Promise<void> {
+  if (!_db) return;
+
+  await _db.end();
+  _db = null;
+}
