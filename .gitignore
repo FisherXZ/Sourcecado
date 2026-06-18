@@ -8,3 +8,8 @@ dist/
 .DS_Store
 .superpowers/
 prove-and-plain-english-skills.zip
+
+# Environment files
+.env
+.env.local
+.env.*.local
