@@ -51,8 +51,8 @@ CREATE TABLE IF NOT EXISTS run_steps (
 
 CREATE TABLE IF NOT EXISTS model_calls (
   id                   BIGSERIAL PRIMARY KEY,
-  run_id               BIGINT REFERENCES runs(id) ON DELETE SET NULL,
-  run_step_id          BIGINT REFERENCES run_steps(id) ON DELETE SET NULL,
+  run_id               BIGINT REFERENCES runs(id) ON DELETE CASCADE,
+  run_step_id          BIGINT REFERENCES run_steps(id) ON DELETE CASCADE,
   task_name            TEXT NOT NULL,
   prompt_version       TEXT NOT NULL,
   prompt_hash          TEXT NOT NULL,
@@ -78,8 +78,8 @@ CREATE TABLE IF NOT EXISTS model_calls (
 
 CREATE TABLE IF NOT EXISTS tool_calls (
   id             BIGSERIAL PRIMARY KEY,
-  run_id         BIGINT REFERENCES runs(id) ON DELETE SET NULL,
-  run_step_id    BIGINT REFERENCES run_steps(id) ON DELETE SET NULL,
+  run_id         BIGINT REFERENCES runs(id) ON DELETE CASCADE,
+  run_step_id    BIGINT REFERENCES run_steps(id) ON DELETE CASCADE,
   tool_name      TEXT NOT NULL,
   status         TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'cancelled')),
   arguments_json JSONB,

@@ -15,7 +15,7 @@ function listSourceFiles(dir: string): string[] {
 }
 
 describe("model provider boundary", () => {
-  it("keeps provider SDK imports and direct model URLs inside the Model Gateway", () => {
+  it("keeps AI SDK imports and direct model URLs inside the Model Gateway", () => {
     const violations: string[] = [];
 
     for (const file of listSourceFiles(srcRoot)) {
@@ -27,6 +27,9 @@ describe("model provider boundary", () => {
       const source = readFileSync(file, "utf8");
       if (source.includes("@ai-sdk/")) {
         violations.push(`${relativePath}: imports provider SDK directly`);
+      }
+      if (/from\s+["']ai["']/.test(source)) {
+        violations.push(`${relativePath}: imports AI SDK core directly`);
       }
       if (source.includes("https://api.openai.com") || source.includes("api.deepseek.com")) {
         violations.push(`${relativePath}: calls model provider HTTP API directly`);

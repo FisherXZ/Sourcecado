@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
 import { getRunTrace, type RunStepTrace } from "@/lib/ledger";
+import { isRunInspectorEnabled } from "@/lib/run-inspector-access";
 
 interface RunPageProps {
   params: Promise<{ id: string }>;
@@ -9,6 +10,10 @@ interface RunPageProps {
 const jsonPreviewLimit = 20_000;
 
 export default async function RunPage({ params }: RunPageProps) {
+  if (!isRunInspectorEnabled()) {
+    notFound();
+  }
+
   const { id } = await params;
   const runId = Number(id);
   if (!Number.isInteger(runId) || runId <= 0) {
