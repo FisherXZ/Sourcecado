@@ -18,11 +18,20 @@ describe("runMigrations()", () => {
     await closeDb();
   });
 
-  it("creates the schema_migrations table on a fresh database", async () => {
+  async function resetMigrationTables(): Promise<void> {
     const db = getDb();
-    // wipe any prior run so this test is repeatable
+    await db`DROP TABLE IF EXISTS tool_calls CASCADE`;
+    await db`DROP TABLE IF EXISTS model_calls CASCADE`;
+    await db`DROP TABLE IF EXISTS run_steps CASCADE`;
+    await db`DROP TABLE IF EXISTS runs CASCADE`;
+    await db`DROP TABLE IF EXISTS migration_probe CASCADE`;
     await db`DROP TABLE IF EXISTS schema_migrations CASCADE`;
+  }
 
+  it("creates the schema_migrations table on a fresh database", async () => {
+    await resetMigrationTables();
+
+    const db = getDb();
     await runMigrations(db);
 
     const rows = await db`
@@ -42,10 +51,9 @@ describe("runMigrations()", () => {
     );
     cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tempRoot);
 
-    const db = getDb();
-    await db`DROP TABLE IF EXISTS migration_probe CASCADE`;
-    await db`DROP TABLE IF EXISTS schema_migrations CASCADE`;
+    await resetMigrationTables();
 
+    const db = getDb();
     await runMigrations(db);
 
     const migrationRows = await db`
@@ -57,5 +65,81 @@ describe("runMigrations()", () => {
     `;
     expect(migrationRows.length).toBe(1);
     expect(tableRows.length).toBe(1);
+  });
+
+  it("creates run ledger and model gateway tables", async () => {
+    await resetMigrationTables();
+
+    const db = getDb();
+    await runMigrations(db);
+
+    const rows = await db`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name IN ('runs', 'run_steps', 'model_calls', 'tool_calls')
+      ORDER BY table_name
+    `;
+    expect(rows.map((row) => row.table_name)).toEqual([
+      "model_calls",
+      "run_steps",
+      "runs",
+      "tool_calls",
+    ]);
+  });
+
+  it("rejects invalid run ledger statuses and step kinds", async () => {
+    await resetMigrationTables();
+
+    const db = getDb();
+    await runMigrations(db);
+    const [run] = await db`
+      INSERT INTO runs (run_type, title, status)
+      VALUES ('test', 'Constraint test', 'running')
+      RETURNING id
+    `;
+
+    await expect(db`
+      INSERT INTO runs (run_type, status)
+      VALUES ('test', 'done')
+    `).rejects.toThrow();
+    await expect(db`
+      INSERT INTO run_steps (run_id, step_kind, name, status)
+      VALUES (${run.id}, 'unknown', 'Bad kind', 'running')
+    `).rejects.toThrow();
+    await expect(db`
+      INSERT INTO run_steps (run_id, step_kind, name, status)
+      VALUES (${run.id}, 'model', 'Bad status', 'done')
+    `).rejects.toThrow();
+  });
+
+  it("rejects orphan model and tool call run steps", async () => {
+    await resetMigrationTables();
+
+    const db = getDb();
+    await runMigrations(db);
+    const [run] = await db`
+      INSERT INTO runs (run_type, title, status)
+      VALUES ('test', 'Foreign key test', 'running')
+      RETURNING id
+    `;
+
+    await expect(db`
+      INSERT INTO model_calls (
+        run_id,
+        run_step_id,
+        task_name,
+        prompt_version,
+        prompt_hash,
+        provider,
+        model,
+        call_kind,
+        status
+      )
+      VALUES (${run.id}, 999999, 'probe', '1', 'hash', 'test', 'test-model', 'generate_text', 'running')
+    `).rejects.toThrow();
+    await expect(db`
+      INSERT INTO tool_calls (run_id, run_step_id, tool_name, status)
+      VALUES (${run.id}, 999999, 'probe_tool', 'running')
+    `).rejects.toThrow();
   });
 });

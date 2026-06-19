@@ -9,7 +9,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    fileParallelism: false,
     globals: true,
-    tsconfig: "./tsconfig.test.json",
+    typecheck: {
+      tsconfig: "./tsconfig.test.json",
+    },
   },
 });

@@ -35,7 +35,10 @@ function readFixture(name: string): string {
   return readFileSync(join(process.cwd(), "tests", "fixtures", "seed-data", name), "utf8");
 }
 
-function restoreEnv(name: "OPENAI_API_KEY" | "SOURCYAVO_LLM_MODEL", value: string | undefined): void {
+function restoreEnv(
+  name: "DEEPSEEK_API_KEY" | "SOURCECADO_GENERATION_MODEL",
+  value: string | undefined
+): void {
   if (value === undefined) {
     delete process.env[name];
   } else {
@@ -51,10 +54,10 @@ afterEach(() => {
 
 describe("refreshMemory", () => {
   it("refreshes CSV-only memory without LLM model configuration", async () => {
-    const previousKey = process.env.OPENAI_API_KEY;
-    const previousModel = process.env.SOURCYAVO_LLM_MODEL;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.SOURCYAVO_LLM_MODEL;
+    const previousKey = process.env.DEEPSEEK_API_KEY;
+    const previousModel = process.env.SOURCECADO_GENERATION_MODEL;
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.SOURCECADO_GENERATION_MODEL;
 
     const dir = tempDir();
     const db = tempDb(dir);
@@ -70,17 +73,17 @@ describe("refreshMemory", () => {
     try {
       await expect(refreshMemory(db)).resolves.toMatchObject({ failed: 0, extracted: 1 });
     } finally {
-      restoreEnv("OPENAI_API_KEY", previousKey);
-      restoreEnv("SOURCYAVO_LLM_MODEL", previousModel);
+      restoreEnv("DEEPSEEK_API_KEY", previousKey);
+      restoreEnv("SOURCECADO_GENERATION_MODEL", previousModel);
     }
     db.close();
   });
 
   it("returns a clear missing-config error when unstructured sources need LLM extraction", async () => {
-    const previousKey = process.env.OPENAI_API_KEY;
-    const previousModel = process.env.SOURCYAVO_LLM_MODEL;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.SOURCYAVO_LLM_MODEL;
+    const previousKey = process.env.DEEPSEEK_API_KEY;
+    const previousModel = process.env.SOURCECADO_GENERATION_MODEL;
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.SOURCECADO_GENERATION_MODEL;
 
     const dir = tempDir();
     const db = tempDb(dir);
@@ -88,10 +91,10 @@ describe("refreshMemory", () => {
     ingestFolder(db, dir);
 
     try {
-      await expect(refreshMemory(db)).rejects.toThrow(/OPENAI_API_KEY/);
+      await expect(refreshMemory(db)).rejects.toThrow(/DEEPSEEK_API_KEY/);
     } finally {
-      restoreEnv("OPENAI_API_KEY", previousKey);
-      restoreEnv("SOURCYAVO_LLM_MODEL", previousModel);
+      restoreEnv("DEEPSEEK_API_KEY", previousKey);
+      restoreEnv("SOURCECADO_GENERATION_MODEL", previousModel);
     }
     db.close();
   });
