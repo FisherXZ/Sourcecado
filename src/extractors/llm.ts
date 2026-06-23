@@ -49,6 +49,14 @@ export function createLlmExtractor(config: LlmExtractorConfig = {}): Extractor {
     );
   }
 
+  // The Model Gateway's default DeepSeek provider reads DEEPSEEK_API_KEY from
+  // the environment. Honor an explicitly supplied config.apiKey by populating
+  // the env when it isn't already set, so a configured key actually takes
+  // effect instead of passing validation here and failing at call time.
+  if (!config.provider && config.apiKey?.trim() && !process.env.DEEPSEEK_API_KEY?.trim()) {
+    process.env.DEEPSEEK_API_KEY = config.apiKey;
+  }
+
   const provider = config.provider ?? createModelGatewayProvider();
 
   return {
