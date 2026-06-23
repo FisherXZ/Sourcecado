@@ -132,37 +132,39 @@ export async function callModel<TObject = unknown>(
       })
     : null;
 
-  const [modelCall] = await db`
-    INSERT INTO model_calls (
-      run_id,
-      run_step_id,
-      task_name,
-      prompt_version,
-      prompt_hash,
-      provider,
-      model,
-      call_kind,
-      status,
-      request_json
-    )
-    VALUES (
-      ${input.trace?.runId ?? null},
-      ${runStep?.id ?? null},
-      ${input.taskName},
-      ${input.promptVersion},
-      ${promptHash},
-      ${providerName},
-      ${model},
-      ${input.kind},
-      'running',
-      ${capturePayloads ? toJson(db, requestPayload) : null}
-    )
-    RETURNING id
-  `;
-
-  const modelCallId = Number(modelCall.id);
+  let modelCallId: number | null = null;
+  let recordedSuccess = false;
 
   try {
+    const [modelCall] = await db`
+      INSERT INTO model_calls (
+        run_id,
+        run_step_id,
+        task_name,
+        prompt_version,
+        prompt_hash,
+        provider,
+        model,
+        call_kind,
+        status,
+        request_json
+      )
+      VALUES (
+        ${input.trace?.runId ?? null},
+        ${runStep?.id ?? null},
+        ${input.taskName},
+        ${input.promptVersion},
+        ${promptHash},
+        ${providerName},
+        ${model},
+        ${input.kind},
+        'running',
+        ${capturePayloads ? toJson(db, requestPayload) : null}
+      )
+      RETURNING id
+    `;
+    modelCallId = Number(modelCall.id);
+
     const providerResult = await executeProvider(input, providerName, model);
     const output = validateAndBuildOutput<TObject>(input, providerResult);
     const usage = normalizeUsage(providerResult.usage);
@@ -182,6 +184,7 @@ export async function callModel<TObject = unknown>(
           updated_at = now()
       WHERE id = ${modelCallId}
     `;
+    recordedSuccess = true;
 
     if (runStep) {
       await finishRunStep(db, {
@@ -200,22 +203,34 @@ export async function callModel<TObject = unknown>(
       usage,
     };
   } catch (error) {
+    // A failure after the model call was already recorded as succeeded is a
+    // ledger bookkeeping error (e.g. finishRunStep), not a provider failure.
+    // Rewriting the succeeded row to 'failed' would corrupt the trace and make
+    // callers retry a call that already succeeded — surface the error instead.
+    if (recordedSuccess) {
+      throw error;
+    }
+
     const gatewayError =
       error instanceof ModelGatewayError
         ? error
         : new ModelGatewayError("provider_error", errorMessage(error), { cause: error });
     const errorJson = serializeError(gatewayError.cause ?? gatewayError);
 
-    await db`
-      UPDATE model_calls
-      SET status = 'failed',
-          error_type = ${gatewayError.code},
-          error_message = ${gatewayError.message},
-          error_json = ${toJson(db, errorJson)},
-          completed_at = now(),
-          updated_at = now()
-      WHERE id = ${modelCallId}
-    `;
+    // modelCallId is null only when the INSERT itself failed; there is no row
+    // to mark failed, but the run step (if any) still needs to be closed out.
+    if (modelCallId !== null) {
+      await db`
+        UPDATE model_calls
+        SET status = 'failed',
+            error_type = ${gatewayError.code},
+            error_message = ${gatewayError.message},
+            error_json = ${toJson(db, errorJson)},
+            completed_at = now(),
+            updated_at = now()
+        WHERE id = ${modelCallId}
+      `;
+    }
 
     if (runStep) {
       await failRunStep(db, {
