@@ -1,7 +1,6 @@
 import { closeDb, getDb } from "@/lib/db";
 import {
   failRun,
-  failRunStep,
   failToolCall,
   finishRun,
   finishRunStep,

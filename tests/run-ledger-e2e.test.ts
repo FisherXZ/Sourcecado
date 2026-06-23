@@ -170,6 +170,7 @@ describe("F3/F4 run ledger integration", () => {
     expect(toolStep?.toolCalls[0]).toMatchObject({
       toolName: "apollo.searchContacts",
       status: "succeeded",
+      metadata: { ledgerCategory: "credits" },
       result: { creditsUsed: 1 },
     });
 
