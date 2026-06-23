@@ -13,6 +13,10 @@ export default defineConfig({
   esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
+    fileParallelism: false,
     globals: true,
+    typecheck: {
+      tsconfig: "./tsconfig.test.json",
+    },
   },
 });

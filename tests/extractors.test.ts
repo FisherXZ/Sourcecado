@@ -294,9 +294,14 @@ describe("LLM extractor", () => {
   });
 
   it("requires model config when creating an unstructured LLM extractor", () => {
-    expect(() => createLlmExtractor({ apiKey: "test-key", model: "" })).toThrow(ExtractionError);
     expect(() => createLlmExtractor({ apiKey: "", model: "test-model" })).toThrow(
-      /OPENAI_API_KEY/
+      /DEEPSEEK_API_KEY/
     );
+  });
+
+  it("does not use the legacy OpenAI Responses API provider", () => {
+    const source = readFileSync(join(process.cwd(), "src", "extractors", "llm.ts"), "utf8");
+    expect(source).not.toContain("https://api.openai.com/v1/responses");
+    expect(source).toContain("callModel");
   });
 });

@@ -238,7 +238,7 @@ function metadataForExtractor(
       ? {
           promptHash: sha256("sourcyavo-llm-extractor-v1"),
           schemaVersion: LLM_SCHEMA_VERSION,
-          modelName: process.env.SOURCYAVO_LLM_MODEL || "unknown"
+          modelName: process.env.SOURCECADO_GENERATION_MODEL || "deepseek-chat"
         }
       : {
           promptHash: DEFAULT_PROMPT_HASH,

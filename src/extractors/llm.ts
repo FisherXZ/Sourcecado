@@ -1,4 +1,6 @@
 import { sha256 } from "../chunk.js";
+import { getDb } from "../lib/db.js";
+import { callModel } from "../lib/model-gateway.js";
 import {
   ENTITY_TYPES,
   RELATIONSHIP_TYPES,
@@ -12,6 +14,7 @@ import {
   ExtractionError,
   type Extractor
 } from "./types.js";
+import { z } from "zod";
 
 export { ExtractionError } from "./types.js";
 
@@ -36,23 +39,25 @@ export interface LlmExtractorConfig {
 }
 
 export function createLlmExtractor(config: LlmExtractorConfig = {}): Extractor {
-  const apiKey = config.apiKey ?? process.env.OPENAI_API_KEY ?? "";
-  const model = config.model ?? process.env.SOURCYAVO_LLM_MODEL ?? "";
+  const apiKey = config.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "";
+  const model = config.model ?? process.env.SOURCECADO_GENERATION_MODEL ?? "deepseek-chat";
 
-  if (!apiKey.trim()) {
+  if (!config.provider && !apiKey.trim()) {
     throw new ExtractionError(
       "missing_config",
-      "OPENAI_API_KEY is required for unstructured LLM extraction."
-    );
-  }
-  if (!model.trim()) {
-    throw new ExtractionError(
-      "missing_config",
-      "SOURCYAVO_LLM_MODEL is required for unstructured LLM extraction."
+      "DEEPSEEK_API_KEY is required for unstructured LLM extraction."
     );
   }
 
-  const provider = config.provider ?? createOpenAiResponsesProvider(apiKey);
+  // The Model Gateway's default DeepSeek provider reads DEEPSEEK_API_KEY from
+  // the environment. Honor an explicitly supplied config.apiKey by populating
+  // the env when it isn't already set, so a configured key actually takes
+  // effect instead of passing validation here and failing at call time.
+  if (!config.provider && config.apiKey?.trim() && !process.env.DEEPSEEK_API_KEY?.trim()) {
+    process.env.DEEPSEEK_API_KEY = config.apiKey;
+  }
+
+  const provider = config.provider ?? createModelGatewayProvider();
 
   return {
     type: "llm",
@@ -195,114 +200,32 @@ function buildSystemPrompt(): string {
   ].join(" ");
 }
 
-function createOpenAiResponsesProvider(apiKey: string): LlmProvider {
+function createModelGatewayProvider(): LlmProvider {
   return async (request) => {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        model: request.model,
-        instructions: request.systemPrompt,
-        input: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: [
-                  `Source type: ${request.sourceType}`,
-                  `Source path: ${request.sourcePath}`,
-                  "",
-                  request.content
-                ].join("\n")
-              }
-            ]
-          }
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "sourcyavo_memory_candidates",
-            strict: true,
-            schema: candidateResponseSchema()
-          }
-        }
-      })
+    const result = await callModel<{ candidates: unknown[] }>(getDb(), {
+      kind: "generate_object",
+      taskName: "extract_memory_candidates",
+      promptVersion: request.schemaVersion,
+      prompt: [
+        `Source type: ${request.sourceType}`,
+        `Source path: ${request.sourcePath}`,
+        "",
+        request.content
+      ].join("\n"),
+      system: request.systemPrompt,
+      schema: candidateResponseSchema(),
+      schemaName: "sourcyavo_memory_candidates",
+      providerName: "deepseek",
+      model: request.model
     });
-
-    if (!response.ok) {
-      throw new ExtractionError(
-        "provider_error",
-        `OpenAI Responses API request failed with ${response.status}: ${await response.text()}`
-      );
-    }
-
-    return extractResponseText(await response.json());
+    return JSON.stringify(result.object);
   };
 }
 
-function candidateResponseSchema(): Record<string, unknown> {
-  return {
-    type: "object",
-    additionalProperties: false,
-    required: ["candidates"],
-    properties: {
-      candidates: {
-        type: "array",
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: [
-            "kind",
-            "subject",
-            "predicate",
-            "object",
-            "entityType",
-            "relationshipType",
-            "confidence",
-            "evidenceText"
-          ],
-          properties: {
-            kind: { type: "string", enum: ["entity", "relationship", "semantic_fact"] },
-            subject: { type: ["string", "null"] },
-            predicate: { type: ["string", "null"] },
-            object: { type: ["string", "null"] },
-            entityType: { type: ["string", "null"], enum: [...ENTITY_TYPES, null] },
-            relationshipType: { type: ["string", "null"], enum: [...RELATIONSHIP_TYPES, null] },
-            confidence: { type: "number", minimum: 0, maximum: 1 },
-            evidenceText: { type: "string" }
-          }
-        }
-      }
-    }
-  };
-}
-
-function extractResponseText(response: unknown): string {
-  if (isObject(response) && typeof response.output_text === "string") {
-    return response.output_text;
-  }
-
-  if (isObject(response) && Array.isArray(response.output)) {
-    for (const outputItem of response.output) {
-      if (!isObject(outputItem) || !Array.isArray(outputItem.content)) {
-        continue;
-      }
-      for (const contentItem of outputItem.content) {
-        if (isObject(contentItem) && typeof contentItem.text === "string") {
-          return contentItem.text;
-        }
-      }
-    }
-  }
-
-  throw new ExtractionError(
-    "provider_error",
-    "OpenAI Responses API response did not include output text."
-  );
+function candidateResponseSchema(): z.ZodType<{ candidates: unknown[] }> {
+  return z.object({
+    candidates: z.array(z.unknown())
+  });
 }
 
 function invalidCandidate(index: number, detail: string): ExtractionError {
