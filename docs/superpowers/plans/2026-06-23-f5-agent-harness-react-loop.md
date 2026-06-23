@@ -736,7 +736,8 @@ Create `tests/agent-route.test.ts`:
 ```ts
 import { vi } from "vitest";
 
-const runAgentMock = vi.fn();
+// vi.mock is hoisted; declare the mock via vi.hoisted so the factory can see it.
+const { runAgentMock } = vi.hoisted(() => ({ runAgentMock: vi.fn() }));
 vi.mock("@/lib/harness", () => ({ runAgent: runAgentMock }));
 
 import { POST } from "@/app/api/agent/route";
