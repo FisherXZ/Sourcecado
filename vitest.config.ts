@@ -7,6 +7,10 @@ export default defineConfig({
       "@": resolve(__dirname, "src"),
     },
   },
+  // Transform JSX/TSX in component tests via esbuild (automatic runtime).
+  // We deliberately avoid @vitejs/plugin-react: its v6 peer-requires Vite 8,
+  // which conflicts with the Vite that Vitest 3 ships.
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
     fileParallelism: false,
