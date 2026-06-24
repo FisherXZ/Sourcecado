@@ -34,7 +34,7 @@ describe("runAgent", () => {
     const registry = createToolRegistry([echoTool]);
     const provider = vi
       .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({ object: { action: "tool", tool: "echo", args: { text: "hello" } } })
+      .mockResolvedValueOnce({ object: { action: "tool", tool: "echo", args: '{"text":"hello"}' } })
       .mockResolvedValueOnce({ object: { action: "final", answer: "Echoed hello" } });
 
     const result = await runAgent({
@@ -78,7 +78,7 @@ describe("runAgent", () => {
     const registry = createToolRegistry([echoTool, adminTool]);
     const provider = vi
       .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({ object: { action: "tool", tool: "danger", args: {} } })
+      .mockResolvedValueOnce({ object: { action: "tool", tool: "danger", args: "{}" } })
       .mockResolvedValueOnce({ object: { action: "final", answer: "could not use danger" } });
 
     const result = await runAgent({ question: "do danger", registry, allowedClasses: ALLOWED, provider });
@@ -98,7 +98,7 @@ describe("runAgent", () => {
     const registry = createToolRegistry([echoTool]);
     const provider = vi
       .fn<ModelGatewayProvider>()
-      .mockResolvedValue({ object: { action: "tool", tool: "echo", args: { text: "again" } } });
+      .mockResolvedValue({ object: { action: "tool", tool: "echo", args: '{"text":"again"}' } });
 
     const result = await runAgent({
       question: "loop forever",
@@ -130,7 +130,7 @@ describe("runAgent", () => {
     const registry = createToolRegistry([boomTool]);
     const provider = vi
       .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({ object: { action: "tool", tool: "boom", args: {} } })
+      .mockResolvedValueOnce({ object: { action: "tool", tool: "boom", args: "{}" } })
       .mockResolvedValueOnce({ object: { action: "final", answer: "recovered" } });
 
     const result = await runAgent({ question: "x", registry, allowedClasses: ALLOWED, provider });
@@ -146,7 +146,7 @@ describe("runAgent", () => {
     const registry = createToolRegistry([echoTool]); // echo requires { text: string }
     const provider = vi
       .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({ object: { action: "tool", tool: "echo", args: { wrong: 1 } } })
+      .mockResolvedValueOnce({ object: { action: "tool", tool: "echo", args: '{"wrong":1}' } })
       .mockResolvedValueOnce({ object: { action: "final", answer: "ok" } });
 
     const result = await runAgent({ question: "x", registry, allowedClasses: ALLOWED, provider });

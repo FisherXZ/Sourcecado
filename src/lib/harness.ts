@@ -13,13 +13,18 @@ import {
 } from "./ledger";
 import { callModel, ModelGatewayError, type ModelGatewayProvider } from "./model-gateway";
 import type { ToolRegistry } from "./tools/registry";
-import type { PermissionClass, Sql } from "./tools/types";
+import type { PermissionClass, Sql, Tool } from "./tools/types";
 
 export const agentDecisionSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("tool"),
     tool: z.string(),
-    args: z.record(z.string(), z.unknown()),
+    // A JSON object string, not a nested object: constrained/structured
+    // generation reliably fills a string but leaves a free-form object empty.
+    args: z
+      .string()
+      .describe('JSON object string of the tool arguments, e.g. {"text":"hi"}')
+      .optional(),
     thought: z.string().optional(),
   }),
   z.object({
@@ -140,7 +145,7 @@ async function decide(db: Sql, opts: DecideOptions): Promise<AgentDecision> {
     kind: "generate_object",
     taskName: "agent_react_decide",
     promptVersion: "1",
-    system: buildSystemPrompt(tools),
+    system: buildAgentSystemPrompt(tools),
     prompt: buildUserPrompt(opts.question, opts.transcript),
     schema: agentDecisionSchema,
     schemaName: "agent_decision",
@@ -153,16 +158,23 @@ async function decide(db: Sql, opts: DecideOptions): Promise<AgentDecision> {
   return result.object;
 }
 
-function buildSystemPrompt(
-  tools: { name: string; description: string; permissionClass: string }[],
-): string {
+export function buildAgentSystemPrompt(tools: Tool[]): string {
   const catalog = tools
-    .map((t) => `- ${t.name} (${t.permissionClass}): ${t.description}`)
+    .map((tool) => {
+      let schema = "{}";
+      try {
+        schema = JSON.stringify(z.toJSONSchema(tool.argsSchema));
+      } catch {
+        schema = "{}";
+      }
+      return `- ${tool.name} (${tool.permissionClass}): ${tool.description}\n  args JSON schema: ${schema}`;
+    })
     .join("\n");
   return [
     "You are a sourcing agent. Decide the next action.",
     "Either call one tool, or give a final answer.",
     "Respond with a decision object: {action:'tool', tool, args} or {action:'final', answer}.",
+    "When calling a tool, set `args` to a JSON object STRING matching that tool's args JSON schema exactly (e.g. \"{\\\"text\\\":\\\"hi\\\"}\").",
     "Available tools:",
     catalog || "(none)",
   ].join("\n");
@@ -188,18 +200,30 @@ async function executeToolCall(db: Sql, opts: ExecuteToolOptions): Promise<strin
   const toolName = decision.tool;
   const tool = registry.get(toolName);
 
+  // The model returns args as a JSON object string; decode before validating.
+  let decodedArgs: unknown = {};
+  let decodeError: string | null = null;
+  const rawArgs = decision.args?.trim();
+  if (rawArgs) {
+    try {
+      decodedArgs = JSON.parse(rawArgs);
+    } catch (error) {
+      decodeError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   const toolStep = await startRunStep(db, {
     runId,
     parentStepId,
     stepKind: "tool",
     name: toolName,
-    input: { args: decision.args },
+    input: { args: decodeError ? decision.args : decodedArgs },
   });
   const toolCall = await startToolCall(db, {
     runId,
     runStepId: toolStep.id,
     toolName,
-    arguments: decision.args,
+    arguments: decodeError ? { raw: decision.args } : decodedArgs,
     metadata: { permissionClass: tool?.permissionClass ?? null },
   });
 
@@ -215,7 +239,16 @@ async function executeToolCall(db: Sql, opts: ExecuteToolOptions): Promise<strin
       `Tool ${toolName} (class ${tool.permissionClass}) is not permitted for this run.`,
     );
   }
-  const parsed = tool.argsSchema.safeParse(decision.args);
+  if (decodeError) {
+    return failTool(
+      db,
+      toolStep.id,
+      toolCall.id,
+      "invalid_args",
+      `Arguments for ${toolName} are not valid JSON: ${decodeError}`,
+    );
+  }
+  const parsed = tool.argsSchema.safeParse(decodedArgs);
   if (!parsed.success) {
     return failTool(
       db,
