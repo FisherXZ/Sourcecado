@@ -293,10 +293,24 @@ describe("LLM extractor", () => {
     });
   });
 
-  it("requires model config when creating an unstructured LLM extractor", () => {
-    expect(() => createLlmExtractor({ apiKey: "", model: "test-model" })).toThrow(
-      /DEEPSEEK_API_KEY/
-    );
+  it("can be constructed without a key; provider error surfaces at call time", async () => {
+    // Construction no longer throws — the gateway's requireEnv validates the
+    // active provider's key at call time, not at construction.
+    const extractor = createLlmExtractor({ model: "test-model" });
+    expect(extractor).toBeDefined();
+
+    // A provider that rejects simulates what happens when requireEnv fires at runtime.
+    const failingProvider: LlmProvider = async () => {
+      throw new Error("DEEPSEEK_API_KEY is required for Model Gateway provider calls.");
+    };
+    const extractorWithBadProvider = createLlmExtractor({
+      model: "test-model",
+      provider: failingProvider,
+    });
+    await expect(extractorWithBadProvider.extract(input)).rejects.toMatchObject({
+      name: "ExtractionError",
+      code: "provider_error",
+    });
   });
 
   it("does not use the legacy OpenAI Responses API provider", () => {

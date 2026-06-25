@@ -79,7 +79,11 @@ describe("refreshMemory", () => {
     db.close();
   });
 
-  it("returns a clear missing-config error when unstructured sources need LLM extraction", async () => {
+  it("records a failed extraction when unstructured sources need LLM extraction without config", async () => {
+    // The construction-time guard was removed from createLlmExtractor so the gateway can
+    // validate the active provider's key at call time (supporting non-DeepSeek providers via
+    // SOURCECADO_GENERATION_PROVIDER). Without a key, extraction now fails gracefully (failed: 1)
+    // rather than throwing from the extractor selection step.
     const previousKey = process.env.DEEPSEEK_API_KEY;
     const previousModel = process.env.SOURCECADO_GENERATION_MODEL;
     delete process.env.DEEPSEEK_API_KEY;
@@ -91,7 +95,9 @@ describe("refreshMemory", () => {
     ingestFolder(db, dir);
 
     try {
-      await expect(refreshMemory(db)).rejects.toThrow(/DEEPSEEK_API_KEY/);
+      const result = await refreshMemory(db);
+      expect(result.extracted).toBe(0);
+      expect(result.failed).toBeGreaterThan(0);
     } finally {
       restoreEnv("DEEPSEEK_API_KEY", previousKey);
       restoreEnv("SOURCECADO_GENERATION_MODEL", previousModel);
