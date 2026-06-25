@@ -191,6 +191,23 @@ describe("checkCitations", () => {
     const { invalid } = checkCitations("see ghost#row-5 for details", new Set());
     expect(invalid).toContain("ghost#row-5");
   });
+
+  it("matches nested-path source IDs containing '/'", () => {
+    const allowed = new Set(["alice/outreach-md#chunk-1"]);
+    const answer = "See alice/outreach-md#chunk-1 for context.";
+    const { invalid, sanitizedAnswer } = checkCitations(answer, allowed);
+    expect(invalid).toHaveLength(0);
+    expect(sanitizedAnswer).toContain("alice/outreach-md#chunk-1");
+  });
+
+  it("rejects truncated last-segment of nested citation when full path is required", () => {
+    // Guard: regex must NOT match the bare last segment as a valid citation
+    const allowed = new Set(["alice/outreach-md#chunk-1"]);
+    const answer = "See outreach-md#chunk-1 for context.";
+    const { invalid } = checkCitations(answer, allowed);
+    // "outreach-md#chunk-1" is not in allowed — should be flagged
+    expect(invalid).toContain("outreach-md#chunk-1");
+  });
 });
 
 // ---------------------------------------------------------------------------

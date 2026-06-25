@@ -1,7 +1,7 @@
 import type { RunTrace, RunStepTrace } from "../ledger";
 import type { MemoryBundle } from "./retrieve";
 
-const CITATION_PATTERN = "[A-Za-z0-9._-]+#(?:chunk|row)-\\d+";
+const CITATION_PATTERN = "[A-Za-z0-9._/-]+#(?:chunk|row)-\\d+";
 
 /** Walk a run trace and collect every MemoryBundle from search_memory tool calls. */
 export function collectBundlesFromTrace(trace: RunTrace | null): MemoryBundle[] {
