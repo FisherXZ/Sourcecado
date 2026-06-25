@@ -11,6 +11,11 @@ export async function POST(request: Request) {
   }
 
   const registry = createToolRegistry([echoTool]);
-  const result = await runAgent({ question, registry });
-  return NextResponse.json(result, { status: result.status === "succeeded" ? 200 : 500 });
+  try {
+    const result = await runAgent({ question, registry });
+    return NextResponse.json(result, { status: result.status === "succeeded" ? 200 : 500 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "agent run failed";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }

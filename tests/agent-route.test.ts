@@ -37,4 +37,11 @@ describe("POST /api/agent", () => {
     expect(res.status).toBe(500);
     await expect(res.json()).resolves.toMatchObject({ runId: 9, status: "failed" });
   });
+
+  it("returns structured JSON error when runAgent throws (e.g. DB init failure)", async () => {
+    runAgentMock.mockRejectedValue(new Error("DB connection refused"));
+    const res = await POST(postRequest({ question: "anything" }));
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toMatchObject({ error: "DB connection refused" });
+  });
 });
