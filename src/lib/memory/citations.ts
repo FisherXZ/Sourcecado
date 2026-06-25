@@ -28,8 +28,8 @@ export function checkCitations(
   allowed: Set<string>
 ): { invalid: string[]; sanitizedAnswer: string } {
   const cited = answer.match(new RegExp(CITATION_PATTERN, "g")) ?? [];
-  const invalid = cited.filter((id) => !allowed.has(id));
-  const invalidSet = new Set(invalid);
+  const invalidSet = new Set(cited.filter((id) => !allowed.has(id)));
+  const invalid = [...invalidSet];
 
   const sanitizedAnswer = answer.replace(
     new RegExp(CITATION_PATTERN, "g"),

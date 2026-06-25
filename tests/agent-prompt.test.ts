@@ -13,4 +13,12 @@ describe("buildAgentSystemPrompt", () => {
   it("handles an empty tool set", () => {
     expect(buildAgentSystemPrompt([])).toContain("(none)");
   });
+
+  it("appends the instructions string after the tool catalog", () => {
+    const instructions = "INSTRUCTIONS_MARKER: ground every answer.";
+    const prompt = buildAgentSystemPrompt([echoTool], instructions);
+    expect(prompt).toContain(instructions);
+    // The instructions block comes after the tool catalog entry.
+    expect(prompt.indexOf(instructions)).toBeGreaterThan(prompt.indexOf("echo (read):"));
+  });
 });

@@ -50,4 +50,45 @@ describe("POST /api/agent", () => {
     const body = await res.json();
     expect(Array.isArray(body.invalidCitations)).toBe(true);
   });
+
+  it("flags an invented citation while leaving a valid one unflagged", async () => {
+    // Final answer cites a valid id (from the bundle) AND an invented one.
+    runAgentMock.mockResolvedValue({
+      runId: 11,
+      status: "succeeded",
+      answer: "Answer: see real-src#chunk-1 and ghost#chunk-7",
+      steps: 2,
+    });
+    // Override the shared null mock: return a trace whose search_memory tool
+    // call produced a bundle containing only the valid citation.
+    getRunTraceMock.mockResolvedValue({
+      steps: [
+        {
+          children: [],
+          toolCalls: [
+            {
+              toolName: "search_memory",
+              status: "succeeded",
+              result: {
+                intent: "generic",
+                acceptedFacts: [],
+                gapFacts: [],
+                chunks: [{ text: "t", citation: "real-src#chunk-1", score: 0.9 }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const res = await POST(postRequest({ question: "who responded?" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.invalidCitations).toContain("ghost#chunk-7");
+    expect(body.invalidCitations).not.toContain("real-src#chunk-1");
+    // Invalid token is sanitized out; the valid one survives.
+    expect(body.answer).toContain("real-src#chunk-1");
+    expect(body.answer).not.toContain("ghost#chunk-7");
+  });
 });
