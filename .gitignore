@@ -14,3 +14,6 @@ prove-and-plain-english-skills.zip
 .env
 .env.local
 .env.*.local
+
+# isolated worktrees
+.claude/worktrees/
