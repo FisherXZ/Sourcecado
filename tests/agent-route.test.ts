@@ -91,4 +91,11 @@ describe("POST /api/agent", () => {
     expect(body.answer).toContain("real-src#chunk-1");
     expect(body.answer).not.toContain("ghost#chunk-7");
   });
+
+  it("returns structured JSON error when runAgent throws (e.g. DB init failure)", async () => {
+    runAgentMock.mockRejectedValue(new Error("DB connection refused"));
+    const res = await POST(postRequest({ question: "anything" }));
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toMatchObject({ error: "DB connection refused" });
+  });
 });

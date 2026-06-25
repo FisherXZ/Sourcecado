@@ -60,22 +60,24 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const allowed = input.allowedClasses ?? new Set(DEFAULT_ALLOWED);
   const maxSteps = input.maxSteps ?? DEFAULT_MAX_STEPS;
 
-  const run = await startRun(db, {
-    runType: "agent_chat",
-    title: input.question.slice(0, 80),
-    input: { question: input.question },
-  });
-  const agentStep = await startRunStep(db, {
-    runId: run.id,
-    stepKind: "agent",
-    name: "react_loop",
-    input: { question: input.question },
-  });
-
+  let run: Awaited<ReturnType<typeof startRun>> | null = null;
+  let agentStep: Awaited<ReturnType<typeof startRunStep>> | null = null;
   const transcript: string[] = [];
   let step = 0;
 
   try {
+    run = await startRun(db, {
+      runType: "agent_chat",
+      title: input.question.slice(0, 80),
+      input: { question: input.question },
+    });
+    agentStep = await startRunStep(db, {
+      runId: run.id,
+      stepKind: "agent",
+      name: "react_loop",
+      input: { question: input.question },
+    });
+
     for (step = 1; step <= maxSteps; step++) {
       const decision = await decide(db, {
         runId: run.id,
@@ -125,9 +127,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   } catch (error) {
     const code = error instanceof ModelGatewayError ? error.code : "harness_error";
     const message = error instanceof Error ? error.message : String(error);
-    await failRunStep(db, { runStepId: agentStep.id, errorType: code, errorMessage: message });
-    await failRun(db, { runId: run.id, errorType: code, errorMessage: message });
-    return { runId: run.id, status: "failed", steps: step };
+    if (agentStep) {
+      await failRunStep(db, { runStepId: agentStep.id, errorType: code, errorMessage: message });
+    }
+    if (run) {
+      await failRun(db, { runId: run.id, errorType: code, errorMessage: message });
+    }
+    return { runId: run?.id ?? 0, status: "failed", steps: step };
   }
 }
 

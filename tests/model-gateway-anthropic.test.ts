@@ -34,6 +34,21 @@ describe("callModel() generation provider routing", () => {
     else process.env[name] = value;
   }
 
+  it("throws config_error for an unknown generation provider instead of silently using DeepSeek", async () => {
+    process.env.SOURCECADO_GENERATION_PROVIDER = "bogus-provider";
+
+    const error = await callModel(getDb(), {
+      kind: "generate_text",
+      taskName: "unknown_provider_probe",
+      promptVersion: "1",
+      prompt: "hi",
+    }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(ModelGatewayError);
+    expect((error as ModelGatewayError).code).toBe("config_error");
+    expect((error as Error).message).toMatch(/bogus-provider/);
+  });
+
   it("routes generation to Anthropic and requires ANTHROPIC_API_KEY", async () => {
     process.env.SOURCECADO_GENERATION_PROVIDER = "anthropic";
     delete process.env.SOURCECADO_GENERATION_MODEL;

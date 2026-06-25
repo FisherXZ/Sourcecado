@@ -29,6 +29,30 @@ describe("runAgent", () => {
     await closeDb();
   });
 
+  it("returns a failed result instead of throwing when the DB init fails (startRun throws)", async () => {
+    const brokenDb = new Proxy(getDb(), {
+      get(target, prop) {
+        const original = Reflect.get(target, prop) as unknown;
+        // Intercept the tagged-template SQL calls (db`...`) by returning a
+        // function that always rejects, simulating a DB connection failure.
+        if (typeof original === "function") {
+          return (...args: unknown[]) => {
+            // The first template-tagged call is startRun's INSERT; reject it.
+            throw new Error("DB connection refused");
+          };
+        }
+        return original;
+      },
+    }) as typeof getDb extends () => infer R ? R : never;
+
+    const registry = createToolRegistry([echoTool]);
+    const result = await runAgent({ question: "any", registry, db: brokenDb });
+
+    expect(result.status).toBe("failed");
+    expect(result.runId).toBe(0); // no DB record was created
+    expect(result.steps).toBe(0);
+  });
+
   it("runs a multi-step loop (tool then final) and traces it fully", async () => {
     const db = getDb();
     const registry = createToolRegistry([echoTool]);
