@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { deepseek } from "@ai-sdk/deepseek";
 import { openai } from "@ai-sdk/openai";
+import type { LanguageModel } from "ai";
 import { embed, embedMany, generateObject, generateText } from "ai";
 import type postgres from "postgres";
 import type { z } from "zod";
@@ -255,18 +257,50 @@ async function executeProvider(
     return input.provider(request);
   }
 
-  return executeDefaultProvider(input, model);
+  return executeDefaultProvider(input, providerName, model);
+}
+
+// Resolve the AI SDK language model for text/object generation. Embeddings stay
+// on OpenAI. Keeps the gateway's single provider abstraction (ADR-0004) uniform
+// across deepseek/anthropic without leaking provider details to callers.
+// @ai-sdk/anthropic expects a base URL that includes the `/v1` segment and posts
+// to `${baseURL}/messages`. Some environments export ANTHROPIC_BASE_URL as the
+// bare host (the official SDK's convention, which appends /v1 itself), which 404s
+// here. Normalize: honor a configured base but ensure it carries a version path.
+export function resolveAnthropicBaseUrl(raw?: string): string {
+  const configured = raw?.trim();
+  if (!configured) return "https://api.anthropic.com/v1";
+  const trimmed = configured.replace(/\/+$/, "");
+  return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+}
+
+function generationModel(providerName: string, model: string): LanguageModel {
+  if (providerName === "anthropic") {
+    requireEnv("ANTHROPIC_API_KEY");
+    const provider = createAnthropic({
+      baseURL: resolveAnthropicBaseUrl(process.env.ANTHROPIC_BASE_URL),
+    });
+    return provider(model);
+  }
+  if (providerName !== "deepseek") {
+    throw new ModelGatewayError(
+      "config_error",
+      `Unsupported generation provider: ${providerName}. Set SOURCECADO_GENERATION_PROVIDER to "anthropic" or "deepseek".`,
+    );
+  }
+  requireEnv("DEEPSEEK_API_KEY");
+  return deepseek(model);
 }
 
 async function executeDefaultProvider(
   input: CallModelInput,
+  providerName: string,
   model: string,
 ): Promise<ModelGatewayProviderResult> {
   switch (input.kind) {
     case "generate_text": {
-      requireEnv("DEEPSEEK_API_KEY");
       const result = await generateText({
-        model: deepseek(model),
+        model: generationModel(providerName, model),
         prompt: input.prompt,
         system: input.system,
       });
@@ -277,9 +311,8 @@ async function executeDefaultProvider(
       };
     }
     case "generate_object": {
-      requireEnv("DEEPSEEK_API_KEY");
       const result = await generateObject({
-        model: deepseek(model),
+        model: generationModel(providerName, model),
         prompt: input.prompt,
         system: input.system,
         schema: input.schema,
@@ -354,7 +387,10 @@ function resolveProviderName(input: CallModelInput): string {
   if (input.providerName?.trim()) {
     return input.providerName;
   }
-  return input.kind === "embed" || input.kind === "embed_many" ? "openai" : "deepseek";
+  if (input.kind === "embed" || input.kind === "embed_many") {
+    return "openai";
+  }
+  return process.env.SOURCECADO_GENERATION_PROVIDER?.trim() || "deepseek";
 }
 
 function resolveModel(input: CallModelInput): string {
@@ -364,7 +400,10 @@ function resolveModel(input: CallModelInput): string {
   if (input.kind === "embed" || input.kind === "embed_many") {
     return process.env.SOURCECADO_EMBEDDING_MODEL || "text-embedding-3-small";
   }
-  return process.env.SOURCECADO_GENERATION_MODEL || "deepseek-chat";
+  if (process.env.SOURCECADO_GENERATION_MODEL?.trim()) {
+    return process.env.SOURCECADO_GENERATION_MODEL;
+  }
+  return resolveProviderName(input) === "anthropic" ? "claude-sonnet-4-6" : "deepseek-chat";
 }
 
 function toProviderRequest(

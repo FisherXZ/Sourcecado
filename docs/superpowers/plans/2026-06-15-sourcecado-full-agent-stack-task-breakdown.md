@@ -149,21 +149,23 @@ the trace for one run.
 - [ ] F4.4 Run inspector view (read-only trace render) (~1.5h) · AFK (build with src/components/ui primitives)
 
 ## F5 — Agent Harness ReAct loop
-Type: AFK · Blocked by: F3, F4
+Type: AFK · Blocked by: F3, F4 · Done: 2026-06-23
 
 **What to build:** The ReAct-style tool-use loop, a tool registry with permission
 classes (`read`/`enrich`/`reason`/`draft`/`write_internal`/`admin`), and one `echo`
-tool. Every step writes to the Run Ledger via F4.
+tool. Every step writes to the Run Ledger via F4. See
+`docs/superpowers/specs/2026-06-23-f5-agent-harness-react-loop-design.md` and
+`docs/superpowers/plans/2026-06-23-f5-agent-harness-react-loop.md`.
 
 **Acceptance criteria:**
-- [ ] A run executes a multi-step loop that calls the model via the gateway and at least one registered tool
-- [ ] Tool registry enforces permission classes (a tool above the run's allowed class is refused and logged)
-- [ ] The full run (steps, tool calls, model calls, status) appears in the run inspector
+- [x] A run executes a multi-step loop that calls the model via the gateway and at least one registered tool
+- [x] Tool registry enforces permission classes (a tool above the run's allowed class is refused and logged)
+- [x] The full run (steps, tool calls, model calls, status) appears in the run inspector
 
 **Tasks:**
-- [ ] F5.1 ReAct loop (observation → model → tool → repeat, with stop condition) (~2h) · AFK
-- [ ] F5.2 Tool registry + permission classes + class enforcement (~1.5h) · AFK
-- [ ] F5.3 `echo` reference tool + wire loop end-to-end to ledger (~1h) · AFK
+- [x] F5.1 ReAct loop (observation → model → tool → repeat, with stop condition) (~2h) · AFK
+- [x] F5.2 Tool registry + permission classes + class enforcement (~1.5h) · AFK
+- [x] F5.3 `echo` reference tool + wire loop end-to-end to ledger (~1h) · AFK
 
 **FOUNDATION DEMO:** type a question in `/chat`, the harness runs a multi-step loop,
 calls the model through the gateway and the echo tool, writes the whole trace to the Run
