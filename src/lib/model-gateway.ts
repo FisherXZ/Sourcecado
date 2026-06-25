@@ -397,7 +397,7 @@ function resolveModel(input: CallModelInput): string {
   if (process.env.SOURCECADO_GENERATION_MODEL?.trim()) {
     return process.env.SOURCECADO_GENERATION_MODEL;
   }
-  return resolveProviderName(input) === "anthropic" ? "claude-opus-4-8" : "deepseek-chat";
+  return resolveProviderName(input) === "anthropic" ? "claude-sonnet-4-6" : "deepseek-chat";
 }
 
 function toProviderRequest(
