@@ -1,272 +1,244 @@
-# Feature A (reframed) — Cited Sourcing Memory Answer: Design
+# Feature A — Cited Sourcing Memory Answer: Design
 
-Date: 2026-06-25
+Date: 2026-06-25 (revised after a grill-me reconciliation of the Claude Code
+architecture with our local memory brain)
 Status: Approved for implementation
-Feature: A (Cited Sourcing Memory Answer) from
-`docs/superpowers/plans/2026-06-15-sourcecado-full-agent-stack-task-breakdown.md`
-Blocked by: F2 (Postgres+pgvector), F3 (gateway embeddings), F5 (agent harness) — F5 in
-review on PR #7.
-Branch: `feat/a-cited-memory-answer` (off `feat/f5-agent-harness`; rebase onto `main`
-after F5 merges).
+Feature: A from `docs/superpowers/plans/2026-06-15-sourcecado-full-agent-stack-task-breakdown.md`
+Blocked by: F2 (Postgres+pgvector), F3 (gateway embeddings), F5 (agent harness) — F5 on PR #7.
+Branch: `feat/a-cited-memory-answer` (off `feat/f5-agent-harness`; rebase onto `main` after F5 merges).
 
 ## Purpose
 
-Let a Sourcing Director ask a question in chat and get a **cited answer with knowledge
-gaps**, synthesized from imported sourcing notes held in Postgres/pgvector. This is the
-first tier-1 measurable outcome: an answer a director can verify against sources, fully
-traced in the Run Ledger.
+A Sourcing Director asks a question in chat and gets a **cited answer with knowledge
+gaps**, synthesized from imported sourcing notes in Postgres/pgvector — the first tier-1
+measurable outcome, fully traced in the Run Ledger.
 
-## The reframe (why this differs from the original A1–A7 plan)
+## The reconciliation (the core architectural decision)
 
-The original plan ported the legacy SQLite engine (`src/answer.ts`, ~420 LOC of regex
-intent classification + deterministic synthesis) and gated it behind a strict
-SQLite-vs-Postgres parity test, including the semantic fact graph
-(`entities`/`relationships`/`semantic_facts`/`extraction_runs`).
+We have a **mature local memory brain** (SQLite): chunking, embeddings, hybrid retrieval
+(cosine gated by lexical), intent-aware fact ranking, and a `semantic_facts` lifecycle
+(accepted / candidate / conflicted / stale) fed by an extraction pipeline with caching,
+confidence-based acceptance, and conflict/staleness detection. **Claude Code** teaches a
+different lesson: the agent reasons, tools fetch context on demand, and grounding lives in
+tool results in the transcript — synthesis is the model's job, not a deterministic
+template.
 
-A systematic read of the Claude Code production agent (leaked source) plus the internal
-fact that we just built the F5 harness reshaped this:
+These reconcile cleanly by **splitting the brain at the synthesis seam**:
 
-- **Claude Code grounds answers via agent-callable search tools + tool results in the
-  transcript, not a precomputed RAG monolith** (`memdir/findRelevantMemories.ts`,
-  `query.ts` tool_result handling). It has no `answer.ts`-style retrieve-and-synthesize
-  function.
-- Porting `answer.ts` as-is would create a non-agentic path that **bypasses the F5
-  harness** — incoherent with what we just shipped.
+- The mature engine becomes the **retrieval + ranking + fact-lifecycle layer behind one
+  tool** (`search_memory`). Nothing valuable is thrown away.
+- The **model becomes the synthesizer** — it writes the cited answer from the tool's
+  structured result. The deterministic prose templates (`answerLines`, `gapLines`, …) are
+  the *only* part not ported; the model replaces them.
 
-Therefore Feature A is reframed:
+This keeps 100% of the retrieval/ranking/fact engineering, makes the F5 loop meaningful,
+and grounds answers in tool results exactly as Claude Code does.
 
-1. **Memory is a tool the agent calls** (`search_memory`), not a monolithic function.
-2. **The model synthesizes the cited answer** (intent, gaps, refusal) from retrieved
-   chunks — `answer.ts`'s deterministic synthesis is NOT ported.
-3. **pgvector retrieval is kept** — semantic recall over notes is our legitimate
-   difference from Claude Code's grep-over-code (it greps exact strings; we need
-   semantic recall over prose).
-4. **Strict parity → an answer eval.** Non-deterministic synthesis can't be diffed
-   against the old engine; instead we assert structural properties (every claim cites a
-   retrieved chunk, gaps surface, refusal on empty, no permission leak).
-5. **The semantic fact graph is deferred** — answer from retrieved chunks; "knowledge
-   gaps" are agent-identified from retrieval coverage.
-6. **Memory add/correct is folded into A** so the learn-loop is closeable from the first
-   feature (Claude Code wires feedback early, not as an end-stage add-on).
+## Decisions (locked during brainstorming + grill-me)
 
-## Decisions (locked during brainstorming)
+1. **Brain↔agent boundary (B):** the brain is exposed as tools that return *structured*
+   results; the model synthesizes prose. Not an opaque "answer" tool, not raw primitives.
+2. **One bundled tool:** `search_memory(query, limit?)` returns
+   `{ intent, acceptedFacts[], gapFacts[], chunks[] }` — it runs `questionIntent` +
+   `loadFacts` + `loadGapFacts` + `retrieveRelevantChunks` internally (intent classified
+   inside the tool). Plus `add_memory_note` (class `write_internal`) for writes.
+3. **Fact model scope:** port `semantic_facts` + its full lifecycle + extraction. **Defer**
+   `entities` / `relationships` / `entity_aliases` — the answer path never reads them
+   (verified: `answer.ts` reads only `source_records`, `memory_chunks`, `semantic_facts`).
+4. **Extraction:** faithful **two-phase batch** — `npm run ingest` then `npm run refresh`.
+   Port `extraction_runs` caching; the LLM extractor routes through the gateway (Anthropic).
+   The extractor needs a **concrete candidate Zod schema** (not `z.array(z.unknown())`) so
+   Anthropic structured output populates it (the `args:{}` lesson from F5).
+5. **Synthesis contract:** the memory-run system prompt requires the **four-section format**
+   (Answer / Evidence / Gaps / Next Action), **strict citation grounding** (cite only
+   citation ids present in the tool result; never invent), **fact-first / chunk-fallback**,
+   **always surface gaps**, **refuse on empty** ("no relevant memory" / "no indexed memory
+   yet"). A cheap deterministic **post-check** drops/flags any cited id not in the tool
+   result.
+6. **No parity gate.** We build the ported system, test the mechanical pieces, run it on
+   real data, and ship if it works. No SQLite-vs-Postgres parity harness, no elaborate eval.
+7. **Embeddings = pgvector(1536), pluggable provider.** Real OpenAI `text-embedding-3-small`
+   when `OPENAI_API_KEY` is set, else a deterministic 1536-dim hash fallback. Same column;
+   set the key later to upgrade with no migration.
+8. **Permissions (ADR-0001) = carry + filter, single default actor for v1.** Build the
+   `source_permissions` column and filter-before-retrieval in SQL; seed one default actor
+   with read on all imported sources. Multi-user management UI deferred.
 
-- **Scope = the cited-answer core**: ingest + pgvector retrieval + `search_memory` tool +
-  agentic answer in chat + memory add/correct. Import UI (A4.2) and the fact graph are
-  out.
-- **Embeddings = pgvector(1536) with a pluggable provider.** The column is `vector(1536)`.
-  Generation goes through the Model Gateway: real OpenAI `text-embedding-3-small` when
-  `OPENAI_API_KEY` is set, else a deterministic 1536-dim hash fallback (offline,
-  reproducible, weak semantics). Same column either way — setting the key later upgrades
-  to real semantic search with no migration.
-- **Permissions (ADR-0001) = carry + filter, single default actor for v1.** The
-  `source_permissions` column and filter-before-retrieval in SQL are built; a default
-  actor seeded with read access to all imported sources. Multi-user permission
-  management UI is deferred.
-- **Ingestion = CLI for v1.** `npm run ingest <dir>` ports the legacy `ingestFolder` to
-  Postgres. In-app upload UI deferred to A4.
-- **Synthesis is agentic.** No port of `answer.ts`; the run's system prompt instructs the
-  model to answer only from retrieved chunks, cite every claim, list gaps, and refuse
-  when retrieval is empty.
+### What we port vs. don't
+
+- **Port:** `chunk` (chunkText/chunkCsv + citations), `ingest` (sources+chunks+embeddings,
+  dedup), `embed`→pgvector, `refresh`→`semantic_facts` lifecycle (extraction cache,
+  confidence accept at 0.75, `markConflictsAndStaleFacts`, `restoreStaleFacts`), retrieval
+  (`retrieveRelevantChunks` hybrid cosine∧lexical) + ranking (`rankRows`, `factIntentScore`,
+  `questionIntent`, `loadFacts`, `loadGapFacts`).
+- **Don't port:** deterministic prose templates (model synthesizes), `entities`/
+  `relationships`/`entity_aliases` graph (unread by the answer), parity harness.
+- **Reuse:** `src/extractors/{llm,csv}.ts` (already gateway-routed), `src/lib/harness.ts`
+  (+ `instructions` param), gateway, ledger, `/chat`, `/runs/[id]`.
 
 ## Module structure
 
-Greenfield unless marked. The legacy `src/` SQLite engine is kept untouched as the eval
-oracle and chunk/heuristic reference.
-
 ```
-src/lib/memory/schema.ts        SourceRecord, MemoryChunk, RetrievedChunk types
-src/lib/memory/embed.ts         embedText(text): Promise<number[]> — gateway or hash fallback
-src/lib/memory/chunk.ts         port of legacy chunkText/chunkCsv + citation construction
-src/lib/memory/ingest.ts        ingestFolder -> Postgres (source_records + memory_chunks)
-src/lib/memory/retrieve.ts      searchMemory() — pgvector cosine + pre-retrieval permission filter
-src/lib/memory/notes.ts         addMemoryNote() write path
+src/lib/memory/chunk.ts        port chunkText/chunkCsv + citationForChunk
+src/lib/memory/embed.ts        embedText(): pgvector(1536), gateway-or-hash fallback
+src/lib/memory/ingest.ts       ingestFolder -> source_records + memory_chunks
+src/lib/memory/extract.ts      refresh.ts port -> semantic_facts (cache, accept, conflict/stale)
+src/lib/memory/retrieve.ts     searchMemory() -> { intent, acceptedFacts, gapFacts, chunks }
+src/lib/memory/notes.ts        addMemoryNote() write/correct path
+src/lib/memory/answer-config.ts MEMORY_INSTRUCTIONS + memoryRegistry()
 src/lib/tools/search-memory.ts  search_memory tool (class read)
 src/lib/tools/add-memory-note.ts add_memory_note tool (class write_internal)
-src/lib/memory/answer-config.ts the memory-run system prompt + allowed tool set
-src/migrations/003_memory.sql   source_records + memory_chunks + source_permissions
-scripts/ingest.ts               CLI entry: npm run ingest <dir>
-REUSE: src/lib/model-gateway.ts (callModel embed), src/lib/harness.ts (runAgent),
-       src/lib/ledger.ts, src/app/chat (ChatClient), src/app/runs/[id]
+src/migrations/003_memory.sql   source_records, memory_chunks, semantic_facts, extraction_runs, source_permissions
+scripts/ingest.ts               npm run ingest <dir>
+scripts/refresh.ts              npm run refresh
 ```
 
 ## Components
 
 ### Schema (migration 003)
 
-```sql
-CREATE TABLE source_records (
-  id            BIGSERIAL PRIMARY KEY,
-  source_id     TEXT NOT NULL UNIQUE,           -- deterministic slug
-  path          TEXT,
-  title         TEXT NOT NULL,
-  source_type   TEXT NOT NULL,                  -- markdown | text | csv | email
-  content_hash  TEXT NOT NULL,                  -- sha256(raw_text), dedupe key
-  raw_text      TEXT NOT NULL,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE memory_chunks (
-  id               BIGSERIAL PRIMARY KEY,
-  source_record_id BIGINT NOT NULL REFERENCES source_records(id) ON DELETE CASCADE,
-  chunk_index      INTEGER NOT NULL,
-  text             TEXT NOT NULL,
-  chunk_hash       TEXT NOT NULL,
-  embedding        vector(1536),                -- pgvector; pluggable provider
-  citation         TEXT NOT NULL,               -- source-id#chunk-N / #row-N
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (source_record_id, chunk_index)
-);
-CREATE INDEX memory_chunks_embedding_idx ON memory_chunks
-  USING hnsw (embedding vector_cosine_ops);
-
-CREATE TABLE source_permissions (
-  id             BIGSERIAL PRIMARY KEY,
-  principal_type TEXT NOT NULL,                 -- user | oauth_client | test_client
-  principal_id   TEXT NOT NULL,
-  source_id      TEXT NOT NULL,
-  access         TEXT NOT NULL DEFAULT 'read',
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (principal_type, principal_id, source_id)
-);
-```
+- `source_records`: id, source_id (unique slug), path, title, source_type, content_hash,
+  raw_text, timestamps.
+- `memory_chunks`: id, source_record_id FK CASCADE, chunk_index, text, chunk_hash,
+  `embedding vector(1536)`, citation, timestamps; UNIQUE(source_record_id, chunk_index);
+  hnsw cosine index.
+- `semantic_facts`: id, subject, predicate, object, source_record_id FK, source_chunk_id FK,
+  confidence REAL, status TEXT CHECK in ('candidate','accepted','conflicted','stale'),
+  created_at; index on (source_record_id, status).
+- `extraction_runs`: id, source_chunk_id FK, cache_key UNIQUE, chunk_hash, extractor_type,
+  extractor_version, prompt_hash, schema_version, model_name, raw_output,
+  parsed_candidates_json, status, error, created_at.
+- `source_permissions`: principal_type, principal_id, source_id, access, UNIQUE(triple).
 
 ### Embeddings (`embed.ts`)
 
-`embedText(text: string): Promise<number[]>` returns a length-1536 vector.
-- If `process.env.OPENAI_API_KEY?.trim()`: `callModel({ kind: "embed",
-  model: "text-embedding-3-small" })` (logged in `model_calls`).
-- Else: deterministic hash — tokenize, sha256 each token, index mod 1536, increment,
-  L2-normalize (the legacy 64-dim approach widened to 1536). No network, reproducible.
-A `usesRealEmbeddings(): boolean` helper surfaces which path is active (for the import
-report and tests).
+`embedText(text): Promise<number[1536]>`. `OPENAI_API_KEY` set → `callModel({kind:"embed",
+model:"text-embedding-3-small"})` (logged in `model_calls`); else deterministic hash into
+1536 dims (legacy approach widened), L2-normalized, offline, reproducible.
+`usesRealEmbeddings()` surfaces the active path.
 
 ### Ingestion (`ingest.ts` + `scripts/ingest.ts`)
 
-Port of `src/ingest.ts`: walk supported files (.md/.txt/.csv/.eml) → `chunk` →
-`embedText` each chunk → upsert `source_records` (preserve source_id on conflict, dedupe
-by content_hash) → replace `memory_chunks` with citations
-(`citationForChunk` → `source-id#chunk-N`, 1-indexed; CSV → `#row-N`). Returns
-`{ processed, skipped, skippedFiles[] }` with per-file reasons (no silent skips). Seeds
-the default actor's `source_permissions` for every ingested source.
+Port `ingestFolder`: walk .md/.txt/.csv/.eml → `chunk` → `embedText` per chunk → upsert
+`source_records` (dedup by content_hash, preserve source_id) → replace `memory_chunks` with
+citations (`source-id#chunk-N`, CSV `#row-N`, 1-indexed). Per-file skip reasons reported; no
+orphan rows; seed default-actor `source_permissions` per source.
 
-### Retrieval (`retrieve.ts`) — ADR-0001 enforced
+### Extraction (`extract.ts` + `scripts/refresh.ts`)
 
-```ts
-searchMemory(db, {
-  query: string;
-  actor: { principalType: string; principalId: string };
-  limit?: number;            // default 6
-}): Promise<RetrievedChunk[]>   // { text, citation, sourceId, score }
-```
-1. Resolve the actor's allowed `source_id`s from `source_permissions` (default-deny).
-2. Embed the query via `embedText`.
-3. **Single SQL query** that filters to allowed sources in the WHERE clause AND ranks by
-   `embedding <=> $queryVec` (cosine). Permission filter is applied before ranking — a
-   restricted source can never surface even if it would rank higher.
-4. Return top-K chunks with citations. Empty allowed-set → empty result (not an error).
+Port `refreshMemory` for `semantic_facts` only: load chunks → per chunk run extractor
+(`createCsvExtractor` for csv, else `createLlmExtractor` via gateway) → cache by `cache_key`
+in `extraction_runs` (reuse on hit) → rebuild `semantic_facts` from `semantic_fact`
+candidates (confidence ≥ 0.75 → `accepted`, else `candidate`; dedup) → `restoreStaleFacts`
+(prior accepted facts that vanish become `stale`) → `markConflictsAndStaleFacts`
+(same subject+predicate, >1 distinct object → `conflicted`; orphaned chunk → `stale`).
+Entity/relationship candidate kinds are ignored in v1. The LLM extractor gets a concrete
+candidate Zod schema so Anthropic structured output populates it.
+
+### Retrieval (`retrieve.ts`) — the bundled tool's engine, ADR-0001 enforced
+
+`searchMemory(db, { query, actor, limit? })` → `{ intent, acceptedFacts, gapFacts, chunks }`:
+1. `intent = questionIntent(query)` (ported regex classifier).
+2. Resolve actor's allowed source_ids (default-deny).
+3. `acceptedFacts` = `loadFacts` (semantic_facts status='accepted', permission-filtered in
+   SQL, ranked by `rankRows`/`factIntentScore`, ≤6).
+4. `gapFacts` = `loadGapFacts` (candidate/conflicted/stale, ≤6).
+5. `chunks` = `retrieveRelevantChunks` — pgvector cosine **gated by lexical match**,
+   permission-filtered, top-3, each with citation.
+Permission filter is applied in the SQL WHERE before ranking — a restricted source never
+surfaces even if it would rank higher.
 
 ### `search_memory` tool + agentic answer
 
-- `search_memory` (class `read`): `argsSchema { query: string, limit?: number }`;
-  `execute` calls `searchMemory` with the run's actor and returns
-  `{ chunks: [{ citation, text, sourceId }] }`. Recorded as a tool_call in the ledger.
-- **Harness change:** `RunAgentInput` gains an optional `instructions?: string`.
-  `buildAgentSystemPrompt(tools, instructions?)` appends it after the tool catalog, so a
-  run can carry task guidance without forking the harness. The echo run passes nothing
-  (unchanged behavior); the memory run passes the memory instructions below.
-- `answer-config.ts` exports `MEMORY_INSTRUCTIONS` — *"Answer only from search_memory
-  results. Cite every claim with its citation id in brackets. If retrieved coverage is
-  thin or conflicting, list it under Knowledge Gaps. If search_memory returns nothing,
-  say there is no relevant memory. Never invent sources."* — and
-  `memoryRegistry()` = `createToolRegistry([searchMemoryTool])`.
-- **Route:** `/api/agent` runs the memory config by default
-  (`registry: memoryRegistry()`, `allowedClasses: {read}`, `instructions:
-  MEMORY_INSTRUCTIONS`), replacing the echo placeholder. The existing `/chat` renders the
-  cited answer + the run-inspector link unchanged.
+- `search_memory` (class `read`): args `{ query, limit? }` → returns the bundle above;
+  recorded as a tool_call in the ledger.
+- `answer-config.ts`: `MEMORY_INSTRUCTIONS` (the Q5 contract) + `memoryRegistry()` =
+  `createToolRegistry([searchMemoryTool])`.
+- **Harness change:** `RunAgentInput` gains optional `instructions?: string`;
+  `buildAgentSystemPrompt(tools, instructions?)` appends it. Echo run unchanged; memory run
+  passes `MEMORY_INSTRUCTIONS`.
+- **Route:** `/api/agent` runs the memory config by default (`memoryRegistry()`,
+  `allowedClasses:{read}`, `instructions: MEMORY_INSTRUCTIONS`), replacing the echo
+  placeholder. Existing `/chat` + `/runs/[id]` render unchanged. A post-check drops any
+  cited id not present in the tool result.
 
-### Memory add/correct (`notes.ts` + `add_memory_note` tool)
+### Memory add/correct (`notes.ts` + `add_memory_note`)
 
-`addMemoryNote(db, { title, text, actor })` writes a `source_record` (source_type
-`note`) + chunk(s) (embedded, cited), grants the actor read, and returns the source_id —
-immediately retrievable. **Correction = add a superseding note** (no destructive edit in
-v1). Exposed as `add_memory_note` tool (class `write_internal`) so an agent run can write
-back, and callable directly from a future memory page.
+`addMemoryNote(db, { title, text, actor })` writes a `source_record` (type `note`) + chunk(s)
+(embedded, cited), grants the actor read, returns source_id — retrievable immediately.
+Correction = add a superseding note (no destructive edit in v1). Exposed as `add_memory_note`
+(class `write_internal`).
 
 ## Data flow
 
 ```
-npm run ingest ./notes
-  -> ingestFolder -> per file: chunk -> embedText -> source_records + memory_chunks (+perms)
+npm run ingest ./notes -> source_records + memory_chunks (+embeddings, +perms)
+npm run refresh         -> extractor per chunk (cached) -> semantic_facts (accept/conflict/stale)
 
-POST /api/agent { question }   (memory run config)
-  -> runAgent(allowed={read}, tools={search_memory})
-       loop: callModel(generate_object decision)
-         -> search_memory(query) -> retrieve.searchMemory (permission-filtered pgvector)
-              -> cited chunks back into the loop (tool_call logged)
-         -> model writes final cited answer + gaps
+POST /api/agent { question }   (memory config)
+  -> runAgent(allowed={read}, tools={search_memory}, instructions=MEMORY_INSTRUCTIONS)
+       loop: callModel(decision)
+         -> search_memory(query) -> retrieve.searchMemory (permission-filtered)
+              -> { intent, acceptedFacts, gapFacts, chunks } back into the loop (logged)
+         -> model writes the 4-section cited answer; post-check validates citations
   -> { runId, answer }
-GET /runs/[id] -> existing inspector renders the trace (search_memory tool calls + answer)
+GET /runs/[id] -> existing inspector renders the trace
 ```
 
 ## Error handling
 
-- Empty allowed-set or no matching chunks → the tool returns an empty result; the model
-  answers "no relevant memory" (not a run failure).
-- Embedding provider error (real path) → surfaces as a `ModelGatewayError`; the run fails
-  and is inspectable (consistent with F5).
-- Ingest per-file failures → recorded with a reason and reported; never silently skipped;
-  never leaves orphan source/chunk rows.
+- Empty allowed-set / no matches → tool returns empty bundle → model answers
+  "no relevant memory" (not a failure).
+- Embedding provider error (real path) → `ModelGatewayError`, run fails, inspectable.
+- Extraction per-chunk failure → recorded in `extraction_runs` with status='failed'; refresh
+  continues; reported in the run summary.
+- Ingest per-file failure → reason recorded, reported, no orphan rows, no silent skips.
 
-## Testing
+## Testing (lean — no parity, no elaborate eval)
 
-Live Postgres, same harness as F3/F4/F5. Reset tables + run migrations in `beforeEach`.
-
-- `tests/memory-ingest.test.ts`: ingest writes source_records + chunks with citations and
-  a 1536-dim embedding; CSV → `#row-N`; per-file skip reasons; no orphan rows.
-- `tests/memory-embed.test.ts`: hash fallback is deterministic and length-1536, L2-norm ~1;
-  `usesRealEmbeddings()` reflects env.
-- `tests/memory-retrieve.test.ts`: pgvector ranking returns cited chunks; **a restricted
-  source never surfaces even when it lexically/semantically matches** (ported from
-  `read-service.test.ts`); empty allowed-set → empty.
-- `tests/search-memory-tool.test.ts`: tool returns cited chunks and logs a tool_call.
-- `tests/memory-answer-eval.test.ts` (the parity replacement): seed corpus + fixed
-  question set, mock provider returning canned cited answers; assert structural
-  properties — every cited id exists in the retrieved set, gaps surface on thin coverage,
-  "no relevant memory" on empty, restricted content never leaks. A separate opt-in live
-  run (real Anthropic) is manual, not in CI.
-- The legacy SQLite suite (`tests/answer.test.ts`, `read-service.test.ts`, etc.) stays
-  green, untouched, as the reference oracle.
+Live Postgres, reset + migrate in `beforeEach`, mock provider where a model is involved.
+- `memory-ingest`: writes records/chunks with citations + 1536-dim embedding; CSV `#row-N`;
+  dedup by content_hash; per-file skip reasons; no orphans.
+- `memory-embed`: hash fallback deterministic, length-1536, L2-norm ~1; `usesRealEmbeddings()`.
+- `memory-extract`: extraction populates `semantic_facts` (accept vs candidate at 0.75);
+  conflict detection (same subject+predicate, 2 objects → conflicted); stale on orphaned
+  chunk; cache reuse on unchanged chunk.
+- `memory-retrieve`: bundle shape; permission filter — **restricted source never surfaces**
+  even when it lexically/semantically matches; empty allowed-set → empty.
+- `search-memory-tool`: returns the bundle, logs a tool_call.
+- `memory-answer`: with a mock provider returning a canned cited answer, assert the
+  post-check passes valid citations and flags an invented one; refuse-on-empty path.
+Real-run validation (ingest a real corpus, ask in `/chat`, eyeball the cited answer) is the
+final check.
 
 ## Deferred (YAGNI)
 
-- Semantic fact graph: `entities`, `relationships`, `semantic_facts`, `extraction_runs`
-  and the LLM extraction pipeline.
-- Multi-user permission management UI.
-- In-app file upload UI (A4.2) — CLI ingest covers v1.
-- Live Drive/Gmail/Notion sync.
+`entities`/`relationships`/`entity_aliases` graph; deterministic prose templates; parity
+harness; multi-user permission UI; in-app upload UI (A4.2); live Drive/Gmail/Notion sync.
 
 ## Acceptance criteria
 
-- [ ] `npm run ingest <dir>` loads notes into Postgres as source_records + memory_chunks
-      with pgvector embeddings and citations; per-file status reported.
-- [ ] `search_memory` returns permission-filtered, cited chunks and logs a tool call.
+- [ ] `npm run ingest <dir>` loads notes as source_records + memory_chunks with pgvector
+      embeddings + citations; per-file status reported.
+- [ ] `npm run refresh` populates `semantic_facts` with accept/candidate split, conflict and
+      stale marking, and reuses cached extractions on unchanged chunks.
+- [ ] `search_memory` returns `{ intent, acceptedFacts, gapFacts, chunks }`,
+      permission-filtered, cited, logged as a tool call.
 - [ ] A restricted source never surfaces to an actor without access (SQL-level filter).
-- [ ] Asking a question in `/chat` runs the harness, calls `search_memory`, and renders a
-      cited answer with knowledge gaps; "no relevant memory" when retrieval is empty.
-- [ ] `add_memory_note` writes a retrievable note; a correction note supersedes prior
-      content in future answers.
-- [ ] The full run (search_memory tool calls, model calls, answer, status) appears in the
-      run inspector.
-- [ ] Answer eval passes on the seed question set; legacy SQLite suite stays green.
+- [ ] Asking in `/chat` runs the harness, calls `search_memory`, and renders a 4-section
+      cited answer with gaps; cited ids are validated against the tool result; "no relevant
+      memory" when empty.
+- [ ] `add_memory_note` writes a retrievable note; a correction note supersedes prior content.
+- [ ] The full run appears in the run inspector.
 
 ## Maps to original plan slices
 
-- A1 (schema+ingest) → migration 003 + `ingest.ts`/`chunk.ts` + CLI.
-- A2 (embeddings + retrieval) → `embed.ts` (pluggable 1536) + `retrieve.ts` (permission-filtered pgvector).
-- A3 (answer + parity) → **reframed**: agentic answer via prompt + answer eval (no `answer.ts` port, no strict parity).
-- A5 (search_memory tool) → `search-memory.ts`, registered into the harness — **the center of A**.
-- A6 (Research Chat from memory) → reuse existing `/chat` + memory run config.
-- A7 (add/correct) → `notes.ts` + `add_memory_note` — **folded into A**.
-- A4 (import UI), fact graph → **deferred**.
+- A1 → migration 003 + `chunk.ts`/`ingest.ts` + `scripts/ingest.ts`.
+- A2 → `embed.ts` (pluggable 1536) + `retrieve.ts` (permission-filtered hybrid pgvector).
+- A3 → **reframed**: faithful port of retrieval/ranking/fact-lifecycle behind `search_memory`
+  + agentic synthesis with citation post-check. No `answer.ts` prose port, **no parity gate**.
+- (extraction) → `extract.ts` + `scripts/refresh.ts` (the `refresh.ts` port; `semantic_facts` only).
+- A5 → `search-memory.ts` registered into the harness — the center of A.
+- A6 → reuse `/chat` + memory run config.
+- A7 → `notes.ts` + `add_memory_note` — folded in.
+- A4 (import UI), entity/relationship graph, prose templates → deferred.
