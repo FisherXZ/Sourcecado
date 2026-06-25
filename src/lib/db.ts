@@ -6,7 +6,7 @@ export function getDb(): postgres.Sql {
   if (!_db) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL is not set");
-    _db = postgres(url);
+    _db = postgres(url, { onnotice: () => {} });
   }
   return _db;
 }

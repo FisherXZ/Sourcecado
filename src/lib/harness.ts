@@ -42,6 +42,7 @@ export interface RunAgentInput {
   maxSteps?: number;
   provider?: ModelGatewayProvider;
   db?: Sql;
+  instructions?: string;
 }
 
 export interface RunAgentResult {
@@ -86,6 +87,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         allowed,
         transcript,
         provider: input.provider,
+        instructions: input.instructions,
       });
 
       if (decision.action === "final") {
@@ -143,6 +145,7 @@ interface DecideOptions {
   allowed: Set<PermissionClass>;
   transcript: string[];
   provider?: ModelGatewayProvider;
+  instructions?: string;
 }
 
 async function decide(db: Sql, opts: DecideOptions): Promise<AgentDecision> {
@@ -151,7 +154,7 @@ async function decide(db: Sql, opts: DecideOptions): Promise<AgentDecision> {
     kind: "generate_object",
     taskName: "agent_react_decide",
     promptVersion: "1",
-    system: buildAgentSystemPrompt(tools),
+    system: buildAgentSystemPrompt(tools, opts.instructions),
     prompt: buildUserPrompt(opts.question, opts.transcript),
     schema: agentDecisionSchema,
     schemaName: "agent_decision",
@@ -164,7 +167,7 @@ async function decide(db: Sql, opts: DecideOptions): Promise<AgentDecision> {
   return result.object;
 }
 
-export function buildAgentSystemPrompt(tools: Tool[]): string {
+export function buildAgentSystemPrompt(tools: Tool[], instructions?: string): string {
   const catalog = tools
     .map((tool) => {
       let schema = "{}";
@@ -176,14 +179,18 @@ export function buildAgentSystemPrompt(tools: Tool[]): string {
       return `- ${tool.name} (${tool.permissionClass}): ${tool.description}\n  args JSON schema: ${schema}`;
     })
     .join("\n");
-  return [
+  const parts = [
     "You are a sourcing agent. Decide the next action.",
     "Either call one tool, or give a final answer.",
     "Respond with a decision object: {action:'tool', tool, args} or {action:'final', answer}.",
     "When calling a tool, set `args` to a JSON object STRING matching that tool's args JSON schema exactly (e.g. \"{\\\"text\\\":\\\"hi\\\"}\").",
     "Available tools:",
     catalog || "(none)",
-  ].join("\n");
+  ];
+  if (instructions) {
+    parts.push("", instructions);
+  }
+  return parts.join("\n");
 }
 
 function buildUserPrompt(question: string, transcript: string[]): string {

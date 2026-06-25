@@ -293,15 +293,96 @@ describe("LLM extractor", () => {
     });
   });
 
-  it("requires model config when creating an unstructured LLM extractor", () => {
-    expect(() => createLlmExtractor({ apiKey: "", model: "test-model" })).toThrow(
-      /DEEPSEEK_API_KEY/
-    );
+  it("can be constructed without a key; provider error surfaces at call time", async () => {
+    // Construction no longer throws — the gateway's requireEnv validates the
+    // active provider's key at call time, not at construction.
+    const extractor = createLlmExtractor({ model: "test-model" });
+    expect(extractor).toBeDefined();
+
+    // A provider that rejects simulates what happens when requireEnv fires at runtime.
+    const failingProvider: LlmProvider = async () => {
+      throw new Error("DEEPSEEK_API_KEY is required for Model Gateway provider calls.");
+    };
+    const extractorWithBadProvider = createLlmExtractor({
+      model: "test-model",
+      provider: failingProvider,
+    });
+    await expect(extractorWithBadProvider.extract(input)).rejects.toMatchObject({
+      name: "ExtractionError",
+      code: "provider_error",
+    });
   });
 
   it("does not use the legacy OpenAI Responses API provider", () => {
     const source = readFileSync(join(process.cwd(), "src", "extractors", "llm.ts"), "utf8");
     expect(source).not.toContain("https://api.openai.com/v1/responses");
     expect(source).toContain("callModel");
+  });
+
+  describe("provider-aware model default", () => {
+    function withEnv(overrides: Record<string, string | undefined>, fn: () => void) {
+      const saved: Record<string, string | undefined> = {};
+      for (const key of Object.keys(overrides)) {
+        saved[key] = process.env[key];
+        if (overrides[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = overrides[key];
+        }
+      }
+      try {
+        fn();
+      } finally {
+        for (const key of Object.keys(saved)) {
+          if (saved[key] === undefined) delete process.env[key];
+          else process.env[key] = saved[key];
+        }
+      }
+    }
+
+    it("uses claude-sonnet-4-6 when provider is anthropic and no model env is set", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: "anthropic", SOURCECADO_GENERATION_MODEL: undefined },
+        () => {
+          expect(createLlmExtractor().modelName).toBe("claude-sonnet-4-6");
+        }
+      );
+    });
+
+    it("uses deepseek-chat when provider is unset and no model env is set", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: undefined, SOURCECADO_GENERATION_MODEL: undefined },
+        () => {
+          expect(createLlmExtractor().modelName).toBe("deepseek-chat");
+        }
+      );
+    });
+
+    it("uses deepseek-chat when provider is 'deepseek' and no model env is set", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: "deepseek", SOURCECADO_GENERATION_MODEL: undefined },
+        () => {
+          expect(createLlmExtractor().modelName).toBe("deepseek-chat");
+        }
+      );
+    });
+
+    it("explicit config.model wins over provider-aware default", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: "anthropic", SOURCECADO_GENERATION_MODEL: undefined },
+        () => {
+          expect(createLlmExtractor({ model: "claude-haiku-4-5" }).modelName).toBe("claude-haiku-4-5");
+        }
+      );
+    });
+
+    it("SOURCECADO_GENERATION_MODEL wins over provider-aware default", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: "anthropic", SOURCECADO_GENERATION_MODEL: "claude-opus-4-5" },
+        () => {
+          expect(createLlmExtractor().modelName).toBe("claude-opus-4-5");
+        }
+      );
+    });
   });
 });

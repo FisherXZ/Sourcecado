@@ -9,7 +9,9 @@
     "lint": "next lint",
     "test": "vitest run",
     "migrate": "tsx scripts/migrate.ts",
-    "stress": "tsx scripts/stress.ts"
+    "ingest": "tsx scripts/ingest.ts",
+    "stress": "tsx scripts/stress.ts",
+    "refresh": "tsx scripts/refresh.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.85",

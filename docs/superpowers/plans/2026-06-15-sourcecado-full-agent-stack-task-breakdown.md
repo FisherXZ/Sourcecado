@@ -114,39 +114,39 @@ build on these primitives instead of restyling. See
 - [x] FD.7 /styleguide catalog page (~1h) · AFK
 
 ## F3 — Model Gateway with usage logging
-Type: AFK · Blocked by: F2
+Type: AFK · Blocked by: F2 · Done: 2026-06-23 (PR #7 stack)
 
 **What to build:** The single `callModel()` entry point (ADR-0004). Records named model
 task, prompt/version name, usage, and errors to a `model_calls` table. Returns a real
 provider response.
 
 **Acceptance criteria:**
-- [ ] All model calls in the codebase go through the gateway (lint/grep check)
-- [ ] A call writes a `model_calls` row with task name, prompt/version, tokens, status
-- [ ] Provider error is captured, not thrown raw, and recorded
+- [x] All model calls in the codebase go through the gateway (lint/grep check)
+- [x] A call writes a `model_calls` row with task name, prompt/version, tokens, status
+- [x] Provider error is captured, not thrown raw, and recorded
 
 **Tasks:**
-- [ ] F3.1 `model_calls` migration (task name, prompt/version, usage, status, error) (~1h) · AFK
-- [ ] F3.2 `callModel()` with named tasks + prompt/version naming (~1.5h) · AFK
-- [ ] F3.3 Structured-output parse helper + error capture + usage counters (~1.5h) · AFK
+- [x] F3.1 `model_calls` migration (task name, prompt/version, usage, status, error) (~1h) · AFK
+- [x] F3.2 `callModel()` with named tasks + prompt/version naming (~1.5h) · AFK
+- [x] F3.3 Structured-output parse helper + error capture + usage counters (~1.5h) · AFK
 
 ## F4 — Run Ledger spine
-Type: AFK · Blocked by: F2
+Type: AFK · Blocked by: F2 · Done: 2026-06-23 (PR #7 stack)
 
 **What to build:** The Run Ledger tables and write path (ADR-0002): `runs`,
 `run_steps`, `tool_calls`, plus linkage to `model_calls`. A run inspector view renders
 the trace for one run.
 
 **Acceptance criteria:**
-- [ ] Starting a run creates a `runs` row; each step/tool/model call is recorded
-- [ ] Final run status (success/error) is persisted
-- [ ] Run inspector renders the full trace (steps, tool calls, model calls, usage) for a run id
+- [x] Starting a run creates a `runs` row; each step/tool/model call is recorded
+- [x] Final run status (success/error) is persisted
+- [x] Run inspector renders the full trace (steps, tool calls, model calls, usage) for a run id (`/runs/[id]`, gated by `SOURCECADO_ENABLE_RUN_INSPECTOR`)
 
 **Tasks:**
-- [ ] F4.1 `runs` + `run_steps` + `tool_calls` migrations (~1.5h) · AFK
-- [ ] F4.2 Run create + step/tool/model logging write path (~1.5h) · AFK
-- [ ] F4.3 Run status + error capture on the run (~1h) · AFK
-- [ ] F4.4 Run inspector view (read-only trace render) (~1.5h) · AFK (build with src/components/ui primitives)
+- [x] F4.1 `runs` + `run_steps` + `tool_calls` migrations (~1.5h) · AFK
+- [x] F4.2 Run create + step/tool/model logging write path (~1.5h) · AFK
+- [x] F4.3 Run status + error capture on the run (~1h) · AFK
+- [x] F4.4 Run inspector view (read-only trace render) (~1.5h) · AFK (build with src/components/ui primitives)
 
 ## F5 — Agent Harness ReAct loop
 Type: AFK · Blocked by: F3, F4 · Done: 2026-06-23
@@ -178,118 +178,135 @@ Ledger, and you can inspect it. Nothing sourcing-specific yet — the spine work
 Port the existing SQLite memory brain (`src/`) into the hosted app and expose it through
 Research Chat. **Highest-risk reuse in the project** — isolated here with a parity test.
 
+> **Status: core delivered (2026-06-25).** Implemented per the reframed design
+> `docs/superpowers/specs/2026-06-25-feature-a-cited-memory-answer-design.md` on branch
+> `feat/a-memory-impl` → **PR #8**. Principal-reviewed (merge risk LOW), 258 tests pass,
+> proven live on 3 complex queries (claude-sonnet-4-6). **Reframe vs this breakdown:** the
+> A3 parity-test gate was **cut** (decision #6 — build/run/validate instead) and the model
+> now synthesizes the prose (no `answer.ts` prose port); the in-app import UI (A4) and the
+> memory-management page (A7.2) are **deferred** to later UI slices — the CLI `npm run
+> ingest`/`refresh` and the `add_memory_note` tool cover those paths for now.
+
 ## A1 — Memory schema + ingest ported to Postgres/pgvector
-Type: AFK · Blocked by: F2
+Type: AFK · Blocked by: F2 · Done: 2026-06-25 (PR #8)
 
 **What to build:** Port `source_records` and `memory_chunks` to Postgres with a pgvector
 embedding column, plus the ingest + chunking path from `src/ingest.ts` / `src/chunk.ts`.
 Carry ADR-0001 permission metadata at the source and chunk level.
 
 **Acceptance criteria:**
-- [ ] Source records and chunks persist in Postgres with permission/source metadata
-- [ ] Ingesting a sample file produces chunks with citations
-- [ ] Embedding column is pgvector, not a text blob
+- [x] Source records and chunks persist in Postgres with permission/source metadata (migration `002_memory.sql` + `source_permissions`)
+- [x] Ingesting a sample file produces chunks with citations (`sourceId#chunk-N` / `#row-N`)
+- [x] Embedding column is pgvector, not a text blob (`vector(1536)` + hnsw cosine index)
 
 **Tasks:**
-- [ ] A1.1 `source_records` + `memory_chunks` migration with pgvector + permission cols (~1.5h) · AFK
-- [ ] A1.2 Port ingest (source record creation, content hashing, dedupe) (~2h) · AFK
-- [ ] A1.3 Port chunking + citation construction (~1.5h) · AFK
+- [x] A1.1 `source_records` + `memory_chunks` migration with pgvector + permission cols (~1.5h) · AFK
+- [x] A1.2 Port ingest (source record creation, content hashing, dedupe) (~2h) · AFK — `src/lib/memory/ingest.ts` + `scripts/ingest.ts`
+- [x] A1.3 Port chunking + citation construction (~1.5h) · AFK — `src/lib/memory/chunk.ts`
 
 ## A2 — Embeddings + cited retrieval ported
-Type: AFK · Blocked by: A1
+Type: AFK · Blocked by: A1 · Done: 2026-06-25 (PR #8)
 
 **What to build:** Replace the in-process text-blob cosine (`src/embeddings.ts`) with
 pgvector similarity search, and port the cited-retrieval path. Permission filter applies
 before retrieval (ADR-0001).
 
 **Acceptance criteria:**
-- [ ] Retrieval uses pgvector similarity, filtered by the caller's allowed sources
-- [ ] Retrieved chunks carry citations
-- [ ] A restricted source never surfaces to a caller without access
+- [x] Retrieval uses pgvector similarity, filtered by the caller's allowed sources (cosine gated by lexical, permission filter in SQL WHERE)
+- [x] Retrieved chunks carry citations
+- [x] A restricted source never surfaces to a caller without access (proven by test)
 
 **Tasks:**
-- [ ] A2.1 Embedding generation through the Model Gateway → pgvector column (~2h) · AFK
-- [ ] A2.2 pgvector similarity query with pre-retrieval permission filter (~2h) · AFK
+- [x] A2.1 Embedding generation through the Model Gateway → pgvector column (~2h) · AFK — `src/lib/memory/embed.ts` (pluggable 1536-dim, gateway or hash fallback)
+- [x] A2.2 pgvector similarity query with pre-retrieval permission filter (~2h) · AFK — `src/lib/memory/retrieve.ts` + `permissions.ts`
 
-## A3 — Answer logic ported with parity test
-Type: HITL · Blocked by: A2
+## A3 — Answer logic ported — REFRAMED (parity gate cut)
+Type: ~~HITL~~ AFK · Blocked by: A2 · Done: 2026-06-25 (PR #8)
 
 **What to build:** Port the intent classification + accepted/gap fact logic from
-`src/answer.ts` (420 LOC). Gate the port behind a **parity test** that runs the same
-question set against the old SQLite engine and the new Postgres engine and compares
-answers. HITL because a human signs off on acceptable parity deltas.
+`src/answer.ts` (420 LOC). ~~Gate the port behind a parity test.~~ **Reframed (2026-06-25
+spec, decision #6):** port the retrieval/ranking/fact-lifecycle behind `search_memory` and
+let the **model synthesize** the prose (the deterministic `answer.ts` templates are the one
+part NOT ported). **No parity harness/gate** — build, run on real data, validate. A
+deterministic citation post-check replaces the prose-parity concern.
 
 **Acceptance criteria:**
-- [ ] Cited Sourcing Memory Answer produced from Postgres with intent + gaps
-- [ ] Parity test compares SQLite vs Postgres answers on a fixed question set
-- [ ] Human-reviewed parity report: deltas are explained and accepted
+- [x] Cited Sourcing Memory Answer produced from Postgres with intent + gaps (model writes Answer/Evidence/Gaps/Next-Action from the tool bundle)
+- [x] ~~Parity test compares SQLite vs Postgres answers~~ → **cut**; replaced by a citation post-check (cited ids must exist in the tool result) + live validation on 3 complex queries
+- [x] ~~Human-reviewed parity report~~ → **cut** (no parity gate); principal review covered correctness instead
 
 **Tasks:**
-- [ ] A3.1 Port intent classification + fact selection (~2h) · AFK
-- [ ] A3.2 Port gap-fact handling + no-memory/no-relevant-memory paths (~1.5h) · AFK
-- [ ] A3.3 Parity harness: question set + SQLite-vs-Postgres diff report (~2h) · AFK
-- [ ] A3.4 Parity review gate + log accepted deltas (~1h) · HITL
+- [x] A3.1 Port intent classification + fact selection (~2h) · AFK — `src/lib/memory/rank.ts` (questionIntent/factIntentScore/rankRows) + `retrieve.ts`
+- [x] A3.2 Port gap-fact handling + no-memory/no-relevant-memory paths (~1.5h) · AFK — `gapFacts` in `retrieve.ts` + refuse-on-empty in `MEMORY_INSTRUCTIONS`
+- [x] ~~A3.3 Parity harness~~ — **cut** (decision #6)
+- [x] ~~A3.4 Parity review gate~~ — **cut** (decision #6); citation post-check (`src/lib/memory/citations.ts`) is the deterministic guard
 
-## A4 — File/export memory import path
+## A4 — File/export memory import path — DEFERRED (in-app UI)
 Type: AFK · Blocked by: A1
 
 **What to build:** App-side file/export import (roadmap: ingestion is file/export only).
 Imported sources become source records with citations.
 
+> **Deferred (2026-06-25):** the in-app import UI is out of Feature A's reframed scope. The
+> ingest path itself is done via the CLI (`npm run ingest <dir>`, A1.2) with per-file
+> success/skip reasons; only the app upload endpoint + UI remain for a later UI slice.
+
 **Acceptance criteria:**
-- [ ] A user can import a file/export from the app and see it become source records
-- [ ] Import surfaces per-file success/skip with reasons (no silent skips)
+- [ ] A user can import a file/export from the app and see it become source records (CLI only for now)
+- [x] Import surfaces per-file success/skip with reasons (no silent skips) — done in `ingestFolder`
 
 **Tasks:**
-- [ ] A4.1 Import endpoint + source-record creation from upload (~2h) · AFK
-- [ ] A4.2 Import result UI with per-file status/skip reasons (~1.5h) · AFK (build with src/components/ui primitives)
+- [ ] A4.1 Import endpoint + source-record creation from upload (~2h) · AFK — deferred (CLI ingest exists)
+- [ ] A4.2 Import result UI with per-file status/skip reasons (~1.5h) · AFK — deferred
 
 ## A5 — search_memory tool
-Type: AFK · Blocked by: A2, F5
+Type: AFK · Blocked by: A2, F5 · Done: 2026-06-25 (PR #8)
 
 **What to build:** A `search_memory` tool (class `read`) that wraps cited retrieval and
 plugs into the harness registry, replacing the echo tool for memory questions.
 
 **Acceptance criteria:**
-- [ ] `search_memory` returns cited chunks/facts to the loop
-- [ ] Tool call + result recorded in the Run Ledger
+- [x] `search_memory` returns cited chunks/facts to the loop (`{intent, acceptedFacts, gapFacts, chunks}`)
+- [x] Tool call + result recorded in the Run Ledger
 
 **Tasks:**
-- [ ] A5.1 `search_memory` tool wrapping retrieval + register it (~1.5h) · AFK
+- [x] A5.1 `search_memory` tool wrapping retrieval + register it (~1.5h) · AFK — `src/lib/tools/search-memory.ts` + `memoryRegistry()`
 
 ## A6 — Research Chat answers from memory
-Type: HITL · Blocked by: A3, A5, F1
+Type: HITL · Blocked by: A3, A5, F1 · Core done: 2026-06-25 (PR #8); design review pending
 
 **What to build:** Minimal Research Chat UI that triggers an agent run, shows run
 status/result inline, and renders the cited answer with gaps. HITL for one chat-layout
 design review.
 
 **Acceptance criteria:**
-- [ ] A Sourcing Director asks a question and gets a cited answer in chat
-- [ ] Run status shows while the run executes; result renders with citations + gaps
-- [ ] A link opens the run inspector for that answer
+- [x] A Sourcing Director asks a question and gets a cited answer in chat (reused `/chat` + memory run config; verified live)
+- [x] Run status shows while the run executes; result renders with citations + gaps
+- [x] A link opens the run inspector for that answer (`/runs/[id]`)
 
 **Tasks:**
-- [ ] A6.1 Research Chat UI: message list + input + run trigger (~2h) · AFK (build with src/components/ui primitives)
-- [ ] A6.2 Inline run status + cited answer + gaps render (~1.5h) · AFK
-- [ ] A6.3 Verify Research Chat matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL
+- [x] A6.1 Research Chat UI: message list + input + run trigger (~2h) · AFK — reused the F5 `/chat` (ChatClient) against the memory config
+- [x] A6.2 Inline run status + cited answer + gaps render (~1.5h) · AFK — 4-section answer + `invalidCitations` from `/api/agent`
+- [ ] A6.3 Verify Research Chat matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL — **pending** (design review not yet done)
 
 ## A7 — Memory management page (add/correct)
-Type: AFK · Blocked by: A3
+Type: AFK · Blocked by: A3 · A7.1 done: 2026-06-25 (PR #8); A7.2 page deferred
 
 **What to build:** Memory management page to add a memory note and correct existing
 memory (the memory-correction path from `src/`).
 
 **Acceptance criteria:**
-- [ ] A user can add a memory note from the app; it becomes retrievable
-- [ ] A user can correct memory; corrections affect future answers
+- [x] A user can add a memory note; it becomes retrievable (`add_memory_note` tool — immediately searchable)
+- [x] A user can correct memory; corrections affect future answers (superseding note, no destructive edit)
+- [ ] …from a dedicated **app page** — deferred (tool exists; management UI is a later slice)
 
 **Tasks:**
-- [ ] A7.1 `add_memory_note` tool + write path (~1.5h) · AFK
-- [ ] A7.2 Memory management page: list + add + correct (~2h) · AFK (build with src/components/ui primitives)
+- [x] A7.1 `add_memory_note` tool + write path (~1.5h) · AFK — `src/lib/tools/add-memory-note.ts` + `src/lib/memory/notes.ts`
+- [ ] A7.2 Memory management page: list + add + correct (~2h) · AFK — **deferred** to a later UI slice
 
-**FEATURE A DEMO:** import sourcing notes, ask a question in chat, get a cited answer
-with gaps, inspect the run, and correct memory.
+**FEATURE A DEMO:** ~~import sourcing notes~~ (CLI `npm run ingest`), ask a question in chat,
+get a cited answer with gaps, inspect the run, and correct memory (`add_memory_note`). ✅
+Demonstrated live 2026-06-25 on 3 complex queries.
 
 ---
 

@@ -39,20 +39,12 @@ export interface LlmExtractorConfig {
 }
 
 export function createLlmExtractor(config: LlmExtractorConfig = {}): Extractor {
-  const apiKey = config.apiKey ?? process.env.DEEPSEEK_API_KEY ?? "";
-  const model = config.model ?? process.env.SOURCECADO_GENERATION_MODEL ?? "deepseek-chat";
+  const generationProvider = process.env.SOURCECADO_GENERATION_PROVIDER?.trim() || "deepseek";
+  const defaultModel = generationProvider === "anthropic" ? "claude-sonnet-4-6" : "deepseek-chat";
+  const model = (config.model ?? process.env.SOURCECADO_GENERATION_MODEL?.trim()) || defaultModel;
 
-  if (!config.provider && !apiKey.trim()) {
-    throw new ExtractionError(
-      "missing_config",
-      "DEEPSEEK_API_KEY is required for unstructured LLM extraction."
-    );
-  }
-
-  // The Model Gateway's default DeepSeek provider reads DEEPSEEK_API_KEY from
-  // the environment. Honor an explicitly supplied config.apiKey by populating
-  // the env when it isn't already set, so a configured key actually takes
-  // effect instead of passing validation here and failing at call time.
+  // If an explicit apiKey is supplied via config, propagate it to the environment
+  // so the Model Gateway can pick it up at call time via requireEnv.
   if (!config.provider && config.apiKey?.trim() && !process.env.DEEPSEEK_API_KEY?.trim()) {
     process.env.DEEPSEEK_API_KEY = config.apiKey;
   }
@@ -202,7 +194,7 @@ function buildSystemPrompt(): string {
 
 function createModelGatewayProvider(): LlmProvider {
   return async (request) => {
-    const result = await callModel<{ candidates: unknown[] }>(getDb(), {
+    const result = await callModel(getDb(), {
       kind: "generate_object",
       taskName: "extract_memory_candidates",
       promptVersion: request.schemaVersion,
@@ -215,16 +207,28 @@ function createModelGatewayProvider(): LlmProvider {
       system: request.systemPrompt,
       schema: candidateResponseSchema(),
       schemaName: "sourcyavo_memory_candidates",
-      providerName: "deepseek",
+      // providerName omitted: gateway resolves via SOURCECADO_GENERATION_PROVIDER env
+      // (defaults to "deepseek" unless SOURCECADO_GENERATION_PROVIDER overrides it)
       model: request.model
     });
     return JSON.stringify(result.object);
   };
 }
 
-function candidateResponseSchema(): z.ZodType<{ candidates: unknown[] }> {
+function candidateResponseSchema() {
   return z.object({
-    candidates: z.array(z.unknown())
+    candidates: z.array(
+      z.object({
+        kind: z.enum(["entity", "relationship", "semantic_fact"]),
+        subject: z.string().optional(),
+        predicate: z.string().optional(),
+        object: z.string().optional(),
+        entityType: z.enum(ENTITY_TYPES).optional(),
+        relationshipType: z.enum(RELATIONSHIP_TYPES).optional(),
+        confidence: z.number(),
+        evidenceText: z.string(),
+      })
+    ),
   });
 }
 
