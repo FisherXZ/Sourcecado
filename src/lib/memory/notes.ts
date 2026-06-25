@@ -1,7 +1,8 @@
 import type postgres from "postgres";
-import { DEFAULT_ACTOR, type MemoryActor } from "./actor.js";
-import { chunkText, citationForChunk, sha256, slugifySourceId } from "./chunk.js";
-import { embedText, toVectorLiteral } from "./embed.js";
+import { DEFAULT_ACTOR, type MemoryActor } from "./actor";
+import { chunkText, sha256, slugifySourceId } from "./chunk";
+import { writeChunksAndGrant } from "./chunk-store";
+import { embedText } from "./embed";
 
 type Sql = postgres.Sql;
 
@@ -38,30 +39,14 @@ export async function addMemoryNote(
     const effectiveSourceId = source.source_id;
 
     // Replace chunks to stay idempotent on re-add (same dedup pattern as ingest.ts).
-    await tx`DELETE FROM memory_chunks WHERE source_record_id = ${sourceRecordId}`;
-
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const vectorLiteral = toVectorLiteral(embeddings[i]);
-      const citation = citationForChunk(effectiveSourceId, "note", chunk);
-      await tx`
-        INSERT INTO memory_chunks (source_record_id, chunk_index, text, chunk_hash, embedding, citation)
-        VALUES (
-          ${sourceRecordId},
-          ${chunk.chunkIndex},
-          ${chunk.text},
-          ${chunk.chunkHash},
-          ${vectorLiteral}::vector,
-          ${citation}
-        )
-      `;
-    }
-
-    await tx`
-      INSERT INTO source_permissions (principal_type, principal_id, source_id, access)
-      VALUES (${actor.actorType}, ${actor.actorId}, ${effectiveSourceId}, 'read')
-      ON CONFLICT (principal_type, principal_id, source_id) DO NOTHING
-    `;
+    await writeChunksAndGrant(tx, {
+      sourceRecordId,
+      sourceId: effectiveSourceId,
+      sourceType: "note",
+      chunks,
+      embeddings,
+      actor,
+    });
   });
 
   return { sourceId };

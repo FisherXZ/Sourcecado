@@ -39,7 +39,9 @@ export interface LlmExtractorConfig {
 }
 
 export function createLlmExtractor(config: LlmExtractorConfig = {}): Extractor {
-  const model = config.model ?? process.env.SOURCECADO_GENERATION_MODEL ?? "deepseek-chat";
+  const generationProvider = process.env.SOURCECADO_GENERATION_PROVIDER?.trim() || "deepseek";
+  const defaultModel = generationProvider === "anthropic" ? "claude-sonnet-4-6" : "deepseek-chat";
+  const model = (config.model ?? process.env.SOURCECADO_GENERATION_MODEL?.trim()) || defaultModel;
 
   // If an explicit apiKey is supplied via config, propagate it to the environment
   // so the Model Gateway can pick it up at call time via requireEnv.

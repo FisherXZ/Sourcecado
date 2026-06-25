@@ -318,4 +318,71 @@ describe("LLM extractor", () => {
     expect(source).not.toContain("https://api.openai.com/v1/responses");
     expect(source).toContain("callModel");
   });
+
+  describe("provider-aware model default", () => {
+    function withEnv(overrides: Record<string, string | undefined>, fn: () => void) {
+      const saved: Record<string, string | undefined> = {};
+      for (const key of Object.keys(overrides)) {
+        saved[key] = process.env[key];
+        if (overrides[key] === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = overrides[key];
+        }
+      }
+      try {
+        fn();
+      } finally {
+        for (const key of Object.keys(saved)) {
+          if (saved[key] === undefined) delete process.env[key];
+          else process.env[key] = saved[key];
+        }
+      }
+    }
+
+    it("uses claude-sonnet-4-6 when provider is anthropic and no model env is set", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: "anthropic", SOURCECADO_GENERATION_MODEL: undefined },
+        () => {
+          expect(createLlmExtractor().modelName).toBe("claude-sonnet-4-6");
+        }
+      );
+    });
+
+    it("uses deepseek-chat when provider is unset and no model env is set", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: undefined, SOURCECADO_GENERATION_MODEL: undefined },
+        () => {
+          expect(createLlmExtractor().modelName).toBe("deepseek-chat");
+        }
+      );
+    });
+
+    it("uses deepseek-chat when provider is 'deepseek' and no model env is set", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: "deepseek", SOURCECADO_GENERATION_MODEL: undefined },
+        () => {
+          expect(createLlmExtractor().modelName).toBe("deepseek-chat");
+        }
+      );
+    });
+
+    it("explicit config.model wins over provider-aware default", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: "anthropic", SOURCECADO_GENERATION_MODEL: undefined },
+        () => {
+          expect(createLlmExtractor({ model: "claude-haiku-4-5" }).modelName).toBe("claude-haiku-4-5");
+        }
+      );
+    });
+
+    it("SOURCECADO_GENERATION_MODEL wins over provider-aware default", () => {
+      withEnv(
+        { SOURCECADO_GENERATION_PROVIDER: "anthropic", SOURCECADO_GENERATION_MODEL: "claude-opus-4-5" },
+        () => {
+          expect(createLlmExtractor().modelName).toBe("claude-opus-4-5");
+        }
+      );
+    });
+  });
 });

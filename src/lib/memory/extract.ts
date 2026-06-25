@@ -11,7 +11,7 @@ import { createCsvExtractor } from "../../extractors/csv.js";
 import { createLlmExtractor, LLM_SCHEMA_VERSION } from "../../extractors/llm.js";
 import type { ExtractionInput, Extractor } from "../../extractors/types.js";
 import type { ExtractedCandidate, SourceType } from "../../types.js";
-import { sha256 } from "./chunk.js";
+import { sha256 } from "./chunk";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -230,12 +230,16 @@ function pickExtractor(input: ExtractionInput, options: RefreshMemoryOptions): E
 
 function metadataForExtractor(extractor: Extractor, options: RefreshMemoryOptions): ExtractionMetadata {
   const provided = options.metadataByExtractorType?.[extractor.type] ?? {};
+  const generationProvider = process.env.SOURCECADO_GENERATION_PROVIDER?.trim() || "deepseek";
+  const generationModel =
+    process.env.SOURCECADO_GENERATION_MODEL?.trim() ||
+    (generationProvider === "anthropic" ? "claude-sonnet-4-6" : "deepseek-chat");
   const defaults =
     extractor.type === "llm"
       ? {
           promptHash: sha256("sourcyavo-llm-extractor-v1"),
           schemaVersion: LLM_SCHEMA_VERSION,
-          modelName: process.env.SOURCECADO_GENERATION_MODEL || "deepseek-chat",
+          modelName: generationModel,
         }
       : {
           promptHash: DEFAULT_PROMPT_HASH,
