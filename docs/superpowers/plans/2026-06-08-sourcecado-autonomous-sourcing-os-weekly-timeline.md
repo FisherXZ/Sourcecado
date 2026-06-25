@@ -9,6 +9,39 @@ Status: Scoped for a 2-person team at ~5 hrs/week each (~70-100 person-hours tot
 > `superpowers:executing-plans` or `superpowers:subagent-driven-development`
 > to execute it.
 
+## Progress (updated 2026-06-25)
+
+FLOOR tier is substantially delivered. **Feature A — Cited Sourcing Memory Answer**
+(branch `feat/a-memory-impl`, off `feat/a-cited-memory-answer`) is built, principal-reviewed
+(merge risk LOW), and proven end-to-end on real data; 258 tests pass.
+
+- [x] **Memory model ported to Postgres/pgvector** — `source_records`, `memory_chunks`
+      (`vector(1536)` + hnsw cosine), `semantic_facts` lifecycle
+      (accepted/candidate/conflicted/stale), `extraction_runs` cache, `source_permissions`
+      (ADR-0001 default-deny). Migration `002_memory.sql`. (Deferred per design: the
+      entities/relationships/alias graph — unread by the answer path.)
+- [x] **Query the brain** — `search_memory` tool returns `{intent, acceptedFacts, gapFacts,
+      chunks}`; the model synthesizes the **Answer/Evidence/Gaps/Next-Action** cited answer
+      with a deterministic citation post-check. Asking in `/chat` runs the agent loop and
+      renders a 4-section cited answer with knowledge gaps, fully traced in the Run Ledger
+      (`/runs/[id]`). Verified live on 3 complex queries (claude-sonnet-4-6).
+- [x] **Add/correct notes** — `add_memory_note` tool writes a note that is immediately
+      retrievable; corrections are superseding notes (no destructive edit).
+- [x] **Ingest + refresh pipeline** — `npm run ingest <dir>` (md/txt/csv/eml → chunks +
+      pgvector embeddings, real OpenAI `text-embedding-3-small` or offline hash fallback) and
+      `npm run refresh` (extractor per chunk → `semantic_facts`, cached).
+- [x] **Agent runtime** — the small custom tool-use loop (F5 harness) is the runtime; this
+      feature registers `search_memory` into it (per the "own the runtime" decision).
+
+Remaining FLOOR work before the floor is fully shipped:
+- [ ] Load the **real Drive notes** corpus (this milestone used a representative demo corpus).
+- [ ] **Auto-write-back**: agent run outputs flowing back into memory automatically (the
+      `add_memory_note` primitive exists; the run→memory wiring is not yet automatic).
+- [ ] Thin web-app polish for query + note management (current surface is `/chat` + `/runs/[id]`).
+
+Infra note: local Postgres is the Dockerized `pgvector/pgvector:pg16` (`docker compose up -d`);
+the hosted Supabase target in Stack Decision is unchanged for later.
+
 ## Why This Was Rescoped
 
 The earlier design doc (`docs/superpowers/specs/2026-06-08-sourcecado-autonomous-sourcing-os-design.md`)
