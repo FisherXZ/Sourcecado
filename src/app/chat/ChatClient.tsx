@@ -65,7 +65,7 @@ export function ChatClient() {
 
       {error && (
         <Card>
-          <div className="text-[13px] text-text">Error: {error}</div>
+          <div role="alert" className="text-[13px] text-text">Error: {error}</div>
         </Card>
       )}
 
