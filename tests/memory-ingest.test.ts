@@ -216,6 +216,35 @@ describe("memory ingestFolder (postgres)", () => {
     expect(sources.every((s) => !s.path.includes("image.png"))).toBe(true);
   });
 
+  it("frontmatter source_id with spaces/punctuation is slugified before storage so citations match the citation regex", async () => {
+    const db = getDb();
+    const dir = makeTempDir();
+    // source_id with spaces and punctuation — would break the citation regex if stored as-is
+    writeFileSync(
+      join(dir, "note.md"),
+      "---\ntitle: My Source\nsource_id: My Src: 2026\n---\nContent about sourcing candidates."
+    );
+
+    const result = await ingestFolder(db, dir);
+    expect(result.processed).toBe(1);
+
+    const [record] = await db<{ source_id: string }[]>`
+      SELECT source_id FROM source_records LIMIT 1
+    `;
+    // source_id must conform to the citation charset
+    expect(record.source_id).toMatch(/^[A-Za-z0-9._/-]+$/);
+
+    const chunks = await db<{ citation: string }[]>`
+      SELECT citation FROM memory_chunks ORDER BY chunk_index
+    `;
+    expect(chunks.length).toBeGreaterThan(0);
+    // Every stored citation must match the citation token pattern
+    const citationPattern = /^[A-Za-z0-9._-]+#(?:chunk|row)-\d+$/;
+    for (const chunk of chunks) {
+      expect(chunk.citation).toMatch(citationPattern);
+    }
+  });
+
   it("empty file is reported in skippedFiles with no orphan rows", async () => {
     const db = getDb();
     const dir = makeTempDir();

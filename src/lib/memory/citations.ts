@@ -1,6 +1,25 @@
+import type { RunTrace, RunStepTrace } from "../ledger";
 import type { MemoryBundle } from "./retrieve";
 
 const CITATION_PATTERN = "[A-Za-z0-9._-]+#(?:chunk|row)-\\d+";
+
+/** Walk a run trace and collect every MemoryBundle from search_memory tool calls. */
+export function collectBundlesFromTrace(trace: RunTrace | null): MemoryBundle[] {
+  if (!trace) return [];
+  const bundles: MemoryBundle[] = [];
+  function walk(steps: RunStepTrace[]) {
+    for (const step of steps) {
+      for (const tc of step.toolCalls) {
+        if (tc.toolName === "search_memory" && tc.status === "succeeded" && tc.result) {
+          bundles.push(tc.result as MemoryBundle);
+        }
+      }
+      walk(step.children);
+    }
+  }
+  walk(trace.steps);
+  return bundles;
+}
 
 /** Collect every citation id the search_memory tool actually returned for a run. */
 export function collectAllowedCitations(bundles: MemoryBundle[]): Set<string> {
@@ -37,4 +56,19 @@ export function checkCitations(
   );
 
   return { invalid, sanitizedAnswer };
+}
+
+/**
+ * Full citation post-check pipeline: walk the trace → collect allowed citations
+ * → strip any citation tokens the agent invented. Returns the sanitized answer
+ * and the list of invalid citation ids.
+ */
+export function verifyAnswerCitations(
+  trace: RunTrace | null,
+  answer: string
+): { answer: string; invalidCitations: string[] } {
+  const bundles = collectBundlesFromTrace(trace);
+  const allowed = collectAllowedCitations(bundles);
+  const { sanitizedAnswer, invalid } = checkCitations(answer, allowed);
+  return { answer: sanitizedAnswer, invalidCitations: invalid };
 }

@@ -206,7 +206,7 @@ function createModelGatewayProvider(): LlmProvider {
       schema: candidateResponseSchema(),
       schemaName: "sourcyavo_memory_candidates",
       // providerName omitted: gateway resolves via SOURCECADO_GENERATION_PROVIDER env
-      // (defaults to "anthropic" → claude-sonnet-4-6, or "deepseek" if set)
+      // (defaults to "deepseek" unless SOURCECADO_GENERATION_PROVIDER overrides it)
       model: request.model
     });
     return JSON.stringify(result.object);

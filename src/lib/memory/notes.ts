@@ -1,7 +1,6 @@
 import type postgres from "postgres";
-import { slugifySourceId } from "../../db.js";
 import { DEFAULT_ACTOR, type MemoryActor } from "./actor.js";
-import { chunkText, citationForChunk, sha256 } from "./chunk.js";
+import { chunkText, citationForChunk, sha256, slugifySourceId } from "./chunk.js";
 import { embedText, toVectorLiteral } from "./embed.js";
 
 type Sql = postgres.Sql;

@@ -108,3 +108,21 @@ function splitOversizedToken(text: string): string[] {
 
   return chunks;
 }
+
+// Ported from src/db.ts (legacy SQLite). Kept here so the Postgres memory
+// stack does not pull in better-sqlite3 via that module's import side-effects.
+// Deterministic slug: lowercase, non-alphanumeric runs collapse to '-', path
+// separators are preserved. Windows backslash is normalised to '/' first.
+export function slugifySourceId(relativeLabel: string): string {
+  return relativeLabel
+    .replace(/\\/g, "/")
+    .toLowerCase()
+    .split("/")
+    .map((segment) =>
+      segment
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+    )
+    .filter((segment) => segment.length > 0)
+    .join("/");
+}

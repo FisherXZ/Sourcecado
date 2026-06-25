@@ -1,11 +1,10 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type postgres from "postgres";
-import { slugifySourceId } from "../../db.js";
 import { isSupportedSourcePath, parseSourceFile } from "../../frontmatter.js";
 import { IngestError, classifyIngestError, type IngestErrorCategory } from "../../ingest-error.js";
 import { DEFAULT_ACTOR, type MemoryActor } from "./actor.js";
-import { chunkCsvRows, chunkText, citationForChunk, sha256, type TextChunk } from "./chunk.js";
+import { chunkCsvRows, chunkText, citationForChunk, sha256, slugifySourceId, type TextChunk } from "./chunk.js";
 import { embedText, toVectorLiteral } from "./embed.js";
 
 export type MemorySkipCategory = IngestErrorCategory | "unchanged";
@@ -76,7 +75,7 @@ async function ingestFile(
 
   const contentHash = sha256(parsed.rawText);
   const relativeLabel = sourceLabel(rootFolder, filePath);
-  const sourceId = parsed.sourceId ?? slugifySourceId(relativeLabel);
+  const sourceId = slugifySourceId(parsed.sourceId ?? relativeLabel);
 
   // Dedup: skip if the stored row already has the same content hash
   const [existing] = await db<{ content_hash: string }[]>`

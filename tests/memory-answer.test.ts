@@ -4,7 +4,7 @@ import { getRunTrace } from "@/lib/ledger";
 import { runMigrations } from "@/lib/migrate";
 import type { ModelGatewayProvider } from "@/lib/model-gateway";
 import { runAgent } from "@/lib/harness";
-import { collectAllowedCitations, checkCitations } from "@/lib/memory/citations";
+import { collectAllowedCitations, checkCitations, collectBundlesFromTrace } from "@/lib/memory/citations";
 import { memoryRegistry } from "@/lib/memory/answer-config";
 import { DEFAULT_ACTOR, type MemoryActor } from "@/lib/memory/actor";
 import { embedText, toVectorLiteral } from "@/lib/memory/embed";
@@ -86,28 +86,6 @@ async function insertFact(
   `;
 }
 
-// ---------------------------------------------------------------------------
-// Helper: extract MemoryBundles from search_memory tool calls in a run trace
-// ---------------------------------------------------------------------------
-
-function collectBundlesFromRun(
-  trace: Awaited<ReturnType<typeof getRunTrace>>
-): MemoryBundle[] {
-  if (!trace) return [];
-  const bundles: MemoryBundle[] = [];
-  function walk(steps: typeof trace.steps) {
-    for (const step of steps) {
-      for (const tc of step.toolCalls) {
-        if (tc.toolName === "search_memory" && tc.status === "succeeded" && tc.result) {
-          bundles.push(tc.result as MemoryBundle);
-        }
-      }
-      walk(step.children);
-    }
-  }
-  walk(trace.steps);
-  return bundles;
-}
 
 // ---------------------------------------------------------------------------
 // Pure unit tests — collectAllowedCitations
@@ -284,7 +262,7 @@ describe("search_memory agentic flow (mock provider + postgres)", () => {
     // Verify tool call is recorded in the ledger
     const trace = await getRunTrace(db, result.runId);
     expect(trace).not.toBeNull();
-    const bundles = collectBundlesFromRun(trace);
+    const bundles = collectBundlesFromTrace(trace);
     expect(bundles).toHaveLength(1);
 
     // Citation post-check: the real citation is allowed
@@ -330,7 +308,7 @@ describe("search_memory agentic flow (mock provider + postgres)", () => {
     expect(result.status).toBe("succeeded");
 
     const trace = await getRunTrace(db, result.runId);
-    const bundles = collectBundlesFromRun(trace);
+    const bundles = collectBundlesFromTrace(trace);
     const allowed = collectAllowedCitations(bundles);
 
     const { invalid } = checkCitations(result.answer!, allowed);
@@ -362,7 +340,7 @@ describe("search_memory agentic flow (mock provider + postgres)", () => {
     expect(result.answer).toBe("no relevant memory");
 
     const trace = await getRunTrace(db, result.runId);
-    const bundles = collectBundlesFromRun(trace);
+    const bundles = collectBundlesFromTrace(trace);
     const allowed = collectAllowedCitations(bundles);
     expect(allowed.size).toBe(0);
 
