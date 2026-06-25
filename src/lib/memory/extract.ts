@@ -175,8 +175,13 @@ export async function markConflictsAndStaleFacts(db: Sql): Promise<void> {
   }
 
   // Mark facts stale when their source_chunk_id points to a missing chunk.
-  // In normal operation ON DELETE SET NULL handles this, but this guards against
-  // orphaned rows produced by TRUNCATE or other non-cascading deletions.
+  // NOTE: under the `source_chunk_id … ON DELETE SET NULL` FK, deleting a chunk
+  // nulls this column, so `source_chunk_id IS NOT NULL AND NOT EXISTS(chunk)` can
+  // never fire through a normal application DELETE. This branch is UNREACHABLE in
+  // normal operation and exists as defensive-only SQL — the only way to reach it
+  // is by bypassing the FK (DDL / session_replication_role); the covering test
+  // manufactures such an orphan via DDL. Task 5: do not treat this as live orphan
+  // protection.
   await db`
     UPDATE semantic_facts
     SET status = 'stale'
@@ -298,6 +303,9 @@ async function recordExtractionRun(
       ${run.status},
       ${run.error}
     )
+    -- On a repeated failure, this overwrites the prior failure row, so the error
+    -- column reflects only the most recent attempt. Acceptable: failed runs are
+    -- never cache-hit (loadCachedRun filters status = succeeded), so they re-run.
     ON CONFLICT (cache_key) DO UPDATE SET
       source_chunk_id        = EXCLUDED.source_chunk_id,
       raw_output             = EXCLUDED.raw_output,
@@ -345,6 +353,10 @@ async function restoreStaleFacts(
   seenFacts: Set<string>
 ): Promise<void> {
   for (const fact of previousFacts) {
+    // If the prior accepted fact's chunk was deleted, its snapshot source_chunk_id
+    // is null, so this key can never match a fresh-extraction key (which carries a
+    // live numeric chunk id) — the fact is therefore always restored as stale, which
+    // is the intended behavior.
     const key = [
       normalizeMemoryKey(fact.subject),
       normalizeMemoryKey(fact.predicate),
