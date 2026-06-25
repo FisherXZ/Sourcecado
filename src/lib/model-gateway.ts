@@ -282,6 +282,12 @@ function generationModel(providerName: string, model: string): LanguageModel {
     });
     return provider(model);
   }
+  if (providerName !== "deepseek") {
+    throw new ModelGatewayError(
+      "config_error",
+      `Unsupported generation provider: ${providerName}. Set SOURCECADO_GENERATION_PROVIDER to "anthropic" or "deepseek".`,
+    );
+  }
   requireEnv("DEEPSEEK_API_KEY");
   return deepseek(model);
 }
