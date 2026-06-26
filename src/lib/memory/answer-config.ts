@@ -6,8 +6,10 @@ export const MEMORY_INSTRUCTIONS = `## Memory Answer Contract
 
 You are a memory-grounded sourcing assistant. Follow these rules strictly:
 
-1. **Call search_memory first.** Before answering any question, call search_memory to retrieve
-   relevant sourcing memory. Never answer from prior training knowledge alone.
+1. **Call search_memory first — on every turn.** Before answering any question, call search_memory
+   to retrieve relevant sourcing memory. Never answer from prior training knowledge alone. On
+   follow-up turns in a conversation, call search_memory AGAIN before citing — never reuse a citation
+   from an earlier turn without re-retrieving it this turn (uncited prior-turn ids are dropped).
 
 2. **Four-section format.** Your final answer MUST use exactly these four sections in this order:
    Answer: <direct answer to the question, citing sources>

@@ -35,6 +35,11 @@ export const agentDecisionSchema = z.discriminatedUnion("action", [
 ]);
 export type AgentDecision = z.infer<typeof agentDecisionSchema>;
 
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface RunAgentInput {
   question: string;
   registry: ToolRegistry;
@@ -43,6 +48,9 @@ export interface RunAgentInput {
   provider?: ModelGatewayProvider;
   db?: Sql;
   instructions?: string;
+  // Prior conversation turns for multi-turn chat. Threaded into the user prompt
+  // (not the system prompt) and capped server-side in buildUserPrompt.
+  history?: ConversationTurn[];
 }
 
 export interface RunAgentResult {
@@ -88,6 +96,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         transcript,
         provider: input.provider,
         instructions: input.instructions,
+        history: input.history,
       });
 
       if (decision.action === "final") {
@@ -146,6 +155,7 @@ interface DecideOptions {
   transcript: string[];
   provider?: ModelGatewayProvider;
   instructions?: string;
+  history?: ConversationTurn[];
 }
 
 async function decide(db: Sql, opts: DecideOptions): Promise<AgentDecision> {
@@ -155,7 +165,7 @@ async function decide(db: Sql, opts: DecideOptions): Promise<AgentDecision> {
     taskName: "agent_react_decide",
     promptVersion: "1",
     system: buildAgentSystemPrompt(tools, opts.instructions),
-    prompt: buildUserPrompt(opts.question, opts.transcript),
+    prompt: buildUserPrompt(opts.question, opts.transcript, opts.history),
     schema: agentDecisionSchema,
     schemaName: "agent_decision",
     trace: { runId: opts.runId, parentStepId: opts.parentStepId },
@@ -193,11 +203,28 @@ export function buildAgentSystemPrompt(tools: Tool[], instructions?: string): st
   return parts.join("\n");
 }
 
-function buildUserPrompt(question: string, transcript: string[]): string {
-  const history = transcript.length
+// Multi-turn history is threaded into the USER prompt (never the system prompt,
+// which holds the tool catalog + MEMORY_INSTRUCTIONS). Capped server-side so a
+// long client conversation can't grow the prompt unbounded — a client cannot be
+// trusted to cap it.
+const MAX_HISTORY_TURNS = 12;
+const MAX_TURN_CHARS = 4000;
+
+export function buildUserPrompt(
+  question: string,
+  transcript: string[],
+  history: ConversationTurn[] = []
+): string {
+  const recent = history.slice(-MAX_HISTORY_TURNS);
+  const conversation = recent.length
+    ? `Conversation so far:\n${recent
+        .map((turn) => `${turn.role === "assistant" ? "Assistant" : "User"}: ${turn.content.slice(0, MAX_TURN_CHARS)}`)
+        .join("\n")}\n\n`
+    : "";
+  const observations = transcript.length
     ? `\n\nObservations so far:\n${transcript.join("\n")}`
     : "";
-  return `Question: ${question}${history}`;
+  return `${conversation}Question: ${question}${observations}`;
 }
 
 interface ExecuteToolOptions {
