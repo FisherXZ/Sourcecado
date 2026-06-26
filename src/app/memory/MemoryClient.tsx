@@ -93,12 +93,19 @@ function SourcesTab() {
   async function toggleArchive(row: SourceItem) {
     setBusyId(row.sourceId);
     try {
-      await fetch(`/api/memory/sources/${row.sourceId}/archive`, {
+      const res = await fetch(`/api/memory/sources/${row.sourceId}/archive`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ archived: !row.archived }),
       });
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok || data.error) {
+        throw new Error(data.error ?? "Failed to update source");
+      }
+      setError(null);
       await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update source");
     } finally {
       setBusyId(null);
     }
