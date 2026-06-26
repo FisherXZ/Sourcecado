@@ -62,3 +62,112 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
+
+/* ===========================================================================
+   Chat reasoning-trace motion — "avocado = live, greige = settled".
+   The only loud elements (avocado rule + pulsing dot) exist exactly as long as
+   the agent is working; completed steps settle to greige. Product register:
+   motion conveys state, never decoration. All effects flatten under
+   prefers-reduced-motion below.
+   =========================================================================== */
+:root {
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-base: 180ms;
+  --dur-answer: 240ms;
+  --dur-collapse: 320ms;
+}
+
+/* Reasoning steps: greige rule when settled, brick when errored, avocado while live. */
+.step-row {
+  border-left: 2px solid var(--border);
+  animation: step-in var(--dur-base) var(--ease-out-quart) both;
+}
+.step-row[data-state="error"] {
+  border-left-color: var(--neg-tx);
+}
+.step-row--pending {
+  border-left-color: var(--accent);
+}
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The single live "working" indicator at the tail of the trace. */
+.step-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--accent);
+  animation: step-dot-pulse 1.1s var(--ease-out-quart) infinite;
+}
+@keyframes step-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+/* Collapse the trace into "Reasoning · N steps" via grid-template-rows
+   (animation-safe — never animate height/top/margin). */
+.reasoning-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-collapse) var(--ease-out-quart);
+  /* Bound the reflow to this subtree so the 320ms grid-rows collapse of a long
+     trace doesn't relayout the whole thread each frame (design-review P1-5). */
+  contain: layout paint;
+}
+.reasoning-body[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+.reasoning-list {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.chevron {
+  display: inline-block;
+  transition: transform var(--dur-base) var(--ease-out-quart);
+}
+.chevron--open {
+  transform: rotate(90deg);
+}
+
+/* User/assistant bubbles settle in with a gentle composed fade (no token typing — v2). */
+.message-enter {
+  animation: message-in var(--dur-answer) var(--ease-out-quart) both;
+}
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -2,49 +2,100 @@
 import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+const { runChatMock } = vi.hoisted(() => ({ runChatMock: vi.fn() }));
+vi.mock("@/app/chat/stream", () => ({ runChat: runChatMock }));
+
 import { ChatClient } from "@/app/chat/ChatClient";
 
 describe("ChatClient", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  beforeEach(() => runChatMock.mockReset());
 
-  it("renders the question input and run button", () => {
+  it("shows an empty state before any question", () => {
     render(<ChatClient />);
-    expect(screen.getByLabelText("Question")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /run/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /ask your team's memory/i })).toBeInTheDocument();
   });
 
-  it("shows an accessible alert when the request fails", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      json: async () => ({ error: "DB connection failed" }),
+  it("streams steps live, then renders the cited answer and re-enables the composer", async () => {
+    let resolveRun: (turn: unknown) => void = () => {};
+    runChatMock.mockImplementation((_q: string, _h: unknown, onUpdate?: (t: unknown) => void) => {
+      if (!onUpdate) return Promise.resolve({ steps: [], answer: "" });
+      onUpdate({ steps: [{ index: 1, tool: "search_memory", ok: true, detail: "2 facts, 1 chunk" }], answer: "" });
+      return new Promise((resolve) => {
+        resolveRun = resolve;
+      });
     });
-    vi.stubGlobal("fetch", fetchMock);
 
     render(<ChatClient />);
-    fireEvent.change(screen.getByLabelText("Question"), { target: { value: "will fail" } });
-    fireEvent.click(screen.getByRole("button", { name: /run/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "tell me about acme" } });
+    fireEvent.submit(screen.getByRole("textbox"));
 
-    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
-    expect(screen.getByRole("alert")).toHaveTextContent("DB connection failed");
-  });
+    // user message + live reasoning step + busy composer
+    await waitFor(() => expect(screen.getByText("tell me about acme")).toBeInTheDocument());
+    expect(screen.getByText("search_memory")).toBeInTheDocument();
+    expect(screen.getByRole("listitem", { busy: true })).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeDisabled();
 
-  it("posts the question and shows the run result with a trace link", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      json: async () => ({ runId: 42, status: "succeeded", answer: "Echoed hello", steps: 2 }),
+    resolveRun({
+      steps: [{ index: 1, tool: "search_memory", ok: true, detail: "2 facts, 1 chunk" }],
+      answer: "Acme Robotics is Series B [acme-md#chunk-1].",
+      meta: { runId: 42, status: "succeeded", steps: 1, invalidCitations: [] },
     });
-    vi.stubGlobal("fetch", fetchMock);
 
-    render(<ChatClient />);
-    fireEvent.change(screen.getByLabelText("Question"), { target: { value: "echo hello" } });
-    fireEvent.click(screen.getByRole("button", { name: /run/i }));
-
-    await waitFor(() => expect(screen.getByText(/Run #42/)).toBeInTheDocument());
-    expect(screen.getByText("Echoed hello")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Acme Robotics is Series B/)).toBeInTheDocument());
+    expect(screen.queryByRole("listitem", { busy: true })).not.toBeInTheDocument(); // settled
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
     expect(screen.getByRole("link", { name: /view trace/i })).toHaveAttribute("href", "/runs/42");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/agent",
-      expect.objectContaining({ method: "POST" }),
+    // P1-4: streaming content lives in a polite live region for screen readers.
+    expect(screen.getByText(/Acme Robotics is Series B/).closest("[aria-live]")).toHaveAttribute(
+      "aria-live",
+      "polite"
     );
+  });
+
+  it("settles to an error state (no live row, composer re-enabled) when the stream fails", async () => {
+    // Guard the teardown no-arg call (vitest cleanup) so only the real run rejects.
+    runChatMock.mockImplementation((_q: string, _h: unknown, onUpdate?: (t: unknown) => void) =>
+      onUpdate ? Promise.reject(new Error("stream dropped")) : Promise.resolve({ steps: [], answer: "" })
+    );
+    render(<ChatClient />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "boom" } });
+    fireEvent.submit(screen.getByRole("textbox"));
+
+    // P0-1: a failed/stalled run must SETTLE — the avocado "live" row is gone,
+    // the failure is surfaced as an alert, and the composer is usable again.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/stream dropped/i);
+    expect(screen.queryByRole("listitem", { busy: true })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
+  });
+
+  it("sends prior turns as history on a follow-up question", async () => {
+    runChatMock.mockResolvedValue({
+      steps: [],
+      answer: "First answer.",
+      meta: { runId: 1, status: "succeeded", steps: 0, invalidCitations: [] },
+    });
+    render(<ChatClient />);
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "first question" } });
+    fireEvent.submit(screen.getByRole("textbox"));
+    await waitFor(() => expect(screen.getByText("First answer.")).toBeInTheDocument());
+
+    runChatMock.mockResolvedValue({
+      steps: [],
+      answer: "Second answer.",
+      meta: { runId: 2, status: "succeeded", steps: 0, invalidCitations: [] },
+    });
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "follow up" } });
+    fireEvent.submit(screen.getByRole("textbox"));
+    await waitFor(() => expect(screen.getByText("Second answer.")).toBeInTheDocument());
+
+    // the second call's history carries the first exchange (user + assistant)
+    const secondCallHistory = runChatMock.mock.calls[1][1];
+    expect(secondCallHistory).toEqual([
+      { role: "user", content: "first question" },
+      { role: "assistant", content: "First answer." },
+    ]);
   });
 });
