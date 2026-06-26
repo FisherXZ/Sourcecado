@@ -10,8 +10,23 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
   const { id } = await params;
-  const body = await request.json().catch(() => null);
-  const archived = (body as { archived?: unknown } | null)?.archived !== false;
+
+  // Default to archive only when the body is genuinely absent/empty. Malformed
+  // JSON is a client error, not an implicit "archive" — reject it with 400.
+  const raw = await request.text();
+  let archived = true;
+  if (raw.trim()) {
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return NextResponse.json({ error: "invalid request body" }, { status: 400 });
+    }
+    if (body === null || typeof body !== "object") {
+      return NextResponse.json({ error: "invalid request body" }, { status: 400 });
+    }
+    archived = (body as { archived?: unknown }).archived !== false;
+  }
 
   try {
     const result = await setSourceArchived(getDb(), { sourceId: id, archived });
@@ -20,7 +35,9 @@ export async function POST(
     }
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "archive failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Log the real failure server-side; return a stable message (same rule as
+    // the note route — internal DB details must not reach the browser).
+    console.error("archive failed", err);
+    return NextResponse.json({ error: "archive failed" }, { status: 500 });
   }
 }

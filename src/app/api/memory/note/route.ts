@@ -16,7 +16,9 @@ export async function POST(request: Request): Promise<Response> {
     const result = await addMemoryNote(getDb(), { title, text });
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "failed to add note";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Log the real failure server-side; return a stable message so internal
+    // DB/embedding details never reach the browser.
+    console.error("failed to add note", err);
+    return NextResponse.json({ error: "failed to add note" }, { status: 500 });
   }
 }
