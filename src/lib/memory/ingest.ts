@@ -179,32 +179,52 @@ async function ingestParsedSource(
   // (when OPENAI_API_KEY is set) is not rolled back on a chunk insert failure.
   const embeddings = await Promise.all(chunks.map((chunk) => embedText(db, chunk.text)));
 
-  // Atomically: upsert source_record + replace chunks + seed permission
-  await db.begin(async (tx) => {
-    const [source] = await tx<{ id: string; source_id: string }[]>`
-      INSERT INTO source_records (source_id, path, title, source_type, content_hash, raw_text)
-      VALUES (${sourceId}, ${storedPath}, ${parsed.title}, ${parsed.sourceType}, ${contentHash}, ${parsed.rawText})
-      ON CONFLICT (path) DO UPDATE SET
-        title        = EXCLUDED.title,
-        source_type  = EXCLUDED.source_type,
-        content_hash = EXCLUDED.content_hash,
-        raw_text     = EXCLUDED.raw_text,
-        updated_at   = now()
-      RETURNING id, source_id
-    `;
+  // Atomically: upsert source_record + replace chunks + seed permission.
+  try {
+    await db.begin(async (tx) => {
+      const [source] = await tx<{ id: string; source_id: string }[]>`
+        INSERT INTO source_records (source_id, path, title, source_type, content_hash, raw_text)
+        VALUES (${sourceId}, ${storedPath}, ${parsed.title}, ${parsed.sourceType}, ${contentHash}, ${parsed.rawText})
+        ON CONFLICT (path) DO UPDATE SET
+          title        = EXCLUDED.title,
+          source_type  = EXCLUDED.source_type,
+          content_hash = EXCLUDED.content_hash,
+          raw_text     = EXCLUDED.raw_text,
+          updated_at   = now()
+        RETURNING id, source_id
+      `;
 
-    const effectiveSourceId = source.source_id;
-    const sourceRecordId = source.id;
+      const effectiveSourceId = source.source_id;
+      const sourceRecordId = source.id;
 
-    await writeChunksAndGrant(tx, {
-      sourceRecordId,
-      sourceId: effectiveSourceId,
-      sourceType: parsed.sourceType,
-      chunks,
-      embeddings,
-      actor,
+      await writeChunksAndGrant(tx, {
+        sourceRecordId,
+        sourceId: effectiveSourceId,
+        sourceType: parsed.sourceType,
+        chunks,
+        embeddings,
+        actor,
+      });
     });
-  });
+  } catch (error) {
+    // TOCTOU backstop: the collision pre-check above is non-atomic (embeddings
+    // are computed between it and this INSERT), so two concurrent ingests of
+    // different paths that slugify to the same source_id can both pass the check
+    // and race here. Path conflicts are absorbed by ON CONFLICT (path), and the
+    // chunk/permission writes can't trip a UNIQUE in this txn, so a unique
+    // violation reaching here is necessarily source_id — surface the same
+    // friendly skip the pre-check would, not a raw Postgres error.
+    if (isSourceIdConflict(error)) {
+      throw new DuplicateSkip(`a different source already uses id '${sourceId}'`);
+    }
+    throw error;
+  }
+}
+
+// A Postgres unique_violation (SQLSTATE 23505) on the source_id constraint.
+function isSourceIdConflict(error: unknown): boolean {
+  const e = error as { code?: string; constraint_name?: string } | null;
+  return e?.code === "23505" && (e.constraint_name == null || e.constraint_name.includes("source_id"));
 }
 
 async function walkFiles(folder: string): Promise<string[]> {
