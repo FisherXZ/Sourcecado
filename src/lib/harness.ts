@@ -40,6 +40,17 @@ export interface ConversationTurn {
   content: string;
 }
 
+// Emitted after each executed tool step (never for the final answer). Carries the
+// model's rationale, the tool, and the observation so a streaming UI can render the
+// agent's live reasoning trace.
+export interface AgentStepEvent {
+  index: number;
+  tool: string;
+  thought?: string;
+  observation: string;
+  ok: boolean;
+}
+
 export interface RunAgentInput {
   question: string;
   registry: ToolRegistry;
@@ -51,6 +62,9 @@ export interface RunAgentInput {
   // Prior conversation turns for multi-turn chat. Threaded into the user prompt
   // (not the system prompt) and capped server-side in buildUserPrompt.
   history?: ConversationTurn[];
+  // Invoked after each executed tool step. Awaited so a streaming consumer can
+  // flush the step to the client before the next decide() runs.
+  onStep?: (event: AgentStepEvent) => void | Promise<void>;
 }
 
 export interface RunAgentResult {
@@ -119,6 +133,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         parentStepId: agentStep.id,
       });
       transcript.push(`Step ${step}: called ${decision.tool} -> ${observation}`);
+      await input.onStep?.({
+        index: step,
+        tool: decision.tool,
+        thought: decision.thought,
+        observation,
+        ok: observation.startsWith("Success"),
+      });
     }
 
     const message = `Agent did not finish within ${maxSteps} steps.`;
