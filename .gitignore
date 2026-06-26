@@ -1,6 +1,7 @@
 node_modules/
 .next/
 dist/
+*.tsbuildinfo
 .sourcyavo/
 *.db
 *.db-shm
