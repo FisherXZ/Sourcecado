@@ -1,6 +1,6 @@
-import type { ExtractedCandidate, RelationshipType } from "../types.js";
-import { normalizeCsvHeader, parseCsvRecords } from "../csv.js";
-import type { ExtractionInput, Extractor } from "./types.js";
+import type { ExtractedCandidate, RelationshipType } from "../types";
+import { normalizeCsvHeader, parseCsvRecords } from "../csv";
+import type { ExtractionInput, Extractor } from "./types";
 
 export const CSV_EXTRACTOR_VERSION = "2";
 

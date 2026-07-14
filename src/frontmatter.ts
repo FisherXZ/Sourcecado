@@ -1,6 +1,6 @@
 import { extname, basename } from "node:path";
-import { IngestError } from "./ingest-error.js";
-import { SOURCE_TYPES, type SourceType } from "./types.js";
+import { IngestError } from "./ingest-error";
+import { SOURCE_TYPES, type SourceType } from "./types";
 
 export interface ParsedSource {
   title: string;

@@ -1,5 +1,5 @@
-import type { ExtractedCandidate } from "../types.js";
-import type { ExtractionInput, Extractor } from "./types.js";
+import type { ExtractedCandidate } from "../types";
+import type { ExtractionInput, Extractor } from "./types";
 
 export const MOCK_EXTRACTOR_VERSION = "1";
 

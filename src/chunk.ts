@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { parseCsvRecords, serializeCsvRecord } from "./csv.js";
-import { IngestError } from "./ingest-error.js";
+import { parseCsvRecords, serializeCsvRecord } from "./csv";
+import { IngestError } from "./ingest-error";
 
 export interface TextChunk {
   chunkIndex: number;
