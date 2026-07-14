@@ -2,11 +2,14 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const srcRoot = join(process.cwd(), "src");
-// AI SDK surface is contained to two audited boundary modules: the model gateway
-// (model calls) and the UI-message-stream transport (chat streaming).
+// Provider SDK/API surface is contained to audited boundary modules: the model
+// gateway (model calls), the UI-message-stream transport (chat streaming), and
+// the raw-SDK streaming adapters under src/lib/llm/ (R1, contracts brief §7).
 const allowedProviderFiles = new Set([
   join("src", "lib", "model-gateway.ts"),
   join("src", "lib", "ui-message-stream.ts"),
+  join("src", "lib", "llm", "anthropic.ts"),
+  join("src", "lib", "llm", "openai-compat.ts"),
 ]);
 
 function listSourceFiles(dir: string): string[] {
