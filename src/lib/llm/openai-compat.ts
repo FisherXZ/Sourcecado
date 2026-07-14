@@ -123,7 +123,11 @@ export function createOpenAiCompatAdapter(providerName: "deepseek" | "openai"): 
         }
       }
       if (choice.finish_reason) {
-        for (const state of toolCalls.values()) {
+        // Emit in the model's declared index order, not Map insertion order:
+        // a provider may stream a later index's first chunk before an earlier
+        // one, which would otherwise reorder the reconstructed tool_use blocks.
+        const ordered = [...toolCalls.entries()].sort(([a], [b]) => a - b).map(([, state]) => state);
+        for (const state of ordered) {
           yield {
             type: "tool_call_end",
             id: state.id,
