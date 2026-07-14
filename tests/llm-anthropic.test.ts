@@ -170,4 +170,41 @@ describe("anthropicAdapter", () => {
       expect.anything(),
     );
   });
+
+  it("constructs the client without a /v1 baseURL suffix (the raw SDK appends /v1 itself; a versioned base 404s as /v1/v1/messages)", async () => {
+    const savedBase = process.env.ANTHROPIC_BASE_URL;
+    try {
+      createMock.mockResolvedValue(
+        fakeStream([
+          { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { input_tokens: 1, output_tokens: 1 } },
+        ]),
+      );
+      const { anthropicAdapter } = await import("@/lib/llm/anthropic");
+      const AnthropicCtor = (await import("@anthropic-ai/sdk")).default as unknown as ReturnType<typeof vi.fn>;
+
+      // Unset env: the SDK's own default host must be used, never a /v1 base.
+      delete process.env.ANTHROPIC_BASE_URL;
+      for await (const e of anthropicAdapter(
+        { model: "m", messages: [{ role: "system", content: "s" }, { role: "user", content: "hi" }], tools: [] },
+      )) void e;
+      let ctorArgs = AnthropicCtor.mock.calls.at(-1)?.[0] as { baseURL?: string };
+      expect(ctorArgs.baseURL ?? "").not.toMatch(/\/v\d+\/?$/);
+
+      // Env set with a trailing /v1 (the @ai-sdk convention): stripped for the raw SDK.
+      createMock.mockResolvedValue(
+        fakeStream([
+          { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { input_tokens: 1, output_tokens: 1 } },
+        ]),
+      );
+      process.env.ANTHROPIC_BASE_URL = "https://proxy.internal/anthropic/v1";
+      for await (const e of anthropicAdapter(
+        { model: "m", messages: [{ role: "system", content: "s" }, { role: "user", content: "hi" }], tools: [] },
+      )) void e;
+      ctorArgs = AnthropicCtor.mock.calls.at(-1)?.[0] as { baseURL?: string };
+      expect(ctorArgs.baseURL).toBe("https://proxy.internal/anthropic");
+    } finally {
+      if (savedBase === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = savedBase;
+    }
+  });
 });
