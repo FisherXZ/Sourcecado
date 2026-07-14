@@ -7,8 +7,20 @@ import { embed, embedMany, generateObject, generateText } from "ai";
 import type postgres from "postgres";
 import type { z } from "zod";
 import { failRunStep, finishRunStep, startRunStep } from "./ledger";
+import { anthropicAdapter } from "./llm/anthropic";
+import { createOpenAiCompatAdapter } from "./llm/openai-compat";
+import type {
+  LlmAdapter,
+  LlmAssistantBlock,
+  LlmAssistantMessage,
+  LlmMessage,
+  LlmStreamEvent,
+  LlmToolDefinition,
+  LlmUsage,
+  StopReason,
+} from "./llm/types";
 
-export type ModelCallKind = "generate_text" | "generate_object" | "embed" | "embed_many";
+export type ModelCallKind = "generate_text" | "generate_object" | "embed" | "embed_many" | "stream_turn";
 export type RedactionMode = "none" | "suppress";
 
 export interface ModelGatewayTrace {
@@ -383,7 +395,15 @@ function validateAndBuildOutput<TObject>(
   }
 }
 
-function resolveProviderName(input: CallModelInput): string {
+// Widened supertype of CallModelInput so streamAgentTurn can reuse both
+// resolvers — they only inspect kind/providerName/model.
+interface ProviderResolutionInput {
+  kind: string;
+  providerName?: string;
+  model?: string;
+}
+
+export function resolveProviderName(input: ProviderResolutionInput): string {
   if (input.providerName?.trim()) {
     return input.providerName;
   }
@@ -393,7 +413,7 @@ function resolveProviderName(input: CallModelInput): string {
   return process.env.SOURCECADO_GENERATION_PROVIDER?.trim() || "deepseek";
 }
 
-function resolveModel(input: CallModelInput): string {
+export function resolveModel(input: ProviderResolutionInput): string {
   if (input.model?.trim()) {
     return input.model;
   }
@@ -403,7 +423,149 @@ function resolveModel(input: CallModelInput): string {
   if (process.env.SOURCECADO_GENERATION_MODEL?.trim()) {
     return process.env.SOURCECADO_GENERATION_MODEL;
   }
-  return resolveProviderName(input) === "anthropic" ? "claude-sonnet-4-6" : "deepseek-chat";
+  const providerName = resolveProviderName(input);
+  if (providerName === "anthropic") return "claude-sonnet-4-6";
+  if (providerName === "openai") {
+    throw new ModelGatewayError(
+      "config_error",
+      'streamAgentTurn requires an explicit model when providerName is "openai" (no default model is assumed).',
+    );
+  }
+  return "deepseek-chat";
+}
+
+export interface StreamAgentTurnInput {
+  taskName: string;
+  promptVersion: string;
+  providerName?: string;
+  model?: string;
+  messages: LlmMessage[];
+  tools: LlmToolDefinition[];
+  trace: ModelGatewayTrace;
+  maxTokens?: number;
+  signal?: AbortSignal;
+  adapter?: LlmAdapter;
+}
+
+export interface LlmTurnOutcome {
+  message: LlmAssistantMessage;
+  stopReason: StopReason;
+  usage: LlmUsage;
+  modelCallId: number;
+}
+
+function pickAdapter(providerName: string): LlmAdapter {
+  if (providerName === "anthropic") return anthropicAdapter;
+  if (providerName === "deepseek") return createOpenAiCompatAdapter("deepseek");
+  if (providerName === "openai") return createOpenAiCompatAdapter("openai");
+  throw new ModelGatewayError(
+    "config_error",
+    `Unsupported streaming provider: ${providerName}. Set SOURCECADO_GENERATION_PROVIDER to "anthropic" or "deepseek".`,
+  );
+}
+
+export async function* streamAgentTurn(
+  db: Sql,
+  input: StreamAgentTurnInput,
+): AsyncGenerator<LlmStreamEvent, LlmTurnOutcome, void> {
+  const providerName = resolveProviderName({ kind: "stream_turn", providerName: input.providerName, model: input.model });
+  const model = resolveModel({ kind: "stream_turn", providerName: input.providerName, model: input.model });
+  const adapter = input.adapter ?? pickAdapter(providerName);
+
+  const requestPayload = {
+    messages: input.messages,
+    toolNames: input.tools.map((t) => t.name),
+    maxTokens: input.maxTokens ?? null,
+  };
+  const promptHash = createHash("sha256").update(JSON.stringify(requestPayload)).digest("hex");
+
+  const runStep = await startRunStep(db, {
+    runId: input.trace.runId,
+    parentStepId: input.trace.parentStepId ?? null,
+    stepKind: "model",
+    name: input.taskName,
+    input: requestPayload,
+  });
+
+  const blocks: LlmAssistantBlock[] = [];
+  let pendingText = "";
+  let usage: LlmUsage = { inputTokens: null, outputTokens: null, totalTokens: null };
+  let stopReason: StopReason = "error";
+  // Declared outside try so the catch handler can still fail the ledger
+  // row if the INSERT itself is what throws (null means "never inserted").
+  let modelCallId: number | null = null;
+
+  const flushPendingText = () => {
+    if (pendingText) {
+      blocks.push({ type: "text", text: pendingText });
+      pendingText = "";
+    }
+  };
+
+  try {
+    const [modelCallRow] = await db`
+      INSERT INTO model_calls (
+        run_id, run_step_id, task_name, prompt_version, prompt_hash,
+        provider, model, call_kind, status, request_json
+      )
+      VALUES (
+        ${input.trace.runId}, ${runStep.id}, ${input.taskName}, ${input.promptVersion}, ${promptHash},
+        ${providerName}, ${model}, 'stream_turn', 'running', ${toJson(db, requestPayload)}
+      )
+      RETURNING id
+    `;
+    modelCallId = Number(modelCallRow.id);
+
+    const events = adapter({ model, messages: input.messages, tools: input.tools, maxTokens: input.maxTokens }, input.signal);
+    for await (const event of events) {
+      if (event.type === "text_delta") {
+        pendingText += event.delta;
+      } else if (event.type === "tool_call_start") {
+        flushPendingText();
+      } else if (event.type === "tool_call_end") {
+        blocks.push({ type: "tool_use", id: event.id, name: event.name, input: event.input });
+      } else if (event.type === "turn_end") {
+        flushPendingText();
+        stopReason = event.stopReason;
+        usage = event.usage;
+      }
+      yield event;
+    }
+
+    const message: LlmAssistantMessage = { role: "assistant", content: blocks };
+    const responsePayload = { message, stopReason };
+
+    await db`
+      UPDATE model_calls
+      SET status = 'succeeded',
+          response_json = ${toJson(db, responsePayload)},
+          usage_json = ${toJson(db, usage)},
+          input_tokens = ${usage.inputTokens},
+          output_tokens = ${usage.outputTokens},
+          total_tokens = ${usage.totalTokens},
+          completed_at = now(),
+          updated_at = now()
+      WHERE id = ${modelCallId}
+    `;
+    await finishRunStep(db, { runStepId: runStep.id, output: responsePayload });
+
+    return { message, stopReason, usage, modelCallId };
+  } catch (error) {
+    const aborted = input.signal?.aborted === true || (error instanceof Error && error.name === "AbortError");
+    const code = aborted ? "aborted" : "provider_error";
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (modelCallId !== null) {
+      await db`
+        UPDATE model_calls
+        SET status = 'failed', error_type = ${code}, error_message = ${message}, completed_at = now(), updated_at = now()
+        WHERE id = ${modelCallId}
+      `;
+    }
+    await failRunStep(db, { runStepId: runStep.id, errorType: code, errorMessage: message });
+
+    throw new ModelGatewayError(code, message, { cause: error });
+  }
 }
 
 function toProviderRequest(
