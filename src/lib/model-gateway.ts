@@ -605,7 +605,7 @@ function buildRequestPayload(input: CallModelInput): Record<string, unknown> {
 }
 
 function buildResponsePayload(
-  kind: ModelCallKind,
+  kind: CallModelInput["kind"],
   output: Partial<CallModelResult>,
   rawResponse: unknown,
 ): Record<string, unknown> {
