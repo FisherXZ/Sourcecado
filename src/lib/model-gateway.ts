@@ -494,6 +494,11 @@ export async function* streamAgentTurn(
   // Declared outside try so the catch handler can still fail the ledger
   // row if the INSERT itself is what throws (null means "never inserted").
   let modelCallId: number | null = null;
+  // Guards the finally: a consumer that stops draining the generator
+  // (early break / .return(), e.g. an SSE client disconnect cancelling the
+  // stream) skips both the success path and the catch — without this, the
+  // model_calls and run_steps rows would sit in 'running' forever.
+  let outcomeRecorded = false;
 
   const flushPendingText = () => {
     if (pendingText) {
@@ -548,6 +553,7 @@ export async function* streamAgentTurn(
       WHERE id = ${modelCallId}
     `;
     await finishRunStep(db, { runStepId: runStep.id, output: responsePayload });
+    outcomeRecorded = true;
 
     return { message, stopReason, usage, modelCallId };
   } catch (error) {
@@ -563,8 +569,21 @@ export async function* streamAgentTurn(
       `;
     }
     await failRunStep(db, { runStepId: runStep.id, errorType: code, errorMessage: message });
+    outcomeRecorded = true;
 
     throw new ModelGatewayError(code, message, { cause: error });
+  } finally {
+    if (!outcomeRecorded) {
+      const abandonMessage = "stream consumer abandoned the turn before completion";
+      if (modelCallId !== null) {
+        await db`
+          UPDATE model_calls
+          SET status = 'failed', error_type = 'abandoned', error_message = ${abandonMessage}, completed_at = now(), updated_at = now()
+          WHERE id = ${modelCallId}
+        `;
+      }
+      await failRunStep(db, { runStepId: runStep.id, errorType: "abandoned", errorMessage: abandonMessage });
+    }
   }
 }
 

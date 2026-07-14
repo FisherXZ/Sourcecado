@@ -154,6 +154,36 @@ describe("streamAgentTurn", () => {
     expect(rows[0]).toMatchObject({ status: "failed", error_type: "aborted" });
   });
 
+  it("marks the ledger abandoned when the consumer stops draining mid-stream", async () => {
+    const db = getDb();
+    const run = await startRun(db, { runType: "chat", title: "t" });
+    const adapter = fakeAdapter([
+      { type: "text_delta", delta: "partial" },
+      { type: "turn_end", stopReason: "end", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+    ]);
+
+    const gen = streamAgentTurn(db, {
+      taskName: "chat_turn",
+      promptVersion: "1",
+      messages: [{ role: "system", content: "s" }, { role: "user", content: "hi" }],
+      tools: [],
+      trace: { runId: run.id },
+      adapter,
+    });
+
+    const first = await gen.next();
+    expect(first.done).toBe(false);
+    // Simulate an SSE client disconnect: the route's stream is cancelled and
+    // the generator is returned without being drained.
+    await gen.return(undefined as never);
+
+    const rows = await db`SELECT * FROM model_calls WHERE run_id = ${run.id}`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "failed", error_type: "abandoned" });
+    const steps = await db`SELECT * FROM run_steps WHERE run_id = ${run.id}`;
+    expect(steps[0]).toMatchObject({ status: "failed", error_type: "abandoned" });
+  });
+
   it("uses the adapter test seam verbatim, bypassing pickAdapter", async () => {
     const db = getDb();
     const run = await startRun(db, { runType: "chat", title: "t" });
