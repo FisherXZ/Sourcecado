@@ -1,4 +1,4 @@
-import type { ExtractedCandidate, SourceType } from "../types.js";
+import type { ExtractedCandidate, SourceType } from "../types";
 
 export interface ExtractionInput {
   sourceId: string;

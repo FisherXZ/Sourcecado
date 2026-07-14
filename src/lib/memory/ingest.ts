@@ -1,8 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type postgres from "postgres";
-import { isSupportedSourcePath, parseSourceFile } from "../../frontmatter.js";
-import { IngestError, classifyIngestError, type IngestErrorCategory } from "../../ingest-error.js";
+import { isSupportedSourcePath, parseSourceFile } from "../../frontmatter";
+import { IngestError, classifyIngestError, type IngestErrorCategory } from "../../ingest-error";
 import { DEFAULT_ACTOR, type MemoryActor } from "./actor";
 import { chunkCsvRows, chunkText, sha256, slugifySourceId, type TextChunk } from "./chunk";
 import { writeChunksAndGrant } from "./chunk-store";

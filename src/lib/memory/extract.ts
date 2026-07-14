@@ -7,10 +7,10 @@
  */
 
 import type postgres from "postgres";
-import { createCsvExtractor } from "../../extractors/csv.js";
-import { createLlmExtractor, LLM_SCHEMA_VERSION } from "../../extractors/llm.js";
-import type { ExtractionInput, Extractor } from "../../extractors/types.js";
-import type { ExtractedCandidate, SourceType } from "../../types.js";
+import { createCsvExtractor } from "../../extractors/csv";
+import { createLlmExtractor, LLM_SCHEMA_VERSION } from "../../extractors/llm";
+import type { ExtractionInput, Extractor } from "../../extractors/types";
+import type { ExtractedCandidate, SourceType } from "../../types";
 import { sha256 } from "./chunk";
 
 // ---------------------------------------------------------------------------
@@ -76,6 +76,8 @@ interface ExistingFactSnapshot {
 }
 
 type Sql = postgres.Sql;
+// For helpers that run inside a `db.begin` callback and receive the tx handle.
+type Tx = postgres.Sql | postgres.TransactionSql;
 
 // ---------------------------------------------------------------------------
 // Public: refreshMemory
@@ -303,7 +305,7 @@ async function recordExtractionRun(
       ${run.metadata.schemaVersion},
       ${run.metadata.modelName},
       ${rawOutput},
-      ${db.json(parsedCandidates as postgres.JSONValue)},
+      ${db.json(parsedCandidates as unknown as postgres.JSONValue)},
       ${run.status},
       ${run.error}
     )
@@ -343,7 +345,7 @@ async function rebuildDerivedMemory(
   });
 }
 
-async function snapshotAcceptedFacts(db: Sql): Promise<ExistingFactSnapshot[]> {
+async function snapshotAcceptedFacts(db: Tx): Promise<ExistingFactSnapshot[]> {
   return db<ExistingFactSnapshot[]>`
     SELECT subject, predicate, object, source_record_id, source_chunk_id, confidence
     FROM semantic_facts
@@ -352,7 +354,7 @@ async function snapshotAcceptedFacts(db: Sql): Promise<ExistingFactSnapshot[]> {
 }
 
 async function restoreStaleFacts(
-  db: Sql,
+  db: Tx,
   previousFacts: ExistingFactSnapshot[],
   seenFacts: Set<string>
 ): Promise<void> {
@@ -382,7 +384,7 @@ async function restoreStaleFacts(
 }
 
 async function insertSemanticFact(
-  db: Sql,
+  db: Tx,
   candidate: ExtractedCandidate,
   chunk: SourceChunkRow,
   seen: Set<string>

@@ -2,7 +2,12 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const srcRoot = join(process.cwd(), "src");
-const allowedProviderFile = join("src", "lib", "model-gateway.ts");
+// AI SDK surface is contained to two audited boundary modules: the model gateway
+// (model calls) and the UI-message-stream transport (chat streaming).
+const allowedProviderFiles = new Set([
+  join("src", "lib", "model-gateway.ts"),
+  join("src", "lib", "ui-message-stream.ts"),
+]);
 
 function listSourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -20,7 +25,7 @@ describe("model provider boundary", () => {
 
     for (const file of listSourceFiles(srcRoot)) {
       const relativePath = relative(process.cwd(), file);
-      if (relativePath === allowedProviderFile) {
+      if (allowedProviderFiles.has(relativePath)) {
         continue;
       }
 

@@ -3,7 +3,9 @@ import type { MemoryActor } from "./actor";
 import { citationForChunk, type TextChunk } from "./chunk";
 import { toVectorLiteral } from "./embed";
 
-type Sql = postgres.Sql;
+// Accepts either a root handle or a transaction handle (callers pass the `tx`
+// from a `db.begin` callback; webpack type-checks this, vitest does not).
+type Sql = postgres.Sql | postgres.TransactionSql;
 
 /**
  * Shared transaction helper: DELETE old chunks for a source record, INSERT the

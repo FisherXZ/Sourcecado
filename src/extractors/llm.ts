@@ -1,6 +1,6 @@
-import { sha256 } from "../chunk.js";
-import { getDb } from "../lib/db.js";
-import { callModel } from "../lib/model-gateway.js";
+import { sha256 } from "../chunk";
+import { getDb } from "../lib/db";
+import { callModel } from "../lib/model-gateway";
 import {
   ENTITY_TYPES,
   RELATIONSHIP_TYPES,
@@ -9,14 +9,14 @@ import {
   type ExtractedCandidateKind,
   type RelationshipType,
   type SourceType
-} from "../types.js";
+} from "../types";
 import {
   ExtractionError,
   type Extractor
-} from "./types.js";
+} from "./types";
 import { z } from "zod";
 
-export { ExtractionError } from "./types.js";
+export { ExtractionError } from "./types";
 
 export const LLM_EXTRACTOR_VERSION = "1";
 export const LLM_SCHEMA_VERSION = "1";
