@@ -98,4 +98,29 @@ describe("ChatClient", () => {
       { role: "assistant", content: "First answer." },
     ]);
   });
+
+  it("excludes an errored exchange's message from the next turn's history", async () => {
+    runChatMock
+      .mockImplementationOnce((_q: string, _h: unknown, onUpdate?: (t: unknown) => void) =>
+        onUpdate ? Promise.reject(new Error("stream dropped")) : Promise.resolve({ steps: [], answer: "" })
+      )
+      .mockResolvedValueOnce({
+        steps: [],
+        answer: "Second answer.",
+        meta: { runId: 2, status: "succeeded", steps: 0, invalidCitations: [] },
+      });
+
+    render(<ChatClient />);
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "first question" } });
+    fireEvent.submit(screen.getByRole("textbox"));
+    await screen.findByRole("alert");
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "follow up" } });
+    fireEvent.submit(screen.getByRole("textbox"));
+    await waitFor(() => expect(screen.getByText("Second answer.")).toBeInTheDocument());
+
+    const secondCallHistory = runChatMock.mock.calls[1][1];
+    expect(secondCallHistory).toEqual([]);
+  });
 });

@@ -59,7 +59,7 @@ export function ChatClient() {
     if (!question || busy) return;
 
     const history: ConversationTurn[] = exchanges
-      .filter((e) => e.done && e.turn.answer)
+      .filter((e) => e.done && !e.errored && e.turn.answer)
       .flatMap((e) => [
         { role: "user", content: e.question },
         { role: "assistant", content: e.turn.answer },
