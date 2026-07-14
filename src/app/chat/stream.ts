@@ -94,7 +94,7 @@ export async function runChat(
     body: JSON.stringify({ question, history }),
     signal,
   });
-  if (!res.ok && !res.body) {
+  if (!res.ok) {
     throw new Error(`Stream failed (${res.status})`);
   }
   const reader = res.body!.getReader();

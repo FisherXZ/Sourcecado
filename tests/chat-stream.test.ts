@@ -1,4 +1,5 @@
-import { applyChunk, drainSse, type AssistantTurn } from "@/app/chat/stream";
+import { vi } from "vitest";
+import { applyChunk, drainSse, runChat, type AssistantTurn } from "@/app/chat/stream";
 
 const empty: AssistantTurn = { steps: [], answer: "" };
 
@@ -61,5 +62,42 @@ describe("applyChunk", () => {
     turn = applyChunk(turn, { type: "text-end", id: "answer" });
     turn = applyChunk(turn, { type: "finish" });
     expect(turn).toEqual(empty);
+  });
+});
+
+function sseResponse(body: string, init: { status?: number } = {}): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(body));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: init.status ?? 200 });
+}
+
+describe("runChat", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("throws on a non-ok response instead of resolving an empty turn", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "question is required" }), { status: 400 })
+      )
+    );
+    await expect(runChat("", [], () => {})).rejects.toThrow(/400/);
+  });
+
+  it("resolves the accumulated turn on a 200 SSE response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse('data: {"type":"text-delta","id":"answer","delta":"Hi"}\n\n')
+      )
+    );
+    const turn = await runChat("hi", [], () => {});
+    expect(turn.answer).toBe("Hi");
   });
 });
