@@ -263,4 +263,126 @@ describe("runAgentLoop", () => {
       result: { echoed: "hello" },
     });
   });
+
+  it("fails the run when maxSteps is exceeded, reporting the last real stopReason", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "loop forever" }],
+      registry,
+      allowed: ALLOWED,
+      maxSteps: 3,
+      db,
+      runId,
+      parentStepId,
+      adapter: sequentialAdapter([() => toolCallTurn("echo", { text: "again" })]),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stopReason).toBe("tool_use");
+    expect(result.steps).toBe(3);
+  });
+
+  it("converts a streamAgentTurn throw into a synthetic assistant message and stops with stopReason 'error'", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+    const throwingAdapter: LlmAdapter = async function* (): AsyncGenerator<LlmStreamEvent> {
+      throw new Error("provider unreachable");
+    };
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "x" }],
+      registry,
+      allowed: ALLOWED,
+      db,
+      runId,
+      parentStepId,
+      adapter: throwingAdapter,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stopReason).toBe("error");
+    const last = result.messages[result.messages.length - 1];
+    expect(last.role).toBe("assistant");
+    if (last.role === "assistant") {
+      expect(last.content[0]).toMatchObject({ type: "text", text: "[model error: provider unreachable]" });
+    }
+  });
+
+  it("stops immediately with a synthetic '[aborted]' message when the signal is already fired", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "x" }],
+      registry,
+      allowed: ALLOWED,
+      db,
+      runId,
+      parentStepId,
+      signal: controller.signal,
+      adapter: sequentialAdapter([() => finalTurn("should never run")]),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stopReason).toBe("aborted");
+    const last = result.messages[result.messages.length - 1];
+    if (last.role === "assistant") {
+      expect(last.content[0]).toMatchObject({ type: "text", text: "[aborted]" });
+    }
+  });
+
+  it("fails the run when a turn ends with stopReason 'max_tokens' and no tool_use/text — a normal, non-throwing outcome", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+    const maxTokensAdapter: LlmAdapter = async function* (): AsyncGenerator<LlmStreamEvent> {
+      yield { type: "turn_end", stopReason: "max_tokens", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+    };
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "x" }],
+      registry,
+      allowed: ALLOWED,
+      db,
+      runId,
+      parentStepId,
+      adapter: maxTokensAdapter,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stopReason).toBe("max_tokens");
+    expect(result.steps).toBe(1);
+  });
+
+  it("reports stopReason 'aborted' (not 'error') when the adapter throws mid-stream while the signal is already aborted", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+    const controller = new AbortController();
+    const midStreamAbortAdapter: LlmAdapter = async function* (): AsyncGenerator<LlmStreamEvent> {
+      controller.abort();
+      throw new Error("aborted by user");
+    };
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "x" }],
+      registry,
+      allowed: ALLOWED,
+      db,
+      runId,
+      parentStepId,
+      signal: controller.signal,
+      adapter: midStreamAbortAdapter,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stopReason).toBe("aborted");
+    const last = result.messages[result.messages.length - 1];
+    expect(last.role).toBe("assistant");
+    if (last.role === "assistant") {
+      expect(last.content[0]).toMatchObject({ type: "text", text: "[aborted]" });
+    }
+  });
 });
