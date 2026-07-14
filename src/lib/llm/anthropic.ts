@@ -108,13 +108,21 @@ export const anthropicAdapter: LlmAdapter = async function* anthropicAdapter(
   );
 
   let stopReason: StopReason = "error";
-  let usage: LlmUsage = { inputTokens: null, outputTokens: null, totalTokens: null };
+  // Anthropic delivers the authoritative input_tokens in message_start and the
+  // cumulative output_tokens in message_delta; the message_delta usage payload
+  // normally omits input_tokens. Track each side independently so neither the
+  // input count nor the total is silently dropped.
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
   let currentToolId: string | null = null;
   let currentToolName: string | null = null;
   let currentToolJson = "";
 
   for await (const event of stream) {
-    if (event.type === "content_block_start") {
+    if (event.type === "message_start") {
+      inputTokens = event.message.usage.input_tokens ?? inputTokens;
+      outputTokens = event.message.usage.output_tokens ?? outputTokens;
+    } else if (event.type === "content_block_start") {
       if (event.content_block.type === "tool_use") {
         currentToolId = event.content_block.id;
         currentToolName = event.content_block.name;
@@ -146,16 +154,20 @@ export const anthropicAdapter: LlmAdapter = async function* anthropicAdapter(
       }
     } else if (event.type === "message_delta") {
       stopReason = mapStopReason(event.delta.stop_reason);
-      usage = {
-        inputTokens: event.usage.input_tokens,
-        outputTokens: event.usage.output_tokens,
-        totalTokens:
-          event.usage.input_tokens !== null || event.usage.output_tokens !== null
-            ? (event.usage.input_tokens ?? 0) + (event.usage.output_tokens ?? 0)
-            : null,
-      };
+      // Only overwrite when the delta actually carries a value: output_tokens is
+      // cumulative here, input_tokens usually arrives only in message_start.
+      if (event.usage.input_tokens != null) inputTokens = event.usage.input_tokens;
+      if (event.usage.output_tokens != null) outputTokens = event.usage.output_tokens;
     }
   }
 
+  const usage: LlmUsage = {
+    inputTokens,
+    outputTokens,
+    totalTokens:
+      inputTokens !== null || outputTokens !== null
+        ? (inputTokens ?? 0) + (outputTokens ?? 0)
+        : null,
+  };
   yield { type: "turn_end", stopReason, usage };
 };

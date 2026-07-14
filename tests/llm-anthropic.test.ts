@@ -40,6 +40,29 @@ describe("anthropicAdapter", () => {
     ]);
   });
 
+  it("captures input_tokens from message_start when message_delta omits it", async () => {
+    // Mirrors the real Anthropic wire protocol: message_start carries the
+    // authoritative input_tokens, message_delta carries only cumulative
+    // output_tokens. Guards against dropping inputTokens / undercounting total.
+    createMock.mockResolvedValue(
+      fakeStream([
+        { type: "message_start", message: { usage: { input_tokens: 25, output_tokens: 1 } } },
+        { type: "content_block_delta", delta: { type: "text_delta", text: "hi" } },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 15 } },
+      ]),
+    );
+    const { anthropicAdapter } = await import("@/lib/llm/anthropic");
+    const events = [];
+    for await (const e of anthropicAdapter(
+      { model: "claude-sonnet-4-6", messages: [{ role: "system", content: "s" }, { role: "user", content: "hi" }], tools: [] },
+    )) events.push(e);
+    expect(events.at(-1)).toEqual({
+      type: "turn_end",
+      stopReason: "end",
+      usage: { inputTokens: 25, outputTokens: 15, totalTokens: 40 },
+    });
+  });
+
   it("normalizes a tool_use turn with accumulated JSON args", async () => {
     createMock.mockResolvedValue(
       fakeStream([
