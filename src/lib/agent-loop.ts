@@ -1,31 +1,18 @@
-import { z } from "zod";
-import {
-  failRunStep,
-  failToolCall,
-  finishRunStep,
-  finishToolCall,
-  startRunStep,
-  startToolCall,
-} from "./ledger";
 import { streamAgentTurn, type LlmTurnOutcome } from "./model-gateway";
 import type {
   LlmAdapter,
   LlmMessage,
   LlmStreamEvent,
-  LlmToolDefinition,
   LlmToolResultBlock,
   StopReason,
 } from "./llm/types";
+import { executeTool, toLlmToolDefinition, type ToolExecutionResult } from "./tools/orchestrator";
 import type { ToolRegistry } from "./tools/registry";
-import type { PermissionClass, Sql, Tool } from "./tools/types";
+import type { PermissionClass, Sql } from "./tools/types";
+
+export type { ToolExecutionResult } from "./tools/orchestrator";
 
 const DEFAULT_MAX_STEPS = 8;
-const TOOL_RESULT_MAX_CHARS = 16_000;
-
-export interface ToolExecutionResult {
-  content: string;
-  isError: boolean;
-}
 
 export interface AgentLoopInput {
   messages: LlmMessage[];
@@ -144,7 +131,8 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     const resultBlocks: LlmToolResultBlock[] = [];
     for (const block of toolUseBlocks) {
       await input.onEvent?.({ type: "tool_start", id: block.id, name: block.name, input: block.input });
-      const result = await executeToolUseBlock({
+      const result = await executeTool({
+        toolUseId: block.id,
         name: block.name,
         input: block.input,
         registry: input.registry,
@@ -181,90 +169,4 @@ async function drain(
 
 function syntheticAssistantMessage(text: string): LlmMessage {
   return { role: "assistant", content: [{ type: "text", text }] };
-}
-
-function toLlmToolDefinition(tool: Tool): LlmToolDefinition {
-  let inputSchema: unknown = {};
-  try {
-    inputSchema = z.toJSONSchema(tool.argsSchema);
-  } catch {
-    inputSchema = {};
-  }
-  return { name: tool.name, description: tool.description, inputSchema };
-}
-
-// --- Internal tool execution -------------------------------------------------
-// Temporary home (Judgment call #1): R3 lifts this verbatim into
-// src/lib/tools/orchestrator.ts as `executeTool`/`toLlmToolDefinition`, then
-// updates the imports above instead of the local definitions.
-
-interface ExecuteToolUseBlockInput {
-  name: string;
-  input: unknown;
-  registry: ToolRegistry;
-  allowed: Set<PermissionClass>;
-  db: Sql;
-  runId: number;
-  parentStepId: number;
-}
-
-async function executeToolUseBlock(opts: ExecuteToolUseBlockInput): Promise<ToolExecutionResult> {
-  const { name, input, registry, allowed, db, runId, parentStepId } = opts;
-  const tool = registry.get(name);
-
-  const toolStep = await startRunStep(db, {
-    runId,
-    parentStepId,
-    stepKind: "tool",
-    name,
-    input: { args: input },
-  });
-  const toolCall = await startToolCall(db, {
-    runId,
-    runStepId: toolStep.id,
-    toolName: name,
-    arguments: input,
-    metadata: { permissionClass: tool?.permissionClass ?? null },
-  });
-
-  const fail = async (errorType: string, message: string): Promise<ToolExecutionResult> => {
-    await failToolCall(db, { toolCallId: toolCall.id, errorType, errorMessage: message });
-    await failRunStep(db, { runStepId: toolStep.id, errorType, errorMessage: message });
-    return truncate(`Error (${errorType}): ${message}`, true);
-  };
-
-  if (!tool) {
-    return fail("unknown_tool", `Unknown tool: ${name}.`);
-  }
-  if (!allowed.has(tool.permissionClass)) {
-    return fail(
-      "permission_denied",
-      `Tool ${name} (class ${tool.permissionClass}) is not permitted for this run.`
-    );
-  }
-  const parsed = tool.argsSchema.safeParse(input);
-  if (!parsed.success) {
-    return fail("invalid_args", `Invalid arguments for ${name}: ${parsed.error.message}`);
-  }
-
-  try {
-    const result = await tool.execute(parsed.data, { db, runId, parentStepId: toolStep.id });
-    await finishToolCall(db, { toolCallId: toolCall.id, result });
-    await finishRunStep(db, { runStepId: toolStep.id, output: result });
-    return truncate(`Success: ${JSON.stringify(result)}`, false);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return fail("tool_error", `Tool ${name} failed: ${message}`);
-  }
-}
-
-function truncate(content: string, isError: boolean): ToolExecutionResult {
-  if (content.length <= TOOL_RESULT_MAX_CHARS) {
-    return { content, isError };
-  }
-  const overflow = content.length - TOOL_RESULT_MAX_CHARS;
-  return {
-    content: `${content.slice(0, TOOL_RESULT_MAX_CHARS)}\n\n[truncated ${overflow} chars]`,
-    isError,
-  };
 }
