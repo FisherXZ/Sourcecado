@@ -63,6 +63,29 @@ describe("applyChunk", () => {
     turn = applyChunk(turn, { type: "finish" });
     expect(turn).toEqual(empty);
   });
+
+  it("sets pendingTool from a data-tool-pending chunk", () => {
+    const turn = applyChunk(empty, { type: "data-tool-pending", data: { tool: "search_memory" } });
+    expect(turn.pendingTool).toBe("search_memory");
+  });
+
+  it("clears pendingTool once the matching step settles", () => {
+    let turn = applyChunk(empty, { type: "data-tool-pending", data: { tool: "search_memory" } });
+    turn = applyChunk(turn, {
+      type: "data-step",
+      data: { index: 1, tool: "search_memory", ok: true, detail: "2 facts, 1 chunk" },
+    });
+    expect(turn.pendingTool).toBeUndefined();
+  });
+
+  it("clears pendingTool once the run's meta lands", () => {
+    let turn = applyChunk(empty, { type: "data-tool-pending", data: { tool: "search_memory" } });
+    turn = applyChunk(turn, {
+      type: "data-meta",
+      data: { runId: 1, status: "succeeded", steps: 1, invalidCitations: [] },
+    });
+    expect(turn.pendingTool).toBeUndefined();
+  });
 });
 
 function sseResponse(body: string, init: { status?: number } = {}): Response {

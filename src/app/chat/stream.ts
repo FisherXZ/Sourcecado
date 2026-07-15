@@ -21,6 +21,10 @@ export interface AssistantTurn {
   steps: ChatStep[];
   answer: string;
   meta?: ChatMeta;
+  // Name of the tool currently dispatched but not yet settled into a ChatStep,
+  // shown in the reasoning trace's live pending row. Cleared once the matching
+  // data-step or the run's data-meta lands.
+  pendingTool?: string;
 }
 
 export interface ConversationTurn {
@@ -69,12 +73,14 @@ export function applyChunk(turn: AssistantTurn, chunk: UiChunk): AssistantTurn {
       const steps = exists
         ? turn.steps.map((s) => (s.index === step.index ? step : s))
         : [...turn.steps, step];
-      return { ...turn, steps };
+      return { ...turn, steps, pendingTool: undefined };
     }
+    case "data-tool-pending":
+      return { ...turn, pendingTool: (chunk.data as { tool: string }).tool };
     case "text-delta":
       return { ...turn, answer: turn.answer + (chunk.delta ?? "") };
     case "data-meta":
-      return { ...turn, meta: chunk.data as ChatMeta };
+      return { ...turn, meta: chunk.data as ChatMeta, pendingTool: undefined };
     default:
       return turn;
   }
