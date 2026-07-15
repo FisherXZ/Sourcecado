@@ -4,11 +4,13 @@ import { answerWithMemory, summarizeStep } from "@/lib/memory/answer";
 import { streamAgentResponse } from "@/lib/ui-message-stream";
 import type { ConversationTurn } from "@/lib/harness";
 
-// Streaming sibling of /api/agent: same memory agent run, but each tool step is
-// pushed to the client live (AI SDK UI-message-stream, via the ui-message-stream
-// boundary module) so the chat can render the reasoning trace as it happens. The
-// final answer is written only after answerWithMemory's citation post-check, so no
-// invalid citation ever streams.
+// Streaming sibling of /api/agent: same memory agent run, but tool steps and
+// the model's own text stream to the client live. Text streams token-by-token
+// only while no search_memory call has happened this run (nothing to check
+// yet); once one fires, subsequent text is held back and the authoritative,
+// citation-checked answer is flushed once at the end — so no invalid citation
+// ever streams. See docs/superpowers/plans/2026-07-14-r5-streaming-rewire-plan.md
+// Judgment call #2 for the exact gating rules.
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const question = (body as { question?: unknown } | null)?.question;
@@ -19,12 +21,37 @@ export async function POST(request: Request) {
   const db = getDb();
 
   return streamAgentResponse(async (writer) => {
+    // Gate coupling note: this checks the literal tool name "search_memory"
+    // because memoryRegistry() registers exactly that one tool today — "any
+    // tool call" and "search_memory called" are the same event. If another
+    // citation-bearing tool ever joins the registry, gate on any tool_start.
+    let searchCalledSoFar = false;
+    let streamedLive = false;
+
     const result = await answerWithMemory(db, {
       question,
       history,
-      onStep: (event) => writer.step(`step-${event.index}`, summarizeStep(event)),
+      onStep: (event) => {
+        writer.step(`step-${event.index}`, summarizeStep(event));
+        if (event.tool === "search_memory") searchCalledSoFar = true;
+      },
+      onAgentLoopEvent: (event) => {
+        if (event.type === "tool_start") {
+          writer.toolPending(event.name);
+          if (event.name === "search_memory") searchCalledSoFar = true;
+        } else if (event.type === "llm" && event.event.type === "text_delta" && !searchCalledSoFar) {
+          writer.answerDelta(event.event.delta);
+          streamedLive = true;
+        }
+      },
     });
-    if (result.answer) writer.answer(result.answer);
+
+    if (streamedLive && !searchCalledSoFar) {
+      writer.answerEnd();
+    } else if (result.answer) {
+      writer.answerFlush(result.answer);
+    }
+
     writer.meta({
       runId: result.runId,
       status: result.status,
