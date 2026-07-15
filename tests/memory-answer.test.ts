@@ -3,7 +3,7 @@ import { getRunTrace } from "@/lib/ledger";
 import { runMigrations } from "@/lib/migrate";
 import type { LlmAdapter, LlmStreamEvent } from "@/lib/llm/types";
 import { runAgent } from "@/lib/harness";
-import { collectAllowedCitations, checkCitations, collectBundlesFromTrace } from "@/lib/memory/citations";
+import { collectAllowedCitations, checkCitations, collectBundlesFromTrace, verifyAnswerCitations } from "@/lib/memory/citations";
 import { memoryRegistry } from "@/lib/memory/answer-config";
 import { DEFAULT_ACTOR, type MemoryActor } from "@/lib/memory/actor";
 import { embedText, toVectorLiteral } from "@/lib/memory/embed";
@@ -206,6 +206,106 @@ describe("checkCitations", () => {
     const { invalid } = checkCitations(answer, allowed);
     // "outreach-md#chunk-1" is not in allowed — should be flagged
     expect(invalid).toContain("outreach-md#chunk-1");
+  });
+});
+
+describe("verifyAnswerCitations — check-on-use per turn", () => {
+  function fakeTrace(steps: Array<{ id: number; bundle?: MemoryBundle }>): import("@/lib/ledger").RunTrace {
+    return {
+      id: 1,
+      runType: "agent_chat",
+      status: "succeeded",
+      title: null,
+      input: null,
+      output: null,
+      metadata: null,
+      errorType: null,
+      errorMessage: null,
+      error: null,
+      startedAt: new Date(),
+      completedAt: null,
+      createdAt: new Date(),
+      steps: steps.map((s) => ({
+        id: s.id,
+        runId: 1,
+        parentStepId: null,
+        stepKind: "tool",
+        name: "search_memory",
+        status: "succeeded",
+        input: null,
+        output: null,
+        metadata: null,
+        errorType: null,
+        errorMessage: null,
+        error: null,
+        startedAt: new Date(),
+        completedAt: null,
+        createdAt: new Date(),
+        children: [],
+        modelCalls: [],
+        toolCalls: s.bundle
+          ? [
+              {
+                id: s.id,
+                runId: 1,
+                runStepId: s.id,
+                toolName: "search_memory",
+                status: "succeeded",
+                arguments: null,
+                result: s.bundle,
+                metadata: null,
+                errorType: null,
+                errorMessage: null,
+                startedAt: new Date(),
+                completedAt: null,
+                createdAt: new Date(),
+              },
+            ]
+          : [],
+      })),
+    } as unknown as import("@/lib/ledger").RunTrace;
+  }
+
+  const bundleWithCitation = (citation: string): MemoryBundle => ({
+    intent: "generic",
+    acceptedFacts: [],
+    gapFacts: [],
+    chunks: [{ text: "t", citation, score: 0.9 }],
+  });
+
+  it("skips the check (answer untouched) when no search_memory call is in scope", () => {
+    const trace = fakeTrace([]); // no steps at all this turn
+    const answer = "Made-up cite ghost#chunk-1 with nothing to validate against.";
+    const { answer: result, invalidCitations } = verifyAnswerCitations(trace, answer);
+    expect(result).toBe(answer); // unchanged, not stripped
+    expect(invalidCitations).toHaveLength(0);
+  });
+
+  it("runs the check when a search_memory call is in scope, stripping invented citations", () => {
+    const trace = fakeTrace([{ id: 1, bundle: bundleWithCitation("real#chunk-1") }]);
+    const answer = "See real#chunk-1 and ghost#chunk-9.";
+    const { answer: result, invalidCitations } = verifyAnswerCitations(trace, answer);
+    expect(result).toContain("real#chunk-1");
+    expect(result).toContain("[unverified citation removed]");
+    expect(invalidCitations).toContain("ghost#chunk-9");
+  });
+
+  it("sinceStepId excludes an earlier turn's search_memory bundle from this turn's allow-list", () => {
+    const trace = fakeTrace([
+      { id: 1, bundle: bundleWithCitation("turn1#chunk-1") }, // earlier turn
+      { id: 5, bundle: bundleWithCitation("turn2#chunk-1") }, // this turn
+    ]);
+    const answer = "turn1#chunk-1 turn2#chunk-1";
+    const { invalidCitations } = verifyAnswerCitations(trace, answer, 3);
+    // turn1's citation is out of scope (step id 1 <= sinceStepId 3) -> invalid.
+    expect(invalidCitations).toContain("turn1#chunk-1");
+    expect(invalidCitations).not.toContain("turn2#chunk-1");
+  });
+
+  it("returns unchanged answer for a null trace", () => {
+    const { answer, invalidCitations } = verifyAnswerCitations(null, "no trace here");
+    expect(answer).toBe("no trace here");
+    expect(invalidCitations).toHaveLength(0);
   });
 });
 
