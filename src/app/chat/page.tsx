@@ -13,7 +13,10 @@ export default async function ChatPage({
   const { new: forceNew } = await searchParams;
   const db = getDb();
 
-  if (forceNew) {
+  // Presence of `?new` starts a fresh session, but guard the obvious falsy
+  // strings — `?new=0` / `?new=false` read as "not new" and shouldn't create
+  // one (the "New chat" link always passes `?new=1`).
+  if (forceNew && forceNew !== "0" && forceNew !== "false") {
     await createSession(db, DEFAULT_ACTOR);
     redirect("/chat");
   }
