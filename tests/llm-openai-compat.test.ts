@@ -91,6 +91,21 @@ describe("createOpenAiCompatAdapter", () => {
     expect(events.at(-1)).toMatchObject({ type: "turn_end", stopReason: "max_tokens" });
   });
 
+  it("does not throw on incomplete tool-argument JSON when a length finish truncates mid-arguments; the turn keeps its real stop reason", async () => {
+    createMock.mockResolvedValue(
+      fakeStream([
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "search_memory", arguments: "" } }] }, finish_reason: null }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"q": "unfini' } }] }, finish_reason: "length" }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } },
+      ]),
+    );
+    const { createOpenAiCompatAdapter } = await import("@/lib/llm/openai-compat");
+    const adapter = createOpenAiCompatAdapter("deepseek");
+    const events = [];
+    for await (const e of adapter({ model: "deepseek-chat", messages: [{ role: "system", content: "s" }], tools: [] })) events.push(e);
+    expect(events).toContainEqual({ type: "tool_call_end", id: "call_1", name: "search_memory", input: {} });
+    expect(events.at(-1)).toMatchObject({ type: "turn_end", stopReason: "max_tokens" });
+  });
+
   it("throws synchronously when DEEPSEEK_API_KEY is missing", async () => {
     delete process.env.DEEPSEEK_API_KEY;
     const { createOpenAiCompatAdapter } = await import("@/lib/llm/openai-compat");

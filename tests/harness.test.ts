@@ -1,13 +1,12 @@
-import { vi } from "vitest";
 import { z } from "zod";
 import { closeDb, getDb } from "@/lib/db";
 import { getRunTrace } from "@/lib/ledger";
 import { runMigrations } from "@/lib/migrate";
-import type { ModelGatewayProvider } from "@/lib/model-gateway";
 import { runAgent } from "@/lib/harness";
 import { createToolRegistry } from "@/lib/tools/registry";
 import { echoTool } from "@/lib/tools/echo";
 import type { Tool } from "@/lib/tools/types";
+import type { LlmAdapter, LlmStreamEvent } from "@/lib/llm/types";
 
 async function resetLedgerTables(): Promise<void> {
   const db = getDb();
@@ -17,6 +16,26 @@ async function resetLedgerTables(): Promise<void> {
   await db`DROP TABLE IF EXISTS runs CASCADE`;
   await db`DROP TABLE IF EXISTS schema_migrations CASCADE`;
   await runMigrations(db);
+}
+
+function sequentialAdapter(turns: (() => AsyncGenerator<LlmStreamEvent>)[]): LlmAdapter {
+  let call = 0;
+  return async function* (_request, _signal) {
+    const turn = turns[Math.min(call, turns.length - 1)];
+    call += 1;
+    for await (const event of turn()) yield event;
+  };
+}
+
+async function* toolCallTurn(toolName: string, args: unknown): AsyncGenerator<LlmStreamEvent> {
+  yield { type: "tool_call_start", id: "call-1", name: toolName };
+  yield { type: "tool_call_end", id: "call-1", name: toolName, input: args };
+  yield { type: "turn_end", stopReason: "tool_use", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+}
+
+async function* finalTurn(answer: string): AsyncGenerator<LlmStreamEvent> {
+  yield { type: "text_delta", delta: answer };
+  yield { type: "turn_end", stopReason: "end", usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 } };
 }
 
 const ALLOWED = new Set<Tool["permissionClass"]>(["read", "reason"]);
@@ -33,11 +52,8 @@ describe("runAgent", () => {
     const brokenDb = new Proxy(getDb(), {
       get(target, prop) {
         const original = Reflect.get(target, prop) as unknown;
-        // Intercept the tagged-template SQL calls (db`...`) by returning a
-        // function that always rejects, simulating a DB connection failure.
         if (typeof original === "function") {
-          return (...args: unknown[]) => {
-            // The first template-tagged call is startRun's INSERT; reject it.
+          return () => {
             throw new Error("DB connection refused");
           };
         }
@@ -49,35 +65,28 @@ describe("runAgent", () => {
     const result = await runAgent({ question: "any", registry, db: brokenDb });
 
     expect(result.status).toBe("failed");
-    expect(result.runId).toBe(0); // no DB record was created
+    expect(result.runId).toBe(0);
     expect(result.steps).toBe(0);
   });
 
-  it("runs a multi-step loop (tool then final) and traces it fully", async () => {
+  it("runs a multi-step loop (tool then final) via native tool_use and traces it fully", async () => {
     const db = getDb();
     const registry = createToolRegistry([echoTool]);
-    const provider = vi
-      .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({ object: { action: "tool", tool: "echo", args: '{"text":"hello"}' } })
-      .mockResolvedValueOnce({ object: { action: "final", answer: "Echoed hello" } });
+    const adapter = sequentialAdapter([
+      () => toolCallTurn("echo", { text: "hello" }),
+      () => finalTurn("Echoed hello"),
+    ]);
 
-    const result = await runAgent({
-      question: "echo hello",
-      registry,
-      allowedClasses: ALLOWED,
-      provider,
-    });
+    const result = await runAgent({ question: "echo hello", registry, allowedClasses: ALLOWED, adapter });
 
     expect(result.status).toBe("succeeded");
     expect(result.answer).toBe("Echoed hello");
-    expect(provider).toHaveBeenCalledTimes(2);
 
     const trace = await getRunTrace(db, result.runId);
     expect(trace?.status).toBe("succeeded");
     const agentStep = trace?.steps[0];
     expect(agentStep?.stepKind).toBe("agent");
 
-    // Each callModel(trace) creates a child "model" step holding the model call.
     const modelSteps = agentStep?.children.filter((s) => s.stepKind === "model") ?? [];
     expect(modelSteps).toHaveLength(2);
     expect(modelSteps[0]?.modelCalls).toHaveLength(1);
@@ -100,14 +109,14 @@ describe("runAgent", () => {
       execute: async () => ({ ok: true }),
     };
     const registry = createToolRegistry([echoTool, adminTool]);
-    const provider = vi
-      .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({ object: { action: "tool", tool: "danger", args: "{}" } })
-      .mockResolvedValueOnce({ object: { action: "final", answer: "could not use danger" } });
+    const adapter = sequentialAdapter([
+      () => toolCallTurn("danger", {}),
+      () => finalTurn("could not use danger"),
+    ]);
 
-    const result = await runAgent({ question: "do danger", registry, allowedClasses: ALLOWED, provider });
+    const result = await runAgent({ question: "do danger", registry, allowedClasses: ALLOWED, adapter });
 
-    expect(result.status).toBe("succeeded"); // refusal is not a run failure
+    expect(result.status).toBe("succeeded");
     const trace = await getRunTrace(db, result.runId);
     const toolStep = trace?.steps[0]?.children.find((s) => s.name === "danger");
     expect(toolStep?.toolCalls[0]).toMatchObject({
@@ -120,28 +129,24 @@ describe("runAgent", () => {
   it("fails the run when maxSteps is exceeded", async () => {
     const db = getDb();
     const registry = createToolRegistry([echoTool]);
-    const provider = vi
-      .fn<ModelGatewayProvider>()
-      .mockResolvedValue({ object: { action: "tool", tool: "echo", args: '{"text":"again"}' } });
+    const adapter = sequentialAdapter([() => toolCallTurn("echo", { text: "again" })]);
 
     const result = await runAgent({
       question: "loop forever",
       registry,
       allowedClasses: ALLOWED,
       maxSteps: 3,
-      provider,
+      adapter,
     });
 
     expect(result.status).toBe("failed");
     expect(result.steps).toBe(3);
-    expect(provider).toHaveBeenCalledTimes(3);
     const trace = await getRunTrace(db, result.runId);
     expect(trace?.status).toBe("failed");
     expect(trace?.errorType).toBe("max_steps_exceeded");
   });
 
   it("feeds a tool execution error back and lets the model recover", async () => {
-    const db = getDb();
     const boomTool: Tool = {
       name: "boom",
       description: "always throws",
@@ -152,32 +157,44 @@ describe("runAgent", () => {
       },
     };
     const registry = createToolRegistry([boomTool]);
-    const provider = vi
-      .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({ object: { action: "tool", tool: "boom", args: "{}" } })
-      .mockResolvedValueOnce({ object: { action: "final", answer: "recovered" } });
+    const adapter = sequentialAdapter([() => toolCallTurn("boom", {}), () => finalTurn("recovered")]);
 
-    const result = await runAgent({ question: "x", registry, allowedClasses: ALLOWED, provider });
+    const result = await runAgent({ question: "x", registry, allowedClasses: ALLOWED, adapter });
 
     expect(result.status).toBe("succeeded");
+    const db = getDb();
     const trace = await getRunTrace(db, result.runId);
     const toolStep = trace?.steps[0]?.children.find((s) => s.name === "boom");
     expect(toolStep?.toolCalls[0]).toMatchObject({ status: "failed", errorType: "tool_error" });
   });
 
   it("feeds invalid tool args back and lets the model recover", async () => {
-    const db = getDb();
     const registry = createToolRegistry([echoTool]); // echo requires { text: string }
-    const provider = vi
-      .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({ object: { action: "tool", tool: "echo", args: '{"wrong":1}' } })
-      .mockResolvedValueOnce({ object: { action: "final", answer: "ok" } });
+    const adapter = sequentialAdapter([() => toolCallTurn("echo", { wrong: 1 }), () => finalTurn("ok")]);
 
-    const result = await runAgent({ question: "x", registry, allowedClasses: ALLOWED, provider });
+    const result = await runAgent({ question: "x", registry, allowedClasses: ALLOWED, adapter });
 
     expect(result.status).toBe("succeeded");
+    const db = getDb();
     const trace = await getRunTrace(db, result.runId);
     const toolStep = trace?.steps[0]?.children.find((s) => s.name === "echo");
     expect(toolStep?.toolCalls[0]).toMatchObject({ status: "failed", errorType: "invalid_args" });
+  });
+
+  it("uses `instructions` as the system message when provided, else a default identity line", async () => {
+    let capturedSystem: string | undefined;
+    const capturingAdapter: LlmAdapter = async function* (request) {
+      const first = request.messages[0];
+      capturedSystem = first.role === "system" ? first.content : undefined;
+      yield { type: "text_delta", delta: "ok" };
+      yield { type: "turn_end", stopReason: "end", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+    };
+    const registry = createToolRegistry([echoTool]);
+
+    await runAgent({ question: "x", registry, adapter: capturingAdapter, instructions: "CUSTOM_INSTRUCTIONS" });
+    expect(capturedSystem).toBe("CUSTOM_INSTRUCTIONS");
+
+    await runAgent({ question: "x", registry, adapter: capturingAdapter });
+    expect(capturedSystem).toMatch(/sourcing agent/i);
   });
 });

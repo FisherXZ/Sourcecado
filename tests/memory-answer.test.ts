@@ -1,8 +1,7 @@
-import { vi } from "vitest";
 import { closeDb, getDb } from "@/lib/db";
 import { getRunTrace } from "@/lib/ledger";
 import { runMigrations } from "@/lib/migrate";
-import type { ModelGatewayProvider } from "@/lib/model-gateway";
+import type { LlmAdapter, LlmStreamEvent } from "@/lib/llm/types";
 import { runAgent } from "@/lib/harness";
 import { collectAllowedCitations, checkCitations, collectBundlesFromTrace } from "@/lib/memory/citations";
 import { memoryRegistry } from "@/lib/memory/answer-config";
@@ -214,6 +213,26 @@ describe("checkCitations", () => {
 // Integration tests — agentic flow with mock provider + real Postgres
 // ---------------------------------------------------------------------------
 
+function sequentialAdapter(turns: (() => AsyncGenerator<LlmStreamEvent>)[]): LlmAdapter {
+  let call = 0;
+  return async function* (_request, _signal) {
+    const turn = turns[Math.min(call, turns.length - 1)];
+    call += 1;
+    for await (const event of turn()) yield event;
+  };
+}
+
+async function* toolCallTurn(toolName: string, args: unknown): AsyncGenerator<LlmStreamEvent> {
+  yield { type: "tool_call_start", id: "call-1", name: toolName };
+  yield { type: "tool_call_end", id: "call-1", name: toolName, input: args };
+  yield { type: "turn_end", stopReason: "tool_use", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+}
+
+async function* finalTurn(answer: string): AsyncGenerator<LlmStreamEvent> {
+  yield { type: "text_delta", delta: answer };
+  yield { type: "turn_end", stopReason: "end", usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 } };
+}
+
 describe("search_memory agentic flow (mock provider + postgres)", () => {
   let savedApiKey: string | undefined;
 
@@ -251,30 +270,24 @@ describe("search_memory agentic flow (mock provider + postgres)", () => {
       sourceChunkId: chunkId,
     });
 
-    const provider = vi
-      .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({
-        object: { action: "tool", tool: "search_memory", args: '{"query":"who responded"}' },
-      })
-      .mockResolvedValueOnce({
-        object: {
-          action: "final",
-          answer:
-            "Answer: Alice responded src-answer-test#chunk-1\nEvidence: src-answer-test#chunk-1\nGaps: None\nNext Action: Follow up",
-        },
-      });
+    const adapter = sequentialAdapter([
+      () => toolCallTurn("search_memory", { query: "who responded" }),
+      () =>
+        finalTurn(
+          "Answer: Alice responded src-answer-test#chunk-1\nEvidence: src-answer-test#chunk-1\nGaps: None\nNext Action: Follow up"
+        ),
+    ]);
 
     const registry = memoryRegistry();
     const result = await runAgent({
       question: "who responded?",
       registry,
       allowedClasses: new Set(["read"]),
-      provider,
+      adapter,
       db,
     });
 
     expect(result.status).toBe("succeeded");
-    expect(provider).toHaveBeenCalledTimes(2);
 
     // Verify tool call is recorded in the ledger
     const trace = await getRunTrace(db, result.runId);
@@ -300,25 +313,20 @@ describe("search_memory agentic flow (mock provider + postgres)", () => {
       citation: "src-invent-test#chunk-1",
     });
 
-    const provider = vi
-      .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({
-        object: { action: "tool", tool: "search_memory", args: '{"query":"who responded"}' },
-      })
-      .mockResolvedValueOnce({
-        object: {
-          action: "final",
-          answer:
-            "Answer: Bob responded src-invent-test#chunk-1 and ghost#chunk-99\nEvidence: src-invent-test#chunk-1\nGaps: None\nNext Action: None",
-        },
-      });
+    const adapter = sequentialAdapter([
+      () => toolCallTurn("search_memory", { query: "who responded" }),
+      () =>
+        finalTurn(
+          "Answer: Bob responded src-invent-test#chunk-1 and ghost#chunk-99\nEvidence: src-invent-test#chunk-1\nGaps: None\nNext Action: None"
+        ),
+    ]);
 
     const registry = memoryRegistry();
     const result = await runAgent({
       question: "who responded?",
       registry,
       allowedClasses: new Set(["read"]),
-      provider,
+      adapter,
       db,
     });
 
@@ -334,14 +342,10 @@ describe("search_memory agentic flow (mock provider + postgres)", () => {
 
   it("refuse-on-empty: empty memory → flow completes as succeeded, no invalid citations", async () => {
     // No data seeded — memory is empty, so search_memory returns empty bundle
-    const provider = vi
-      .fn<ModelGatewayProvider>()
-      .mockResolvedValueOnce({
-        object: { action: "tool", tool: "search_memory", args: '{"query":"who responded"}' },
-      })
-      .mockResolvedValueOnce({
-        object: { action: "final", answer: "no relevant memory" },
-      });
+    const adapter = sequentialAdapter([
+      () => toolCallTurn("search_memory", { query: "who responded" }),
+      () => finalTurn("no relevant memory"),
+    ]);
 
     const db = getDb();
     const registry = memoryRegistry();
@@ -349,7 +353,7 @@ describe("search_memory agentic flow (mock provider + postgres)", () => {
       question: "who responded?",
       registry,
       allowedClasses: new Set(["read"]),
-      provider,
+      adapter,
       db,
     });
 

@@ -14,14 +14,30 @@ function requireEnv(name: string): string {
   return value;
 }
 
-// Mirrors model-gateway.ts's resolveAnthropicBaseUrl. Duplicated (not
-// imported) to avoid a circular import — model-gateway.ts imports this
-// module to pick the default adapter for streamAgentTurn.
-function resolveAnthropicBaseUrl(raw?: string): string {
+// Inverse of model-gateway.ts's resolveAnthropicBaseUrl: the raw
+// @anthropic-ai/sdk appends /v1/... to its baseURL itself, so a versioned
+// base (the @ai-sdk/anthropic convention) posts to /v1/v1/messages and 404s.
+// Strip a trailing version segment; return undefined when unset so the SDK
+// uses its own default host.
+function resolveAnthropicBaseUrl(raw?: string): string | undefined {
   const configured = raw?.trim();
-  if (!configured) return "https://api.anthropic.com/v1";
+  if (!configured) return undefined;
   const trimmed = configured.replace(/\/+$/, "");
-  return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+  return trimmed.replace(/\/v\d+$/, "");
+}
+
+// When max_tokens truncates a turn mid-tool-input, the block still closes but
+// the accumulated JSON is incomplete. A throw here would misclassify a normal
+// truncation outcome as provider_error; fall back to {} so the turn completes
+// with its real stop reason (a stopReason of "tool_use" then degrades to an
+// invalid_args tool_result the model can recover from).
+function parseToolInput(json: string): unknown {
+  if (!json) return {};
+  try {
+    return JSON.parse(json);
+  } catch {
+    return {};
+  }
 }
 
 function toAnthropicTools(tools: LlmToolDefinition[]): Anthropic.Tool[] {
@@ -146,7 +162,7 @@ export const anthropicAdapter: LlmAdapter = async function* anthropicAdapter(
           type: "tool_call_end",
           id: currentToolId,
           name: currentToolName,
-          input: currentToolJson ? JSON.parse(currentToolJson) : {},
+          input: parseToolInput(currentToolJson),
         };
         currentToolId = null;
         currentToolName = null;
