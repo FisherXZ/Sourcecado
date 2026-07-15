@@ -19,7 +19,7 @@ export const IDENTITY_SECTION: SystemPromptSection = {
     "You are a sourcing agent with access to team memory and tools. Decide when to search, when to answer directly, and when to record a finding.",
 };
 
-// Replaces the deleted MEMORY_INSTRUCTIONS four-section contract. Free-format:
+// Replaces the deleted four-section memory-answer contract. Free-format:
 // no fixed section headers, no "call search_memory every turn."
 export const TOOL_USE_GUIDANCE_SECTION: SystemPromptSection = {
   title: "Tool-Use Guidance",

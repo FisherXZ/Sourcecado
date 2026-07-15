@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { conversationTurnsToMessages } from "@/lib/harness";
-import { MEMORY_INSTRUCTIONS } from "@/lib/memory/answer-config";
 
 describe("conversationTurnsToMessages — multi-turn history", () => {
   it("maps user/assistant turns to LlmMessage in order", () => {
@@ -38,11 +37,5 @@ describe("conversationTurnsToMessages — multi-turn history", () => {
     if (message.role === "user") {
       expect(message.content.length).toBeLessThan(huge.length);
     }
-  });
-});
-
-describe("MEMORY_INSTRUCTIONS — multi-turn citation safety (N3)", () => {
-  it("requires calling search_memory every turn so prior-turn citations are not scrubbed", () => {
-    expect(MEMORY_INSTRUCTIONS).toMatch(/every turn|each turn|follow-up/i);
   });
 });
