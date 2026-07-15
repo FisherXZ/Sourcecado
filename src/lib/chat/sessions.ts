@@ -39,6 +39,11 @@ export async function getOrCreateLatestSession(db: Sql, actor: MemoryActor = DEF
 // plus its paired tool_result message) can't persist half-written — a
 // dropped INSERT mid-call would otherwise leave an unpaired tool_use row
 // that every future turn re-threads into the model, which providers reject.
+// The `FOR UPDATE` row lock serializes concurrent appends to the same session
+// (reachable in v1 because every client shares DEFAULT_ACTOR): without it, two
+// overlapping transactions can interleave the auto-incremented message ids and
+// drop another turn's row between an assistant tool_use and its tool_result,
+// breaking the same adjacency the transaction exists to protect.
 export async function appendMessages(
   db: Sql,
   sessionId: number,
@@ -48,6 +53,7 @@ export async function appendMessages(
   if (messages.length === 0) return;
 
   await db.begin(async (tx) => {
+    await tx`SELECT id FROM chat_sessions WHERE id = ${sessionId} FOR UPDATE`;
     for (const message of messages) {
       const rowRunId = message.role === "user" || message.role === "system" ? null : (runId ?? null);
       await tx`
