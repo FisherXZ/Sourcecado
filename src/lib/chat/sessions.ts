@@ -52,7 +52,7 @@ export async function appendMessages(
       const rowRunId = message.role === "user" || message.role === "system" ? null : (runId ?? null);
       await tx`
         INSERT INTO chat_messages (session_id, role, content_json, run_id)
-        VALUES (${sessionId}, ${message.role}, ${toJson(tx as unknown as Sql, message.content)}, ${rowRunId})
+        VALUES (${sessionId}, ${message.role}, ${toJson(tx, message.content)}, ${rowRunId})
       `;
     }
     await tx`UPDATE chat_sessions SET updated_at = now() WHERE id = ${sessionId}`;
@@ -69,6 +69,6 @@ export async function loadSessionMessages(db: Sql, sessionId: number): Promise<L
   return rows.map((r) => ({ role: r.role, content: r.content_json }) as LlmMessage);
 }
 
-function toJson(db: Sql, value: unknown) {
+function toJson(db: postgres.Sql | postgres.TransactionSql, value: unknown) {
   return db.json(value as postgres.JSONValue);
 }
