@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   session_id    BIGINT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
   role          TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant', 'tool_result')),
   content_json  JSONB NOT NULL,
-  run_id        BIGINT REFERENCES runs(id) ON DELETE SET NULL,
+  run_id        BIGINT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
