@@ -14,6 +14,11 @@ export default defineConfig({
   test: {
     environment: "node",
     fileParallelism: false,
+    // fileParallelism alone does not serialize the DB suites (verified:
+    // parallel workers race on Postgres catalog resets, 80-118 flaky
+    // failures). All suites share one database — force a single worker.
+    maxWorkers: 1,
+    minWorkers: 1,
     globals: true,
     typecheck: {
       tsconfig: "./tsconfig.test.json",
