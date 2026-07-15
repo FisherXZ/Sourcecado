@@ -123,4 +123,15 @@ describe("ChatClient", () => {
     const secondCallHistory = runChatMock.mock.calls[1][1];
     expect(secondCallHistory).toEqual([]);
   });
+
+  it("seeds resumed exchanges from initialExchanges without calling runChat", () => {
+    render(
+      <ChatClient
+        initialExchanges={[{ question: "earlier question", answer: "earlier answer" }]}
+      />
+    );
+    expect(screen.getByText("earlier question")).toBeInTheDocument();
+    expect(screen.getByText("earlier answer")).toBeInTheDocument();
+    expect(runChatMock).not.toHaveBeenCalled();
+  });
 });
