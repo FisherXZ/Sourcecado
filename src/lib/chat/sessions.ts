@@ -52,7 +52,7 @@ export async function appendMessages(
       const rowRunId = message.role === "user" || message.role === "system" ? null : (runId ?? null);
       await tx`
         INSERT INTO chat_messages (session_id, role, content_json, run_id)
-        VALUES (${sessionId}, ${message.role}, ${toJson(tx, message.content)}, ${rowRunId})
+        VALUES (${sessionId}, ${message.role}, ${toJson(tx as unknown as Sql, message.content)}, ${rowRunId})
       `;
     }
     await tx`UPDATE chat_sessions SET updated_at = now() WHERE id = ${sessionId}`;
