@@ -79,9 +79,10 @@ export interface MemoryIndexRows {
 
 // Memory-index query for R4 context assembly (src/lib/context.ts): the
 // actor's permitted, non-archived sources (title/type/date), newest-updated
-// first, plus the subset that are memory notes capped to the last 20. Kept
-// here (not context.ts) — same DB-query-over-source_records concern as
-// listSources/setSourceArchived above.
+// first, split into two DISJOINT lists — non-note `sources` and memory `notes`
+// (capped to the last 20). Disjoint so context.ts can render them as separate
+// sections without listing a note in both. Kept here (not context.ts) — same
+// DB-query-over-source_records concern as listSources/setSourceArchived above.
 export async function listMemoryIndexRows(
   db: Sql,
   actor: MemoryActor = DEFAULT_ACTOR
@@ -98,13 +99,14 @@ export async function listMemoryIndexRows(
     ORDER BY updated_at DESC
   `;
 
-  const sources: MemoryIndexRow[] = rows.map((r) => ({
+  const all: MemoryIndexRow[] = rows.map((r) => ({
     sourceId: r.source_id,
     title: r.title,
     sourceType: r.source_type,
     updatedAt: r.updated_at.toISOString(),
   }));
-  const recentNotes = sources.filter((s) => s.sourceType === "note").slice(0, 20);
+  const recentNotes = all.filter((s) => s.sourceType === "note").slice(0, 20);
+  const sources = all.filter((s) => s.sourceType !== "note");
 
   return { sources, recentNotes };
 }

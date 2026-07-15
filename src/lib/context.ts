@@ -38,10 +38,13 @@ export async function buildMemoryIndexSection(
 ): Promise<SystemPromptSection> {
   const { sources, recentNotes } = await listMemoryIndexRows(db, actor);
 
+  // `sources` and `recentNotes` are disjoint (listMemoryIndexRows splits notes
+  // out), so each entry renders in exactly one section.
   const lines: string[] = [];
-  if (sources.length === 0) {
+  if (sources.length === 0 && recentNotes.length === 0) {
     lines.push("No memory sources are indexed yet.");
-  } else {
+  }
+  if (sources.length > 0) {
     lines.push("Sources:");
     for (const s of sources) {
       lines.push(
@@ -50,7 +53,8 @@ export async function buildMemoryIndexSection(
     }
   }
   if (recentNotes.length > 0) {
-    lines.push("", "Recent notes:");
+    if (lines.length > 0) lines.push("");
+    lines.push("Recent notes:");
     for (const n of recentNotes) {
       lines.push(`- ${n.sourceId} (updated ${n.updatedAt.slice(0, 10)}): ${n.title ?? "(untitled)"}`);
     }

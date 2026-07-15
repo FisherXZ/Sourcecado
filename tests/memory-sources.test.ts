@@ -158,6 +158,19 @@ describe("listMemoryIndexRows", () => {
     expect(recentNotes[0].sourceId).toBe("note-24");
   });
 
+  it("splits notes out of sources — the two lists are disjoint", async () => {
+    const db = getDb();
+    await insertSourceRow(db, { sourceId: "doc", title: "Doc", sourceType: "markdown" });
+    await insertSourceRow(db, { sourceId: "note", title: "Note", sourceType: "note" });
+    await grantRead(db, "doc");
+    await grantRead(db, "note");
+
+    const { sources, recentNotes } = await listMemoryIndexRows(db, DEFAULT_ACTOR);
+    expect(sources.map((s) => s.sourceId)).toEqual(["doc"]);
+    expect(recentNotes.map((s) => s.sourceId)).toEqual(["note"]);
+    expect(sources.some((s) => s.sourceType === "note")).toBe(false);
+  });
+
   it("returns empty lists when the actor has no permitted sources", async () => {
     const db = getDb();
     const { sources, recentNotes } = await listMemoryIndexRows(db, DEFAULT_ACTOR);

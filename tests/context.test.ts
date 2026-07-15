@@ -24,11 +24,11 @@ async function resetMemoryTables(): Promise<void> {
 
 async function insertSourceRow(
   db: ReturnType<typeof getDb>,
-  opts: { sourceId: string; title: string }
+  opts: { sourceId: string; title: string; sourceType?: string }
 ): Promise<void> {
   await db`
     INSERT INTO source_records (source_id, path, title, source_type, content_hash, raw_text)
-    VALUES (${opts.sourceId}, ${"/test/" + opts.sourceId}, ${opts.title}, 'markdown', ${"hash-" + opts.sourceId}, '')
+    VALUES (${opts.sourceId}, ${"/test/" + opts.sourceId}, ${opts.title}, ${opts.sourceType ?? "markdown"}, ${"hash-" + opts.sourceId}, '')
   `;
   await db`
     INSERT INTO source_permissions (principal_type, principal_id, source_id, access)
@@ -88,6 +88,35 @@ describe("buildMemoryIndexSection (postgres)", () => {
     expect(section.body).toContain("acme");
     expect(section.body).toContain("Acme");
     expect(section.body).toContain("markdown");
+  });
+
+  it("lists a note only once — under 'Recent notes:', not also under 'Sources:'", async () => {
+    const db = getDb();
+    await insertSourceRow(db, { sourceId: "doc-1", title: "Doc One", sourceType: "markdown" });
+    await insertSourceRow(db, { sourceId: "note-1", title: "Note One", sourceType: "note" });
+    const section = await buildMemoryIndexSection(db, DEFAULT_ACTOR);
+
+    // The note id must appear exactly once in the whole body.
+    const occurrences = section.body.split("note-1").length - 1;
+    expect(occurrences).toBe(1);
+    // Non-note source lives under Sources:, the note under Recent notes:.
+    const sourcesIdx = section.body.indexOf("Sources:");
+    const notesIdx = section.body.indexOf("Recent notes:");
+    expect(sourcesIdx).toBeGreaterThanOrEqual(0);
+    expect(notesIdx).toBeGreaterThan(sourcesIdx);
+    expect(section.body.slice(sourcesIdx, notesIdx)).toContain("doc-1");
+    expect(section.body.slice(sourcesIdx, notesIdx)).not.toContain("note-1");
+    expect(section.body.slice(notesIdx)).toContain("note-1");
+  });
+
+  it("renders a note-only workspace under 'Recent notes:' with no empty 'Sources:' header", async () => {
+    const db = getDb();
+    await insertSourceRow(db, { sourceId: "note-only", title: "Solo Note", sourceType: "note" });
+    const section = await buildMemoryIndexSection(db, DEFAULT_ACTOR);
+    expect(section.body).toContain("Recent notes:");
+    expect(section.body).toContain("note-only");
+    expect(section.body).not.toContain("Sources:");
+    expect(section.body).not.toContain("No memory sources are indexed yet.");
   });
 
   it("caps the rendered body and appends an overflow notice when too many sources are indexed", async () => {
