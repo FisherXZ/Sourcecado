@@ -4,30 +4,30 @@ import { DEFAULT_ACTOR, type MemoryActor } from "../memory/actor";
 import type { LlmMessage } from "../llm/types";
 
 export interface ChatSession {
-  id: string | number;
+  id: number;
 }
 
 // Always inserts a fresh row — used for the "new chat" path, where the whole
 // point is a session that did NOT exist a moment ago.
 export async function createSession(db: Sql, actor: MemoryActor = DEFAULT_ACTOR): Promise<ChatSession> {
-  const [row] = await db<{ id: string }[]>`
+  const [row] = await db<{ id: number }[]>`
     INSERT INTO chat_sessions (actor_type, actor_id)
     VALUES (${actor.actorType}, ${actor.actorId})
     RETURNING id
   `;
-  return { id: row.id };
+  return { id: Number(row.id) };
 }
 
 // Resume-latest-or-create-new: the actor's most recently updated session, or
 // a brand new one if they have none yet.
 export async function getOrCreateLatestSession(db: Sql, actor: MemoryActor = DEFAULT_ACTOR): Promise<ChatSession> {
-  const [existing] = await db<{ id: string }[]>`
+  const [existing] = await db<{ id: number }[]>`
     SELECT id FROM chat_sessions
     WHERE actor_type = ${actor.actorType} AND actor_id = ${actor.actorId}
     ORDER BY updated_at DESC
     LIMIT 1
   `;
-  if (existing) return { id: existing.id };
+  if (existing) return { id: Number(existing.id) };
   return createSession(db, actor);
 }
 
@@ -52,7 +52,7 @@ export async function appendMessages(
       const rowRunId = message.role === "user" || message.role === "system" ? null : (runId ?? null);
       await tx`
         INSERT INTO chat_messages (session_id, role, content_json, run_id)
-        VALUES (${sessionId}, ${message.role}, ${db.json(message.content as any)}, ${rowRunId})
+        VALUES (${sessionId}, ${message.role}, ${toJson(tx, message.content)}, ${rowRunId})
       `;
     }
     await tx`UPDATE chat_sessions SET updated_at = now() WHERE id = ${sessionId}`;
@@ -69,3 +69,6 @@ export async function loadSessionMessages(db: Sql, sessionId: number): Promise<L
   return rows.map((r) => ({ role: r.role, content: r.content_json }) as LlmMessage);
 }
 
+function toJson(db: Sql, value: unknown) {
+  return db.json(value as postgres.JSONValue);
+}
