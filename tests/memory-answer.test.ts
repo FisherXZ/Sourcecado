@@ -5,6 +5,7 @@ import type { LlmAdapter, LlmStreamEvent } from "@/lib/llm/types";
 import { runAgent } from "@/lib/harness";
 import { collectAllowedCitations, checkCitations, collectBundlesFromTrace, verifyAnswerCitations } from "@/lib/memory/citations";
 import { memoryRegistry } from "@/lib/memory/answer-config";
+import { answerWithMemory } from "@/lib/memory/answer";
 import { DEFAULT_ACTOR, type MemoryActor } from "@/lib/memory/actor";
 import { embedText, toVectorLiteral } from "@/lib/memory/embed";
 import type { MemoryBundle } from "@/lib/memory/retrieve";
@@ -85,6 +86,23 @@ async function insertFact(
   `;
 }
 
+
+// ---------------------------------------------------------------------------
+// Pure unit tests — memoryRegistry composition
+// ---------------------------------------------------------------------------
+
+describe("memoryRegistry", () => {
+  it("registers both search_memory (read) and add_memory_note (write_internal)", () => {
+    const registry = memoryRegistry();
+    expect(registry.get("search_memory")?.permissionClass).toBe("read");
+    expect(registry.get("add_memory_note")?.permissionClass).toBe("write_internal");
+    // add_memory_note is only listed once its write_internal class is allowed.
+    expect(registry.list(new Set(["read"])).map((t) => t.name)).toEqual(["search_memory"]);
+    expect(
+      registry.list(new Set(["read", "write_internal"])).map((t) => t.name).sort()
+    ).toEqual(["add_memory_note", "search_memory"]);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Pure unit tests — collectAllowedCitations
@@ -467,5 +485,52 @@ describe("search_memory agentic flow (mock provider + postgres)", () => {
 
     const { invalid } = checkCitations(result.answer!, allowed);
     expect(invalid).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration — write_internal permission decision (answer.ts allowedClasses)
+// ---------------------------------------------------------------------------
+
+describe("answerWithMemory add_memory_note (mock provider + postgres)", () => {
+  let savedApiKey: string | undefined;
+
+  beforeEach(async () => {
+    savedApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY; // force offline hash embedding
+    const db = getDb();
+    await resetAllTables(db);
+  });
+
+  afterEach(async () => {
+    if (savedApiKey !== undefined) {
+      process.env.OPENAI_API_KEY = savedApiKey;
+    } else {
+      delete process.env.OPENAI_API_KEY;
+    }
+    await closeDb();
+  });
+
+  it("executes an add_memory_note tool call end-to-end (write_internal is permitted)", async () => {
+    const db = getDb();
+    const adapter = sequentialAdapter([
+      () => toolCallTurn("add_memory_note", { title: "Acme intro call", text: "Acme is warm; follow up next week." }),
+      () => finalTurn("Recorded the Acme outcome."),
+    ]);
+
+    const result = await answerWithMemory(db, {
+      question: "Record that Acme is warm and we should follow up next week.",
+      adapter,
+    });
+
+    expect(result.status).toBe("succeeded");
+
+    // The note must have actually been written — a permission_denied on
+    // write_internal would leave source_records empty and still "succeed".
+    const notes = await db<{ source_id: string; title: string }[]>`
+      SELECT source_id, title FROM source_records WHERE source_type = 'note'
+    `;
+    expect(notes).toHaveLength(1);
+    expect(notes[0].title).toBe("Acme intro call");
   });
 });

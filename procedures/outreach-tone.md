@@ -1,3 +1,3 @@
 # Outreach Tone
 
-Next actions should be direct, useful, and human. Do not draft outreach unless the user asks for it.
+Outreach drafts are core deliverables: produce them ready for the Director's review whenever the ask calls for one. Drafts are direct, useful, and human. Sending is always the Director's act.

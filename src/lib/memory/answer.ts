@@ -2,7 +2,7 @@ import { runAgent, type AgentStepEvent, type ConversationTurn } from "@/lib/harn
 import type { AgentLoopEvent } from "@/lib/agent-loop";
 import { buildMemoryAnswerInstructions } from "@/lib/context";
 import { getRunTrace } from "@/lib/ledger";
-import type { LlmMessage } from "@/lib/llm/types";
+import type { LlmAdapter, LlmMessage } from "@/lib/llm/types";
 import { verifyAnswerCitations } from "@/lib/memory/citations";
 import { memoryRegistry } from "@/lib/memory/answer-config";
 import type { Sql } from "@/lib/tools/types";
@@ -28,6 +28,9 @@ export interface AnswerWithMemoryInput {
   // aborts between steps (and its provider fetch is cancelled) instead of
   // running to completion in the background. See RunAgentInput.signal.
   signal?: AbortSignal;
+  // Test seam: injected LlmAdapter, forwarded to runAgent. Mirrors
+  // RunAgentInput.adapter; production callers never set it.
+  adapter?: LlmAdapter;
 }
 
 // One agent run over team memory: the ReAct harness plus the citation post-check
@@ -42,12 +45,15 @@ export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): P
     question: input.question,
     history: input.history,
     registry,
-    allowedClasses: new Set(["read"]),
+    // §4's record-as-note doctrine (add_memory_note, class write_internal) is
+    // dead wiring unless the chat run permits that class alongside read.
+    allowedClasses: new Set(["read", "write_internal"]),
     instructions,
     db,
     onStep: input.onStep,
     onAgentLoopEvent: input.onAgentLoopEvent,
     signal: input.signal,
+    adapter: input.adapter,
   });
 
   let answer = result.answer;

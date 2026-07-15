@@ -22,9 +22,10 @@ export async function POST(request: Request) {
 
   return streamAgentResponse(async (writer) => {
     // Gate coupling note: this checks the literal tool name "search_memory"
-    // because memoryRegistry() registers exactly that one tool today — "any
-    // tool call" and "search_memory called" are the same event. If another
-    // citation-bearing tool ever joins the registry, gate on any tool_start.
+    // because it is the registry's only citation-bearing tool — add_memory_note
+    // returns {sourceId} only, never citation ids, so it cannot make a streamed
+    // citation invalid. If another citation-bearing tool ever joins the
+    // registry, gate on any tool_start.
     let searchCalledSoFar = false;
     let streamedLive = false;
 
