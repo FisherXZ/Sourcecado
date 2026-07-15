@@ -40,7 +40,7 @@ describe("chat session persistence", () => {
     const session = await getOrCreateLatestSession(db, ACTOR);
     const rows = await db`SELECT id FROM chat_sessions WHERE actor_type = ${ACTOR.actorType} AND actor_id = ${ACTOR.actorId}`;
     expect(rows).toHaveLength(1);
-    expect(rows[0].id).toBe(session.id);
+    expect(Number(rows[0].id)).toBe(session.id);
   });
 
   it("getOrCreateLatestSession returns the most recently updated session, not just most recently created", async () => {
