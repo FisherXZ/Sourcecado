@@ -121,6 +121,7 @@ export function ChatClient() {
                       running={!e.done && !e.errored}
                       open={e.open}
                       onToggle={() => patch(e.id, (x) => ({ ...x, open: !x.open }))}
+                      pendingTool={e.turn.pendingTool}
                     />
                   )}
                   {e.errored ? (

@@ -84,4 +84,160 @@ describe("POST /api/agent/stream", () => {
     expect(body).toContain("data-meta");
     expect(body).toContain("failed");
   });
+
+  it("closes the open answer text part when the run fails after narration streamed and a search fired", async () => {
+    // Regression for the mixed live-then-search failure path: pre-search
+    // narration opens the "answer" text part (answerStarted), search_memory then
+    // gates further streaming, and the run fails with no result.answer. Neither
+    // the answerEnd nor the answerFlush branch used to run, so text-start was
+    // never matched by text-end and the SSE part was left open. The stream must
+    // emit exactly one text-end for the narration part, with no phantom flush.
+    runAgentMock.mockImplementation(
+      async (input: {
+        onStep?: (e: unknown) => unknown;
+        onAgentLoopEvent?: (e: unknown) => unknown;
+      }) => {
+        await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "checking memory..." } });
+        await input.onAgentLoopEvent?.({ type: "tool_start", id: "call-1", name: "search_memory", input: {} });
+        return { runId: 12, status: "failed", steps: 8 };
+      }
+    );
+
+    const res = await POST(postRequest({ question: "loop after narration" }));
+    const body = await readAll(res);
+
+    expect(body).toContain("checking memory...");
+    // The open answer part is closed exactly once, and no answer was flushed.
+    const endCount = (body.match(/"type":"text-end"/g) ?? []).length;
+    expect(endCount).toBe(1);
+    expect(body).toContain("data-meta");
+    expect(body).toContain("failed");
+  });
+
+  it("streams the answer live token-by-token when search_memory was never called", async () => {
+    runAgentMock.mockImplementation(
+      async (input: {
+        onStep?: (e: unknown) => unknown;
+        onAgentLoopEvent?: (e: unknown) => unknown;
+      }) => {
+        await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "Acme is " } });
+        await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "a Series B co." } });
+        return { runId: 7, status: "succeeded", answer: "Acme is a Series B co.", steps: 0 };
+      }
+    );
+
+    const res = await POST(postRequest({ question: "what is acme" }));
+    const body = await readAll(res);
+
+    // Two separate text-delta writes prove live streaming, not one final flush.
+    const deltaCount = (body.match(/"type":"text-delta"/g) ?? []).length;
+    expect(deltaCount).toBe(2);
+    expect(body).toContain("Acme is ");
+    expect(body).toContain("a Series B co.");
+    expect(body).toContain("data-meta");
+  });
+
+  it("buffers text once search_memory is called and flushes the checked answer once at the end", async () => {
+    runAgentMock.mockImplementation(
+      async (input: {
+        onStep?: (e: unknown) => unknown;
+        onAgentLoopEvent?: (e: unknown) => unknown;
+      }) => {
+        await input.onAgentLoopEvent?.({ type: "tool_start", id: "call-1", name: "search_memory", input: {} });
+        // Any text after the tool_start must NOT be forwarded live.
+        await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "should not stream" } });
+        await input.onStep?.({
+          index: 1,
+          tool: "search_memory",
+          observation: 'Success: {"acceptedFacts":[],"gapFacts":[],"chunks":[]}',
+          ok: true,
+        });
+        return {
+          runId: 8,
+          status: "succeeded",
+          answer: "Acme Robotics is a Series B company [acme-md#chunk-1].",
+          steps: 1,
+        };
+      }
+    );
+
+    const res = await POST(postRequest({ question: "tell me about acme" }));
+    const body = await readAll(res);
+
+    expect(body).not.toContain("should not stream");
+    // Exactly one text-delta write carries the final, checked answer.
+    const deltaLines = body.split("\n").filter((l) => l.includes('"type":"text-delta"'));
+    expect(deltaLines).toHaveLength(1);
+    expect(body).toContain("Acme Robotics is a Series B company");
+    expect(body).toContain("data-tool-pending");
+    expect(body).toContain("search_memory");
+  });
+
+  it("still streams the answer in one shot when the caller never emits onAgentLoopEvent (backward compatible)", async () => {
+    runAgentMock.mockImplementation(async (input: { onStep?: (e: unknown) => unknown }) => {
+      await input.onStep?.({
+        index: 1,
+        tool: "search_memory",
+        observation: 'Success: {"acceptedFacts":[1],"gapFacts":[],"chunks":[1]}',
+        ok: true,
+      });
+      return { runId: 9, status: "succeeded", answer: "Answer with no live events.", steps: 1 };
+    });
+
+    const res = await POST(postRequest({ question: "tell me about acme" }));
+    const body = await readAll(res);
+    expect(body).toContain("Answer with no live events.");
+  });
+
+  it("forwards the request's abort signal into runAgent so a client disconnect terminates the loop", async () => {
+    // The AI SDK's UI-message-stream swallows write-after-cancel (safeEnqueue),
+    // so a disconnected client never makes writer.write throw — the only thing
+    // that actually stops the background loop is the request's AbortSignal,
+    // checked between steps and passed to the provider fetch. Guard that it is
+    // threaded end-to-end; drop it and runs keep burning credits after a leave.
+    let received: AbortSignal | undefined;
+    runAgentMock.mockImplementation(async (input: { signal?: AbortSignal }) => {
+      received = input.signal;
+      return { runId: 11, status: "succeeded", answer: "ok", steps: 0 };
+    });
+
+    const req = postRequest({ question: "hi" });
+    await readAll(await POST(req));
+
+    expect(received).toBeInstanceOf(AbortSignal);
+    expect(received).toBe(req.signal);
+  });
+
+  it("accepts that pre-tool narration streams live AND reappears in the step's thought field (Judgment call #3 — documented, not suppressed)", async () => {
+    runAgentMock.mockImplementation(
+      async (input: {
+        onStep?: (e: unknown) => unknown;
+        onAgentLoopEvent?: (e: unknown) => unknown;
+      }) => {
+        await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "checking memory..." } });
+        await input.onAgentLoopEvent?.({ type: "tool_start", id: "call-1", name: "search_memory", input: {} });
+        await input.onStep?.({
+          index: 1,
+          tool: "search_memory",
+          observation: 'Success: {"acceptedFacts":[],"gapFacts":[],"chunks":[]}',
+          ok: true,
+          thought: "checking memory...",
+        });
+        return {
+          runId: 10,
+          status: "succeeded",
+          answer: "Acme is a Series B company.",
+          steps: 1,
+        };
+      }
+    );
+
+    const res = await POST(postRequest({ question: "tell me about acme" }));
+    const body = await readAll(res);
+
+    // The narration streamed live before the tool_start gate closed...
+    expect(body).toContain("checking memory...");
+    // ...and also reappears verbatim as the step's thought line — accepted duplication, not suppressed.
+    expect(body).toContain('"thought":"checking memory..."');
+  });
 });

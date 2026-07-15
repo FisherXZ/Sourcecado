@@ -76,6 +76,18 @@ describe("ReasoningTrace", () => {
     render(<ReasoningTrace steps={[step()]} running={false} open={true} onToggle={() => {}} />);
     expect(screen.queryByRole("listitem", { busy: true })).not.toBeInTheDocument();
   });
+
+  it("shows the pending tool name in the live row when given", () => {
+    render(
+      <ReasoningTrace steps={[]} running={true} open={true} onToggle={() => {}} pendingTool="search_memory" />
+    );
+    expect(screen.getByText(/Running search_memory/)).toBeInTheDocument();
+  });
+
+  it("falls back to the generic label when no pending tool is given", () => {
+    render(<ReasoningTrace steps={[]} running={true} open={true} onToggle={() => {}} />);
+    expect(screen.getByText(/Searching memory/)).toBeInTheDocument();
+  });
 });
 
 describe("MessageBubble", () => {

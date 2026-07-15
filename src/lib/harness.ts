@@ -35,6 +35,12 @@ export interface RunAgentInput {
   // Invoked after each executed tool step. Awaited so a streaming consumer can
   // flush the step to the client before the next turn runs.
   onStep?: (event: AgentStepEvent) => void | Promise<void>;
+  // Raw agent-loop events (llm text/thinking deltas, tool_start, tool_end),
+  // forwarded 1:1 before the existing tool_end→onStep collapse. Optional and
+  // additive — omitting it reproduces today's behavior exactly. Consumed by
+  // the streaming route (R5) for true token streaming; the JSON /api/agent
+  // route and existing tests never set it.
+  onAgentLoopEvent?: (event: AgentLoopEvent) => void | Promise<void>;
   providerName?: string;
   // Test seam: injected LlmAdapter, forwarded to streamAgentTurn. Mirrors the old
   // `provider` seam's purpose for the new native tool-calling loop.
@@ -98,8 +104,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
 
     let stepCounter = 0;
     let thoughtBuffer = "";
-    const onEvent = input.onStep
+    const onEvent = input.onStep || input.onAgentLoopEvent
       ? async (event: AgentLoopEvent): Promise<void> => {
+          await input.onAgentLoopEvent?.(event);
+          if (!input.onStep) return;
           if (event.type === "llm" && (event.event.type === "text_delta" || event.event.type === "thinking_delta")) {
             thoughtBuffer += event.event.delta;
             return;
