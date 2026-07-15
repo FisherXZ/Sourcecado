@@ -76,7 +76,12 @@ export async function POST(request: Request) {
     // transcript runAgent built (system + priorMessages + the new user
     // message + whatever the loop produced); slice off exactly that known
     // prefix.
-    const priorPrefixLength = priorMessages.length + 2; // system + priorMessages + user message
+    // system + priorMessages + user message. The `+ 2` (rather than
+    // `+ history.length + 2`) is valid ONLY because `history` is not forwarded
+    // to answerWithMemory on this route (see lines 23-30); harness assembles
+    // `[system, ...conversationTurnsToMessages(history), ...priorMessages, user]`,
+    // so if history is ever re-forwarded here, add its message count too.
+    const priorPrefixLength = priorMessages.length + 2;
     const producedMessages = withCheckedAnswer(result.messages.slice(priorPrefixLength), result.answer);
     await appendMessages(db, session.id, producedMessages, result.runId);
 
