@@ -10,14 +10,20 @@ export function ReasoningTrace({
   running,
   open,
   onToggle,
+  pendingTool,
 }: {
   steps: ChatStep[];
   running: boolean;
   open: boolean;
   onToggle: () => void;
+  pendingTool?: string;
 }) {
   const count = steps.length;
-  const pendingLabel = count === 0 ? "Searching memory" : "Composing answer";
+  const pendingLabel = pendingTool
+    ? `Running ${pendingTool}`
+    : count === 0
+      ? "Searching memory"
+      : "Composing answer";
 
   return (
     <div className="reasoning-trace">
