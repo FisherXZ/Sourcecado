@@ -1,7 +1,9 @@
 import { runAgent, type AgentStepEvent, type ConversationTurn } from "@/lib/harness";
+import { buildMemoryAnswerInstructions } from "@/lib/context";
 import { getRunTrace } from "@/lib/ledger";
+import type { LlmMessage } from "@/lib/llm/types";
 import { verifyAnswerCitations } from "@/lib/memory/citations";
-import { memoryRegistry, MEMORY_INSTRUCTIONS } from "@/lib/memory/answer-config";
+import { memoryRegistry } from "@/lib/memory/answer-config";
 import type { Sql } from "@/lib/tools/types";
 
 export interface MemoryAnswer {
@@ -10,6 +12,9 @@ export interface MemoryAnswer {
   answer?: string;
   steps: number;
   invalidCitations: string[];
+  // The full transcript produced by this run (RunAgentResult.messages) —
+  // consumed by R6's chat-session persistence via the streaming route.
+  messages: LlmMessage[];
 }
 
 export interface AnswerWithMemoryInput {
@@ -25,12 +30,13 @@ export interface AnswerWithMemoryInput {
 // bad citation never reaches the client.
 export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): Promise<MemoryAnswer> {
   const registry = memoryRegistry();
+  const instructions = await buildMemoryAnswerInstructions(db);
   const result = await runAgent({
     question: input.question,
     history: input.history,
     registry,
     allowedClasses: new Set(["read"]),
-    instructions: MEMORY_INSTRUCTIONS,
+    instructions,
     db,
     onStep: input.onStep,
   });
@@ -50,6 +56,7 @@ export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): P
     answer,
     steps: result.steps,
     invalidCitations,
+    messages: result.messages,
   };
 }
 

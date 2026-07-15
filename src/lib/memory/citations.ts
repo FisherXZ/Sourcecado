@@ -4,11 +4,18 @@ import type { MemoryBundle } from "./retrieve";
 const CITATION_PATTERN = "[A-Za-z0-9._/-]+#(?:chunk|row)-\\d+";
 
 /** Walk a run trace and collect every MemoryBundle from search_memory tool calls. */
-export function collectBundlesFromTrace(trace: RunTrace | null): MemoryBundle[] {
+export function collectBundlesFromTrace(
+  trace: RunTrace | null,
+  sinceStepId?: number
+): MemoryBundle[] {
   if (!trace) return [];
   const bundles: MemoryBundle[] = [];
   function walk(steps: RunStepTrace[]) {
     for (const step of steps) {
+      // Multi-turn chat sessions (R6) nest a fresh "agent" step per turn
+      // under the same run; step ids are assigned sequentially, so this
+      // scopes the walk to only steps created after the given turn boundary.
+      if (sinceStepId !== undefined && step.id <= sinceStepId) continue;
       for (const tc of step.toolCalls) {
         if (tc.toolName === "search_memory" && tc.status === "succeeded" && tc.result) {
           bundles.push(tc.result as MemoryBundle);
@@ -59,15 +66,24 @@ export function checkCitations(
 }
 
 /**
- * Full citation post-check pipeline: walk the trace → collect allowed citations
- * → strip any citation tokens the agent invented. Returns the sanitized answer
+ * Citation post-check pipeline, run check-on-use: walk the trace (scoped to
+ * steps after `sinceStepId` when given) → collect allowed citations → strip
+ * any citation tokens the agent invented. Turns with no in-scope
+ * search_memory call skip the check entirely. Returns the sanitized answer
  * and the list of invalid citation ids.
  */
 export function verifyAnswerCitations(
   trace: RunTrace | null,
-  answer: string
+  answer: string,
+  sinceStepId?: number
 ): { answer: string; invalidCitations: string[] } {
-  const bundles = collectBundlesFromTrace(trace);
+  const bundles = collectBundlesFromTrace(trace, sinceStepId);
+  // Check-on-use: only validate/strip citations on turns where
+  // search_memory was actually called in-scope. No bundles -> nothing to
+  // validate against, nothing to strip (leave the answer untouched).
+  if (bundles.length === 0) {
+    return { answer, invalidCitations: [] };
+  }
   const allowed = collectAllowedCitations(bundles);
   const { sanitizedAnswer, invalid } = checkCitations(answer, allowed);
   return { answer: sanitizedAnswer, invalidCitations: invalid };

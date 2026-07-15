@@ -7,6 +7,9 @@ const { runAgentMock, getRunTraceMock } = vi.hoisted(() => ({
 vi.mock("@/lib/harness", () => ({ runAgent: runAgentMock }));
 vi.mock("@/lib/ledger", () => ({ getRunTrace: getRunTraceMock }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
+vi.mock("@/lib/context", () => ({
+  buildMemoryAnswerInstructions: vi.fn().mockResolvedValue("stub instructions"),
+}));
 
 import { POST } from "@/app/api/agent/route";
 
