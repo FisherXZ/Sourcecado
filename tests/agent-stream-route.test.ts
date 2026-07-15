@@ -85,6 +85,35 @@ describe("POST /api/agent/stream", () => {
     expect(body).toContain("failed");
   });
 
+  it("closes the open answer text part when the run fails after narration streamed and a search fired", async () => {
+    // Regression for the mixed live-then-search failure path: pre-search
+    // narration opens the "answer" text part (answerStarted), search_memory then
+    // gates further streaming, and the run fails with no result.answer. Neither
+    // the answerEnd nor the answerFlush branch used to run, so text-start was
+    // never matched by text-end and the SSE part was left open. The stream must
+    // emit exactly one text-end for the narration part, with no phantom flush.
+    runAgentMock.mockImplementation(
+      async (input: {
+        onStep?: (e: unknown) => unknown;
+        onAgentLoopEvent?: (e: unknown) => unknown;
+      }) => {
+        await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "checking memory..." } });
+        await input.onAgentLoopEvent?.({ type: "tool_start", id: "call-1", name: "search_memory", input: {} });
+        return { runId: 12, status: "failed", steps: 8 };
+      }
+    );
+
+    const res = await POST(postRequest({ question: "loop after narration" }));
+    const body = await readAll(res);
+
+    expect(body).toContain("checking memory...");
+    // The open answer part is closed exactly once, and no answer was flushed.
+    const endCount = (body.match(/"type":"text-end"/g) ?? []).length;
+    expect(endCount).toBe(1);
+    expect(body).toContain("data-meta");
+    expect(body).toContain("failed");
+  });
+
   it("streams the answer live token-by-token when search_memory was never called", async () => {
     runAgentMock.mockImplementation(
       async (input: {

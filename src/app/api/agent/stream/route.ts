@@ -55,6 +55,12 @@ export async function POST(request: Request) {
       writer.answerEnd();
     } else if (result.answer) {
       writer.answerFlush(result.answer);
+    } else {
+      // Run ended with no authoritative answer (e.g. failed mid-stream after a
+      // search_memory gated further live streaming): close any answer part that
+      // pre-search narration left open, so the SSE text part is well-formed for
+      // every consumer. Idempotent — a no-op when nothing streamed live.
+      writer.answerEnd();
     }
 
     writer.meta({
