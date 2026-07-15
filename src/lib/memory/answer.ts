@@ -24,6 +24,10 @@ export interface AnswerWithMemoryInput {
   onStep?: (event: AgentStepEvent) => void | Promise<void>;
   // Raw agent-loop events, forwarded 1:1 to runAgent — see RunAgentInput.
   onAgentLoopEvent?: (event: AgentLoopEvent) => void | Promise<void>;
+  // Client disconnect / timeout signal, forwarded to runAgent so the loop
+  // aborts between steps (and its provider fetch is cancelled) instead of
+  // running to completion in the background. See RunAgentInput.signal.
+  signal?: AbortSignal;
 }
 
 // One agent run over team memory: the ReAct harness plus the citation post-check
@@ -43,6 +47,7 @@ export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): P
     db,
     onStep: input.onStep,
     onAgentLoopEvent: input.onAgentLoopEvent,
+    signal: input.signal,
   });
 
   let answer = result.answer;

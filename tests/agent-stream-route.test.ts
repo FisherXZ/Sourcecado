@@ -160,6 +160,25 @@ describe("POST /api/agent/stream", () => {
     expect(body).toContain("Answer with no live events.");
   });
 
+  it("forwards the request's abort signal into runAgent so a client disconnect terminates the loop", async () => {
+    // The AI SDK's UI-message-stream swallows write-after-cancel (safeEnqueue),
+    // so a disconnected client never makes writer.write throw — the only thing
+    // that actually stops the background loop is the request's AbortSignal,
+    // checked between steps and passed to the provider fetch. Guard that it is
+    // threaded end-to-end; drop it and runs keep burning credits after a leave.
+    let received: AbortSignal | undefined;
+    runAgentMock.mockImplementation(async (input: { signal?: AbortSignal }) => {
+      received = input.signal;
+      return { runId: 11, status: "succeeded", answer: "ok", steps: 0 };
+    });
+
+    const req = postRequest({ question: "hi" });
+    await readAll(await POST(req));
+
+    expect(received).toBeInstanceOf(AbortSignal);
+    expect(received).toBe(req.signal);
+  });
+
   it("accepts that pre-tool narration streams live AND reappears in the step's thought field (Judgment call #3 — documented, not suppressed)", async () => {
     runAgentMock.mockImplementation(
       async (input: {

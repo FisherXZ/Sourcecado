@@ -31,6 +31,11 @@ export async function POST(request: Request) {
     const result = await answerWithMemory(db, {
       question,
       history,
+      // Abort the run when the client disconnects (or the client-side 90s
+      // timeout fires): Next aborts request.signal on connection close, and the
+      // AI SDK stream swallows write-after-cancel, so this signal is the only
+      // thing that actually terminates the background loop.
+      signal: request.signal,
       onStep: (event) => {
         writer.step(`step-${event.index}`, summarizeStep(event));
         if (event.tool === "search_memory") searchCalledSoFar = true;
