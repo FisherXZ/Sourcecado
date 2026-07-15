@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { appendMessages, getOrCreateLatestSession, loadSessionMessages } from "@/lib/chat/sessions";
-import { conversationTurnsToMessages, type ConversationTurn } from "@/lib/harness";
+import type { ConversationTurn } from "@/lib/harness";
 import { answerWithMemory, summarizeStep } from "@/lib/memory/answer";
 import { DEFAULT_ACTOR } from "@/lib/memory/actor";
 import { streamAgentResponse } from "@/lib/ui-message-stream";
-import type { LlmUserMessage } from "@/lib/llm/types";
+import type { LlmAssistantBlock, LlmMessage, LlmUserMessage } from "@/lib/llm/types";
 
 // Streaming sibling of /api/agent: same memory agent run, but tool steps and
 // the model's own text stream to the client live. Text streams token-by-token
@@ -20,6 +20,13 @@ export async function POST(request: Request) {
   if (typeof question !== "string" || !question.trim()) {
     return NextResponse.json({ error: "question is required" }, { status: 400 });
   }
+  // R6: `history` is still accepted, for request-shape compatibility, but
+  // intentionally not forwarded to answerWithMemory below — the persisted
+  // session's `priorMessages` (loaded below) supersedes it for this route.
+  // Passing both double-fed the whole conversation into every turn's
+  // transcript. /api/agent (the non-stream route) has no persisted session
+  // and legitimately still uses client-sent history.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- parsed for validation only, deliberately not forwarded (see comment above)
   const history = parseHistory((body as { history?: unknown } | null)?.history);
   const db = getDb();
 
@@ -42,7 +49,6 @@ export async function POST(request: Request) {
 
     const result = await answerWithMemory(db, {
       question,
-      history,
       priorMessages,
       // Abort the run when the client disconnects (or the client-side 90s
       // timeout fires): Next aborts request.signal on connection close, and the
@@ -67,11 +73,11 @@ export async function POST(request: Request) {
     // Persist the loop's newly-produced messages after it settles, tagged with
     // the run id — on both success and failure (even a failed run's synthetic
     // error message should show up on reload). `result.messages` is the full
-    // transcript runAgent built (system + history + priorMessages + the new
-    // user message + whatever the loop produced); slice off exactly that
-    // known prefix.
-    const priorPrefixLength = 1 + conversationTurnsToMessages(history).length + priorMessages.length + 1;
-    const producedMessages = result.messages.slice(priorPrefixLength);
+    // transcript runAgent built (system + priorMessages + the new user
+    // message + whatever the loop produced); slice off exactly that known
+    // prefix.
+    const priorPrefixLength = priorMessages.length + 2; // system + priorMessages + user message
+    const producedMessages = withCheckedAnswer(result.messages.slice(priorPrefixLength), result.answer);
     await appendMessages(db, session.id, producedMessages, result.runId);
 
     if (streamedLive && !searchCalledSoFar) {
@@ -93,6 +99,28 @@ export async function POST(request: Request) {
       invalidCitations: result.invalidCitations,
     });
   });
+}
+
+// answerWithMemory scrubs invalid citations out of `result.answer`, but
+// `result.messages` (sourced from the raw agent loop) still carries the
+// pre-check text on the final assistant message. Persisting the raw
+// messages would resurrect a scrubbed citation on reload, so replace that
+// message's text with the checked answer before it's written — tool_use
+// blocks (if any) on that message are left in place; every earlier message
+// is untouched. No-op when the slice has no assistant message (e.g. a
+// failed run) or no checked answer exists.
+function withCheckedAnswer(messages: LlmMessage[], answer: string | undefined): LlmMessage[] {
+  if (answer === undefined) return messages;
+  const lastAssistantIndex = messages.map((m) => m.role).lastIndexOf("assistant");
+  if (lastAssistantIndex === -1) return messages;
+
+  const original = messages[lastAssistantIndex] as { role: "assistant"; content: LlmAssistantBlock[] };
+  const toolUseBlocks = original.content.filter((block) => block.type === "tool_use");
+  const newContent: LlmAssistantBlock[] = [{ type: "text", text: answer }, ...toolUseBlocks];
+
+  const updated = [...messages];
+  updated[lastAssistantIndex] = { role: "assistant", content: newContent };
+  return updated;
 }
 
 // Accept only well-formed {role, content} turns; ignore anything malformed so a

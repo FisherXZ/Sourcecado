@@ -10,9 +10,6 @@ const { runAgentMock, getRunTraceMock, getOrCreateLatestSessionMock, loadSession
   }));
 vi.mock("@/lib/harness", () => ({
   runAgent: runAgentMock,
-  // Route uses this (unmocked, real behavior would be []) to compute the
-  // produced-messages slice offset; no test here sends body.history.
-  conversationTurnsToMessages: () => [],
 }));
 vi.mock("@/lib/ledger", () => ({ getRunTrace: getRunTraceMock }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
@@ -330,6 +327,101 @@ describe("POST /api/agent/stream", () => {
 
       expect(appendMessagesMock).toHaveBeenCalledTimes(2); // user message + failure message, same as success path
       expect(appendMessagesMock.mock.calls[1][3]).toBe(52);
+    });
+
+    it("does not double-feed client-sent history: the persisted session's priorMessages supersede it, and runAgent receives history undefined", async () => {
+      const prior = [
+        { role: "user", content: "earlier question" },
+        { role: "assistant", content: [{ type: "text", text: "earlier answer" }] },
+      ];
+      loadSessionMessagesMock.mockResolvedValue(prior);
+      runAgentMock.mockResolvedValue({
+        runId: 61,
+        status: "succeeded",
+        answer: "ok",
+        steps: 0,
+        messages: [
+          { role: "system", content: "stub" },
+          ...prior,
+          { role: "user", content: "new question" },
+          { role: "assistant", content: [{ type: "text", text: "ok" }] },
+        ],
+      });
+
+      const res = await POST(
+        postRequest({
+          question: "new question",
+          history: [{ role: "user", content: "client-sent history turn" }],
+        })
+      );
+      await readAll(res);
+
+      expect(runAgentMock).toHaveBeenCalledWith(
+        expect.objectContaining({ history: undefined, priorMessages: prior })
+      );
+    });
+
+    it("persists the citation-checked answer text, not the raw pre-check text, on the final assistant message (tool_use blocks preserved)", async () => {
+      const rawAnswer = "Acme is here [bad-doc#chunk-9].";
+      const checkedAnswer = "Acme is here [[unverified citation removed]].";
+      const toolUseBlock = { type: "tool_use", id: "call-1", name: "noop", input: {} };
+      runAgentMock.mockResolvedValue({
+        runId: 62,
+        status: "succeeded",
+        answer: rawAnswer,
+        steps: 1,
+        messages: [
+          { role: "system", content: "stub" },
+          { role: "user", content: "tell me about acme" },
+          { role: "assistant", content: [{ type: "text", text: rawAnswer }, toolUseBlock] },
+        ],
+      });
+      getRunTraceMock.mockResolvedValue({
+        id: 62,
+        steps: [
+          {
+            id: 1,
+            children: [],
+            toolCalls: [
+              {
+                toolName: "search_memory",
+                status: "succeeded",
+                result: { acceptedFacts: [], gapFacts: [], chunks: [{ citation: "good-doc#chunk-1" }] },
+              },
+            ],
+          },
+        ],
+      });
+
+      const res = await POST(postRequest({ question: "tell me about acme" }));
+      await readAll(res);
+
+      expect(appendMessagesMock.mock.calls[1][2]).toEqual([
+        { role: "assistant", content: [{ type: "text", text: checkedAnswer }, toolUseBlock] },
+      ]);
+    });
+
+    it("persists exactly the loop's produced messages for a clean success turn (no system prompt, no dropped assistant reply)", async () => {
+      runAgentMock.mockResolvedValue({
+        runId: 63,
+        status: "succeeded",
+        answer: "hi there",
+        steps: 0,
+        messages: [
+          { role: "system", content: "stub instructions" },
+          { role: "user", content: "hello there" },
+          { role: "assistant", content: [{ type: "text", text: "hi there" }] },
+        ],
+      });
+
+      const res = await POST(postRequest({ question: "hello there" }));
+      await readAll(res);
+
+      expect(appendMessagesMock.mock.calls[1][2]).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "hi there" }] },
+      ]);
+      expect(appendMessagesMock.mock.calls[1][1]).toBe(7);
+      expect(appendMessagesMock.mock.calls[1][3]).toBe(63);
     });
   });
 });
