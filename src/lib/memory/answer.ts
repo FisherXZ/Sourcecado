@@ -1,4 +1,5 @@
 import { runAgent, type AgentStepEvent, type ConversationTurn } from "@/lib/harness";
+import type { AgentLoopEvent } from "@/lib/agent-loop";
 import { buildMemoryAnswerInstructions } from "@/lib/context";
 import { getRunTrace } from "@/lib/ledger";
 import type { LlmMessage } from "@/lib/llm/types";
@@ -21,6 +22,8 @@ export interface AnswerWithMemoryInput {
   question: string;
   history?: ConversationTurn[];
   onStep?: (event: AgentStepEvent) => void | Promise<void>;
+  // Raw agent-loop events, forwarded 1:1 to runAgent — see RunAgentInput.
+  onAgentLoopEvent?: (event: AgentLoopEvent) => void | Promise<void>;
 }
 
 // One agent run over team memory: the ReAct harness plus the citation post-check
@@ -39,6 +42,7 @@ export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): P
     instructions,
     db,
     onStep: input.onStep,
+    onAgentLoopEvent: input.onAgentLoopEvent,
   });
 
   let answer = result.answer;
