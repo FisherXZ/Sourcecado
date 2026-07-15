@@ -6,8 +6,9 @@ import {
   buildSystemPrompt,
   buildMemoryIndexSection,
   buildMemoryAnswerInstructions,
+  buildEnvironmentSection,
   IDENTITY_SECTION,
-  TOOL_USE_GUIDANCE_SECTION,
+  STATIC_SECTIONS,
   type SystemPromptSection,
 } from "@/lib/context";
 
@@ -51,11 +52,27 @@ describe("buildSystemPrompt", () => {
   });
 });
 
-describe("fixed sections", () => {
-  it("IDENTITY_SECTION and TOOL_USE_GUIDANCE_SECTION carry no fixed four-section format language", () => {
-    expect(IDENTITY_SECTION.title).toBe("Identity");
-    expect(TOOL_USE_GUIDANCE_SECTION.body).not.toMatch(/Answer:|Evidence:|Gaps:|Next Action:/);
-    expect(TOOL_USE_GUIDANCE_SECTION.body).toMatch(/sourceId#chunk-N/);
+describe("static sections (v5)", () => {
+  it("STATIC_SECTIONS are the seven v5 sections in §1–§7 order", () => {
+    expect(STATIC_SECTIONS.map((s) => s.title)).toEqual([
+      "Identity & mission",
+      "Persistence",
+      "Acting vs asking",
+      "Sourcing doctrine",
+      "Memory & citations",
+      "Capabilities envelope",
+      "Communication",
+    ]);
+    expect(STATIC_SECTIONS[0]).toBe(IDENTITY_SECTION);
+  });
+
+  it("carries the v5 doctrine, not the retired free-format guidance", () => {
+    const doctrine = STATIC_SECTIONS.find((s) => s.title === "Sourcing doctrine")!;
+    expect(doctrine.body).toMatch(/why-now/);
+    const memory = STATIC_SECTIONS.find((s) => s.title === "Memory & citations")!;
+    expect(memory.body).toMatch(/sourceId#chunk-N/);
+    // No section carries the deleted identity text.
+    expect(STATIC_SECTIONS.some((s) => /sourcing agent with access to team memory/.test(s.body))).toBe(false);
   });
 });
 
@@ -144,14 +161,32 @@ describe("buildMemoryAnswerInstructions (postgres)", () => {
     await closeDb();
   });
 
-  it("composes identity + tool-use guidance + memory index, in that order", async () => {
+  it("composes the seven static sections, then the memory index, then Environment last", async () => {
     const db = getDb();
     const instructions = await buildMemoryAnswerInstructions(db, DEFAULT_ACTOR);
-    const identityIdx = instructions.indexOf("## Identity");
-    const guidanceIdx = instructions.indexOf("## Tool-Use Guidance");
+
+    // Every static header appears, in §1–§7 order.
+    const staticIdxs = STATIC_SECTIONS.map((s) => instructions.indexOf(`## ${s.title}`));
+    expect(staticIdxs.every((i) => i >= 0)).toBe(true);
+    for (let i = 1; i < staticIdxs.length; i++) {
+      expect(staticIdxs[i]).toBeGreaterThan(staticIdxs[i - 1]);
+    }
+
+    // Memory Index follows the static sections; Environment follows the index and is last.
     const indexIdx = instructions.indexOf("## Memory Index");
-    expect(identityIdx).toBeGreaterThanOrEqual(0);
-    expect(guidanceIdx).toBeGreaterThan(identityIdx);
-    expect(indexIdx).toBeGreaterThan(guidanceIdx);
+    const envIdx = instructions.indexOf("## Environment");
+    expect(indexIdx).toBeGreaterThan(staticIdxs[staticIdxs.length - 1]);
+    expect(envIdx).toBeGreaterThan(indexIdx);
+
+    // The Environment section carries today's date and is the trailing section.
+    expect(instructions).toMatch(/## Environment\nToday's date: \d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("buildEnvironmentSection", () => {
+  it("renders today's date as an ISO YYYY-MM-DD line", () => {
+    const section = buildEnvironmentSection(new Date("2026-07-15T09:30:00Z"));
+    expect(section.title).toBe("Environment");
+    expect(section.body).toBe("Today's date: 2026-07-15");
   });
 });
