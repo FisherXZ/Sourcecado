@@ -67,6 +67,9 @@ describe("chat session persistence", () => {
   it("appendMessages + loadSessionMessages round-trip every LlmMessage variant", async () => {
     const db = getDb();
     const session = await createSession(db, ACTOR);
+    const [run] = await db<{ id: number }[]>`
+      INSERT INTO runs (run_type, status) VALUES ('agent_chat_stream', 'succeeded') RETURNING id
+    `;
     const userMsg: LlmUserMessage = { role: "user", content: "tell me about acme" };
     const assistantMsg: LlmAssistantMessage = {
       role: "assistant",
@@ -81,7 +84,7 @@ describe("chat session persistence", () => {
     };
 
     await appendMessages(db, session.id, [userMsg]);
-    await appendMessages(db, session.id, [assistantMsg, toolResultMsg], 42);
+    await appendMessages(db, session.id, [assistantMsg, toolResultMsg], run.id);
 
     const loaded = await loadSessionMessages(db, session.id);
     expect(loaded).toEqual([userMsg, assistantMsg, toolResultMsg]);
@@ -90,7 +93,10 @@ describe("chat session persistence", () => {
   it("forces run_id to NULL for user/system rows even if a runId is passed", async () => {
     const db = getDb();
     const session = await createSession(db, ACTOR);
-    await appendMessages(db, session.id, [{ role: "user", content: "hi" } as LlmUserMessage], 99);
+    const [run] = await db<{ id: number }[]>`
+      INSERT INTO runs (run_type, status) VALUES ('agent_chat_stream', 'succeeded') RETURNING id
+    `;
+    await appendMessages(db, session.id, [{ role: "user", content: "hi" } as LlmUserMessage], run.id);
     const rows = await db<{ run_id: number | null }[]>`SELECT run_id FROM chat_messages WHERE session_id = ${session.id}`;
     expect(rows[0].run_id).toBeNull();
   });
