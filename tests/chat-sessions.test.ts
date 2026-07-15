@@ -127,4 +127,24 @@ describe("chat session persistence", () => {
     const loaded = await loadSessionMessages(db, session.id);
     expect(loaded.map((m) => m.content)).toEqual(["first", "second"]);
   });
+
+  it("appendMessages is atomic: a mid-batch failure rolls back the whole call, persisting no rows and leaving updated_at untouched", async () => {
+    const db = getDb();
+    const session = await createSession(db, ACTOR);
+    const [before] = await db<{ updated_at: Date }[]>`SELECT updated_at FROM chat_sessions WHERE id = ${session.id}`;
+
+    // Second message has a role the CHECK constraint rejects, so its INSERT
+    // throws mid-batch. The db.begin wrapper must roll back the first (valid)
+    // INSERT too — otherwise a dropped write would leave an unpaired row that
+    // poisons every future turn (the invariant the plan's eng review demanded).
+    const good = { role: "user", content: "kept?" } as LlmUserMessage;
+    const bad = { role: "bogus", content: "boom" } as unknown as LlmUserMessage;
+
+    await expect(appendMessages(db, session.id, [good, bad])).rejects.toThrow();
+
+    const rows = await db`SELECT 1 FROM chat_messages WHERE session_id = ${session.id}`;
+    expect(rows).toHaveLength(0);
+    const [after] = await db<{ updated_at: Date }[]>`SELECT updated_at FROM chat_sessions WHERE id = ${session.id}`;
+    expect(after.updated_at.getTime()).toBe(before.updated_at.getTime());
+  });
 });
