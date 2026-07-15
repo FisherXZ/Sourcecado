@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/ui";
 import { Composer } from "./Composer";
 import { MessageBubble } from "./MessageBubble";
 import { ReasoningTrace } from "./ReasoningTrace";
+import type { ResumedExchange } from "./resume";
 import { runChat, type AssistantTurn, type ChatMeta, type ConversationTurn } from "./stream";
 
 interface Exchange {
@@ -24,8 +25,16 @@ function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 }
 
-export function ChatClient() {
-  const [exchanges, setExchanges] = useState<Exchange[]>([]);
+export function ChatClient({ initialExchanges = [] }: { initialExchanges?: ResumedExchange[] }) {
+  const [exchanges, setExchanges] = useState<Exchange[]>(() =>
+    initialExchanges.map((resumed, index) => ({
+      id: -(index + 1), // negative ids so they never collide with idRef's live-turn counter
+      question: resumed.question,
+      turn: { steps: [], answer: resumed.answer },
+      open: false,
+      done: true,
+    }))
+  );
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const idRef = useRef(0);

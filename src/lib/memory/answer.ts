@@ -21,6 +21,9 @@ export interface MemoryAnswer {
 export interface AnswerWithMemoryInput {
   question: string;
   history?: ConversationTurn[];
+  // Full-fidelity prior session messages (R6), forwarded straight through to
+  // runAgent's priorMessages — see RunAgentInput.priorMessages.
+  priorMessages?: LlmMessage[];
   onStep?: (event: AgentStepEvent) => void | Promise<void>;
   // Raw agent-loop events, forwarded 1:1 to runAgent — see RunAgentInput.
   onAgentLoopEvent?: (event: AgentLoopEvent) => void | Promise<void>;
@@ -44,6 +47,7 @@ export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): P
   const result = await runAgent({
     question: input.question,
     history: input.history,
+    priorMessages: input.priorMessages,
     registry,
     // §4's record-as-note doctrine (add_memory_note, class write_internal) is
     // dead wiring unless the chat run permits that class alongside read.

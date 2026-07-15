@@ -6,7 +6,7 @@ import { runAgent } from "@/lib/harness";
 import { createToolRegistry } from "@/lib/tools/registry";
 import { echoTool } from "@/lib/tools/echo";
 import type { Tool } from "@/lib/tools/types";
-import type { LlmAdapter, LlmStreamEvent } from "@/lib/llm/types";
+import type { LlmAdapter, LlmMessage, LlmStreamEvent } from "@/lib/llm/types";
 
 async function resetLedgerTables(): Promise<void> {
   const db = getDb();
@@ -196,5 +196,30 @@ describe("runAgent", () => {
 
     await runAgent({ question: "x", registry, adapter: capturingAdapter });
     expect(capturedSystem).toMatch(/sourcing agent/i);
+  });
+
+  it("threads priorMessages into messages[] immediately before the new user message", async () => {
+    let capturedMessages: unknown[] | undefined;
+    const capturingAdapter: LlmAdapter = async function* (request) {
+      // Snapshot now: agent-loop.ts pushes the model's reply onto this same
+      // array (by reference) once the turn ends, so a live reference would
+      // observe post-turn mutations instead of what was actually sent.
+      capturedMessages = [...request.messages];
+      yield { type: "text_delta", delta: "ok" };
+      yield { type: "turn_end", stopReason: "end", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+    };
+    const registry = createToolRegistry([echoTool]);
+    const prior: LlmMessage[] = [
+      { role: "user", content: "earlier question" },
+      { role: "assistant", content: [{ type: "text", text: "earlier answer" }] },
+    ];
+
+    await runAgent({ question: "new question", registry, adapter: capturingAdapter, priorMessages: prior });
+
+    expect(capturedMessages).toEqual([
+      { role: "system", content: expect.stringMatching(/sourcing agent/i) },
+      ...prior,
+      { role: "user", content: "new question" },
+    ]);
   });
 });
