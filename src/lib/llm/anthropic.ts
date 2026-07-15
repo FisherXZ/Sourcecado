@@ -26,6 +26,20 @@ function resolveAnthropicBaseUrl(raw?: string): string | undefined {
   return trimmed.replace(/\/v\d+$/, "");
 }
 
+// When max_tokens truncates a turn mid-tool-input, the block still closes but
+// the accumulated JSON is incomplete. A throw here would misclassify a normal
+// truncation outcome as provider_error; fall back to {} so the turn completes
+// with its real stop reason (a stopReason of "tool_use" then degrades to an
+// invalid_args tool_result the model can recover from).
+function parseToolInput(json: string): unknown {
+  if (!json) return {};
+  try {
+    return JSON.parse(json);
+  } catch {
+    return {};
+  }
+}
+
 function toAnthropicTools(tools: LlmToolDefinition[]): Anthropic.Tool[] {
   return tools.map((tool) => ({
     name: tool.name,
@@ -148,7 +162,7 @@ export const anthropicAdapter: LlmAdapter = async function* anthropicAdapter(
           type: "tool_call_end",
           id: currentToolId,
           name: currentToolName,
-          input: currentToolJson ? JSON.parse(currentToolJson) : {},
+          input: parseToolInput(currentToolJson),
         };
         currentToolId = null;
         currentToolName = null;

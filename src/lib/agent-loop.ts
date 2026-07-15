@@ -67,8 +67,9 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     }
 
     let outcome: LlmTurnOutcome;
+    let gen: AsyncGenerator<LlmStreamEvent, LlmTurnOutcome, void> | undefined;
     try {
-      const gen = streamAgentTurn(input.db, {
+      gen = streamAgentTurn(input.db, {
         taskName: "agent_loop_turn",
         promptVersion: "1",
         providerName: input.provider,
@@ -80,6 +81,16 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
       });
       outcome = await drain(gen, input.onEvent);
     } catch (error) {
+      // If the throw came from onEvent (not the generator itself), the
+      // generator is still suspended at a yield — resume it with return() so
+      // streamAgentTurn's finally can mark its ledger rows 'abandoned' instead
+      // of leaving them 'running' forever. No-op if the generator already ran
+      // to completion or threw.
+      try {
+        await gen?.return(undefined as never);
+      } catch {
+        // Cleanup is best-effort; the original error still decides the outcome.
+      }
       const aborted = input.signal?.aborted === true;
       const message = error instanceof Error ? error.message : String(error);
       messages.push(syntheticAssistantMessage(aborted ? "[aborted]" : `[model error: ${message}]`));
@@ -99,6 +110,30 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
 
     if (outcome.stopReason !== "tool_use") {
       // "max_tokens" or "error" surfaced as a normal turn outcome (not a throw).
+      // Keep messages[] a provider-valid transcript for later reuse (R6 persists
+      // and resubmits it): a truncated turn can carry tool_use blocks that will
+      // never execute — providers reject a transcript where a tool_use has no
+      // paired tool_result — and an empty assistant message is rejected outright.
+      if (outcome.message.content.length === 0) {
+        messages[messages.length - 1] = syntheticAssistantMessage(
+          `[model produced no content: ${outcome.stopReason}]`
+        );
+      }
+      const dangling = outcome.message.content.filter(
+        (block): block is Extract<(typeof outcome.message.content)[number], { type: "tool_use" }> =>
+          block.type === "tool_use"
+      );
+      if (dangling.length > 0) {
+        messages.push({
+          role: "tool_result",
+          content: dangling.map((block) => ({
+            toolUseId: block.id,
+            toolName: block.name,
+            content: `Error (not_executed): run ended (${outcome.stopReason}) before this tool call could execute.`,
+            isError: true,
+          })),
+        });
+      }
       return { status: "failed", messages, stopReason: outcome.stopReason, steps: step };
     }
 

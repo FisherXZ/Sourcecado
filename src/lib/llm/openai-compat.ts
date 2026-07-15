@@ -14,6 +14,20 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// A finish_reason of "length" can truncate a turn mid-tool-arguments, leaving
+// incomplete JSON accumulated. A throw here would misclassify a normal
+// truncation outcome as provider_error; fall back to {} so the turn completes
+// with its real stop reason (a "tool_calls" finish then degrades to an
+// invalid_args tool_result the model can recover from).
+function parseToolInput(json: string): unknown {
+  if (!json) return {};
+  try {
+    return JSON.parse(json);
+  } catch {
+    return {};
+  }
+}
+
 function toOpenAiTools(tools: LlmToolDefinition[]): OpenAI.Chat.ChatCompletionTool[] {
   return tools.map((tool) => ({
     type: "function",
@@ -132,7 +146,7 @@ export function createOpenAiCompatAdapter(providerName: "deepseek" | "openai"): 
             type: "tool_call_end",
             id: state.id,
             name: state.name,
-            input: state.argsJson ? JSON.parse(state.argsJson) : {},
+            input: parseToolInput(state.argsJson),
           };
         }
         stopReason = mapFinishReason(choice.finish_reason);

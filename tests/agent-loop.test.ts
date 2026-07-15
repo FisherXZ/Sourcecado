@@ -357,6 +357,92 @@ describe("runAgentLoop", () => {
     expect(result.steps).toBe(1);
   });
 
+  it("pairs tool_use blocks from a max_tokens-truncated turn with not_executed tool_results so the transcript stays provider-valid", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+    const truncatedToolTurn: LlmAdapter = async function* (): AsyncGenerator<LlmStreamEvent> {
+      yield { type: "tool_call_start", id: "call-1", name: "echo" };
+      yield { type: "tool_call_end", id: "call-1", name: "echo", input: {} };
+      yield { type: "turn_end", stopReason: "max_tokens", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+    };
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "x" }],
+      registry,
+      allowed: ALLOWED,
+      db,
+      runId,
+      parentStepId,
+      adapter: truncatedToolTurn,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stopReason).toBe("max_tokens");
+    const last = result.messages[result.messages.length - 1];
+    expect(last.role).toBe("tool_result");
+    if (last.role === "tool_result") {
+      expect(last.content[0]).toMatchObject({
+        toolUseId: "call-1",
+        toolName: "echo",
+        isError: true,
+      });
+      expect(last.content[0].content).toContain("Error (not_executed)");
+    }
+  });
+
+  it("replaces an empty assistant message from a max_tokens turn with a synthetic text block", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+    const emptyMaxTokensTurn: LlmAdapter = async function* (): AsyncGenerator<LlmStreamEvent> {
+      yield { type: "turn_end", stopReason: "max_tokens", usage: { inputTokens: 10, outputTokens: 0, totalTokens: 10 } };
+    };
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "x" }],
+      registry,
+      allowed: ALLOWED,
+      db,
+      runId,
+      parentStepId,
+      adapter: emptyMaxTokensTurn,
+    });
+
+    expect(result.status).toBe("failed");
+    const last = result.messages[result.messages.length - 1];
+    expect(last.role).toBe("assistant");
+    if (last.role === "assistant") {
+      expect(last.content).toHaveLength(1);
+      expect(last.content[0]).toMatchObject({ type: "text", text: "[model produced no content: max_tokens]" });
+    }
+  });
+
+  it("closes the suspended turn generator when onEvent throws mid-stream, so ledger rows are not left 'running'", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "x" }],
+      registry,
+      allowed: ALLOWED,
+      db,
+      runId,
+      parentStepId,
+      adapter: sequentialAdapter([() => finalTurn("never consumed")]),
+      onEvent: () => {
+        throw new Error("consumer failed");
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.stopReason).toBe("error");
+
+    const rows = await db`SELECT status, error_type FROM model_calls WHERE run_id = ${runId}`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "failed", error_type: "abandoned" });
+    const running = await db`SELECT id FROM run_steps WHERE run_id = ${runId} AND status = 'running' AND step_kind = 'model'`;
+    expect(running).toHaveLength(0);
+  });
+
   it("reports stopReason 'aborted' (not 'error') when the adapter throws mid-stream while the signal is already aborted", async () => {
     const { db, runId, parentStepId } = await seedAgentStep();
     const registry = createToolRegistry([echoTool]);
