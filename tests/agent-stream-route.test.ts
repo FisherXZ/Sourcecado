@@ -1,17 +1,42 @@
 import { vi } from "vitest";
 
-const { runAgentMock, getRunTraceMock } = vi.hoisted(() => ({
-  runAgentMock: vi.fn(),
-  getRunTraceMock: vi.fn(),
+const { runAgentMock, getRunTraceMock, getOrCreateLatestSessionMock, loadSessionMessagesMock, appendMessagesMock } =
+  vi.hoisted(() => ({
+    runAgentMock: vi.fn(),
+    getRunTraceMock: vi.fn(),
+    getOrCreateLatestSessionMock: vi.fn(),
+    loadSessionMessagesMock: vi.fn(),
+    appendMessagesMock: vi.fn(),
+  }));
+vi.mock("@/lib/harness", () => ({
+  runAgent: runAgentMock,
+  // Route uses this (unmocked, real behavior would be []) to compute the
+  // produced-messages slice offset; no test here sends body.history.
+  conversationTurnsToMessages: () => [],
 }));
-vi.mock("@/lib/harness", () => ({ runAgent: runAgentMock }));
 vi.mock("@/lib/ledger", () => ({ getRunTrace: getRunTraceMock }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
 vi.mock("@/lib/context", () => ({
   buildMemoryAnswerInstructions: vi.fn().mockResolvedValue("stub instructions"),
 }));
+vi.mock("@/lib/chat/sessions", () => ({
+  getOrCreateLatestSession: getOrCreateLatestSessionMock,
+  loadSessionMessages: loadSessionMessagesMock,
+  appendMessages: appendMessagesMock,
+}));
 
 import { POST } from "@/app/api/agent/stream/route";
+import { DEFAULT_ACTOR } from "@/lib/memory/actor";
+
+// Minimal transcript shape (system + user + one produced assistant message)
+// for tests that don't care about the exact messages[] content — just that
+// `result.messages` exists so the route's persist-after-settle slice doesn't
+// crash on `.slice()` of `undefined`.
+const STUB_MESSAGES = [
+  { role: "system", content: "stub instructions" },
+  { role: "user", content: "stub question" },
+  { role: "assistant", content: [{ type: "text", text: "stub" }] },
+];
 
 function postRequest(body: unknown): Request {
   return new Request("http://localhost/api/agent/stream", {
@@ -37,6 +62,9 @@ describe("POST /api/agent/stream", () => {
   beforeEach(() => {
     runAgentMock.mockReset();
     getRunTraceMock.mockResolvedValue(null); // no trace → citation check is a pass-through
+    getOrCreateLatestSessionMock.mockReset().mockResolvedValue({ id: 7 });
+    loadSessionMessagesMock.mockReset().mockResolvedValue([]);
+    appendMessagesMock.mockReset().mockResolvedValue(undefined);
   });
 
   it("returns 400 when question is missing", async () => {
@@ -58,6 +86,7 @@ describe("POST /api/agent/stream", () => {
         status: "succeeded",
         answer: "Acme Robotics is a Series B company [acme-md#chunk-1].",
         steps: 1,
+        messages: STUB_MESSAGES,
       };
     });
 
@@ -77,7 +106,7 @@ describe("POST /api/agent/stream", () => {
   });
 
   it("still emits a meta part when the run fails with no answer", async () => {
-    runAgentMock.mockResolvedValue({ runId: 9, status: "failed", steps: 8 });
+    runAgentMock.mockResolvedValue({ runId: 9, status: "failed", steps: 8, messages: STUB_MESSAGES });
     const res = await POST(postRequest({ question: "loop" }));
     expect(res.status).toBe(200); // the stream itself is a 200; failure is carried in meta
     const body = await readAll(res);
@@ -99,7 +128,7 @@ describe("POST /api/agent/stream", () => {
       }) => {
         await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "checking memory..." } });
         await input.onAgentLoopEvent?.({ type: "tool_start", id: "call-1", name: "search_memory", input: {} });
-        return { runId: 12, status: "failed", steps: 8 };
+        return { runId: 12, status: "failed", steps: 8, messages: STUB_MESSAGES };
       }
     );
 
@@ -122,7 +151,7 @@ describe("POST /api/agent/stream", () => {
       }) => {
         await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "Acme is " } });
         await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "a Series B co." } });
-        return { runId: 7, status: "succeeded", answer: "Acme is a Series B co.", steps: 0 };
+        return { runId: 7, status: "succeeded", answer: "Acme is a Series B co.", steps: 0, messages: STUB_MESSAGES };
       }
     );
 
@@ -157,6 +186,7 @@ describe("POST /api/agent/stream", () => {
           status: "succeeded",
           answer: "Acme Robotics is a Series B company [acme-md#chunk-1].",
           steps: 1,
+          messages: STUB_MESSAGES,
         };
       }
     );
@@ -181,7 +211,7 @@ describe("POST /api/agent/stream", () => {
         observation: 'Success: {"acceptedFacts":[1],"gapFacts":[],"chunks":[1]}',
         ok: true,
       });
-      return { runId: 9, status: "succeeded", answer: "Answer with no live events.", steps: 1 };
+      return { runId: 9, status: "succeeded", answer: "Answer with no live events.", steps: 1, messages: STUB_MESSAGES };
     });
 
     const res = await POST(postRequest({ question: "tell me about acme" }));
@@ -198,7 +228,7 @@ describe("POST /api/agent/stream", () => {
     let received: AbortSignal | undefined;
     runAgentMock.mockImplementation(async (input: { signal?: AbortSignal }) => {
       received = input.signal;
-      return { runId: 11, status: "succeeded", answer: "ok", steps: 0 };
+      return { runId: 11, status: "succeeded", answer: "ok", steps: 0, messages: STUB_MESSAGES };
     });
 
     const req = postRequest({ question: "hi" });
@@ -228,6 +258,7 @@ describe("POST /api/agent/stream", () => {
           status: "succeeded",
           answer: "Acme is a Series B company.",
           steps: 1,
+          messages: STUB_MESSAGES,
         };
       }
     );
@@ -239,5 +270,66 @@ describe("POST /api/agent/stream", () => {
     expect(body).toContain("checking memory...");
     // ...and also reappears verbatim as the step's thought line — accepted duplication, not suppressed.
     expect(body).toContain('"thought":"checking memory..."');
+  });
+
+  describe("session persistence (R6)", () => {
+    it("loads prior session messages before running the turn and threads them in as priorMessages", async () => {
+      const prior = [
+        { role: "user", content: "earlier question" },
+        { role: "assistant", content: [{ type: "text", text: "earlier answer" }] },
+      ];
+      loadSessionMessagesMock.mockResolvedValue(prior);
+      runAgentMock.mockResolvedValue({
+        runId: 50,
+        status: "succeeded",
+        answer: "ok",
+        steps: 0,
+        messages: [{ role: "system", content: "stub" }, ...prior, { role: "user", content: "follow-up question" }],
+      });
+
+      const res = await POST(postRequest({ question: "follow-up question" }));
+      await readAll(res);
+
+      expect(getOrCreateLatestSessionMock).toHaveBeenCalledWith(expect.anything(), DEFAULT_ACTOR);
+      expect(loadSessionMessagesMock).toHaveBeenCalledWith(expect.anything(), 7);
+      expect(runAgentMock).toHaveBeenCalledWith(expect.objectContaining({ priorMessages: prior }));
+    });
+
+    it("persists the user message immediately and the produced messages after the turn, tagged with the run id", async () => {
+      runAgentMock.mockResolvedValue({
+        runId: 51,
+        status: "succeeded",
+        answer: "ok",
+        steps: 0,
+        messages: STUB_MESSAGES,
+      });
+
+      const res = await POST(postRequest({ question: "hello there" }));
+      await readAll(res);
+
+      expect(appendMessagesMock).toHaveBeenCalledTimes(2);
+      // first call: the new user message, persisted immediately, no runId
+      expect(appendMessagesMock.mock.calls[0][1]).toBe(7);
+      expect(appendMessagesMock.mock.calls[0][2]).toEqual([{ role: "user", content: "hello there" }]);
+      expect(appendMessagesMock.mock.calls[0][3]).toBeUndefined();
+      // second call: the loop's produced messages, tagged with the run id
+      expect(appendMessagesMock.mock.calls[1][1]).toBe(7);
+      expect(appendMessagesMock.mock.calls[1][3]).toBe(51);
+    });
+
+    it("still persists the turn's messages when the loop fails", async () => {
+      runAgentMock.mockResolvedValue({
+        runId: 52,
+        status: "failed",
+        steps: 8,
+        messages: STUB_MESSAGES,
+      });
+
+      const res = await POST(postRequest({ question: "loop" }));
+      await readAll(res);
+
+      expect(appendMessagesMock).toHaveBeenCalledTimes(2); // user message + failure message, same as success path
+      expect(appendMessagesMock.mock.calls[1][3]).toBe(52);
+    });
   });
 });

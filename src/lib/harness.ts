@@ -32,6 +32,11 @@ export interface RunAgentInput {
   // Prior conversation turns for multi-turn chat. Threaded into messages[] ahead
   // of the current question, capped server-side in conversationTurnsToMessages.
   history?: ConversationTurn[];
+  // Full-fidelity prior messages for a resumed chat session (R6). Threaded
+  // into messages[] immediately before the new user message — unlike
+  // `history`, these are already LlmMessage-shaped, so no string-only
+  // downgrade happens and tool_use/tool_result blocks survive intact.
+  priorMessages?: LlmMessage[];
   // Invoked after each executed tool step. Awaited so a streaming consumer can
   // flush the step to the client before the next turn runs.
   onStep?: (event: AgentStepEvent) => void | Promise<void>;
@@ -99,6 +104,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     const messages: LlmMessage[] = [
       { role: "system", content: input.instructions ?? DEFAULT_IDENTITY },
       ...conversationTurnsToMessages(input.history),
+      ...(input.priorMessages ?? []),
       { role: "user", content: input.question },
     ];
 
