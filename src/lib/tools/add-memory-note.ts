@@ -8,6 +8,8 @@ export const addMemoryNoteTool: Tool<{ title: string; text: string }, { sourceId
   permissionClass: "write_internal",
   argsSchema: z.object({ title: z.string().min(1), text: z.string().min(1) }),
   async execute(args, ctx) {
-    return addMemoryNote(ctx.db, { title: args.title, text: args.text });
+    // Stamp the writing run so a note produced by a (possibly prompt-injected)
+    // chat run is traceable back to that run and archivable.
+    return addMemoryNote(ctx.db, { title: args.title, text: args.text, runId: ctx.runId });
   },
 };

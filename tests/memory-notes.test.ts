@@ -5,6 +5,7 @@ import { DEFAULT_ACTOR } from "@/lib/memory/actor";
 import { addMemoryNote } from "@/lib/memory/notes";
 import { searchMemory } from "@/lib/memory/retrieve";
 import { addMemoryNoteTool } from "@/lib/tools/add-memory-note";
+import { startRun } from "@/lib/ledger";
 
 async function resetMemoryTables(): Promise<void> {
   const db = getDb();
@@ -128,6 +129,42 @@ describe("addMemoryNote (postgres)", () => {
     });
     const found = bundle.chunks.some((c) => c.citation.startsWith(id2));
     expect(found).toBe(true);
+  });
+
+  it("stamps the writing run and actor onto the source row (poisoned-note traceability)", async () => {
+    const db = getDb();
+    const run = await startRun(db, { runType: "agent_chat", title: "note-provenance", input: {} });
+
+    const { sourceId } = await addMemoryNoteTool.execute(
+      { title: "Injected Note", text: "Possibly prompt-injected content." },
+      { db, runId: run.id, parentStepId: 0 }
+    );
+
+    const [row] = await db<
+      { created_by_run_id: string | null; created_by_actor_type: string; created_by_actor_id: string }[]
+    >`
+      SELECT created_by_run_id, created_by_actor_type, created_by_actor_id
+      FROM source_records WHERE source_id = ${sourceId}
+    `;
+    expect(row).toBeDefined();
+    expect(Number(row.created_by_run_id)).toBe(run.id);
+    expect(row.created_by_actor_type).toBe(DEFAULT_ACTOR.actorType);
+    expect(row.created_by_actor_id).toBe(DEFAULT_ACTOR.actorId);
+  });
+
+  it("run-less re-add (direct API path) preserves an existing run attribution", async () => {
+    const db = getDb();
+    const run = await startRun(db, { runType: "agent_chat", title: "note-preserve", input: {} });
+    const args = { title: "Traced Note", text: "Content written first by a chat run." };
+
+    const { sourceId } = await addMemoryNote(db, { ...args, runId: run.id });
+    // Re-add identical text through the run-less path (no runId).
+    await addMemoryNote(db, args);
+
+    const [row] = await db<{ created_by_run_id: string | null }[]>`
+      SELECT created_by_run_id FROM source_records WHERE source_id = ${sourceId}
+    `;
+    expect(Number(row.created_by_run_id)).toBe(run.id);
   });
 
   it("idempotent: adding identical note twice does not duplicate memory_chunks", async () => {
