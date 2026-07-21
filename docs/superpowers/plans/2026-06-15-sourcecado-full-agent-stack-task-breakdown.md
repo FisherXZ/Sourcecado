@@ -357,11 +357,11 @@ Type: AFK (mostly) · Blocked by: F2
   visually anywhere).
 
 **Acceptance criteria:**
-- [ ] Organizations and Contacts persist and link (an Org can contain Contacts); every Contact has name, role, and org
-- [ ] `get_contact` / `get_organization` return records to the loop and log to the ledger
-- [ ] Two contacts sharing a name/alias never silently merge — `get_contact` returns `ambiguous` with candidates instead
-- [ ] `create_contact` refuses to silently save a partial identity; missing fields are asked for or explicitly flagged as gaps, never dropped
-- [ ] A Contact Profile Card renders identity + relationship timeline + cited facts + gaps in one place
+- [x] Organizations and Contacts persist and link (an Org can contain Contacts) — correction: "every Contact has name, role, and org" as originally worded overstates it; role/org (and now phone/email/linkedinUrl/photoUrl) are optional by design, since a thin record is a gap to fill later, not a blocked write. Only name is required.
+- [x] `get_contact` / `get_organization` return records to the loop and log to the ledger (ledger logging via the existing tool-orchestrator chokepoint, same as every other tool)
+- [x] Two contacts sharing a name/alias never silently merge — `get_contact` returns `ambiguous` with candidates instead
+- [x] `create_contact` refuses to silently save a partial identity; missing fields are asked for or explicitly flagged as gaps, never dropped
+- [x] A Contact Profile Card renders identity + relationship timeline + cited facts + gaps in one place — signed off 2026-07-21 (B1.8)
 
 **Tasks:**
 - [x] B1.1 `organizations` + `contacts` (name, role, org_id) + `contact_aliases` migration (~2h) · AFK — `src/migrations/006_contacts.sql` (TDD, `tests/contacts-migrate.test.ts`)
@@ -371,7 +371,7 @@ Type: AFK (mostly) · Blocked by: F2
 - [x] B1.5 `list_outreach_history` tool (read) (~1h) · AFK — `src/lib/contacts/outreach.ts` + `src/lib/tools/list-outreach-history.ts`, registered in `memoryRegistry()`
 - [x] B1.6 Contact Profile Card component (Identity/Relationship/Key Facts/Gaps) (~2h) · AFK — `src/app/chat/ContactProfileCard.tsx` + `selectContactCard` in `src/app/chat/stream.ts`, wired into `ChatClient.tsx`. Verified via component tests + confirmed `/chat` compiles/loads with no regression; could not drive an end-to-end live render since no model API key is configured locally (see B1.8 for a real design-review pass once one is)
 - [x] B1.7 Sourcing doctrine update: gather name+role+org on new-connection intake (~1h) · AFK — two new bullets in `SOURCING_DOCTRINE_SECTION` (`src/lib/context.ts`), covering intake and ambiguity
-- [ ] B1.8 Verify card matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL
+- [x] B1.8 Verify card matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL — signed off 2026-07-21 after reviewing rendered states (full record, thin/new-connection record) via the dev-preview scratch-page pattern; card uses `Card`/`Tag` primitives throughout, spacing/type scale consistent with the rest of the app
 - [x] B1.9 phone/email/linkedinUrl/photoUrl on Contact (~2h) · AFK — added 2026-07-21 from B1.8 design-review feedback (room for social/contact links + a profile photo). `src/migrations/008_contact_details.sql`, threaded through `resolve.ts`/`create.ts`/both tools/the wire format (`answer.ts` + `stream.ts`). Auto-populating `photoUrl` from a confirmed LinkedIn match is C3's job, not this task's — these are plain optional fields for now.
 
 ## B2 — Target Personas
