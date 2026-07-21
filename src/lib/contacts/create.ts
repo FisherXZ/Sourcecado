@@ -21,6 +21,10 @@ export interface CreateContactArgs {
   name: string;
   role?: string;
   organizationName?: string;
+  phone?: string;
+  email?: string;
+  linkedinUrl?: string;
+  photoUrl?: string;
 }
 
 export type CreateContactResult =
@@ -31,6 +35,10 @@ export async function createContact(db: Sql, args: CreateContactArgs): Promise<C
   const name = args.name.trim();
   const role = args.role?.trim() || null;
   const organizationName = args.organizationName?.trim() || null;
+  const phone = args.phone?.trim() || null;
+  const email = args.email?.trim() || null;
+  const linkedinUrl = args.linkedinUrl?.trim() || null;
+  const photoUrl = args.photoUrl?.trim() || null;
 
   let organizationId: number | null = null;
   let resolvedOrganizationName: string | null = null;
@@ -53,8 +61,8 @@ export async function createContact(db: Sql, args: CreateContactArgs): Promise<C
   }
 
   const [row] = await db<{ id: number | string }[]>`
-    INSERT INTO contacts (canonical_name, role, organization_id)
-    VALUES (${name}, ${role}, ${organizationId})
+    INSERT INTO contacts (canonical_name, role, organization_id, phone, email, linkedin_url, photo_url)
+    VALUES (${name}, ${role}, ${organizationId}, ${phone}, ${email}, ${linkedinUrl}, ${photoUrl})
     RETURNING id
   `;
 
@@ -66,6 +74,10 @@ export async function createContact(db: Sql, args: CreateContactArgs): Promise<C
       role,
       organizationId,
       organizationName: resolvedOrganizationName,
+      phone,
+      email,
+      linkedinUrl,
+      photoUrl,
     },
   };
 }

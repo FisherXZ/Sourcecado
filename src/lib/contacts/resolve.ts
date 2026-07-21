@@ -10,6 +10,10 @@ export interface ContactSummary {
   role: string | null;
   organizationId: number | null;
   organizationName: string | null;
+  phone: string | null;
+  email: string | null;
+  linkedinUrl: string | null;
+  photoUrl: string | null;
 }
 
 export type ContactResolution =
@@ -48,6 +52,10 @@ interface ContactRow {
   role: string | null;
   organization_id: number | string | null;
   organization_name: string | null;
+  phone: string | null;
+  email: string | null;
+  linkedin_url: string | null;
+  photo_url: string | null;
 }
 
 function mapContact(row: ContactRow): ContactSummary {
@@ -57,13 +65,17 @@ function mapContact(row: ContactRow): ContactSummary {
     role: row.role,
     organizationId: row.organization_id === null ? null : Number(row.organization_id),
     organizationName: row.organization_name,
+    phone: row.phone,
+    email: row.email,
+    linkedinUrl: row.linkedin_url,
+    photoUrl: row.photo_url,
   };
 }
 
 export async function resolveContact(db: Sql, name: string): Promise<ContactResolution> {
   const trimmed = name.trim();
   const rows = await db<ContactRow[]>`
-    SELECT c.id, c.canonical_name, c.role,
+    SELECT c.id, c.canonical_name, c.role, c.phone, c.email, c.linkedin_url, c.photo_url,
            o.id AS organization_id, o.name AS organization_name
     FROM contacts c
     LEFT JOIN organizations o ON o.id = c.organization_id

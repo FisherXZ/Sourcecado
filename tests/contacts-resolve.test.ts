@@ -39,6 +39,22 @@ describe("resolveContact", () => {
     }
   });
 
+  it("resolves phone, email, linkedinUrl, and photoUrl alongside the rest", async () => {
+    const db = getDb();
+    await db`
+      INSERT INTO contacts (canonical_name, phone, email, linkedin_url, photo_url)
+      VALUES ('Jane Smith', '555-0100', 'jane@acme.com', 'https://linkedin.com/in/janesmith', 'https://example.com/jane.jpg')
+    `;
+    const result = await resolveContact(db, "Jane Smith");
+    expect(result.status).toBe("found");
+    if (result.status === "found") {
+      expect(result.contact.phone).toBe("555-0100");
+      expect(result.contact.email).toBe("jane@acme.com");
+      expect(result.contact.linkedinUrl).toBe("https://linkedin.com/in/janesmith");
+      expect(result.contact.photoUrl).toBe("https://example.com/jane.jpg");
+    }
+  });
+
   it("resolves a contact with no role/org — nulls, not an error", async () => {
     const db = getDb();
     await db`INSERT INTO contacts (canonical_name) VALUES ('Thin Record')`;
@@ -48,6 +64,10 @@ describe("resolveContact", () => {
       expect(result.contact.role).toBeNull();
       expect(result.contact.organizationId).toBeNull();
       expect(result.contact.organizationName).toBeNull();
+      expect(result.contact.phone).toBeNull();
+      expect(result.contact.email).toBeNull();
+      expect(result.contact.linkedinUrl).toBeNull();
+      expect(result.contact.photoUrl).toBeNull();
     }
   });
 

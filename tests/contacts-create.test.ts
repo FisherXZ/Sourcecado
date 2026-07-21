@@ -31,6 +31,37 @@ describe("createContact", () => {
     }
   });
 
+  it("creates a contact with only a name — phone, email, linkedin, photo are gaps (null) too", async () => {
+    const result = await createContact(getDb(), { name: "Thin Record" });
+    expect(result.status).toBe("created");
+    if (result.status === "created") {
+      expect(result.contact.phone).toBeNull();
+      expect(result.contact.email).toBeNull();
+      expect(result.contact.linkedinUrl).toBeNull();
+      expect(result.contact.photoUrl).toBeNull();
+    }
+  });
+
+  it("stores phone, email, linkedinUrl, and photoUrl when provided", async () => {
+    const db = getDb();
+    const result = await createContact(db, {
+      name: "Jane Smith",
+      phone: "555-0100",
+      email: "jane@acme.com",
+      linkedinUrl: "https://linkedin.com/in/janesmith",
+      photoUrl: "https://example.com/jane.jpg",
+    });
+    expect(result.status).toBe("created");
+    if (result.status === "created") {
+      expect(result.contact.phone).toBe("555-0100");
+      expect(result.contact.email).toBe("jane@acme.com");
+      expect(result.contact.linkedinUrl).toBe("https://linkedin.com/in/janesmith");
+      expect(result.contact.photoUrl).toBe("https://example.com/jane.jpg");
+    }
+    const [row] = await db<{ phone: string | null }[]>`SELECT phone FROM contacts WHERE canonical_name = 'Jane Smith'`;
+    expect(row.phone).toBe("555-0100");
+  });
+
   it("creates a new organization when the named org doesn't exist yet", async () => {
     const db = getDb();
     const result = await createContact(db, { name: "Jane Smith", role: "PM", organizationName: "Brand New Co" });
