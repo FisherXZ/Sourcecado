@@ -96,18 +96,25 @@ function mapOrg(row: OrgRow): OrganizationSummary {
   return { id: Number(row.id), name: row.name, domain: row.domain };
 }
 
-export async function resolveOrganization(db: Sql, name: string): Promise<OrganizationResolution> {
+// Shared by resolveOrganization and createContact — both need "does an org with
+// exactly this name already exist" without duplicating the query/mapping.
+export async function findOrganizationsByExactName(db: Sql, name: string): Promise<OrganizationSummary[]> {
   const trimmed = name.trim();
-  const orgs = await db<OrgRow[]>`
+  const rows = await db<OrgRow[]>`
     SELECT id, name, domain FROM organizations
     WHERE lower(name) = lower(${trimmed})
     ORDER BY id
   `;
+  return rows.map(mapOrg);
+}
+
+export async function resolveOrganization(db: Sql, name: string): Promise<OrganizationResolution> {
+  const orgs = await findOrganizationsByExactName(db, name);
 
   if (orgs.length === 0) return { status: "not_found" };
-  if (orgs.length > 1) return { status: "ambiguous", candidates: orgs.map(mapOrg) };
+  if (orgs.length > 1) return { status: "ambiguous", candidates: orgs };
 
-  const organization = mapOrg(orgs[0]);
+  const organization = orgs[0];
   const contactRows = await db<{ id: number | string; canonical_name: string; role: string | null }[]>`
     SELECT id, canonical_name, role FROM contacts
     WHERE organization_id = ${organization.id}
