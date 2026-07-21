@@ -21,6 +21,10 @@ export interface ContactCardData {
   canonicalName: string;
   role: string | null;
   organizationName: string | null;
+  phone: string | null;
+  email: string | null;
+  linkedinUrl: string | null;
+  photoUrl: string | null;
 }
 
 export interface OutreachHistoryEntry {

@@ -131,7 +131,16 @@ describe("selectContactCard", () => {
     tool: "get_contact",
     ok: true,
     detail: "found",
-    contactCard: { id: 1, canonicalName: "Jane Smith", role: "PM", organizationName: "Acme" },
+    contactCard: {
+      id: 1,
+      canonicalName: "Jane Smith",
+      role: "PM",
+      organizationName: "Acme",
+      phone: null,
+      email: null,
+      linkedinUrl: null,
+      photoUrl: null,
+    },
   };
 
   it("returns undefined when no step has a contactCard", () => {

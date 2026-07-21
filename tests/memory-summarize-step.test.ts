@@ -40,13 +40,18 @@ describe("summarizeStep", () => {
       tool: "get_contact",
       ok: true,
       observation:
-        'Success: {"status":"found","contact":{"id":1,"canonicalName":"Jane Smith","role":"PM","organizationName":"Acme"}}',
+        'Success: {"status":"found","contact":{"id":1,"canonicalName":"Jane Smith","role":"PM","organizationName":"Acme",' +
+        '"phone":"555-0100","email":"jane@acme.com","linkedinUrl":"https://linkedin.com/in/janesmith","photoUrl":"https://example.com/jane.jpg"}}',
     });
     expect(part.contactCard).toEqual({
       id: 1,
       canonicalName: "Jane Smith",
       role: "PM",
       organizationName: "Acme",
+      phone: "555-0100",
+      email: "jane@acme.com",
+      linkedinUrl: "https://linkedin.com/in/janesmith",
+      photoUrl: "https://example.com/jane.jpg",
     });
   });
 

@@ -5,7 +5,16 @@ import { ContactProfileCard } from "@/app/chat/ContactProfileCard";
 import type { ContactCardView } from "@/app/chat/stream";
 
 const baseView: ContactCardView = {
-  contact: { id: 1, canonicalName: "Jane Smith", role: "PM", organizationName: "Acme Corp" },
+  contact: {
+    id: 1,
+    canonicalName: "Jane Smith",
+    role: "PM",
+    organizationName: "Acme Corp",
+    phone: null,
+    email: null,
+    linkedinUrl: null,
+    photoUrl: null,
+  },
   history: [],
   acceptedFacts: [],
   gapFacts: [],
@@ -22,7 +31,16 @@ describe("ContactProfileCard", () => {
   it("shows a gap indicator instead of hiding missing role/org", () => {
     render(
       <ContactProfileCard
-        contact={{ id: 1, canonicalName: "Thin Record", role: null, organizationName: null }}
+        contact={{
+          id: 1,
+          canonicalName: "Thin Record",
+          role: null,
+          organizationName: null,
+          phone: null,
+          email: null,
+          linkedinUrl: null,
+          photoUrl: null,
+        }}
         history={[]}
         acceptedFacts={[]}
         gapFacts={[]}
