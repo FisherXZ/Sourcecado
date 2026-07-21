@@ -3,10 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { EmptyState } from "@/components/ui";
 import { Composer } from "./Composer";
+import { ContactProfileCard } from "./ContactProfileCard";
 import { MessageBubble } from "./MessageBubble";
 import { ReasoningTrace } from "./ReasoningTrace";
 import type { ResumedExchange } from "./resume";
-import { runChat, type AssistantTurn, type ChatMeta, type ConversationTurn } from "./stream";
+import {
+  runChat,
+  selectContactCard,
+  type AssistantTurn,
+  type ChatMeta,
+  type ConversationTurn,
+} from "./stream";
 
 interface Exchange {
   id: number;
@@ -120,7 +127,9 @@ export function ChatClient({ initialExchanges = [] }: { initialExchanges?: Resum
           </div>
         ) : (
           <div className="flex flex-col gap-6">
-            {exchanges.map((e) => (
+            {exchanges.map((e) => {
+              const contactCard = selectContactCard(e.turn.steps);
+              return (
               <div key={e.id} className="flex flex-col gap-2">
                 <MessageBubble role="user">{e.question}</MessageBubble>
                 <div className="flex flex-col gap-2" aria-live="polite">
@@ -133,6 +142,7 @@ export function ChatClient({ initialExchanges = [] }: { initialExchanges?: Resum
                       pendingTool={e.turn.pendingTool}
                     />
                   )}
+                  {contactCard ? <ContactProfileCard {...contactCard} /> : null}
                   {e.errored ? (
                     <div
                       role="alert"
@@ -148,7 +158,8 @@ export function ChatClient({ initialExchanges = [] }: { initialExchanges?: Resum
                   {e.turn.meta ? <MetaFooter meta={e.turn.meta} /> : null}
                 </div>
               </div>
-            ))}
+              );
+            })}
             <div ref={bottomRef} />
           </div>
         )}

@@ -4,7 +4,12 @@ import { vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const { runChatMock } = vi.hoisted(() => ({ runChatMock: vi.fn() }));
-vi.mock("@/app/chat/stream", () => ({ runChat: runChatMock }));
+vi.mock("@/app/chat/stream", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/chat/stream")>();
+  // Only runChat is mocked — selectContactCard stays real (it's pure) so
+  // ChatClient's card-selection logic isn't silently skipped in these tests.
+  return { ...actual, runChat: runChatMock };
+});
 
 import { ChatClient } from "@/app/chat/ChatClient";
 
