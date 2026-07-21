@@ -477,8 +477,53 @@ and citations.
 - [ ] C2.2 `web_enrich_company` tool + citations (~1.5h) · AFK
 - [ ] C2.3 `web_enrich_contact` tool + citations (~1.5h) · AFK
 
+## C3 — Guided contact data-collection workflow
+Type: HITL · Blocked by: C1, C2, B1 (done) · Added: 2026-07-21, from B1.8 design-review feedback
+
+**What to build:** A human-directed, verified workflow for filling in what's missing on a
+Contact — distinct from C1/C2's autonomous enrichment tool calls. Two entry points: (1)
+automatically offered right after a thin Contact is created (B1.3's `create_contact` with
+gaps), and (2) a "Data collect" action on an existing Contact's profile card. The workflow
+asks the Director only for whichever fields are actually missing, and where the person is
+public enough to be found (news, interviews, LinkedIn), surfaces candidate results from C1/C2
+for the Director to review — every web-sourced candidate requires explicit Director
+confirmation that it's the same person before anything is written, reusing the same
+ask-don't-guess identity pattern already built for `get_contact`/`get_organization`
+(B1.2) rather than inventing a new one. A confirmed LinkedIn match can populate the Contact
+Profile Card's photo.
+
+Every field this workflow writes carries provenance: the value, where it came from (the
+Director typing it directly vs. a specific cited source/URL), who recorded it, and when —
+reusing the existing citation/source_record pattern already used for memory chunks rather
+than a new mechanism. "Who recorded it" is `DEFAULT_ACTOR` until Stage H ships; this workflow
+does not block on Stage H, but should read the actor from context (not hardcode it) so H's
+real login slots in later without a rewrite here.
+
+This is also where B1.6's "Key facts" section gets its real citation model: instead of a flat
+list of facts with no link back to how they were learned, each fact cites either the specific
+`outreach_history` entry + actor that produced it, or the external document/enrichment source
+that did. B1.6 shipped the flat version because this workflow (its actual source) didn't
+exist yet; revisit `ContactProfileCard`'s Key Facts section as part of this slice.
+
+**Acceptance criteria:**
+- [ ] A newly created thin Contact (B1.3, missing role/org/etc.) surfaces a "Data collect" prompt
+- [ ] An existing Contact's profile card has a "Data collect" action that asks only for what's missing
+- [ ] A web/enrichment-sourced candidate is never written without explicit Director confirmation it's the same person
+- [ ] Every field written through this workflow records value + source + actor + method + timestamp
+- [ ] A confirmed LinkedIn match can set the Contact's photo
+- [ ] Key Facts on the Contact Profile Card cite their originating interaction or external source, not just a bare fact
+
+**Tasks:**
+- [ ] C3.1 Design the guided workflow's step sequence + gap-detection logic (~2h) · HITL
+- [ ] C3.2 Candidate surfacing from Apollo/web enrichment + identity-confirmation UI (~2h) · AFK
+- [ ] C3.3 Field-level provenance write path (value + source + actor + method + timestamp) (~2h) · AFK
+- [ ] C3.4 "Data collect" entry points: new-connection intake + existing-profile trigger (~1.5h) · AFK
+- [ ] C3.5 Rework Contact Profile Card's Key Facts to cite their originating interaction/source (~1.5h) · AFK
+- [ ] C3.6 Verify guided workflow UX matches DESIGN.md (~1h) · HITL
+
 **FEATURE C DEMO:** research an Organization, enrich potential Contacts, keep citations,
-and see Apollo/web usage in the Run Ledger.
+see Apollo/web usage in the Run Ledger, and walk a new connection through guided data
+collection with a verified LinkedIn photo match.
 
 ---
 
@@ -644,6 +689,40 @@ outcome/feedback → memory update.
 - [ ] G3.3 Demo runbook + reset script (~1h) · AFK
 
 **FINAL DEMO:** the full sourcing loop, dependable and repeatable.
+
+---
+
+# H. ACTOR IDENTITY & ATTRIBUTION (deferred, not scheduled)
+
+Added: 2026-07-21, from B1.8 design-review feedback. Real login/session identity for
+individual Codeology officers, replacing the `DEFAULT_ACTOR` v1 sentinel
+(`src/lib/memory/actor.ts`, `MemoryActor { actorType: "user" | "oauth_client" |
+"test_client"; actorId: string }`) used across 8 files as of 2026-07-21. Explicitly not
+being built now — this section exists so the requirement isn't lost, and so whoever picks
+it up knows what already depends on it.
+
+## H1 — Per-officer login & session identity
+Type: HITL · Blocked by: none (can start anytime) · Status: not started, deferred
+
+**What to build:** Real authentication distinguishing individual Codeology officers, not
+just the single shared `test_client` sentinel — producing a `MemoryActor` per logged-in
+user that flows through every write path already wired to accept one.
+
+**Why it matters:** Every write path already threads a `MemoryActor` through
+(`DEFAULT_ACTOR` today) — `create_contact` (B1.3), `add_memory_note` (A7.1), the future
+outreach-outcome tools (B3), the artifact review flow (D1), human feedback (G1), and the
+guided data-collection workflow (C3) all want to record *which officer* did something, not
+just *that* something happened. Building this once, early, avoids retrofitting attribution
+into five-plus already-shipped write paths later. C3 in particular is written to read the
+actor from context rather than hardcode it, specifically so this slot can land later without
+a rewrite there.
+
+**Acceptance criteria:**
+- [ ] An individual Codeology officer can log in and act as themselves, not the shared sentinel
+- [ ] Every existing `DEFAULT_ACTOR` call site (8 files as of 2026-07-21 — see `grep -rl DEFAULT_ACTOR src/`) receives a real actor from session context instead
+- [ ] A written fact/note/contact/artifact records who wrote it, traceable back to a specific officer
+
+**Tasks:** not scoped — revisit when this becomes a priority.
 
 ---
 
