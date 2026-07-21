@@ -8,7 +8,7 @@ async function resetContactTables(): Promise<void> {
   await db`DROP TABLE IF EXISTS contact_aliases CASCADE`;
   await db`DROP TABLE IF EXISTS contacts CASCADE`;
   await db`DROP TABLE IF EXISTS organizations CASCADE`;
-  await db`DELETE FROM schema_migrations WHERE name = '006_contacts.sql'`;
+  await db`DELETE FROM schema_migrations WHERE name IN ('006_contacts.sql', '007_outreach_history.sql', '008_contact_details.sql')`;
   await runMigrations(db);
 }
 
