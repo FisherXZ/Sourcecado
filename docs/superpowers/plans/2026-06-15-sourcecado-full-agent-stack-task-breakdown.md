@@ -370,7 +370,7 @@ Type: AFK (mostly) · Blocked by: F2
 - [x] B1.4 `outreach_history` migration — relationship timeline, pulled forward from B3 (~1.5h) · AFK — `src/migrations/007_outreach_history.sql`
 - [x] B1.5 `list_outreach_history` tool (read) (~1h) · AFK — `src/lib/contacts/outreach.ts` + `src/lib/tools/list-outreach-history.ts`, registered in `memoryRegistry()`
 - [x] B1.6 Contact Profile Card component (Identity/Relationship/Key Facts/Gaps) (~2h) · AFK — `src/app/chat/ContactProfileCard.tsx` + `selectContactCard` in `src/app/chat/stream.ts`, wired into `ChatClient.tsx`. Verified via component tests + confirmed `/chat` compiles/loads with no regression; could not drive an end-to-end live render since no model API key is configured locally (see B1.8 for a real design-review pass once one is)
-- [ ] B1.7 Sourcing doctrine update: gather name+role+org on new-connection intake (~1h) · AFK
+- [x] B1.7 Sourcing doctrine update: gather name+role+org on new-connection intake (~1h) · AFK — two new bullets in `SOURCING_DOCTRINE_SECTION` (`src/lib/context.ts`), covering intake and ambiguity
 - [ ] B1.8 Verify card matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL
 
 ## B2 — Target Personas
