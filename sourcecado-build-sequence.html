@@ -315,7 +315,7 @@
       <div class="stat"><div class="n">31</div><div class="l">Slices</div></div>
       <div class="stat"><div class="n">~91</div><div class="l">Tasks · 1–2h ea</div></div>
       <div class="stat"><div class="n">6</div><div class="l">HITL gates</div></div>
-      <div class="stat"><div class="n">11/31</div><div class="l">Slices done</div></div>
+      <div class="stat"><div class="n">12/31</div><div class="l">Slices done</div></div>
       <div class="stat"><div class="n">~2mo</div><div class="l">Original target</div></div>
     </div>
   </header>
@@ -382,11 +382,11 @@
         <div class="rail" style="background:var(--rail-b)">
           <div class="badge">B</div>
           <div class="nm">Sourcing State Model</div>
-          <div class="ph">Act like a director · B1 in progress</div>
+          <div class="ph">Act like a director · B1 done</div>
           <div class="counts"><span><b>5</b></span><span><b>17</b>t</span></div>
         </div>
         <div class="slices">
-          <div class="slice" data-status="partial"><div class="sid">B1</div><div class="sbody"><div class="stitle">Organizations &amp; Contacts + identity + Profile Card <span class="mono" style="color:var(--ink-faint);font-size:11px">· widened 2026-07-21</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="status-partial">7/8</span><span class="tag-type hitl">HITL</span></div></div>
+          <div class="slice" data-status="done"><div class="sid">B1</div><div class="sbody"><div class="stitle">Organizations &amp; Contacts + identity + Profile Card <span class="mono" style="color:var(--ink-faint);font-size:11px">· widened 2026-07-21</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
           <div class="slice"><div class="sid">B2</div><div class="sbody"><div class="stitle">Target Personas</div><div class="sblock"><b>↳</b> B1</div></div><div class="smeta"><span class="tasks">1</span><span class="tag-type afk">AFK</span></div></div>
           <div class="slice"><div class="sid">B3</div><div class="sbody"><div class="stitle">Outreach Outcomes / Follow-Up <span class="mono" style="color:var(--ink-faint);font-size:11px">· History moved to B1.4</span></div><div class="sblock"><b>↳</b> B1</div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type afk">AFK</span></div></div>
           <div class="slice"><div class="sid">B4</div><div class="sbody"><div class="stitle">Contact / Organization detail page</div><div class="sblock"><b>↳</b> B3 · <span style="color:var(--hitl)">design</span></div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type hitl">HITL</span></div></div>
@@ -506,7 +506,7 @@ const TASKS = {
   A6:[["A6.1","Research Chat UI: message list + input + run trigger","2h","done"],["A6.2","Inline run status + cited answer + gaps render","1.5h","done"],["A6.3","Chat-layout design review — higher stakes post R1–R6 rewrite","1h","hitl"]],
   A7:[["A7.1","add_memory_note tool + write path","1.5h","done"],["A7.2","Memory management page: list + add + correct","2h","done"]],
 
-  B1:[["B1.1","organizations + contacts + contact_aliases migration","2h","done"],["B1.2","get_contact + get_organization tools + alias resolution + ambiguous state","2.5h","done"],["B1.3","create_contact tool — requires name+role+org, gap-flags missing","1.5h","done"],["B1.4","outreach_history migration (pulled forward from B3)","1.5h","done"],["B1.5","list_outreach_history tool","1h","done"],["B1.6","Contact Profile Card component","2h","done"],["B1.7","Sourcing doctrine: gather name+role+org, ask on ambiguity","1h","done"],["B1.8","Verify card matches DESIGN.md + uses primitives","1h","hitl"]],
+  B1:[["B1.1","organizations + contacts + contact_aliases migration","2h","done"],["B1.2","get_contact + get_organization tools + alias resolution + ambiguous state","2.5h","done"],["B1.3","create_contact tool — requires name+role+org, gap-flags missing","1.5h","done"],["B1.4","outreach_history migration (pulled forward from B3)","1.5h","done"],["B1.5","list_outreach_history tool","1h","done"],["B1.6","Contact Profile Card component","2h","done"],["B1.7","Sourcing doctrine: gather name+role+org, ask on ambiguity","1h","done"],["B1.8","Verify card matches DESIGN.md + uses primitives — signed off","1h","done"],["B1.9","phone/email/linkedinUrl/photoUrl on Contact","2h","done"]],
   B2:[["B2.1","target_personas migration + association","1.5h","afk"]],
   B3:[["B3.1","outreach_history migration — done, see B1.4","1.5h","cut"],["B3.1b","outreach_outcomes migration","1h","afk"],["B3.2","followup_sequence state migration","1h","afk"],["B3.2b","list_outreach_history tool — done, see B1.5","—","cut"],["B3.3","record_outreach_outcome + update_followup_sequence tools","1.5h","afk"]],
   B4:[["B4.1","Detail page data loaders + layout","2h","afk"],["B4.2","History / outcomes / artifacts panels","2h","afk"],["B4.3","Detail-page design review pass","1h","hitl"]],
