@@ -35,6 +35,13 @@ describe("webFetchTool", () => {
       "127.0.0.1", "10.0.0.5", "172.16.4.4", "172.31.255.255", "192.168.1.1",
       "169.254.169.254", "100.64.0.1", "0.0.0.0",
       "::1", "::", "fe80::1", "fea0::1", "feb0::1", "fc00::1", "fd12:3456::1", "::ffff:169.254.169.254",
+      // IPv4-mapped IPv6 in hextet form (WHATWG URL parser / some resolvers emit
+      // this) must unwrap and block just like the dotted form:
+      "::ffff:a9fe:a9fe", // 169.254.169.254 metadata
+      "::ffff:7f00:1", // 127.0.0.1 loopback
+      "::ffff:0a00:0001", // 10.0.0.1 private
+      "::ffff:0:0", // 0.0.0.0
+      "::ffff:1234", // unrecognised ::ffff: form → fail closed
       "999.1.1.1", "not-an-ip",
     ]) {
       expect(isBlockedIp(ip)).toBe(true);

@@ -34,11 +34,25 @@ export function htmlToText(html: string): string {
 
 // SSRF guard. true for loopback / private / link-local / CGNAT / cloud-metadata
 // / unique-local addresses — anything an agent-supplied URL must not reach.
-// IPv4-mapped IPv6 (::ffff:a.b.c.d) is unwrapped and checked as IPv4. Malformed
-// IPv4 fails closed; unrecognised-but-valid IPv6 (global unicast) is allowed.
+// IPv4-mapped IPv6 is unwrapped and checked as IPv4 in BOTH presentation forms
+// the resolver / URL parser can produce: dotted (`::ffff:169.254.169.254`) and
+// hextet (`::ffff:a9fe:a9fe`, which the WHATWG URL parser and some getaddrinfo
+// implementations emit). Any other `::ffff:` form we can't cleanly unwrap fails
+// closed. Malformed IPv4 fails closed; unrecognised-but-valid IPv6 (global
+// unicast) is allowed.
 export function isBlockedIp(ip: string): boolean {
-  const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(ip);
-  const addr = mapped ? mapped[1] : ip;
+  const mappedDotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(ip);
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
+  let addr = ip;
+  if (mappedDotted) {
+    addr = mappedDotted[1];
+  } else if (mappedHex) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    addr = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  } else if (/^::ffff:/i.test(ip)) {
+    return true; // some other IPv4-mapped form we can't unwrap → fail closed
+  }
 
   if (addr.includes(".")) {
     const parts = addr.split(".").map((p) => Number(p));
