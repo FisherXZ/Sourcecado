@@ -1,4 +1,4 @@
-import { resolveAnthropicBaseUrl } from "@/lib/model-gateway";
+import { resolveAnthropicBaseUrl, toBareAnthropicHost } from "@/lib/model-gateway";
 
 describe("resolveAnthropicBaseUrl", () => {
   it("defaults to the versioned Anthropic API base", () => {
@@ -16,5 +16,23 @@ describe("resolveAnthropicBaseUrl", () => {
     expect(resolveAnthropicBaseUrl("https://proxy.internal/anthropic/v2")).toBe(
       "https://proxy.internal/anthropic/v2",
     );
+  });
+});
+
+describe("toBareAnthropicHost", () => {
+  it("strips a trailing /v1 segment", () => {
+    expect(toBareAnthropicHost("https://api.anthropic.com/v1")).toBe("https://api.anthropic.com");
+  });
+
+  it("strips a trailing /v2 (or other version) segment", () => {
+    expect(toBareAnthropicHost("https://proxy.internal/anthropic/v2")).toBe("https://proxy.internal/anthropic");
+  });
+
+  it("is a no-op when there is no version segment", () => {
+    expect(toBareAnthropicHost("https://api.anthropic.com")).toBe("https://api.anthropic.com");
+  });
+
+  it("composes with resolveAnthropicBaseUrl for the default case", () => {
+    expect(toBareAnthropicHost(resolveAnthropicBaseUrl(undefined))).toBe("https://api.anthropic.com");
   });
 });

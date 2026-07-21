@@ -1,11 +1,8 @@
 import { createHash } from "node:crypto";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { deepseek } from "@ai-sdk/deepseek";
-import { openai } from "@ai-sdk/openai";
-import type { LanguageModel } from "ai";
-import { embed, embedMany, generateObject, generateText } from "ai";
+import Anthropic from "@anthropic-ai/sdk";
+import OpenAIClient from "openai";
 import type postgres from "postgres";
-import type { z } from "zod";
+import { z } from "zod"; // value import — z.toJSONSchema is a runtime call now
 import { failRunStep, finishRunStep, startRunStep } from "./ledger";
 import { anthropicAdapter } from "./llm/anthropic";
 import { createOpenAiCompatAdapter } from "./llm/openai-compat";
@@ -272,13 +269,11 @@ async function executeProvider(
   return executeDefaultProvider(input, providerName, model);
 }
 
-// Resolve the AI SDK language model for text/object generation. Embeddings stay
-// on OpenAI. Keeps the gateway's single provider abstraction (ADR-0004) uniform
-// across deepseek/anthropic without leaking provider details to callers.
-// @ai-sdk/anthropic expects a base URL that includes the `/v1` segment and posts
-// to `${baseURL}/messages`. Some environments export ANTHROPIC_BASE_URL as the
-// bare host (the official SDK's convention, which appends /v1 itself), which 404s
-// here. Normalize: honor a configured base but ensure it carries a version path.
+// @ai-sdk/anthropic expected a base URL that includes the `/v1` segment and
+// posts to `${baseURL}/messages`. Some environments export ANTHROPIC_BASE_URL
+// as the bare host, which 404'd there. This normalizer keeps its tested
+// contract (the /v1-suffixed form); toBareAnthropicHost() strips it back off
+// for the raw SDK, which appends the versioned path itself.
 export function resolveAnthropicBaseUrl(raw?: string): string {
   const configured = raw?.trim();
   if (!configured) return "https://api.anthropic.com/v1";
@@ -286,22 +281,190 @@ export function resolveAnthropicBaseUrl(raw?: string): string {
   return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
 }
 
-function generationModel(providerName: string, model: string): LanguageModel {
-  if (providerName === "anthropic") {
-    requireEnv("ANTHROPIC_API_KEY");
-    const provider = createAnthropic({
-      baseURL: resolveAnthropicBaseUrl(process.env.ANTHROPIC_BASE_URL),
-    });
-    return provider(model);
-  }
-  if (providerName !== "deepseek") {
+// The raw @anthropic-ai/sdk client posts to `${baseURL}/v1/messages` itself —
+// unlike @ai-sdk/anthropic it wants the bare host, not a version-suffixed URL.
+export function toBareAnthropicHost(versionedBaseUrl: string): string {
+  return versionedBaseUrl.replace(/\/v\d+$/, "");
+}
+
+// DeepSeek's own server-side default governs when no explicit max_tokens is
+// sent (@ai-sdk/deepseek passed `max_tokens: undefined`), so this flat constant
+// reproduces existing DeepSeek behavior. Anthropic does NOT use it — see
+// anthropicMaxTokensForModel(), which reproduces @ai-sdk/anthropic's per-model
+// default rather than shrinking it.
+const DEFAULT_MAX_TOKENS = 4096;
+
+// Mirrors @ai-sdk/anthropic's maxOutputTokensForModel table — the raw SDK has
+// no implicit default and requires max_tokens on every request. Without this,
+// every claude-sonnet-4-* call (incl. the configured claude-sonnet-4-6) would
+// silently drop from an effective 64000 ceiling to 4096, truncating both
+// harness.ts's decide() and extractors/llm.ts's document-wide extraction.
+function anthropicMaxTokensForModel(model: string): number {
+  return /^claude-sonnet-4-/.test(model) ? 64000 : DEFAULT_MAX_TOKENS;
+}
+
+function anthropicClient(): Anthropic {
+  requireEnv("ANTHROPIC_API_KEY");
+  return new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    baseURL: toBareAnthropicHost(resolveAnthropicBaseUrl(process.env.ANTHROPIC_BASE_URL)),
+  });
+}
+
+function deepseekClient(): OpenAIClient {
+  requireEnv("DEEPSEEK_API_KEY");
+  return new OpenAIClient({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: "https://api.deepseek.com" });
+}
+
+function openaiEmbeddingClient(): OpenAIClient {
+  requireEnv("OPENAI_API_KEY");
+  return new OpenAIClient({ apiKey: process.env.OPENAI_API_KEY });
+}
+
+function assertSupportedGenerationProvider(
+  providerName: string,
+): asserts providerName is "anthropic" | "deepseek" {
+  if (providerName !== "anthropic" && providerName !== "deepseek") {
     throw new ModelGatewayError(
       "config_error",
       `Unsupported generation provider: ${providerName}. Set SOURCECADO_GENERATION_PROVIDER to "anthropic" or "deepseek".`,
     );
   }
-  requireEnv("DEEPSEEK_API_KEY");
-  return deepseek(model);
+}
+
+function toGenerationJsonSchema(schema: z.ZodType): unknown {
+  return z.toJSONSchema(schema);
+}
+
+async function generateTextAnthropic(input: GenerateTextInput, model: string): Promise<ModelGatewayProviderResult> {
+  const client = anthropicClient();
+  const response = await client.messages.create({
+    model,
+    max_tokens: anthropicMaxTokensForModel(model),
+    system: input.system,
+    messages: [{ role: "user", content: input.prompt }],
+  });
+  const text = response.content
+    .filter((block): block is Anthropic.TextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("");
+  return {
+    text,
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+    },
+    rawResponse: response,
+  };
+}
+
+async function generateObjectAnthropic(input: GenerateObjectInput, model: string): Promise<ModelGatewayProviderResult> {
+  const client = anthropicClient();
+  const toolName = "emit_object";
+  const jsonSchema = toGenerationJsonSchema(input.schema);
+  const response = await client.messages.create({
+    model,
+    max_tokens: anthropicMaxTokensForModel(model),
+    system: input.system,
+    messages: [{ role: "user", content: input.prompt }],
+    tools: [
+      {
+        name: toolName,
+        description: "Emit the structured result for this task. Always call this tool exactly once.",
+        input_schema: jsonSchema as Anthropic.Tool["input_schema"],
+      },
+    ],
+    tool_choice: { type: "tool", name: toolName },
+  });
+  const toolUse = response.content.find(
+    (block): block is Anthropic.ToolUseBlock => block.type === "tool_use" && block.name === toolName,
+  );
+  return {
+    object: toolUse?.input,
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+    },
+    rawResponse: response,
+  };
+}
+
+async function generateTextDeepseek(input: GenerateTextInput, model: string): Promise<ModelGatewayProviderResult> {
+  const client = deepseekClient();
+  const messages: OpenAIClient.Chat.ChatCompletionMessageParam[] = [];
+  if (input.system) messages.push({ role: "system", content: input.system });
+  messages.push({ role: "user", content: input.prompt });
+  const response = await client.chat.completions.create({ model, max_tokens: DEFAULT_MAX_TOKENS, messages });
+  return {
+    text: response.choices[0]?.message.content ?? "",
+    usage: {
+      inputTokens: response.usage?.prompt_tokens ?? null,
+      outputTokens: response.usage?.completion_tokens ?? null,
+      totalTokens: response.usage?.total_tokens ?? null,
+    },
+    rawResponse: response,
+  };
+}
+
+async function generateObjectDeepseek(input: GenerateObjectInput, model: string): Promise<ModelGatewayProviderResult> {
+  const client = deepseekClient();
+  const jsonSchema = toGenerationJsonSchema(input.schema);
+  const promptWithSchema = [
+    input.prompt,
+    "",
+    "Respond with a single strict JSON object matching this schema and no other text:",
+    JSON.stringify(jsonSchema),
+  ].join("\n");
+  const messages: OpenAIClient.Chat.ChatCompletionMessageParam[] = [];
+  if (input.system) messages.push({ role: "system", content: input.system });
+  messages.push({ role: "user", content: promptWithSchema });
+  const response = await client.chat.completions.create({
+    model,
+    max_tokens: DEFAULT_MAX_TOKENS,
+    response_format: { type: "json_object" },
+    messages,
+  });
+  const raw = response.choices[0]?.message.content ?? "{}";
+  let object: unknown;
+  try {
+    object = JSON.parse(raw);
+  } catch (error) {
+    throw new ModelGatewayError("invalid_output", "Model provider returned malformed JSON for generate_object.", {
+      cause: error,
+    });
+  }
+  return {
+    object,
+    usage: {
+      inputTokens: response.usage?.prompt_tokens ?? null,
+      outputTokens: response.usage?.completion_tokens ?? null,
+      totalTokens: response.usage?.total_tokens ?? null,
+    },
+    rawResponse: response,
+  };
+}
+
+async function embedOpenai(input: EmbedInput, model: string): Promise<ModelGatewayProviderResult> {
+  const client = openaiEmbeddingClient();
+  const response = await client.embeddings.create({ model, input: input.value });
+  return {
+    embedding: response.data[0]?.embedding,
+    usage: { tokens: response.usage?.total_tokens ?? null },
+    rawResponse: response,
+  };
+}
+
+async function embedManyOpenai(input: EmbedManyInput, model: string): Promise<ModelGatewayProviderResult> {
+  const client = openaiEmbeddingClient();
+  const response = await client.embeddings.create({ model, input: input.values });
+  const embeddings = [...response.data].sort((a, b) => a.index - b.index).map((entry) => entry.embedding);
+  return {
+    embeddings,
+    usage: { tokens: response.usage?.total_tokens ?? null },
+    rawResponse: response,
+  };
 }
 
 async function executeDefaultProvider(
@@ -310,56 +473,20 @@ async function executeDefaultProvider(
   model: string,
 ): Promise<ModelGatewayProviderResult> {
   switch (input.kind) {
-    case "generate_text": {
-      const result = await generateText({
-        model: generationModel(providerName, model),
-        prompt: input.prompt,
-        system: input.system,
-      });
-      return {
-        text: result.text,
-        usage: result.totalUsage ?? result.usage,
-        rawResponse: result.response.body ?? result.response,
-      };
-    }
-    case "generate_object": {
-      const result = await generateObject({
-        model: generationModel(providerName, model),
-        prompt: input.prompt,
-        system: input.system,
-        schema: input.schema,
-        schemaName: input.schemaName,
-      });
-      return {
-        object: result.object,
-        usage: result.usage,
-        rawResponse: result.response.body ?? result.response,
-      };
-    }
-    case "embed": {
-      requireEnv("OPENAI_API_KEY");
-      const result = await embed({
-        model: openai.embedding(model),
-        value: input.value,
-      });
-      return {
-        embedding: result.embedding,
-        usage: result.usage,
-        rawResponse: result.response?.body ?? result.response,
-      };
-    }
-    case "embed_many": {
-      requireEnv("OPENAI_API_KEY");
-      const result = await embedMany({
-        model: openai.embedding(model),
-        values: input.values,
-      });
-      return {
-        embeddings: result.embeddings,
-        usage: result.usage,
-        rawResponse: result.responses,
-      };
-    }
+    case "generate_text":
+      assertSupportedGenerationProvider(providerName);
+      return providerName === "anthropic"
+        ? generateTextAnthropic(input, model)
+        : generateTextDeepseek(input, model);
+    case "generate_object":
+      assertSupportedGenerationProvider(providerName);
+      return providerName === "anthropic"
+        ? generateObjectAnthropic(input, model)
+        : generateObjectDeepseek(input, model);
+    case "embed":
+      return embedOpenai(input, model);
+    case "embed_many":
+      return embedManyOpenai(input, model);
   }
 }
 
