@@ -366,7 +366,7 @@ Type: AFK (mostly) · Blocked by: F2
 **Tasks:**
 - [x] B1.1 `organizations` + `contacts` (name, role, org_id) + `contact_aliases` migration (~2h) · AFK — `src/migrations/006_contacts.sql` (TDD, `tests/contacts-migrate.test.ts`)
 - [x] B1.2 `get_contact` + `get_organization` tools — alias resolution, `ambiguous` result state, org→contacts listing (~2.5h) · AFK — `src/lib/contacts/resolve.ts` + `src/lib/tools/get-contact.ts` + `src/lib/tools/get-organization.ts`, registered in `memoryRegistry()`
-- [ ] B1.3 `create_contact` tool (write_internal) — requires name+role+org, gap-flags missing fields (~1.5h) · AFK
+- [x] B1.3 `create_contact` tool (write_internal) — requires name+role+org, gap-flags missing fields (~1.5h) · AFK — `src/lib/contacts/create.ts` + `src/lib/tools/create-contact.ts`, registered in `memoryRegistry()`
 - [ ] B1.4 `outreach_history` migration — relationship timeline, pulled forward from B3 (~1.5h) · AFK
 - [ ] B1.5 `list_outreach_history` tool (read) (~1h) · AFK
 - [ ] B1.6 Contact Profile Card component (Identity/Relationship/Key Facts/Gaps) (~2h) · AFK
