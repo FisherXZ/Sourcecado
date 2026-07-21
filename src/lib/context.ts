@@ -136,9 +136,13 @@ function capMemoryIndexLines(lines: string[]): string {
 
 // A Sourcing Lead is defined by timeliness, so ranking needs today's date. Built
 // per run from new Date() at call time and appended below the cache boundary
-// (after the memory index), never part of STATIC_SECTIONS.
+// (after the memory index), never part of STATIC_SECTIONS. Rendered in the
+// Codeology team's timezone (America/Los_Angeles), not UTC — otherwise "today"
+// flips a calendar day early every evening for the Berkeley team. en-CA gives
+// the YYYY-MM-DD ISO shape.
 export function buildEnvironmentSection(now: Date = new Date()): SystemPromptSection {
-  return { title: "Environment", body: `Today's date: ${now.toISOString().slice(0, 10)}` };
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(now);
+  return { title: "Environment", body: `Today's date: ${today}` };
 }
 
 // The memory-chat path's system-prompt composer: the static v5 sections (§1–§7),

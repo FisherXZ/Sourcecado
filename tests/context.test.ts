@@ -189,4 +189,10 @@ describe("buildEnvironmentSection", () => {
     expect(section.title).toBe("Environment");
     expect(section.body).toBe("Today's date: 2026-07-15");
   });
+
+  it("uses the team's Los Angeles timezone, not UTC, for the calendar day", () => {
+    // 2026-07-16T05:00:00Z is still 2026-07-15 (22:00 PDT) in America/Los_Angeles.
+    const section = buildEnvironmentSection(new Date("2026-07-16T05:00:00Z"));
+    expect(section.body).toBe("Today's date: 2026-07-15");
+  });
 });
