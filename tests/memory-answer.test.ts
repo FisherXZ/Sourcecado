@@ -92,15 +92,30 @@ async function insertFact(
 // ---------------------------------------------------------------------------
 
 describe("memoryRegistry", () => {
-  it("registers both search_memory (read) and add_memory_note (write_internal)", () => {
+  it("registers memory + external enrich tools with their permission classes", () => {
     const registry = memoryRegistry();
     expect(registry.get("search_memory")?.permissionClass).toBe("read");
     expect(registry.get("add_memory_note")?.permissionClass).toBe("write_internal");
-    // add_memory_note is only listed once its write_internal class is allowed.
+    for (const name of ["web_search", "web_fetch", "apollo_search_people", "apollo_enrich_contact"]) {
+      expect(registry.get(name)?.permissionClass).toBe("enrich");
+    }
+  });
+
+  it("filters by allowed permission class — enrich is not leaked to a read-only run", () => {
+    const registry = memoryRegistry();
+    // A read-only run sees only search_memory (enrich + write_internal filtered out).
     expect(registry.list(new Set(["read"])).map((t) => t.name)).toEqual(["search_memory"]);
+    // A chat run (read + write_internal + enrich) sees all six tools.
     expect(
-      registry.list(new Set(["read", "write_internal"])).map((t) => t.name).sort()
-    ).toEqual(["add_memory_note", "search_memory"]);
+      registry.list(new Set(["read", "write_internal", "enrich"])).map((t) => t.name).sort()
+    ).toEqual([
+      "add_memory_note",
+      "apollo_enrich_contact",
+      "apollo_search_people",
+      "search_memory",
+      "web_fetch",
+      "web_search",
+    ]);
   });
 });
 

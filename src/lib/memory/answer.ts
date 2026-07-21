@@ -49,9 +49,11 @@ export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): P
     history: input.history,
     priorMessages: input.priorMessages,
     registry,
-    // §4's record-as-note doctrine (add_memory_note, class write_internal) is
-    // dead wiring unless the chat run permits that class alongside read.
-    allowedClasses: new Set(["read", "write_internal"]),
+    // Chat runs execute read + record-as-note (write_internal) + external
+    // enrichment (enrich: web_search / web_fetch / apollo_*). enrich is allowed
+    // freely per Fisher's 2026-07-15 call; per-run cost control (credit caps,
+    // per-tool budgets) is an URGENT post-R9 follow-up — see progress.md.
+    allowedClasses: new Set(["read", "write_internal", "enrich"]),
     instructions,
     db,
     onStep: input.onStep,
