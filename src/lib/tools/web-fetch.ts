@@ -59,7 +59,7 @@ export function isBlockedIp(ip: string): boolean {
   if (!addr.includes(":")) return true; // neither IPv4 nor IPv6 → fail closed
   const v6 = addr.toLowerCase();
   if (v6 === "::1" || v6 === "::") return true; // loopback / unspecified
-  if (v6.startsWith("fe80")) return true; // fe80::/10 link-local
+  if (/^fe[89ab]/.test(v6)) return true; // fe80::/10 link-local (fe80–febf)
   if (v6.startsWith("fc") || v6.startsWith("fd")) return true; // fc00::/7 unique-local
   return false; // global unicast IPv6 allowed
 }

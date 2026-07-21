@@ -54,8 +54,11 @@ describe("webSearchTool", () => {
       expect.objectContaining({ method: "POST" }),
     );
     const [, options] = fetchMock.mock.calls[0];
+    // Tavily authenticates via Authorization: Bearer, NOT api_key in the body.
+    expect(options.headers).toMatchObject({ authorization: "Bearer test-key" });
     const body = JSON.parse(options.body as string);
-    expect(body).toMatchObject({ api_key: "test-key", query: "sourcing directors", max_results: 5 });
+    expect(body).toMatchObject({ query: "sourcing directors", max_results: 5 });
+    expect(body.api_key).toBeUndefined();
   });
 
   it("throws a clean error on a non-OK Tavily response", async () => {

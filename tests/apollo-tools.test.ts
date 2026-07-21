@@ -73,7 +73,7 @@ describe("apollo tools", () => {
         },
       ]);
       expect(fetchMock).toHaveBeenCalledWith(
-        "https://api.apollo.io/v1/mixed_people/search",
+        "https://api.apollo.io/api/v1/mixed_people/api_search",
         expect.objectContaining({ method: "POST" }),
       );
     });

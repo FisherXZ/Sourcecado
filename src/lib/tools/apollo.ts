@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { Tool } from "./types";
 
-const APOLLO_SEARCH_URL = "https://api.apollo.io/v1/mixed_people/search";
-const APOLLO_MATCH_URL = "https://api.apollo.io/v1/people/match";
+const APOLLO_SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search";
+const APOLLO_MATCH_URL = "https://api.apollo.io/api/v1/people/match";
 
 function requireApolloApiKey(): string {
   const apiKey = process.env.APOLLO_API_KEY;

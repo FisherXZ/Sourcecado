@@ -38,9 +38,8 @@ export const webSearchTool: Tool<WebSearchArgs, WebSearchResult> = {
 
     const res = await fetch(TAVILY_SEARCH_URL, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
-        api_key: apiKey,
         query: args.query,
         max_results: args.maxResults ?? 5,
       }),
