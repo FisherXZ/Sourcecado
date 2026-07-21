@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { applyChunk, drainSse, runChat, type AssistantTurn } from "@/app/chat/stream";
+import { applyChunk, drainSse, runChat, selectContactCard, type AssistantTurn, type ChatStep } from "@/app/chat/stream";
 
 const empty: AssistantTurn = { steps: [], answer: "" };
 
@@ -122,5 +122,58 @@ describe("runChat", () => {
     );
     const turn = await runChat("hi", [], () => {});
     expect(turn.answer).toBe("Hi");
+  });
+});
+
+describe("selectContactCard", () => {
+  const contactStep: ChatStep = {
+    index: 1,
+    tool: "get_contact",
+    ok: true,
+    detail: "found",
+    contactCard: { id: 1, canonicalName: "Jane Smith", role: "PM", organizationName: "Acme" },
+  };
+
+  it("returns undefined when no step has a contactCard", () => {
+    expect(selectContactCard([{ index: 1, tool: "search_memory", ok: true, detail: "0 facts, 0 chunks" }])).toBeUndefined();
+  });
+
+  it("returns the contact alone, with empty arrays, when no history/facts steps are present", () => {
+    const view = selectContactCard([contactStep]);
+    expect(view).toEqual({
+      contact: contactStep.contactCard,
+      history: [],
+      acceptedFacts: [],
+      gapFacts: [],
+    });
+  });
+
+  it("merges in outreach history and splits memoryFacts into accepted vs gap by status", () => {
+    const historyStep: ChatStep = {
+      index: 2,
+      tool: "list_outreach_history",
+      ok: true,
+      detail: "1 entry",
+      outreachHistory: [{ occurredAt: "2026-01-01T00:00:00.000Z", channel: "email", summary: "Intro", citation: null }],
+    };
+    const factsStep: ChatStep = {
+      index: 3,
+      tool: "search_memory",
+      ok: true,
+      detail: "2 facts, 0 chunks",
+      memoryFacts: [
+        { subject: "Jane", predicate: "role", object: "PM", citation: "c1", status: "accepted" },
+        { subject: "Jane", predicate: "last_contacted", object: "unknown", citation: null, status: "candidate" },
+      ],
+    };
+
+    const view = selectContactCard([contactStep, historyStep, factsStep]);
+    expect(view?.history).toHaveLength(1);
+    expect(view?.acceptedFacts).toEqual([
+      { subject: "Jane", predicate: "role", object: "PM", citation: "c1", status: "accepted" },
+    ]);
+    expect(view?.gapFacts).toEqual([
+      { subject: "Jane", predicate: "last_contacted", object: "unknown", citation: null, status: "candidate" },
+    ]);
   });
 });
