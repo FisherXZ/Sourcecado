@@ -372,6 +372,7 @@ Type: AFK (mostly) · Blocked by: F2
 - [x] B1.6 Contact Profile Card component (Identity/Relationship/Key Facts/Gaps) (~2h) · AFK — `src/app/chat/ContactProfileCard.tsx` + `selectContactCard` in `src/app/chat/stream.ts`, wired into `ChatClient.tsx`. Verified via component tests + confirmed `/chat` compiles/loads with no regression; could not drive an end-to-end live render since no model API key is configured locally (see B1.8 for a real design-review pass once one is)
 - [x] B1.7 Sourcing doctrine update: gather name+role+org on new-connection intake (~1h) · AFK — two new bullets in `SOURCING_DOCTRINE_SECTION` (`src/lib/context.ts`), covering intake and ambiguity
 - [ ] B1.8 Verify card matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL
+- [x] B1.9 phone/email/linkedinUrl/photoUrl on Contact (~2h) · AFK — added 2026-07-21 from B1.8 design-review feedback (room for social/contact links + a profile photo). `src/migrations/008_contact_details.sql`, threaded through `resolve.ts`/`create.ts`/both tools/the wire format (`answer.ts` + `stream.ts`). Auto-populating `photoUrl` from a confirmed LinkedIn match is C3's job, not this task's — these are plain optional fields for now.
 
 ## B2 — Target Personas
 Type: AFK · Blocked by: B1
