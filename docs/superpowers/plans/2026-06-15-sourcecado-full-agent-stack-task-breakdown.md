@@ -241,23 +241,23 @@ deterministic citation post-check replaces the prose-parity concern.
 - [x] ~~A3.3 Parity harness~~ — **cut** (decision #6)
 - [x] ~~A3.4 Parity review gate~~ — **cut** (decision #6); citation post-check (`src/lib/memory/citations.ts`) is the deterministic guard
 
-## A4 — File/export memory import path — DEFERRED (in-app UI)
-Type: AFK · Blocked by: A1
+## A4 — File/export memory import path
+Type: AFK · Blocked by: A1 · Done: 2026-06-25 (PR #9)
 
 **What to build:** App-side file/export import (roadmap: ingestion is file/export only).
 Imported sources become source records with citations.
 
-> **Deferred (2026-06-25):** the in-app import UI is out of Feature A's reframed scope. The
-> ingest path itself is done via the CLI (`npm run ingest <dir>`, A1.2) with per-file
-> success/skip reasons; only the app upload endpoint + UI remain for a later UI slice.
+> **Correction (2026-07-21):** this was marked deferred earlier the same day (2026-06-25,
+> 14:06) but was actually built later that evening — `df7fd64` (19:28) added the in-memory
+> `ingestFiles` core + `POST /api/memory/import`. The doc was never updated after. Not deferred.
 
 **Acceptance criteria:**
-- [ ] A user can import a file/export from the app and see it become source records (CLI only for now)
+- [x] A user can import a file/export from the app and see it become source records — `POST /api/memory/import`
 - [x] Import surfaces per-file success/skip with reasons (no silent skips) — done in `ingestFolder`
 
 **Tasks:**
-- [ ] A4.1 Import endpoint + source-record creation from upload (~2h) · AFK — deferred (CLI ingest exists)
-- [ ] A4.2 Import result UI with per-file status/skip reasons (~1.5h) · AFK — deferred
+- [x] A4.1 Import endpoint + source-record creation from upload (~2h) · AFK — `src/lib/memory/ingest.ts` (`ingestFiles`) + `src/app/api/memory/import/route.ts`
+- [ ] A4.2 Import result UI with per-file status/skip reasons (~1.5h) · AFK — still no dedicated result UI; route returns per-file status but nothing renders it yet
 
 ## A5 — search_memory tool
 Type: AFK · Blocked by: A2, F5 · Done: 2026-06-25 (PR #8)
@@ -287,22 +287,27 @@ design review.
 **Tasks:**
 - [x] A6.1 Research Chat UI: message list + input + run trigger (~2h) · AFK — reused the F5 `/chat` (ChatClient) against the memory config
 - [x] A6.2 Inline run status + cited answer + gaps render (~1.5h) · AFK — 4-section answer + `invalidCitations` from `/api/agent`
-- [ ] A6.3 Verify Research Chat matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL — **pending** (design review not yet done)
+- [ ] A6.3 Verify Research Chat matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL — **pending**, and now higher-stakes: the undocumented `rt-R1`–`rt-R6` runtime rewrite (2026-07-14/15, PRs #11–#16 — raw-SDK provider adapters, hand-rolled agent loop, tool orchestrator, context/prompt v5, SSE streaming rewire, server-side chat sessions) substantially changed this UI/streaming after this checkbox was written. No design doc exists for that rewrite; review it against DESIGN.md fresh rather than assuming this checkbox's original scope still applies.
 
 ## A7 — Memory management page (add/correct)
-Type: AFK · Blocked by: A3 · A7.1 done: 2026-06-25 (PR #8); A7.2 page deferred
+Type: AFK · Blocked by: A3 · Done: 2026-06-25 (PR #9)
 
 **What to build:** Memory management page to add a memory note and correct existing
 memory (the memory-correction path from `src/`).
 
+> **Correction (2026-07-21):** A7.2 was marked deferred earlier the same day (2026-06-25,
+> 14:06) but shipped later that night — `599792d` (memory sources backend) and `4cfd62b`
+> (23:22, `/memory` page: sources list with archive/restore + add-note) both landed after
+> the doc was written. Not deferred.
+
 **Acceptance criteria:**
 - [x] A user can add a memory note; it becomes retrievable (`add_memory_note` tool — immediately searchable)
 - [x] A user can correct memory; corrections affect future answers (superseding note, no destructive edit)
-- [ ] …from a dedicated **app page** — deferred (tool exists; management UI is a later slice)
+- [x] …from a dedicated **app page** — `src/app/memory/MemoryClient.tsx` (list, archive/restore, add-note)
 
 **Tasks:**
 - [x] A7.1 `add_memory_note` tool + write path (~1.5h) · AFK — `src/lib/tools/add-memory-note.ts` + `src/lib/memory/notes.ts`
-- [ ] A7.2 Memory management page: list + add + correct (~2h) · AFK — **deferred** to a later UI slice
+- [x] A7.2 Memory management page: list + add + correct (~2h) · AFK — `src/app/memory/MemoryClient.tsx` + `src/app/api/memory/sources/*` routes
 
 **FEATURE A DEMO:** ~~import sourcing notes~~ (CLI `npm run ingest`), ask a question in chat,
 get a cited answer with gaps, inspect the run, and correct memory (`add_memory_note`). ✅
@@ -315,19 +320,58 @@ Demonstrated live 2026-06-25 on 3 complex queries.
 Give the agent enough sourcing state to act like a Sourcing Director. Each entity is
 added here (not in a day-1 schema).
 
-## B1 — Organizations & Contacts
-Type: AFK · Blocked by: F2
+## B1 — Organizations & Contacts + identity resolution + Contact Profile Card
+Type: AFK (mostly) · Blocked by: F2
 
-**What to build:** `organizations` and `contacts` schema + read tools (`get_contact`,
-`get_organization`) wired into the harness.
+> **Expanded scope (2026-07-21):** pulled forward and widened beyond the original
+> read-only B1 to deliver a Contact Profile Card — a single readable card showing a
+> person's identity, our relationship with them, key facts, and knowledge gaps, for the
+> consulting/sourcing use case of building on past connections while creating new ones.
+> Pulls `outreach_history` + `list_outreach_history` forward from B3 (see note there);
+> B3's outcome-state-machine and follow-up-sequence tables stay deferred.
+
+**What to build:**
+- `organizations` + `contacts` + `contact_aliases` schema. Contacts require **name, role,
+  and organization** at intake — not name alone — so a company can later be looked up for
+  everyone known there.
+- `get_contact` / `get_organization` read tools with resolution: exact canonical name →
+  exact alias → else return an **ambiguous** result (candidates + distinguishing org/title)
+  rather than guessing. This is a third result state alongside found/not-found, not an
+  error. `get_organization` also lists known contacts at that org.
+- `create_contact` (write_internal tool): the write path for a new connection surfaced in
+  chat. Requires name + role + org (creating the org if new); if the Director gives an
+  incomplete name, the agent asks for the missing field before writing rather than saving a
+  thin record — if the Director explicitly doesn't know a field, it's saved and flagged as
+  a Knowledge Gap rather than blocking. Doctrine addition to `context.ts`'s Sourcing
+  doctrine section.
+- Ambiguity resolution is chat-time only (a human is present to ask). Bulk import (file
+  upload, CSV) has no one to ask mid-file: unambiguous exact matches auto-link, anything
+  ambiguous or unmatched stays unlinked and becomes a Knowledge Gap for later review — no
+  auto-merge, ever. **The review surface for those flagged mentions is an explicit
+  fast-follow, not built in this pass** — revisit once real historical data is actually
+  being imported and the volume of unresolved mentions is known.
+- Contact Profile Card component: renders when `get_contact` resolves a person —
+  **Identity** (name, org, role) · **Relationship** (past-collaborator flag + interaction
+  timeline from `list_outreach_history`) · **Key Facts** (cited, from existing
+  `search_memory`) · **Knowledge Gaps** (existing `gapFacts`, not currently surfaced
+  visually anywhere).
 
 **Acceptance criteria:**
-- [ ] Organizations and Contacts persist and link (an Org can contain Contacts)
+- [ ] Organizations and Contacts persist and link (an Org can contain Contacts); every Contact has name, role, and org
 - [ ] `get_contact` / `get_organization` return records to the loop and log to the ledger
+- [ ] Two contacts sharing a name/alias never silently merge — `get_contact` returns `ambiguous` with candidates instead
+- [ ] `create_contact` refuses to silently save a partial identity; missing fields are asked for or explicitly flagged as gaps, never dropped
+- [ ] A Contact Profile Card renders identity + relationship timeline + cited facts + gaps in one place
 
 **Tasks:**
-- [ ] B1.1 `organizations` + `contacts` migration (~1.5h) · AFK
-- [ ] B1.2 `get_contact` + `get_organization` tools + register (~1.5h) · AFK
+- [x] B1.1 `organizations` + `contacts` (name, role, org_id) + `contact_aliases` migration (~2h) · AFK — `src/migrations/006_contacts.sql` (TDD, `tests/contacts-migrate.test.ts`)
+- [ ] B1.2 `get_contact` + `get_organization` tools — alias resolution, `ambiguous` result state, org→contacts listing (~2.5h) · AFK
+- [ ] B1.3 `create_contact` tool (write_internal) — requires name+role+org, gap-flags missing fields (~1.5h) · AFK
+- [ ] B1.4 `outreach_history` migration — relationship timeline, pulled forward from B3 (~1.5h) · AFK
+- [ ] B1.5 `list_outreach_history` tool (read) (~1h) · AFK
+- [ ] B1.6 Contact Profile Card component (Identity/Relationship/Key Facts/Gaps) (~2h) · AFK
+- [ ] B1.7 Sourcing doctrine update: gather name+role+org on new-connection intake (~1h) · AFK
+- [ ] B1.8 Verify card matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL
 
 ## B2 — Target Personas
 Type: AFK · Blocked by: B1
@@ -342,22 +386,27 @@ Organizations.
 **Tasks:**
 - [ ] B2.1 `target_personas` migration + association (~1.5h) · AFK
 
-## B3 — Outreach History, Outcomes, Follow-Up state
+## B3 — Outreach Outcomes, Follow-Up state
 Type: AFK · Blocked by: B1
 
-**What to build:** `outreach_history`, `outreach_outcomes`, `followup_sequence` state +
-the `list_outreach_history` read tool. Sourcing Lead is a state of a Contact, not a new
-table (per CONTEXT.md).
+> **Note (2026-07-21):** `outreach_history` (migration) and `list_outreach_history` (read
+> tool) were pulled forward into B1.4/B1.5 for the Contact Profile Card's relationship
+> timeline — don't rebuild them here. What's left is the outcome-state-machine and
+> follow-up-sequence scheduling, which is write/state work the card doesn't need.
+
+**What to build:** `outreach_outcomes`, `followup_sequence` state + the write tools.
+Sourcing Lead is a state of a Contact, not a new table (per CONTEXT.md).
 
 **Acceptance criteria:**
-- [ ] Outreach history and outcomes persist against a Contact
+- [ ] Outcomes persist against a Contact's outreach history
 - [ ] Follow-Up Sequence state can be read and updated
-- [ ] `list_outreach_history` returns history to the loop
 
 **Tasks:**
-- [ ] B3.1 `outreach_history` + `outreach_outcomes` migrations (~1.5h) · AFK
+- [ ] ~~B3.1 `outreach_history` migration~~ — done, see B1.4
+- [ ] B3.1b `outreach_outcomes` migration (~1h) · AFK
 - [ ] B3.2 `followup_sequence` state migration (~1h) · AFK
-- [ ] B3.3 `list_outreach_history` + `record_outreach_outcome` + `update_followup_sequence` tools (~2h) · AFK
+- [ ] ~~`list_outreach_history` tool~~ — done, see B1.5
+- [ ] B3.3 `record_outreach_outcome` + `update_followup_sequence` tools (~1.5h) · AFK
 
 ## B4 — Contact / Organization detail page
 Type: HITL · Blocked by: B3
