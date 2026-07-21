@@ -368,7 +368,7 @@ Type: AFK (mostly) · Blocked by: F2
 - [x] B1.2 `get_contact` + `get_organization` tools — alias resolution, `ambiguous` result state, org→contacts listing (~2.5h) · AFK — `src/lib/contacts/resolve.ts` + `src/lib/tools/get-contact.ts` + `src/lib/tools/get-organization.ts`, registered in `memoryRegistry()`
 - [x] B1.3 `create_contact` tool (write_internal) — requires name+role+org, gap-flags missing fields (~1.5h) · AFK — `src/lib/contacts/create.ts` + `src/lib/tools/create-contact.ts`, registered in `memoryRegistry()`
 - [x] B1.4 `outreach_history` migration — relationship timeline, pulled forward from B3 (~1.5h) · AFK — `src/migrations/007_outreach_history.sql`
-- [ ] B1.5 `list_outreach_history` tool (read) (~1h) · AFK
+- [x] B1.5 `list_outreach_history` tool (read) (~1h) · AFK — `src/lib/contacts/outreach.ts` + `src/lib/tools/list-outreach-history.ts`, registered in `memoryRegistry()`
 - [ ] B1.6 Contact Profile Card component (Identity/Relationship/Key Facts/Gaps) (~2h) · AFK
 - [ ] B1.7 Sourcing doctrine update: gather name+role+org on new-connection intake (~1h) · AFK
 - [ ] B1.8 Verify card matches DESIGN.md + uses src/components/ui primitives (~1h) · HITL
