@@ -92,15 +92,21 @@ async function insertFact(
 // ---------------------------------------------------------------------------
 
 describe("memoryRegistry", () => {
-  it("registers both search_memory (read) and add_memory_note (write_internal)", () => {
+  it("registers search_memory, get_contact, get_organization (read) and add_memory_note (write_internal)", () => {
     const registry = memoryRegistry();
     expect(registry.get("search_memory")?.permissionClass).toBe("read");
+    expect(registry.get("get_contact")?.permissionClass).toBe("read");
+    expect(registry.get("get_organization")?.permissionClass).toBe("read");
     expect(registry.get("add_memory_note")?.permissionClass).toBe("write_internal");
     // add_memory_note is only listed once its write_internal class is allowed.
-    expect(registry.list(new Set(["read"])).map((t) => t.name)).toEqual(["search_memory"]);
+    expect(registry.list(new Set(["read"])).map((t) => t.name).sort()).toEqual([
+      "get_contact",
+      "get_organization",
+      "search_memory",
+    ]);
     expect(
       registry.list(new Set(["read", "write_internal"])).map((t) => t.name).sort()
-    ).toEqual(["add_memory_note", "search_memory"]);
+    ).toEqual(["add_memory_note", "get_contact", "get_organization", "search_memory"]);
   });
 });
 
