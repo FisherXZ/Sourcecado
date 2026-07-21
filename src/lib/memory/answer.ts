@@ -87,6 +87,37 @@ export interface ChatStepPart {
   thought?: string;
   ok: boolean;
   detail: string;
+  // The three fields below carry structured data alongside `detail`'s prose
+  // summary, so the Contact Profile Card (B1.6) can render get_contact,
+  // list_outreach_history, and search_memory results from the same step
+  // stream without re-parsing raw tool JSON in the browser. Populated only
+  // for their respective tools; absent for every other tool and for
+  // get_contact results that are ambiguous or not_found.
+  contactCard?: ContactCardPart;
+  outreachHistory?: OutreachHistoryPart[];
+  memoryFacts?: MemoryFactPart[];
+}
+
+export interface ContactCardPart {
+  id: number;
+  canonicalName: string;
+  role: string | null;
+  organizationName: string | null;
+}
+
+export interface OutreachHistoryPart {
+  occurredAt: string;
+  channel: string | null;
+  summary: string;
+  citation: string | null;
+}
+
+export interface MemoryFactPart {
+  subject: string;
+  predicate: string;
+  object: string;
+  citation: string | null;
+  status: string;
 }
 
 export function summarizeStep(event: AgentStepEvent): ChatStepPart {
@@ -96,7 +127,48 @@ export function summarizeStep(event: AgentStepEvent): ChatStepPart {
     thought: event.thought,
     ok: event.ok,
     detail: describeObservation(event),
+    ...extractStructuredData(event),
   };
+}
+
+function extractStructuredData(
+  event: AgentStepEvent
+): Pick<ChatStepPart, "contactCard" | "outreachHistory" | "memoryFacts"> {
+  if (!event.ok) return {};
+  const payload = event.observation.replace(/^Success:\s*/, "");
+
+  if (event.tool === "get_contact") {
+    try {
+      const r = JSON.parse(payload) as { status?: string; contact?: ContactCardPart };
+      if (r.status === "found" && r.contact) return { contactCard: r.contact };
+    } catch {
+      // Malformed payload — no card rather than a crash.
+    }
+    return {};
+  }
+
+  if (event.tool === "list_outreach_history") {
+    try {
+      const entries = JSON.parse(payload) as OutreachHistoryPart[];
+      if (Array.isArray(entries)) return { outreachHistory: entries };
+    } catch {
+      // Malformed payload — no history rather than a crash.
+    }
+    return {};
+  }
+
+  if (event.tool === "search_memory") {
+    try {
+      const r = JSON.parse(payload) as { acceptedFacts?: MemoryFactPart[]; gapFacts?: MemoryFactPart[] };
+      const facts = [...(r.acceptedFacts ?? []), ...(r.gapFacts ?? [])];
+      if (facts.length > 0) return { memoryFacts: facts };
+    } catch {
+      // Malformed payload — no facts rather than a crash.
+    }
+    return {};
+  }
+
+  return {};
 }
 
 function describeObservation(event: AgentStepEvent): string {
