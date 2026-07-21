@@ -74,6 +74,13 @@ describe("static sections (v5)", () => {
     // No section carries the deleted identity text.
     expect(STATIC_SECTIONS.some((s) => /sourcing agent with access to team memory/.test(s.body))).toBe(false);
   });
+
+  it("carries B1.7's new-connection intake and ambiguity doctrine", () => {
+    const doctrine = STATIC_SECTIONS.find((s) => s.title === "Sourcing doctrine")!;
+    expect(doctrine.body).toMatch(/name, role, and organization/);
+    expect(doctrine.body).toMatch(/let it show as a gap rather than blocking/);
+    expect(doctrine.body).toMatch(/more than one match, ask which one is meant/);
+  });
 });
 
 describe("buildMemoryIndexSection (postgres)", () => {
