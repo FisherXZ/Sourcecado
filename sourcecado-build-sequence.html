@@ -21,6 +21,8 @@
     --afk-wash:#e8f5ef;
     --hitl:#bd6a12;
     --hitl-wash:#fbf0e2;
+    --deferred:#7a828d;
+    --deferred-wash:#eceeef;
     --rail-f:#16191e;
     --rail-a:#2f49c9;
     --rail-b:#0f8aa6;
@@ -28,6 +30,7 @@
     --rail-d:#7a3fb0;
     --rail-e:#b0573f;
     --rail-g:#1d8a64;
+    --rail-h:#5a626d;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
@@ -63,12 +66,15 @@
   .sub{
     max-width:620px;color:var(--ink-soft);font-size:15.5px;line-height:1.55;
   }
+  .synced{
+    margin-top:10px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-faint);
+  }
   .meta-row{
     display:flex;flex-wrap:wrap;gap:0;margin-top:26px;
     border:1px solid var(--line-strong);border-radius:3px;overflow:hidden;
   }
   .stat{
-    flex:1 1 0;min-width:140px;padding:16px 20px;
+    flex:1 1 0;min-width:130px;padding:16px 20px;
     border-right:1px solid var(--line);
   }
   .stat:last-child{border-right:none}
@@ -77,7 +83,7 @@
 
   /* ---------- Legend ---------- */
   .legend{
-    display:flex;flex-wrap:wrap;gap:22px;align-items:center;
+    display:flex;flex-wrap:wrap;gap:20px;align-items:center;
     margin:20px 0 4px;padding:13px 18px;
     background:#fafbfc;border:1px solid var(--line);border-radius:3px;
     font-size:12.5px;color:var(--ink-soft);
@@ -86,6 +92,7 @@
   .dot{width:9px;height:9px;border-radius:50%;flex:none}
   .dot.afk{background:var(--afk)}
   .dot.hitl{background:var(--hitl)}
+  .dot.deferred{background:var(--deferred)}
   .swatch{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500}
   .legend b{color:var(--ink);font-weight:600}
 
@@ -109,7 +116,9 @@
     border:1px solid var(--line-strong);border-radius:5px;
     background:var(--paper);overflow:hidden;
     box-shadow:0 1px 0 rgba(20,25,30,.02), 0 10px 24px -20px rgba(20,25,30,.35);
+    position:relative;
   }
+  .stage.deferred{border-style:dashed;box-shadow:none}
   .rail{
     padding:24px 22px;color:#fff;position:relative;
     display:flex;flex-direction:column;
@@ -132,6 +141,13 @@
   }
   .rail .counts span{opacity:.9}
   .rail .counts b{font-weight:600}
+  .rail-check{
+    position:absolute;top:20px;right:18px;
+    width:22px;height:22px;border-radius:50%;
+    background:rgba(255,255,255,.16);
+    display:flex;align-items:center;justify-content:center;
+    font-size:12px;font-weight:700;
+  }
 
   .slices{padding:10px 8px}
   .slice{
@@ -140,6 +156,7 @@
   }
   .slice + .slice{border-top:1px solid var(--line)}
   .slice:hover{background:#fafbfc}
+  .slice[data-status="done"] .stitle{color:var(--ink-soft)}
   .sid{
     font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:600;
     color:var(--ink);width:30px;flex:none;padding-top:1px;
@@ -163,6 +180,17 @@
   }
   .tag-type.afk{background:var(--afk-wash);color:var(--afk)}
   .tag-type.hitl{background:var(--hitl-wash);color:var(--hitl)}
+  .tag-type.deferred{background:var(--deferred-wash);color:var(--deferred)}
+  .status-done{
+    font-family:"IBM Plex Mono",monospace;font-size:10px;font-weight:600;letter-spacing:.06em;
+    padding:3px 9px;border-radius:999px;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;
+    background:var(--afk-wash);color:var(--afk);
+  }
+  .status-partial{
+    font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;
+    padding:3px 9px;border-radius:999px;white-space:nowrap;
+    background:var(--blue-wash);color:var(--blue);
+  }
 
   .demo{
     grid-column:1 / -1;
@@ -212,15 +240,20 @@
     border-bottom:1px dashed var(--line);
   }
   .subtask:last-child{border-bottom:none}
+  .subtask.done .st-title{color:var(--ink-soft)}
+  .subtask.cut .st-title{color:var(--ink-faint);text-decoration:line-through}
   .st-id{font-family:"IBM Plex Mono",monospace;font-size:11.5px;font-weight:600;color:var(--blue);width:40px;flex:none}
+  .subtask.done .st-id{color:var(--afk)}
   .st-title{flex:1;font-size:13.5px;color:var(--ink);line-height:1.4}
   .st-est{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-faint);flex:none;width:42px;text-align:right}
   .st-type{
     font-family:"IBM Plex Mono",monospace;font-size:9.5px;font-weight:600;letter-spacing:.05em;
-    padding:2px 6px;border-radius:3px;flex:none;width:42px;text-align:center;
+    padding:2px 6px;border-radius:3px;flex:none;width:46px;text-align:center;
   }
   .st-type.afk{background:var(--afk-wash);color:var(--afk)}
   .st-type.hitl{background:var(--hitl-wash);color:var(--hitl)}
+  .st-type.done{background:var(--afk-wash);color:var(--afk)}
+  .st-type.cut{background:#f1efe8;color:var(--ink-faint)}
   .expand-all{
     margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:11px;
     background:var(--paper);border:1px solid var(--line-strong);border-radius:999px;
@@ -247,6 +280,8 @@
   .flow > *:nth-child(8){animation-delay:.40s}
   .flow > *:nth-child(9){animation-delay:.45s}
   .flow > *:nth-child(10){animation-delay:.50s}
+  .flow > *:nth-child(11){animation-delay:.55s}
+  .flow > *:nth-child(12){animation-delay:.60s}
   @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 
   @media (max-width:760px){
@@ -274,19 +309,22 @@
     <div class="kicker">Sourcecado · Full Agent Stack</div>
     <h1>Build&nbsp;Sequence <em>top&#8209;down</em></h1>
     <p class="sub">A minimal spine first, then each capability as its own vertical slice. Schema grows per feature, no big&#8209;bang design. Every task is ~1&ndash;2 hours of engineer&#8209;with&#8209;Claude&#8209;Code work; every slice is demoable on its own.</p>
+    <p class="synced">Regenerated 2026-07-21 from the current task breakdown &mdash; not the 2026-06-15 original.</p>
     <div class="meta-row">
-      <div class="stat"><div class="n">7</div><div class="l">Stages</div></div>
-      <div class="stat"><div class="n">28</div><div class="l">Slices</div></div>
-      <div class="stat"><div class="n">~74</div><div class="l">Tasks · 1–2h ea</div></div>
-      <div class="stat"><div class="n">5</div><div class="l">HITL gates</div></div>
-      <div class="stat"><div class="n">~2mo</div><div class="l">Target</div></div>
+      <div class="stat"><div class="n">8</div><div class="l">Stages (+H deferred)</div></div>
+      <div class="stat"><div class="n">31</div><div class="l">Slices</div></div>
+      <div class="stat"><div class="n">~91</div><div class="l">Tasks · 1–2h ea</div></div>
+      <div class="stat"><div class="n">6</div><div class="l">HITL gates</div></div>
+      <div class="stat"><div class="n">11/31</div><div class="l">Slices done</div></div>
+      <div class="stat"><div class="n">~2mo</div><div class="l">Original target</div></div>
     </div>
   </header>
 
   <div class="legend">
     <div class="grp"><span class="dot afk"></span><b>AFK</b>&nbsp;build &amp; merge, no human gate</div>
     <div class="grp"><span class="dot hitl"></span><b>HITL</b>&nbsp;needs a decision / design review</div>
-    <div class="grp"><span class="swatch" style="color:var(--blue)">[n tasks]</span>&nbsp;1–2h chunks in the slice</div>
+    <div class="grp"><span class="dot deferred"></span><b>Deferred</b>&nbsp;not scheduled</div>
+    <div class="grp"><span class="swatch" style="color:var(--afk)">✓ done</span>&nbsp;/&nbsp;<span class="swatch" style="color:var(--blue)">n/m</span>&nbsp;partial</div>
     <div class="grp"><span class="mono" style="color:var(--ink-faint)">↳ blocked by</span>&nbsp;dependency</div>
     <button class="expand-all" id="toggleAll">▸ expand all</button>
   </div>
@@ -296,17 +334,19 @@
     <!-- FOUNDATION -->
     <div class="stage">
       <div class="rail" style="background:var(--rail-f)">
+        <div class="rail-check">✓</div>
         <div class="badge">F</div>
         <div class="nm">Foundation Cluster</div>
         <div class="ph">The spine · enables all</div>
-        <div class="counts"><span><b>5</b> slices</span><span><b>15</b> tasks</span></div>
+        <div class="counts"><span><b>6</b> slices</span><span><b>22</b> tasks</span></div>
       </div>
       <div class="slices">
-        <div class="slice"><div class="sid">F1</div><div class="sbody"><div class="stitle">App shell runs locally</div><div class="sblock"><b>↳</b> none</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
-        <div class="slice"><div class="sid">F2</div><div class="sbody"><div class="stitle">Postgres + pgvector available locally</div><div class="sblock"><b>↳</b> none</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
-        <div class="slice"><div class="sid">F3</div><div class="sbody"><div class="stitle">Model Gateway with usage logging <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0004</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
-        <div class="slice"><div class="sid">F4</div><div class="sbody"><div class="stitle">Run Ledger spine <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0002</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="tasks">4 tasks</span><span class="tag-type afk">AFK</span></div></div>
-        <div class="slice"><div class="sid">F5</div><div class="sbody"><div class="stitle">Agent Harness ReAct loop + tool registry</div><div class="sblock"><b>↳</b> F3, F4</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">F1</div><div class="sbody"><div class="stitle">App shell runs locally</div><div class="sblock"><b>↳</b> none</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">F2</div><div class="sbody"><div class="stitle">Postgres + pgvector available locally</div><div class="sblock"><b>↳</b> none</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">FD</div><div class="sbody"><div class="stitle">Design Foundation (Warm Operator) <span class="mono" style="color:var(--ink-faint);font-size:11px">· inserted 2026-06-18</span></div><div class="sblock"><b>↳</b> F1</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">F3</div><div class="sbody"><div class="stitle">Model Gateway with usage logging <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0004</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">F4</div><div class="sbody"><div class="stitle">Run Ledger spine <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0002</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">F5</div><div class="sbody"><div class="stitle">Agent Harness ReAct loop + tool registry</div><div class="sblock"><b>↳</b> F3, F4</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
       </div>
       <div class="demo"><span class="pin">demo</span><span>Type a question → harness runs a traced multi-step loop calling the model + echo tool, full trace lands in the Run Ledger. Spine works, nothing sourcing-specific yet.</span></div>
     </div>
@@ -316,21 +356,22 @@
     <!-- A -->
     <div class="stage">
       <div class="rail" style="background:var(--rail-a)">
+        <div class="rail-check">✓</div>
         <div class="badge">A</div>
         <div class="nm">Cited Sourcing Memory Answer</div>
         <div class="ph">Port the brain · highest risk</div>
-        <div class="counts"><span><b>7</b> slices</span><span><b>17</b> tasks</span></div>
+        <div class="counts"><span><b>7</b> slices</span><span><b>15</b> tasks</span></div>
       </div>
       <div class="slices">
-        <div class="slice"><div class="sid">A1</div><div class="sbody"><div class="stitle">Memory schema + ingest → Postgres/pgvector</div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type afk">AFK</span></div></div>
-        <div class="slice"><div class="sid">A2</div><div class="sbody"><div class="stitle">Embeddings + cited retrieval ported <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0001</span></div><div class="sblock"><b>↳</b> A1</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
-        <div class="slice"><div class="sid">A3</div><div class="sbody"><div class="stitle">Answer logic ported &mdash; with parity test</div><div class="sblock"><b>↳</b> A2 &nbsp;·&nbsp; <span style="color:var(--hitl)">SQLite-vs-Postgres sign-off</span></div></div><div class="smeta"><span class="tasks">4 tasks</span><span class="tag-type hitl">HITL</span></div></div>
-        <div class="slice"><div class="sid">A4</div><div class="sbody"><div class="stitle">File / export memory import path</div><div class="sblock"><b>↳</b> A1</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
-        <div class="slice"><div class="sid">A5</div><div class="sbody"><div class="stitle">search_memory tool</div><div class="sblock"><b>↳</b> A2, F5</div></div><div class="smeta"><span class="tasks">1 task</span><span class="tag-type afk">AFK</span></div></div>
-        <div class="slice"><div class="sid">A6</div><div class="sbody"><div class="stitle">Research Chat answers from memory</div><div class="sblock"><b>↳</b> A3, A5, F1 &nbsp;·&nbsp; <span style="color:var(--hitl)">chat design review</span></div></div><div class="smeta"><span class="tasks">3 tasks</span><span class="tag-type hitl">HITL</span></div></div>
-        <div class="slice"><div class="sid">A7</div><div class="sbody"><div class="stitle">Memory management page (add / correct)</div><div class="sblock"><b>↳</b> A3</div></div><div class="smeta"><span class="tasks">2 tasks</span><span class="tag-type afk">AFK</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">A1</div><div class="sbody"><div class="stitle">Memory schema + ingest → Postgres/pgvector</div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">A2</div><div class="sbody"><div class="stitle">Embeddings + cited retrieval ported <span class="mono" style="color:var(--ink-faint);font-size:11px">· ADR-0001</span></div><div class="sblock"><b>↳</b> A1</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">A3</div><div class="sbody"><div class="stitle">Answer logic ported <span class="mono" style="color:var(--ink-faint);font-size:11px">· parity gate cut, model synthesizes prose</span></div><div class="sblock"><b>↳</b> A2</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="partial"><div class="sid">A4</div><div class="sbody"><div class="stitle">File/export memory import path</div><div class="sblock"><b>↳</b> A1</div></div><div class="smeta"><span class="status-partial">1/2</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">A5</div><div class="sbody"><div class="stitle">search_memory tool</div><div class="sblock"><b>↳</b> A2, F5</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
+        <div class="slice" data-status="partial"><div class="sid">A6</div><div class="sbody"><div class="stitle">Research Chat answers from memory <span class="mono" style="color:var(--hitl);font-size:11px">· A6.3 higher-stakes now (R1&ndash;R6 rewrite)</span></div><div class="sblock"><b>↳</b> A3, A5, F1</div></div><div class="smeta"><span class="status-partial">2/3</span></div></div>
+        <div class="slice" data-status="done"><div class="sid">A7</div><div class="sbody"><div class="stitle">Memory management page (add / correct)</div><div class="sblock"><b>↳</b> A3</div></div><div class="smeta"><span class="status-done">✓ done</span></div></div>
       </div>
-      <div class="demo"><span class="pin">demo</span><span>Import notes → ask a question in chat → cited answer with gaps → inspect the run → correct memory.</span></div>
+      <div class="demo"><span class="pin">demo</span><span>Import notes → ask a question in chat → cited answer with gaps → inspect the run → correct memory. Demonstrated live 2026-06-25 on 3 complex queries.</span></div>
     </div>
 
     <div class="connector"><div class="ln"></div><div class="tag">splits into 2 lanes</div><div class="chev"></div></div>
@@ -341,13 +382,13 @@
         <div class="rail" style="background:var(--rail-b)">
           <div class="badge">B</div>
           <div class="nm">Sourcing State Model</div>
-          <div class="ph">Act like a director</div>
-          <div class="counts"><span><b>5</b></span><span><b>11</b>t</span></div>
+          <div class="ph">Act like a director · B1 in progress</div>
+          <div class="counts"><span><b>5</b></span><span><b>17</b>t</span></div>
         </div>
         <div class="slices">
-          <div class="slice"><div class="sid">B1</div><div class="sbody"><div class="stitle">Organizations &amp; Contacts</div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="tasks">2</span><span class="tag-type afk">AFK</span></div></div>
+          <div class="slice" data-status="partial"><div class="sid">B1</div><div class="sbody"><div class="stitle">Organizations &amp; Contacts + identity + Profile Card <span class="mono" style="color:var(--ink-faint);font-size:11px">· widened 2026-07-21</span></div><div class="sblock"><b>↳</b> F2</div></div><div class="smeta"><span class="status-partial">7/8</span><span class="tag-type hitl">HITL</span></div></div>
           <div class="slice"><div class="sid">B2</div><div class="sbody"><div class="stitle">Target Personas</div><div class="sblock"><b>↳</b> B1</div></div><div class="smeta"><span class="tasks">1</span><span class="tag-type afk">AFK</span></div></div>
-          <div class="slice"><div class="sid">B3</div><div class="sbody"><div class="stitle">Outreach History / Outcomes / Follow-Up</div><div class="sblock"><b>↳</b> B1</div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type afk">AFK</span></div></div>
+          <div class="slice"><div class="sid">B3</div><div class="sbody"><div class="stitle">Outreach Outcomes / Follow-Up <span class="mono" style="color:var(--ink-faint);font-size:11px">· History moved to B1.4</span></div><div class="sblock"><b>↳</b> B1</div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type afk">AFK</span></div></div>
           <div class="slice"><div class="sid">B4</div><div class="sbody"><div class="stitle">Contact / Organization detail page</div><div class="sblock"><b>↳</b> B3 · <span style="color:var(--hitl)">design</span></div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type hitl">HITL</span></div></div>
           <div class="slice"><div class="sid">B5</div><div class="sbody"><div class="stitle">Manual Reply Capture</div><div class="sblock"><b>↳</b> B3</div></div><div class="smeta"><span class="tasks">2</span><span class="tag-type afk">AFK</span></div></div>
         </div>
@@ -357,14 +398,15 @@
           <div class="badge">C</div>
           <div class="nm">Enrichment</div>
           <div class="ph">Provenance + usage</div>
-          <div class="counts"><span><b>2</b></span><span><b>6</b>t</span></div>
+          <div class="counts"><span><b>3</b></span><span><b>12</b>t</span></div>
         </div>
         <div class="slices">
           <div class="slice"><div class="sid">C1</div><div class="sbody"><div class="stitle">Apollo search / enrich tools</div><div class="sblock"><b>↳</b> F5, B1</div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type afk">AFK</span></div></div>
           <div class="slice"><div class="sid">C2</div><div class="sbody"><div class="stitle">Web Enrichment tools (Apify provider)</div><div class="sblock"><b>↳</b> F5, B1</div></div><div class="smeta"><span class="tasks">3</span><span class="tag-type afk">AFK</span></div></div>
+          <div class="slice"><div class="sid">C3</div><div class="sbody"><div class="stitle">Guided contact data-collection workflow <span class="mono" style="color:var(--ink-faint);font-size:11px">· added 2026-07-21</span></div><div class="sblock"><b>↳</b> C1, C2, B1</div></div><div class="smeta"><span class="tasks">6</span><span class="tag-type hitl">HITL</span></div></div>
           <div class="slice" style="opacity:.55"><div class="sid">—</div><div class="sbody"><div class="stitle" style="font-weight:450;color:var(--ink-soft)">No LinkedIn-specific enrichment (out of scope)</div></div></div>
         </div>
-        <div class="demo"><span class="pin">demo</span><span>Research an Org, enrich Contacts with citations, see Apollo/web usage in the Ledger.</span></div>
+        <div class="demo"><span class="pin">demo</span><span>Research an Org, enrich Contacts with citations, see Apollo/web usage in the Ledger, then walk a new connection through guided data collection with a verified LinkedIn photo match.</span></div>
       </div>
     </div>
 
@@ -422,6 +464,22 @@
       <div class="demo"><span class="pin">final</span><span>The full sourcing loop: imported memory → chat/routine run → enrichment → artifacts → review → outcome/feedback → memory update. Dependable and repeatable from a clean DB.</span></div>
     </div>
 
+    <div class="connector"><div class="ln"></div><div class="tag">deferred · not scheduled</div><div class="chev"></div></div>
+
+    <!-- H -->
+    <div class="stage deferred">
+      <div class="rail" style="background:var(--rail-h)">
+        <div class="badge">H</div>
+        <div class="nm">Actor Identity &amp; Attribution</div>
+        <div class="ph">Real per-officer login · added 2026-07-21</div>
+        <div class="counts"><span><b>1</b> slice</span><span>tasks not scoped</span></div>
+      </div>
+      <div class="slices">
+        <div class="slice"><div class="sid">H1</div><div class="sbody"><div class="stitle">Per-officer login &amp; session identity</div><div class="sblock"><b>↳</b> none &mdash; can start anytime, blocks nothing shipped so far</div></div><div class="smeta"><span class="tag-type deferred">DEFERRED</span></div></div>
+      </div>
+      <div class="demo"><span class="pin">why</span><span>Replaces the DEFAULT_ACTOR v1 sentinel (8 call sites today) so create_contact, notes, B3's outcomes, D1's artifact review, G1's feedback, and C3's data-collection workflow can all attribute writes to a real officer instead of one shared identity.</span></div>
+    </div>
+
   </div>
 
   <footer>
@@ -433,28 +491,30 @@
 
 <script>
 const TASKS = {
-  F1:[["F1.1","Scaffold Next.js app shell + base layout / nav","1h","afk"],["F1.2","Add /chat placeholder route + /health route","1h","afk"]],
-  F2:[["F2.1","docker-compose Postgres + pgvector + .env.example","1h","afk"],["F2.2","DB client / access layer + connection config","1h","afk"],["F2.3","Migration runner + baseline migration","1.5h","afk"]],
-  F3:[["F3.1","model_calls migration (task, prompt/version, usage, status, error)","1h","afk"],["F3.2","callModel() with named tasks + prompt/version naming","1.5h","afk"],["F3.3","Structured-output parse + error capture + usage counters","1.5h","afk"]],
-  F4:[["F4.1","runs + run_steps + tool_calls migrations","1.5h","afk"],["F4.2","Run create + step/tool/model logging write path","1.5h","afk"],["F4.3","Run status + error capture on the run","1h","afk"],["F4.4","Run inspector view (read-only trace render)","1.5h","afk"]],
-  F5:[["F5.1","ReAct loop (observation → model → tool → repeat, stop cond.)","2h","afk"],["F5.2","Tool registry + permission classes + class enforcement","1.5h","afk"],["F5.3","echo reference tool + wire loop end-to-end to ledger","1h","afk"]],
+  F1:[["F1.1","Scaffold Next.js app shell + base layout / nav","1h","done"],["F1.2","Add /chat placeholder route + /health route","1h","done"]],
+  F2:[["F2.1","docker-compose Postgres + pgvector + .env.example","1h","done"],["F2.2","DB client / access layer + connection config","1h","done"],["F2.3","Migration runner + baseline migration","1.5h","done"]],
+  FD:[["FD.1","Design tokens + font wiring","1h","done"],["FD.2","UI test infra + Button/StatusPill","1.5h","done"],["FD.3","Input/Toggle/Card/EmptyState","1h","done"],["FD.4","DataTable","1.5h","done"],["FD.5","AppShell","1.5h","done"],["FD.6","F1 retrofit + Sourcecado rename","1h","done"],["FD.7","/styleguide catalog page","1h","done"]],
+  F3:[["F3.1","model_calls migration (task, prompt/version, usage, status, error)","1h","done"],["F3.2","callModel() with named tasks + prompt/version naming","1.5h","done"],["F3.3","Structured-output parse + error capture + usage counters","1.5h","done"]],
+  F4:[["F4.1","runs + run_steps + tool_calls migrations","1.5h","done"],["F4.2","Run create + step/tool/model logging write path","1.5h","done"],["F4.3","Run status + error capture on the run","1h","done"],["F4.4","Run inspector view (read-only trace render)","1.5h","done"]],
+  F5:[["F5.1","ReAct loop (observation → model → tool → repeat, stop cond.)","2h","done"],["F5.2","Tool registry + permission classes + class enforcement","1.5h","done"],["F5.3","echo reference tool + wire loop end-to-end to ledger","1h","done"]],
 
-  A1:[["A1.1","source_records + memory_chunks migration: pgvector + permission cols","1.5h","afk"],["A1.2","Port ingest (source records, content hashing, dedupe)","2h","afk"],["A1.3","Port chunking + citation construction","1.5h","afk"]],
-  A2:[["A2.1","Embedding generation through Model Gateway → pgvector column","2h","afk"],["A2.2","pgvector similarity query with pre-retrieval permission filter","2h","afk"]],
-  A3:[["A3.1","Port intent classification + fact selection","2h","afk"],["A3.2","Port gap-fact handling + no-memory / no-relevant-memory paths","1.5h","afk"],["A3.3","Parity harness: question set + SQLite-vs-Postgres diff report","2h","afk"],["A3.4","Parity review gate + log accepted deltas","1h","hitl"]],
-  A4:[["A4.1","Import endpoint + source-record creation from upload","2h","afk"],["A4.2","Import result UI with per-file status / skip reasons","1.5h","afk"]],
-  A5:[["A5.1","search_memory tool wrapping retrieval + register it","1.5h","afk"]],
-  A6:[["A6.1","Research Chat UI: message list + input + run trigger","2h","afk"],["A6.2","Inline run status + cited answer + gaps render","1.5h","afk"],["A6.3","Chat-layout design review pass","1h","hitl"]],
-  A7:[["A7.1","add_memory_note tool + write path","1.5h","afk"],["A7.2","Memory management page: list + add + correct","2h","afk"]],
+  A1:[["A1.1","source_records + memory_chunks migration: pgvector + permission cols","1.5h","done"],["A1.2","Port ingest (source records, content hashing, dedupe)","2h","done"],["A1.3","Port chunking + citation construction","1.5h","done"]],
+  A2:[["A2.1","Embedding generation through Model Gateway → pgvector column","2h","done"],["A2.2","pgvector similarity query with pre-retrieval permission filter","2h","done"]],
+  A3:[["A3.1","Port intent classification + fact selection","2h","done"],["A3.2","Port gap-fact handling + no-memory / no-relevant-memory paths","1.5h","done"],["A3.3","Parity harness — cut, decision #6","2h","cut"],["A3.4","Parity review gate — cut, decision #6","1h","cut"]],
+  A4:[["A4.1","Import endpoint + source-record creation from upload","2h","done"],["A4.2","Import result UI with per-file status / skip reasons","1.5h","afk"]],
+  A5:[["A5.1","search_memory tool wrapping retrieval + register it","1.5h","done"]],
+  A6:[["A6.1","Research Chat UI: message list + input + run trigger","2h","done"],["A6.2","Inline run status + cited answer + gaps render","1.5h","done"],["A6.3","Chat-layout design review — higher stakes post R1–R6 rewrite","1h","hitl"]],
+  A7:[["A7.1","add_memory_note tool + write path","1.5h","done"],["A7.2","Memory management page: list + add + correct","2h","done"]],
 
-  B1:[["B1.1","organizations + contacts migration","1.5h","afk"],["B1.2","get_contact + get_organization tools + register","1.5h","afk"]],
+  B1:[["B1.1","organizations + contacts + contact_aliases migration","2h","done"],["B1.2","get_contact + get_organization tools + alias resolution + ambiguous state","2.5h","done"],["B1.3","create_contact tool — requires name+role+org, gap-flags missing","1.5h","done"],["B1.4","outreach_history migration (pulled forward from B3)","1.5h","done"],["B1.5","list_outreach_history tool","1h","done"],["B1.6","Contact Profile Card component","2h","done"],["B1.7","Sourcing doctrine: gather name+role+org, ask on ambiguity","1h","done"],["B1.8","Verify card matches DESIGN.md + uses primitives","1h","hitl"]],
   B2:[["B2.1","target_personas migration + association","1.5h","afk"]],
-  B3:[["B3.1","outreach_history + outreach_outcomes migrations","1.5h","afk"],["B3.2","followup_sequence state migration","1h","afk"],["B3.3","list_outreach_history + record_outreach_outcome + update_followup_sequence tools","2h","afk"]],
+  B3:[["B3.1","outreach_history migration — done, see B1.4","1.5h","cut"],["B3.1b","outreach_outcomes migration","1h","afk"],["B3.2","followup_sequence state migration","1h","afk"],["B3.2b","list_outreach_history tool — done, see B1.5","—","cut"],["B3.3","record_outreach_outcome + update_followup_sequence tools","1.5h","afk"]],
   B4:[["B4.1","Detail page data loaders + layout","2h","afk"],["B4.2","History / outcomes / artifacts panels","2h","afk"],["B4.3","Detail-page design review pass","1h","hitl"]],
   B5:[["B5.1","Manual Reply Capture form + write to outcomes / state","1.5h","afk"],["B5.2","Reply → next-action suggestion run trigger","1.5h","afk"]],
 
   C1:[["C1.1","Apollo client + usage tracking plumbing","2h","afk"],["C1.2","search_apollo tool + citation records","1.5h","afk"],["C1.3","enrich_apollo_contact tool + write to Contact with provenance","2h","afk"]],
   C2:[["C2.1","Web provider client (Apify) + usage tracking","2h","afk"],["C2.2","web_enrich_company tool + citations","1.5h","afk"],["C2.3","web_enrich_contact tool + citations","1.5h","afk"]],
+  C3:[["C3.1","Design guided workflow's step sequence + gap-detection logic","2h","hitl"],["C3.2","Candidate surfacing from Apollo/web + identity-confirmation UI","2h","afk"],["C3.3","Field-level provenance write path (value+source+actor+method+time)","2h","afk"],["C3.4","“Data collect” entry points: new-connection + existing-profile","1.5h","afk"],["C3.5","Rework Key Facts to cite originating interaction/source","1.5h","afk"],["C3.6","Verify guided workflow UX matches DESIGN.md","1h","hitl"]],
 
   D1:[["D1.1","artifacts migration + create / revise / save tools","2h","afk"],["D1.2","Artifact panel UI + draft / revise / save flow","2h","afk"],["D1.3","Save-artifact-to-memory path","1h","afk"],["D1.4","Artifact shape + panel design review","1h","hitl"]],
   D2:[["D2.1","Citation checker over artifact claims","2h","afk"],["D2.2","Duplicate Contact check","1.5h","afk"]],
@@ -483,12 +543,12 @@ document.querySelectorAll('.slice').forEach(slice => {
 
   const panel = document.createElement('div');
   panel.className = 'subtasks';
-  panel.innerHTML = '<div class="subhdr">' + rows.length + ' task' + (rows.length>1?'s':'') + ' · ~1–2h each</div>' +
+  panel.innerHTML = '<div class="subhdr">' + rows.length + ' task' + (rows.length>1?'s':'') + '</div>' +
     rows.map(r =>
-      '<div class="subtask">' +
+      '<div class="subtask ' + r[3] + '">' +
         '<span class="st-id">'+r[0]+'</span>' +
         '<span class="st-title">'+r[1]+'</span>' +
-        '<span class="st-est">~'+r[2]+'</span>' +
+        '<span class="st-est">'+(r[2]==='—' ? '' : '~'+r[2])+'</span>' +
         '<span class="st-type '+r[3]+'">'+r[3].toUpperCase()+'</span>' +
       '</div>'
     ).join('');
