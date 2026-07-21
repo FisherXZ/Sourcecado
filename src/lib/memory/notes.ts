@@ -8,9 +8,9 @@ type Sql = postgres.Sql;
 
 export async function addMemoryNote(
   db: Sql,
-  args: { title: string; text: string; actor?: MemoryActor }
+  args: { title: string; text: string; actor?: MemoryActor; runId?: number }
 ): Promise<{ sourceId: string }> {
-  const { title, text, actor = DEFAULT_ACTOR } = args;
+  const { title, text, actor = DEFAULT_ACTOR, runId } = args;
 
   const titleSlug = slugifySourceId(title);
   const sourceId = `note-${titleSlug}-${sha256(text).slice(0, 8)}`;
@@ -25,13 +25,25 @@ export async function addMemoryNote(
 
   await db.begin(async (tx) => {
     const [source] = await tx<{ id: string; source_id: string }[]>`
-      INSERT INTO source_records (source_id, path, title, source_type, content_hash, raw_text)
-      VALUES (${sourceId}, ${path}, ${title}, 'note', ${contentHash}, ${text})
+      INSERT INTO source_records (
+        source_id, path, title, source_type, content_hash, raw_text,
+        created_by_run_id, created_by_actor_type, created_by_actor_id
+      )
+      VALUES (
+        ${sourceId}, ${path}, ${title}, 'note', ${contentHash}, ${text},
+        ${runId ?? null}, ${actor.actorType}, ${actor.actorId}
+      )
       ON CONFLICT (path) DO UPDATE SET
-        title        = EXCLUDED.title,
-        content_hash = EXCLUDED.content_hash,
-        raw_text     = EXCLUDED.raw_text,
-        updated_at   = now()
+        title                 = EXCLUDED.title,
+        content_hash          = EXCLUDED.content_hash,
+        raw_text              = EXCLUDED.raw_text,
+        -- Preserve an existing run attribution when a run-less path (e.g. the
+        -- direct /api/memory/note route) re-adds identical text; a real writing
+        -- run always wins over null so the note stays traceable.
+        created_by_run_id     = COALESCE(EXCLUDED.created_by_run_id, source_records.created_by_run_id),
+        created_by_actor_type = EXCLUDED.created_by_actor_type,
+        created_by_actor_id   = EXCLUDED.created_by_actor_id,
+        updated_at            = now()
       RETURNING id, source_id
     `;
 
