@@ -41,4 +41,36 @@ describe("createContactTool", () => {
   it("allows name alone, with role and organizationName omitted", () => {
     expect(() => createContactTool.argsSchema.parse({ name: "Jane Smith" })).not.toThrow();
   });
+
+  it("declares phone, email, linkedinUrl, and photoUrl in its args schema (not just pass-through)", () => {
+    const shape = (createContactTool.argsSchema as unknown as { shape: Record<string, unknown> }).shape;
+    expect(Object.keys(shape).sort()).toEqual([
+      "email",
+      "linkedinUrl",
+      "name",
+      "organizationName",
+      "phone",
+      "photoUrl",
+      "role",
+    ]);
+  });
+
+  it("accepts phone, email, linkedinUrl, and photoUrl and writes them through", async () => {
+    const db = getDb();
+    const result = await createContactTool.execute(
+      {
+        name: "Jane Smith",
+        phone: "555-0100",
+        email: "jane@acme.com",
+        linkedinUrl: "https://linkedin.com/in/janesmith",
+        photoUrl: "https://example.com/jane.jpg",
+      },
+      { db, runId: 0, parentStepId: 0 },
+    );
+    expect(result.status).toBe("created");
+    if (result.status === "created") {
+      expect(result.contact.phone).toBe("555-0100");
+      expect(result.contact.linkedinUrl).toBe("https://linkedin.com/in/janesmith");
+    }
+  });
 });
