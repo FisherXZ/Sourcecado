@@ -92,22 +92,31 @@ async function insertFact(
 // ---------------------------------------------------------------------------
 
 describe("memoryRegistry", () => {
-  it("registers search_memory, get_contact, get_organization (read) and add_memory_note, create_contact (write_internal)", () => {
+  it("registers search_memory, get_contact, get_organization, list_outreach_history (read) and add_memory_note, create_contact (write_internal)", () => {
     const registry = memoryRegistry();
     expect(registry.get("search_memory")?.permissionClass).toBe("read");
     expect(registry.get("get_contact")?.permissionClass).toBe("read");
     expect(registry.get("get_organization")?.permissionClass).toBe("read");
+    expect(registry.get("list_outreach_history")?.permissionClass).toBe("read");
     expect(registry.get("add_memory_note")?.permissionClass).toBe("write_internal");
     expect(registry.get("create_contact")?.permissionClass).toBe("write_internal");
     // write_internal tools are only listed once that class is allowed.
     expect(registry.list(new Set(["read"])).map((t) => t.name).sort()).toEqual([
       "get_contact",
       "get_organization",
+      "list_outreach_history",
       "search_memory",
     ]);
     expect(
       registry.list(new Set(["read", "write_internal"])).map((t) => t.name).sort()
-    ).toEqual(["add_memory_note", "create_contact", "get_contact", "get_organization", "search_memory"]);
+    ).toEqual([
+      "add_memory_note",
+      "create_contact",
+      "get_contact",
+      "get_organization",
+      "list_outreach_history",
+      "search_memory",
+    ]);
   });
 });
 
