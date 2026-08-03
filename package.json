@@ -14,9 +14,6 @@
     "refresh": "tsx scripts/refresh.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.85",
-    "@ai-sdk/deepseek": "^2.0.39",
-    "@ai-sdk/openai": "^3.0.73",
     "@anthropic-ai/sdk": "^0.111.0",
     "ai": "^6.0.208",
     "better-sqlite3": "^11.9.1",

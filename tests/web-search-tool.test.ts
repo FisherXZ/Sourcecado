@@ -98,8 +98,12 @@ describe("webSearchTool", () => {
     ).rejects.toThrow(/Unexpected token/);
   });
 
-  it.skipIf(!process.env.TAVILY_API_KEY)(
-    "live: searches Tavily for a real query when TAVILY_API_KEY is present",
+  // Gated on the explicit SOURCECADO_RUN_LIVE_SMOKE opt-in (like web_fetch's
+  // live smoke), NOT on TAVILY_API_KEY presence — .env.local carries the key
+  // for the DB suites, and an over-quota account (HTTP 433) must not turn the
+  // default suite red on external billing state.
+  it.skipIf(!process.env.SOURCECADO_RUN_LIVE_SMOKE)(
+    "live: searches Tavily for a real query (opt-in via SOURCECADO_RUN_LIVE_SMOKE)",
     async () => {
       const result = await webSearchTool.execute(
         { query: "Sourcecado sourcing operating system" },
