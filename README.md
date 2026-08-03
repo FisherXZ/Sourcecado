@@ -42,8 +42,6 @@ npm test
 
 The DB-backed tests (`tests/db-client.test.ts`, `tests/migrate.test.ts`) require Postgres
 running and `DATABASE_URL` exported (see [Database](#database-local-postgres--pgvector)).
-The legacy SQLite CLI suite is currently broken (`better-sqlite3` native bindings — see
-[TODOS.md](TODOS.md)); the web app tests are unaffected.
 
 ## Project structure
 
@@ -63,4 +61,4 @@ The legacy SQLite CLI suite is currently broken (`better-sqlite3` native binding
 
 ## Legacy CLI
 
-The original `sourcyavo` CLI (ingest / refresh / ask) is not available in v0.2.0.0. The `better-sqlite3` native bindings require a rebuild; see TODOS.md. The web app is the primary interface going forward.
+The original `sourcyavo` CLI (ingest / refresh / ask) and its SQLite storage layer were removed in v0.2.0. Postgres + pgvector (`src/lib/memory/`) replaced them, and the web app is the only interface. `npm run ingest` and `npm run refresh` still exist, but they run against Postgres via `src/lib/`.

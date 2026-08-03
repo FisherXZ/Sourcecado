@@ -24,4 +24,12 @@ describe("package.json dependencies", () => {
     expect(pkg.dependencies).toHaveProperty("@anthropic-ai/sdk");
     expect(pkg.dependencies).toHaveProperty("openai");
   });
+
+  it("does not depend on better-sqlite3 (R10 removed the legacy CLI stack)", () => {
+    // The native binding was never compiled on Node 26, which is why the repo
+    // installed with --ignore-scripts. Postgres + pgvector replaced it; keeping
+    // the dep out is what lets `npm install` run unpatched.
+    const sqliteDeps = depNames.filter((name) => name.includes("better-sqlite3"));
+    expect(sqliteDeps).toEqual([]);
+  });
 });

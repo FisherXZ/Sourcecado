@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { slugifySourceId } from "../src/db.js";
+import { slugifySourceId } from "../src/lib/memory/chunk.js";
 
 describe("slugifySourceId", () => {
   it("lowercases and collapses non-alphanumeric runs while preserving separators", () => {
