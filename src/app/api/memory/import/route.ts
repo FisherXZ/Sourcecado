@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { ingestFiles, type UploadFile } from "@/lib/memory/ingest";
+import { requireActor } from "@/lib/auth/actor";
 
 // AFK import: accept uploaded file(s) as multipart/form-data and turn them into
 // source records via the shared ingest core. Per-file outcomes (incl. skips with
@@ -30,7 +31,10 @@ export async function POST(request: Request): Promise<Response> {
   );
 
   try {
-    const result = await ingestFiles(getDb(), files);
+    // The importing director is granted read on every source this creates
+    // (chunk-store issues the grant from this actor), so uploads land in their
+    // memory rather than a shared pool.
+    const result = await ingestFiles(getDb(), files, await requireActor());
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "import failed";

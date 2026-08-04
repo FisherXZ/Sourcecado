@@ -81,8 +81,16 @@ export async function ingestFiles(
   const result: MemoryIngestResult = { processed: 0, skipped: 0, skippedFiles: [] };
   const seenPaths = new Set<string>();
 
+  // Upload identity is scoped to the uploader. A global `upload://{name}` was
+  // safe when one sentinel actor owned everything, but with real directors it
+  // means two people who both upload "contacts.csv" share one row: the second
+  // ON CONFLICT (path) DO UPDATE overwrites the first's text and chunks while
+  // the first's read grant survives — destroying A's data, exposing B's to A,
+  // and letting B plant text that A's agent retrieves as trusted memory.
+  const ownerKey = uploadOwnerKey(actor);
+
   for (const file of files) {
-    const storedPath = `upload://${file.name}`;
+    const storedPath = `upload://${ownerKey}/${file.name}`;
 
     // Collision (a): same filename twice in one batch. Skip the later one
     // rather than let ON CONFLICT (path) silently overwrite the first.
@@ -101,7 +109,12 @@ export async function ingestFiles(
       await ingestParsedSource(db, {
         parseName: file.name,
         storedPath,
-        label: file.name,
+        // The owner prefix must reach source_id too, not just path: source_id
+        // carries its own UNIQUE, so an unscoped id would turn B's upload into
+        // a DuplicateSkip against A's — a cross-tenant denial of service that
+        // also reveals A's filenames. slugifySourceId keeps "/" as a segment
+        // separator, so citations read `user-1/contacts#chunk-1`.
+        label: `${ownerKey}/${file.name}`,
         content: new TextDecoder().decode(file.bytes),
         actor,
       });
@@ -112,6 +125,12 @@ export async function ingestFiles(
   }
 
   return result;
+}
+
+// Slug-safe owner discriminator for upload identity. actorType is included so
+// a test_client with id "1" can never collide with user 1.
+function uploadOwnerKey(actor: MemoryActor): string {
+  return `${actor.actorType}-${actor.actorId}`.replace(/[^a-zA-Z0-9-]+/g, "-");
 }
 
 async function ingestFile(

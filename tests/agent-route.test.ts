@@ -7,6 +7,12 @@ const { runAgentMock, getRunTraceMock } = vi.hoisted(() => ({
 vi.mock("@/lib/harness", () => ({ runAgent: runAgentMock }));
 vi.mock("@/lib/ledger", () => ({ getRunTrace: getRunTraceMock }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
+// Stubs the auth boundary (the route sits behind middleware in production).
+// Mocking here also keeps next-auth — and its `next/server` import, which
+// Vitest cannot resolve — out of the module graph.
+vi.mock("@/lib/auth/actor", () => ({
+  requireActor: vi.fn().mockResolvedValue({ actorType: "user", actorId: "1" }),
+}));
 vi.mock("@/lib/context", () => ({
   buildMemoryAnswerInstructions: vi.fn().mockResolvedValue("stub instructions"),
 }));

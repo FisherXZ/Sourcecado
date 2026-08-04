@@ -9,6 +9,7 @@ import type {
 import { executeTool, toLlmToolDefinition, type ToolExecutionResult } from "./tools/orchestrator";
 import type { ToolRegistry } from "./tools/registry";
 import type { PermissionClass, Sql } from "./tools/types";
+import type { MemoryActor } from "./memory/actor";
 
 export type { ToolExecutionResult } from "./tools/orchestrator";
 
@@ -22,6 +23,7 @@ export interface AgentLoopInput {
   db: Sql;
   runId: number;
   parentStepId: number;
+  actor: MemoryActor;
   provider?: string;
   adapter?: LlmAdapter;
   signal?: AbortSignal;
@@ -140,6 +142,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
         db: input.db,
         runId: input.runId,
         parentStepId: input.parentStepId,
+        actor: input.actor,
       });
       await input.onEvent?.({ type: "tool_end", id: block.id, name: block.name, result });
       resultBlocks.push({

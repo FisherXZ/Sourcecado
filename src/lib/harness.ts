@@ -5,6 +5,7 @@ import { runAgentLoop, type AgentLoopEvent } from "./agent-loop";
 import type { LlmAdapter, LlmMessage } from "./llm/types";
 import type { ToolRegistry } from "./tools/registry";
 import type { PermissionClass, Sql } from "./tools/types";
+import type { MemoryActor } from "./memory/actor";
 
 export interface ConversationTurn {
   role: "user" | "assistant";
@@ -25,6 +26,9 @@ export interface AgentStepEvent {
 export interface RunAgentInput {
   question: string;
   registry: ToolRegistry;
+  // Who the run executes as (H1). Required — see ToolContext.actor for why
+  // there is deliberately no DEFAULT_ACTOR fallback on this path.
+  actor: MemoryActor;
   allowedClasses?: Set<PermissionClass>;
   maxSteps?: number;
   db?: Sql;
@@ -93,6 +97,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       runType: "agent_chat",
       title: input.question.slice(0, 80),
       input: { question: input.question },
+      actor: input.actor,
     });
     agentStep = await startRunStep(db, {
       runId: run.id,
@@ -141,6 +146,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       db,
       runId: run.id,
       parentStepId: agentStep.id,
+      actor: input.actor,
       provider: input.providerName,
       adapter: input.adapter,
       signal: input.signal,

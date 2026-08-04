@@ -11,10 +11,18 @@ vi.mock("@/lib/memory/sources", () => ({
 }));
 vi.mock("@/lib/memory/notes", () => ({ addMemoryNote: addNoteMock }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
+vi.mock("@/lib/auth/actor", () => ({
+  requireActor: vi.fn().mockResolvedValue({ actorType: "user", actorId: "1" }),
+}));
 
 import { GET as getSources } from "@/app/api/memory/sources/route";
 import { POST as archive } from "@/app/api/memory/sources/[id]/archive/route";
 import { POST as addNote } from "@/app/api/memory/note/route";
+
+// The signed-in actor the mocked requireActor above resolves to. Every route
+// below must forward it — that forwarding is what scopes writes and archive
+// actions to the acting director.
+const SIGNED_IN_ACTOR = { actorType: "user", actorId: "1" };
 
 function jsonReq(url: string, body: unknown): Request {
   return new Request(url, {
@@ -48,19 +56,19 @@ describe("POST /api/memory/sources/[id]/archive", () => {
     const res = await archive(req({ archived: true }), { params: Promise.resolve({ id: "acme" }) });
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ sourceId: "acme", archived: true });
-    expect(setArchivedMock).toHaveBeenCalledWith(expect.anything(), { sourceId: "acme", archived: true });
+    expect(setArchivedMock).toHaveBeenCalledWith(expect.anything(), { sourceId: "acme", archived: true, actor: SIGNED_IN_ACTOR });
   });
 
   it("defaults to archived=true when the body omits it", async () => {
     setArchivedMock.mockResolvedValue({ sourceId: "acme", archived: true });
     await archive(req({}), { params: Promise.resolve({ id: "acme" }) });
-    expect(setArchivedMock).toHaveBeenCalledWith(expect.anything(), { sourceId: "acme", archived: true });
+    expect(setArchivedMock).toHaveBeenCalledWith(expect.anything(), { sourceId: "acme", archived: true, actor: SIGNED_IN_ACTOR });
   });
 
   it("un-archives when archived=false", async () => {
     setArchivedMock.mockResolvedValue({ sourceId: "acme", archived: false });
     await archive(req({ archived: false }), { params: Promise.resolve({ id: "acme" }) });
-    expect(setArchivedMock).toHaveBeenCalledWith(expect.anything(), { sourceId: "acme", archived: false });
+    expect(setArchivedMock).toHaveBeenCalledWith(expect.anything(), { sourceId: "acme", archived: false, actor: SIGNED_IN_ACTOR });
   });
 
   it("returns 404 when the source is unknown/not permitted", async () => {
@@ -78,7 +86,7 @@ describe("POST /api/memory/note", () => {
     const res = await addNote(jsonReq("http://localhost/api/memory/note", { title: "T", text: "body" }));
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ sourceId: "note-abc" });
-    expect(addNoteMock).toHaveBeenCalledWith(expect.anything(), { title: "T", text: "body" });
+    expect(addNoteMock).toHaveBeenCalledWith(expect.anything(), { title: "T", text: "body", actor: SIGNED_IN_ACTOR });
   });
 
   it("returns 400 when title or text is missing", async () => {

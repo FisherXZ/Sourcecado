@@ -52,7 +52,13 @@ describe("memory ingestFiles (in-memory uploads)", () => {
     const sources = await db<{ path: string }[]>`
       SELECT path FROM source_records ORDER BY path
     `;
-    expect(sources.map((s) => s.path)).toEqual(["upload://acme.md", "upload://contacts.csv"]);
+    // Upload paths are scoped to the uploading actor (H1) so two directors who
+    // upload the same filename get separate sources rather than one clobbering
+    // the other. Here the actor is the DEFAULT_ACTOR default.
+    expect(sources.map((s) => s.path)).toEqual([
+      "upload://test-client-default/acme.md",
+      "upload://test-client-default/contacts.csv",
+    ]);
 
     const [{ n: grants }] = await db<{ n: number }[]>`
       SELECT count(*)::int AS n FROM source_permissions

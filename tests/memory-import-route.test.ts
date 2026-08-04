@@ -3,6 +3,9 @@ import { vi } from "vitest";
 const { ingestFilesMock } = vi.hoisted(() => ({ ingestFilesMock: vi.fn() }));
 vi.mock("@/lib/memory/ingest", () => ({ ingestFiles: ingestFilesMock }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
+vi.mock("@/lib/auth/actor", () => ({
+  requireActor: vi.fn().mockResolvedValue({ actorType: "user", actorId: "1" }),
+}));
 
 import { POST } from "@/app/api/memory/import/route";
 

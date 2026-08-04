@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { addMemoryNote } from "@/lib/memory/notes";
+import { requireActor } from "@/lib/auth/actor";
 
 // Add a memory note (or a correction = a superseding note). Dedicated write path
 // — NOT the read-only /api/agent registry. Becomes immediately retrievable.
@@ -13,7 +14,8 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   try {
-    const result = await addMemoryNote(getDb(), { title, text });
+    const actor = await requireActor();
+    const result = await addMemoryNote(getDb(), { title, text, actor });
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
     // Log the real failure server-side; return a stable message so internal
