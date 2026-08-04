@@ -1,9 +1,14 @@
 import { z } from "zod";
 import { lookup } from "node:dns/promises";
+import { fetchCapped } from "./web-fetch-http";
 import type { Tool } from "./types";
 
-export const WEB_FETCH_MAX_CHARS = 500_000;
+// Bytes, not characters: the cap now bounds how much we read off the socket, so
+// it is a real memory bound rather than a slice applied to an already-buffered
+// body.
+export const WEB_FETCH_MAX_BYTES = 500_000;
 const MAX_REDIRECTS = 5;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export const webFetchArgsSchema = z.object({
   url: z.string().min(1),
@@ -81,8 +86,12 @@ export function isBlockedIp(ip: string): boolean {
 // Resolve a host (dns.lookup echoes a literal IP verbatim, so this covers
 // literal-IP URLs too) and reject if ANY resolved address is non-public.
 // Called on every redirect hop.
-export async function assertPublicHost(hostname: string): Promise<void> {
-  let addrs: Array<{ address: string }>;
+//
+// Returns the address it validated so the caller can pin the connection to it.
+// Without that, the transport re-resolves at connect time and a hostname whose
+// DNS flips between this check and the socket reaches the address we refused.
+export async function assertPublicHost(hostname: string): Promise<{ address: string; family: number }> {
+  let addrs: Array<{ address: string; family: number }>;
   try {
     addrs = await lookup(hostname, { all: true });
   } catch {
@@ -96,6 +105,7 @@ export async function assertPublicHost(hostname: string): Promise<void> {
       throw new Error(`web_fetch: refusing non-public address ${address} for "${hostname}"`);
     }
   }
+  return addrs[0];
 }
 
 export const webFetchTool: Tool<WebFetchArgs, WebFetchResult> = {
@@ -118,36 +128,40 @@ export const webFetchTool: Tool<WebFetchArgs, WebFetchResult> = {
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         throw new Error(`Unsupported URL protocol: ${parsed.protocol} (only http/https allowed)`);
       }
-      await assertPublicHost(parsed.hostname); // re-validated every hop
+      const pinned = await assertPublicHost(parsed.hostname); // re-validated every hop
       finalUrl = parsed.toString();
 
-      const res = await fetch(finalUrl, {
-        redirect: "manual", // follow manually so each hop's host is re-validated
-        signal: AbortSignal.timeout(15_000),
+      // Redirects are followed manually so each hop's host is re-validated, and
+      // each hop connects to its own validated address.
+      const res = await fetchCapped({
+        url: finalUrl,
+        address: pinned.address,
+        family: pinned.family,
+        maxBytes: WEB_FETCH_MAX_BYTES,
+        timeoutMs: REQUEST_TIMEOUT_MS,
       });
 
       if (res.status >= 300 && res.status < 400) {
         if (hop >= MAX_REDIRECTS) {
           throw new Error(`web_fetch: too many redirects (>${MAX_REDIRECTS})`);
         }
-        const location = res.headers.get("location");
-        if (!location) {
+        if (!res.location) {
           throw new Error(`web_fetch: redirect ${res.status} with no Location header`);
         }
-        target = new URL(location, finalUrl).toString();
+        target = new URL(res.location, finalUrl).toString();
         continue;
       }
 
-      if (!res.ok) {
+      if (res.status < 200 || res.status >= 300) {
         throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
       }
 
-      const contentType = res.headers.get("content-type");
-      const raw = await res.text();
-      const truncated = raw.length > WEB_FETCH_MAX_CHARS;
-      const capped = truncated ? raw.slice(0, WEB_FETCH_MAX_CHARS) : raw;
-
-      return { url: finalUrl, contentType, text: htmlToText(capped), truncated };
+      return {
+        url: finalUrl,
+        contentType: res.contentType,
+        text: htmlToText(res.text),
+        truncated: res.truncated,
+      };
     }
   },
 };
