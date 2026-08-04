@@ -13,7 +13,14 @@ import type { MemoryActor } from "./memory/actor";
 
 export type { ToolExecutionResult } from "./tools/orchestrator";
 
-const DEFAULT_MAX_STEPS = 8;
+// A runaway backstop, NOT a product limit — neither Claude Code nor openclaw
+// bounds its main agent loop by turn count. Spend belongs to the per-run ceiling
+// (docs/superpowers/plans/2026-08-04-ticket-enrich-spend-ceiling.md); 50 sits far
+// above any real sourcing chain, so it only catches a pathological tool cycle.
+// Not removed outright because this loop has no context compaction: unbounded, it
+// would end on a provider context-length rejection rather than on finishing.
+// Exported so harness.ts shares the value — the two copies used to drift.
+export const DEFAULT_MAX_STEPS = 50;
 
 export interface AgentLoopInput {
   messages: LlmMessage[];
@@ -36,8 +43,12 @@ export type AgentLoopEvent =
   | { type: "tool_end"; id: string; name: string; result: ToolExecutionResult };
 
 export interface AgentLoopResult {
-  status: "succeeded" | "failed";
+  // "truncated" = ran out of steps with work in hand. Deliberately distinct from
+  // "failed": the caller must be able to tell "here is what I have" from "the
+  // model errored", and only the former should reach the user as an answer.
+  status: "succeeded" | "truncated" | "failed";
   messages: LlmMessage[];
+  // Always set for "succeeded" and "truncated"; absent for "failed".
   finalText?: string;
   stopReason: StopReason;
   steps: number;
@@ -90,11 +101,7 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     lastStopReason = outcome.stopReason;
 
     if (outcome.stopReason === "end") {
-      const finalText = outcome.message.content
-        .filter((block): block is Extract<(typeof outcome.message.content)[number], { type: "text" }> => block.type === "text")
-        .map((block) => block.text)
-        .join("");
-      return { status: "succeeded", messages, finalText, stopReason: "end", steps: step };
+      return { status: "succeeded", messages, finalText: assistantText(outcome.message), stopReason: "end", steps: step };
     }
 
     if (outcome.stopReason !== "tool_use") {
@@ -155,7 +162,38 @@ export async function runAgentLoop(input: AgentLoopInput): Promise<AgentLoopResu
     messages.push({ role: "tool_result", content: resultBlocks });
   }
 
-  return { status: "failed", messages, stopReason: lastStopReason, steps: maxSteps };
+  // Out of steps mid-chain. The run did real work — carry the model's own last
+  // words out as the answer rather than discarding the whole transcript. No
+  // extra synthesis turn: at this ceiling the run is already pathological, so
+  // spending another model call to tidy it up is the wrong trade. The fallback
+  // matters: an empty finalText would reproduce the blank-answer bug this fixes.
+  return {
+    status: "truncated",
+    messages,
+    finalText:
+      lastAssistantText(messages) ||
+      `[Ran out of steps: stopped after ${maxSteps} model turns without producing an answer.]`,
+    stopReason: lastStopReason,
+    steps: maxSteps,
+  };
+}
+
+function assistantText(message: LlmMessage): string {
+  if (message.role !== "assistant") return "";
+  return message.content
+    .filter((block): block is Extract<(typeof message.content)[number], { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("");
+}
+
+// The model may have spent its last turns on bare tool calls with no narration,
+// leaving nothing to carry forward. Returns "" in that case; callers substitute.
+function lastAssistantText(messages: LlmMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const text = assistantText(messages[i]).trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 async function drain(

@@ -53,6 +53,24 @@ describe("POST /api/agent", () => {
     await expect(res.json()).resolves.toMatchObject({ runId: 9, status: "failed" });
   });
 
+  it("returns 200 with the partial answer when the run is truncated", async () => {
+    // A truncated run is a result, not a server error — 500 would make the
+    // partial work unreachable to any HTTP client.
+    runAgentMock.mockResolvedValue({
+      runId: 12,
+      status: "truncated",
+      answer: "Found 2 candidates; ran out of steps before verifying emails.",
+      steps: 50,
+    });
+    const res = await POST(postRequest({ question: "source me 5 people" }));
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      runId: 12,
+      status: "truncated",
+      answer: "Found 2 candidates; ran out of steps before verifying emails.",
+    });
+  });
+
   it("returns invalidCitations in the response body", async () => {
     runAgentMock.mockResolvedValue({ runId: 7, status: "succeeded", answer: "hi", steps: 1 });
     const res = await POST(postRequest({ question: "echo hi" }));

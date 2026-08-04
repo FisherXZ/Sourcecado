@@ -116,6 +116,25 @@ describe("POST /api/agent/stream", () => {
     expect(body).toContain("failed");
   });
 
+  it("flushes a truncated run's partial answer and marks it truncated in meta", async () => {
+    // The stream route is the production path — a truncated run must arrive as
+    // readable text plus a status the UI can render a notice from.
+    runAgentMock.mockResolvedValue({
+      runId: 13,
+      status: "truncated",
+      answer: "Found 2 candidates; ran out of steps before verifying emails.",
+      steps: 50,
+      messages: STUB_MESSAGES,
+    });
+    const res = await POST(postRequest({ question: "source me 5 people" }));
+    expect(res.status).toBe(200);
+    const body = await readAll(res);
+
+    expect(body).toContain("Found 2 candidates");
+    expect(body).toContain("data-meta");
+    expect(body).toContain("truncated");
+  });
+
   it("closes the open answer text part when the run fails after narration streamed and a search fired", async () => {
     // Regression for the mixed live-then-search failure path: pre-search
     // narration opens the "answer" text part (answerStarted), search_memory then

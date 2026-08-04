@@ -11,7 +11,8 @@ import type { MemoryActor } from "@/lib/memory/actor";
 
 export interface MemoryAnswer {
   runId: number;
-  status: "succeeded" | "failed";
+  // "truncated" carries a usable partial answer — see AgentLoopResult.status.
+  status: "succeeded" | "truncated" | "failed";
   answer?: string;
   steps: number;
   invalidCitations: string[];
@@ -39,6 +40,10 @@ export interface AnswerWithMemoryInput {
   // Test seam: injected LlmAdapter, forwarded to runAgent. Mirrors
   // RunAgentInput.adapter; production callers never set it.
   adapter?: LlmAdapter;
+  // Test seam: forwarded to runAgent.maxSteps. Production callers leave it unset
+  // and get DEFAULT_MAX_STEPS; tests use it to reach the truncated path without
+  // driving 50 real turns.
+  maxSteps?: number;
 }
 
 // One agent run over team memory: the ReAct harness plus the citation post-check
@@ -73,11 +78,15 @@ export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): P
     onAgentLoopEvent: input.onAgentLoopEvent,
     signal: input.signal,
     adapter: input.adapter,
+    maxSteps: input.maxSteps,
   });
 
   let answer = result.answer;
   let invalidCitations: string[] = [];
-  if (result.status === "succeeded" && answer !== undefined) {
+  // Every status that carries text must be checked. Gating on "succeeded" alone
+  // would ship a truncated run's partial answer to the user with its citations
+  // unverified — the same text, none of the scrubbing.
+  if ((result.status === "succeeded" || result.status === "truncated") && answer !== undefined) {
     const trace = await getRunTrace(db, result.runId);
     const checked = verifyAnswerCitations(trace, answer);
     answer = checked.answer;

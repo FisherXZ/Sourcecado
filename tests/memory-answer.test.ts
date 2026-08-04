@@ -366,6 +366,17 @@ async function* finalTurn(answer: string): AsyncGenerator<LlmStreamEvent> {
   yield { type: "turn_end", stopReason: "end", usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 } };
 }
 
+async function* narratedToolCallTurn(
+  text: string,
+  toolName: string,
+  args: unknown
+): AsyncGenerator<LlmStreamEvent> {
+  yield { type: "text_delta", delta: text };
+  yield { type: "tool_call_start", id: "call-1", name: toolName };
+  yield { type: "tool_call_end", id: "call-1", name: toolName, input: args };
+  yield { type: "turn_end", stopReason: "tool_use", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+}
+
 describe("search_memory agentic flow (mock provider + postgres)", () => {
   let savedApiKey: string | undefined;
 
@@ -547,5 +558,53 @@ describe("answerWithMemory add_memory_note (mock provider + postgres)", () => {
     `;
     expect(notes).toHaveLength(1);
     expect(notes[0].title).toBe("Acme intro call");
+  });
+
+  // Regression guard for the gate at answer.ts. It used to read
+  // `status === "succeeded" && answer !== undefined`, which would let a
+  // truncated run's partial text reach the user with its citations unchecked.
+  it("runs the citation post-check on a truncated run's partial answer", async () => {
+    const db = getDb();
+    const srcId = await insertSource(db, "src-trunc-test");
+    await grantRead(db, DEFAULT_ACTOR, "src-trunc-test");
+    const chunkId = await insertChunk(db, {
+      sourceRecordId: srcId,
+      text: "Dana responded to sourcing outreach",
+      citation: "src-trunc-test#chunk-1",
+    });
+    await insertFact(db, {
+      subject: "Dana",
+      predicate: "status",
+      object: "responded",
+      status: "accepted",
+      sourceRecordId: srcId,
+      sourceChunkId: chunkId,
+    });
+
+    const adapter = sequentialAdapter([
+      () => toolCallTurn("search_memory", { query: "who responded" }),
+      // Narrates a real citation alongside an invented one, then calls another
+      // tool — so the run is still mid-chain when it runs out of steps.
+      () =>
+        narratedToolCallTurn(
+          "So far: Dana responded src-trunc-test#chunk-1 and ghost#chunk-99. Checking more.",
+          "search_memory",
+          { query: "anyone else" }
+        ),
+    ]);
+
+    const result = await answerWithMemory(db, {
+      question: "who responded?",
+      actor: DEFAULT_ACTOR,
+      adapter,
+      maxSteps: 2,
+    });
+
+    expect(result.status).toBe("truncated");
+    expect(result.answer).toBeTruthy();
+    expect(result.invalidCitations).toContain("ghost#chunk-99");
+    expect(result.answer).not.toContain("ghost#chunk-99");
+    // The real citation survives the scrub.
+    expect(result.answer).toContain("src-trunc-test#chunk-1");
   });
 });

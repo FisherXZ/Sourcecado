@@ -12,7 +12,7 @@ export interface ChatStep {
 
 export interface ChatMeta {
   runId: number;
-  status: "succeeded" | "failed";
+  status: "succeeded" | "truncated" | "failed";
   steps: number;
   invalidCitations: string[];
 }

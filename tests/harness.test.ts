@@ -38,6 +38,17 @@ async function* finalTurn(answer: string): AsyncGenerator<LlmStreamEvent> {
   yield { type: "turn_end", stopReason: "end", usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 } };
 }
 
+async function* narratedToolCallTurn(
+  text: string,
+  toolName: string,
+  args: unknown
+): AsyncGenerator<LlmStreamEvent> {
+  yield { type: "text_delta", delta: text };
+  yield { type: "tool_call_start", id: "call-1", name: toolName };
+  yield { type: "tool_call_end", id: "call-1", name: toolName, input: args };
+  yield { type: "turn_end", stopReason: "tool_use", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+}
+
 const ALLOWED = new Set<Tool["permissionClass"]>(["read", "reason"]);
 
 describe("runAgent", () => {
@@ -126,10 +137,12 @@ describe("runAgent", () => {
     });
   });
 
-  it("fails the run when maxSteps is exceeded", async () => {
+  it("truncates the run when maxSteps is exceeded, returning the partial answer", async () => {
     const db = getDb();
     const registry = createToolRegistry([echoTool]);
-    const adapter = sequentialAdapter([() => toolCallTurn("echo", { text: "again" })]);
+    const adapter = sequentialAdapter([
+      () => narratedToolCallTurn("Checked memory; still verifying emails.", "echo", { text: "again" }),
+    ]);
 
     const result = await runAgent({
       question: "loop forever",
@@ -139,11 +152,16 @@ describe("runAgent", () => {
       adapter,
     });
 
-    expect(result.status).toBe("failed");
+    expect(result.status).toBe("truncated");
     expect(result.steps).toBe(3);
+    expect(result.answer).toBe("Checked memory; still verifying emails.");
+
+    // The run produced work, so the ledger records it as finished with a
+    // truncation marker rather than as a failure.
     const trace = await getRunTrace(db, result.runId);
-    expect(trace?.status).toBe("failed");
-    expect(trace?.errorType).toBe("max_steps_exceeded");
+    expect(trace?.status).toBe("succeeded");
+    expect(trace?.errorType).toBeNull();
+    expect(trace?.output).toMatchObject({ truncated: true, steps: 3 });
   });
 
   it("feeds a tool execution error back and lets the model recover", async () => {
