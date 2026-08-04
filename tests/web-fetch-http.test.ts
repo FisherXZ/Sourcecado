@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
+import { gzipSync } from "node:zlib";
 import { fetchCapped, pinnedLookup } from "@/lib/tools/web-fetch-http";
 
 // Transport-level tests. These run against a real loopback HTTP server rather
@@ -133,6 +134,84 @@ describe("fetchCapped", () => {
       expect(res.status).toBe(302);
       expect(res.location).toBe("https://elsewhere.test/next");
       expect(res.text).toBe("");
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("closes the socket on a redirect instead of draining its body", async () => {
+    // Without the destroy, res.resume() keeps reading in the background after
+    // the promise settles — past the byte cap and past the cleared deadline.
+    let pushed = 0;
+    let clientGone = false;
+    const { server, port } = await listen((_req, res) => {
+      res.writeHead(302, { location: "https://elsewhere.test/next" });
+      const chunk = "x".repeat(64 * 1024);
+      const pump = (): void => {
+        if (clientGone || pushed > 8 * 1024 * 1024) return void res.end();
+        pushed += chunk.length;
+        if (res.write(chunk)) setImmediate(pump);
+        else res.once("drain", pump);
+      };
+      res.on("close", () => { clientGone = true; });
+      pump();
+    });
+    try {
+      const res = await fetchCapped({
+        url: `http://127.0.0.1:${port}/go`,
+        address: "127.0.0.1",
+        family: 4,
+        maxBytes: 10_000,
+        timeoutMs: 5_000,
+      });
+      expect(res.status).toBe(302);
+      await new Promise((r) => setTimeout(r, 250)); // let a leaked drain accumulate
+      expect(clientGone).toBe(true);
+      expect(pushed).toBeLessThan(4 * 1024 * 1024);
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("requests identity encoding and refuses a compressed response", async () => {
+    // http.request sends no Accept-Encoding of its own and does not decompress,
+    // so an encoded body would reach htmlToText() as binary garbage.
+    let accept: string | undefined;
+    const { server, port } = await listen((req, res) => {
+      accept = req.headers["accept-encoding"];
+      res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip" });
+      res.end(gzipSync(Buffer.from("<h1>Hello</h1>")));
+    });
+    try {
+      await expect(
+        fetchCapped({
+          url: `http://127.0.0.1:${port}/gz`,
+          address: "127.0.0.1",
+          family: 4,
+          maxBytes: 10_000,
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow(/refusing gzip-encoded response/);
+      expect(accept).toBe("identity");
+    } finally {
+      await close(server);
+    }
+  });
+
+  it("does not reuse pooled sockets between calls to the same host and port", async () => {
+    // The default global agent keys its pool on host:port and ignores `lookup`,
+    // so a reused socket could serve a hop that never ran pinnedLookup.
+    let connections = 0;
+    const { server, port } = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+    });
+    server.on("connection", () => { connections++; });
+    try {
+      const opts = { address: "127.0.0.1", family: 4, maxBytes: 10_000, timeoutMs: 5_000 };
+      await fetchCapped({ url: `http://127.0.0.1:${port}/one`, ...opts });
+      await fetchCapped({ url: `http://127.0.0.1:${port}/two`, ...opts });
+      expect(connections).toBe(2);
     } finally {
       await close(server);
     }

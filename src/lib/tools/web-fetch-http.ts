@@ -68,6 +68,17 @@ export function fetchCapped(opts: FetchCappedOptions): Promise<CappedResponse> {
         port: url.port || (isHttps ? 443 : 80),
         path: `${url.pathname}${url.search}`,
         lookup: pinnedLookup(opts.address, opts.family), // ...only the socket is pinned
+        // Ask for no compression. Decompressing would move the byte cap off the
+        // wire and onto the decoded output, which reopens the unbounded-memory
+        // hole this transport exists to close (a 500KB gzip expands to GBs).
+        // Unlike fetch(), http.request sends no Accept-Encoding of its own, so
+        // this is explicit rather than a downgrade.
+        headers: { "accept-encoding": "identity" },
+        // Do not pool. The default global agent keys sockets on host:port and
+        // ignores `lookup`, so a pooled socket could serve a hop that never ran
+        // pinnedLookup — weakening "this connection goes to the address we just
+        // validated" into "…to an address we validated at some point".
+        agent: false,
       },
       (res) => {
         const base = {
@@ -77,10 +88,26 @@ export function fetchCapped(opts: FetchCappedOptions): Promise<CappedResponse> {
           location: header(res, "location"),
         };
 
-        // Redirect bodies are never used — discard rather than buffer.
+        // Redirect bodies are never used. Close the socket rather than draining
+        // it: res.resume() would keep reading in the background after we
+        // resolve, past both the byte cap and the (already cleared) deadline —
+        // and web-fetch.ts allows 5 hops, so one call could leave several
+        // sockets draining.
         if (base.status >= 300 && base.status < 400) {
-          res.resume();
           settle(() => resolve({ ...base, text: "", truncated: false }));
+          req.destroy();
+          return;
+        }
+
+        // A server may compress anyway despite the identity request. Decoding
+        // bytes we cannot decode would hand htmlToText() binary garbage, so
+        // fail loudly instead of returning corrupted "text".
+        const encoding = header(res, "content-encoding");
+        if (encoding && encoding.toLowerCase() !== "identity") {
+          settle(() =>
+            reject(new Error(`web_fetch: refusing ${encoding}-encoded response (identity was requested)`)),
+          );
+          req.destroy();
           return;
         }
 
