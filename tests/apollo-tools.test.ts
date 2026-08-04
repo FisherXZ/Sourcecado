@@ -183,6 +183,33 @@ describe("apollo tools", () => {
         ),
       ).rejects.toThrow(/Unexpected token/);
     });
+
+    // The fixtures above are captured from a real response, so they start out
+    // correct — and then rot silently the day Apollo changes the contract.
+    // Only a real call catches that. Gated on the explicit SOURCECADO_RUN_LIVE_SMOKE
+    // opt-in because each run spends an Apollo credit; .env.local carries
+    // APOLLO_API_KEY for the DB suites, so key presence is not the right gate.
+    it.skipIf(!process.env.SOURCECADO_RUN_LIVE_SMOKE)(
+      "live: search still returns the fields we map (opt-in via SOURCECADO_RUN_LIVE_SMOKE)",
+      async () => {
+        const result = await apolloSearchPeopleTool.execute(
+          { organizationName: "Anthropic", limit: 2 },
+          { db: getDb(), runId: 0, parentStepId: 0 },
+        );
+
+        expect(result.people.length).toBeGreaterThan(0);
+        for (const person of result.people) {
+          expect(typeof person.apolloId).toBe("string");
+          expect(person.apolloId).not.toBe("");
+          expect(typeof person.firstName).toBe("string");
+          expect(typeof person.organizationName).toBe("string");
+          expect(typeof person.hasEmail).toBe("boolean");
+          // Apollo sends this as a status string, not a boolean. If it ever
+          // becomes one, directPhoneStatus is the wrong shape and this fails.
+          expect(typeof person.directPhoneStatus).not.toBe("boolean");
+        }
+      },
+    );
   });
 
   describe("apolloEnrichContactTool", () => {
