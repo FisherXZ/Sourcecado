@@ -128,6 +128,11 @@ tool doctrine(§5) · formatting(§7) · safety/limits (distributed: send
 boundary + personalization guard §4, citation honesty §5) · env(dynamic
 suffix). Cache boundary is structural, not prose.
 
+Resolved 2026-08-04 (J1 audit): the `(tool doctrine)` in §5's heading is a slot
+annotation, not prompt text — §5 is the only heading carrying its slot name, and
+the only one whose mapping isn't self-evident. The shipped title stays
+`Memory & citations`. The fidelity test pins section **bodies**, not headings.
+
 ## Post-hotfix follow-ups
 
 - R7 registers web_search/web_fetch/apollo into the chat registry (see R7
@@ -135,3 +140,7 @@ suffix). Cache boundary is structural, not prose.
   activate then. Chat runs will allow `enrich` freely; **per-run cost control
   is an urgent post-R9 follow-up** (Fisher, 2026-07-15).
 - v2: externalize §1+§4 to a team-editable doc, SOUL.md-style.
+  **Done 2026-08-04 (J1)**, and wider than planned: all seven sections now live
+  in `personas/sourcing.md`, whose frontmatter also binds the toolset. Splitting
+  the prompt across a `.ts` half and an `.md` half would have made future audits
+  harder than either pure option.
