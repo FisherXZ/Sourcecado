@@ -7,10 +7,9 @@ import {
   buildMemoryIndexSection,
   buildMemoryAnswerInstructions,
   buildEnvironmentSection,
-  IDENTITY_SECTION,
-  STATIC_SECTIONS,
   type SystemPromptSection,
 } from "@/lib/context";
+import { loadPersona } from "@/lib/persona";
 
 async function resetMemoryTables(): Promise<void> {
   const db = getDb();
@@ -52,9 +51,9 @@ describe("buildSystemPrompt", () => {
   });
 });
 
-describe("static sections (v5)", () => {
-  it("STATIC_SECTIONS are the seven v5 sections in §1–§7 order", () => {
-    expect(STATIC_SECTIONS.map((s) => s.title)).toEqual([
+describe("static sections (v5, from the sourcing persona)", () => {
+  it("are the seven v5 sections in §1–§7 order", () => {
+    expect(loadPersona().sections.map((s) => s.title)).toEqual([
       "Identity & mission",
       "Persistence",
       "Acting vs asking",
@@ -63,16 +62,16 @@ describe("static sections (v5)", () => {
       "Capabilities envelope",
       "Communication",
     ]);
-    expect(STATIC_SECTIONS[0]).toBe(IDENTITY_SECTION);
   });
 
   it("carries the v5 doctrine, not the retired free-format guidance", () => {
-    const doctrine = STATIC_SECTIONS.find((s) => s.title === "Sourcing doctrine")!;
+    const sections = loadPersona().sections;
+    const doctrine = sections.find((s) => s.title === "Sourcing doctrine")!;
     expect(doctrine.body).toMatch(/why-now/);
-    const memory = STATIC_SECTIONS.find((s) => s.title === "Memory & citations")!;
+    const memory = sections.find((s) => s.title === "Memory & citations")!;
     expect(memory.body).toMatch(/sourceId#chunk-N/);
     // No section carries the deleted identity text.
-    expect(STATIC_SECTIONS.some((s) => /sourcing agent with access to team memory/.test(s.body))).toBe(false);
+    expect(sections.some((s) => /sourcing agent with access to team memory/.test(s.body))).toBe(false);
   });
 });
 
@@ -166,7 +165,7 @@ describe("buildMemoryAnswerInstructions (postgres)", () => {
     const instructions = await buildMemoryAnswerInstructions(db, DEFAULT_ACTOR);
 
     // Every static header appears, in §1–§7 order.
-    const staticIdxs = STATIC_SECTIONS.map((s) => instructions.indexOf(`## ${s.title}`));
+    const staticIdxs = loadPersona().sections.map((s) => instructions.indexOf(`## ${s.title}`));
     expect(staticIdxs.every((i) => i >= 0)).toBe(true);
     for (let i = 1; i < staticIdxs.length; i++) {
       expect(staticIdxs[i]).toBeGreaterThan(staticIdxs[i - 1]);
