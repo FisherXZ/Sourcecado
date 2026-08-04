@@ -5,6 +5,7 @@ import { getRunTrace } from "@/lib/ledger";
 import type { LlmAdapter, LlmMessage } from "@/lib/llm/types";
 import { verifyAnswerCitations } from "@/lib/memory/citations";
 import { memoryRegistry } from "@/lib/memory/answer-config";
+import { loadPersona } from "@/lib/persona";
 import type { Sql } from "@/lib/tools/types";
 import type { MemoryActor } from "@/lib/memory/actor";
 
@@ -46,11 +47,15 @@ export interface AnswerWithMemoryInput {
 // onStep). The post-check runs here, before any answer is returned/streamed, so a
 // bad citation never reaches the client.
 export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): Promise<MemoryAnswer> {
-  const registry = memoryRegistry();
+  // One load per run: the prompt sections and the toolset come from the same
+  // persona file, so a persona edit can never leave §6's capability claim
+  // describing a different tool list than the one actually registered.
+  const persona = loadPersona();
+  const registry = memoryRegistry(persona);
   // Scoped to the actor: the system prompt embeds a memory index listing source
   // titles, so an unscoped build would leak another director's source names in
   // the prompt even though search_memory itself is filtered.
-  const instructions = await buildMemoryAnswerInstructions(db, input.actor);
+  const instructions = await buildMemoryAnswerInstructions(db, input.actor, persona);
   const result = await runAgent({
     question: input.question,
     actor: input.actor,
