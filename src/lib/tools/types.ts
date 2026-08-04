@@ -1,5 +1,6 @@
 import type postgres from "postgres";
 import type { z } from "zod";
+import type { MemoryActor } from "../memory/actor";
 
 export type Sql = postgres.Sql;
 
@@ -24,6 +25,11 @@ export interface ToolContext {
   db: Sql;
   runId: number;
   parentStepId: number;
+  // Who this run executes as. Required, with no DEFAULT_ACTOR fallback: memory
+  // tools filter on it, so a forgotten actor would silently read another
+  // director's sources. Required makes that a compile error instead. Tests and
+  // CLI scripts pass DEFAULT_ACTOR explicitly.
+  actor: MemoryActor;
 }
 
 export interface Tool<TArgs = unknown, TResult = unknown> {

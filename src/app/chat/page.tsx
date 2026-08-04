@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getDb } from "@/lib/db";
 import { createSession, getOrCreateLatestSession, loadSessionMessages } from "@/lib/chat/sessions";
-import { DEFAULT_ACTOR } from "@/lib/memory/actor";
+import { requireActor } from "@/lib/auth/actor";
 import { mapMessagesToResumedExchanges } from "./resume";
 import { ChatClient } from "./ChatClient";
 
@@ -12,16 +12,17 @@ export default async function ChatPage({
 }) {
   const { new: forceNew } = await searchParams;
   const db = getDb();
+  const actor = await requireActor();
 
   // Presence of `?new` starts a fresh session, but guard the obvious falsy
   // strings — `?new=0` / `?new=false` read as "not new" and shouldn't create
   // one (the "New chat" link always passes `?new=1`).
   if (forceNew && forceNew !== "0" && forceNew !== "false") {
-    await createSession(db, DEFAULT_ACTOR);
+    await createSession(db, actor);
     redirect("/chat");
   }
 
-  const session = await getOrCreateLatestSession(db, DEFAULT_ACTOR);
+  const session = await getOrCreateLatestSession(db, actor);
   const messages = await loadSessionMessages(db, session.id);
   const initialExchanges = mapMessagesToResumedExchanges(messages);
 

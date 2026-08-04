@@ -6,6 +6,7 @@ import type { LlmAdapter, LlmMessage } from "@/lib/llm/types";
 import { verifyAnswerCitations } from "@/lib/memory/citations";
 import { memoryRegistry } from "@/lib/memory/answer-config";
 import type { Sql } from "@/lib/tools/types";
+import type { MemoryActor } from "@/lib/memory/actor";
 
 export interface MemoryAnswer {
   runId: number;
@@ -20,6 +21,9 @@ export interface MemoryAnswer {
 
 export interface AnswerWithMemoryInput {
   question: string;
+  // The signed-in director this run answers for (H1). Scopes every
+  // search_memory hit and stamps the ledger run.
+  actor: MemoryActor;
   history?: ConversationTurn[];
   // Full-fidelity prior session messages (R6), forwarded straight through to
   // runAgent's priorMessages — see RunAgentInput.priorMessages.
@@ -43,9 +47,13 @@ export interface AnswerWithMemoryInput {
 // bad citation never reaches the client.
 export async function answerWithMemory(db: Sql, input: AnswerWithMemoryInput): Promise<MemoryAnswer> {
   const registry = memoryRegistry();
-  const instructions = await buildMemoryAnswerInstructions(db);
+  // Scoped to the actor: the system prompt embeds a memory index listing source
+  // titles, so an unscoped build would leak another director's source names in
+  // the prompt even though search_memory itself is filtered.
+  const instructions = await buildMemoryAnswerInstructions(db, input.actor);
   const result = await runAgent({
     question: input.question,
+    actor: input.actor,
     history: input.history,
     priorMessages: input.priorMessages,
     registry,

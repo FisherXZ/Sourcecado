@@ -3,7 +3,7 @@ import { getDb } from "@/lib/db";
 import { appendMessages, getOrCreateLatestSession, loadSessionMessages } from "@/lib/chat/sessions";
 import type { ConversationTurn } from "@/lib/harness";
 import { answerWithMemory, summarizeStep } from "@/lib/memory/answer";
-import { DEFAULT_ACTOR } from "@/lib/memory/actor";
+import { requireActor } from "@/lib/auth/actor";
 import { streamAgentResponse } from "@/lib/ui-message-stream";
 import type { LlmAssistantBlock, LlmMessage, LlmUserMessage } from "@/lib/llm/types";
 
@@ -29,12 +29,13 @@ export async function POST(request: Request) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- parsed for validation only, deliberately not forwarded (see comment above)
   const history = parseHistory((body as { history?: unknown } | null)?.history);
   const db = getDb();
+  const actor = await requireActor();
 
   // Chat-session continuity (R6): resume this actor's latest session and load
   // its prior turns (already LlmMessage-shaped, full fidelity) before the
   // turn's input is assembled. The new user message is persisted immediately
   // — durable even if the loop below fails or the request aborts.
-  const session = await getOrCreateLatestSession(db, DEFAULT_ACTOR);
+  const session = await getOrCreateLatestSession(db, actor);
   const priorMessages = await loadSessionMessages(db, session.id);
   const userMessage: LlmUserMessage = { role: "user", content: question };
   await appendMessages(db, session.id, [userMessage]);
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
 
     const result = await answerWithMemory(db, {
       question,
+      actor,
       priorMessages,
       // Abort the run when the client disconnects (or the client-side 90s
       // timeout fires): Next aborts request.signal on connection close, and the

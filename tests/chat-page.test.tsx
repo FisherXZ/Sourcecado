@@ -15,6 +15,9 @@ vi.mock("@/lib/chat/sessions", () => ({
 }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
 vi.mock("next/navigation", () => ({ redirect: redirectMock }));
+vi.mock("@/lib/auth/actor", () => ({
+  requireActor: vi.fn().mockResolvedValue({ actorType: "user", actorId: "1" }),
+}));
 
 import ChatPage from "@/app/chat/page";
 import { ChatClient } from "@/app/chat/ChatClient";

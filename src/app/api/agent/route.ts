@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { type ConversationTurn } from "@/lib/harness";
 import { answerWithMemory } from "@/lib/memory/answer";
+import { requireActor } from "@/lib/auth/actor";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -13,7 +14,8 @@ export async function POST(request: Request) {
 
   try {
     const db = getDb();
-    const result = await answerWithMemory(db, { question, history });
+    const actor = await requireActor();
+    const result = await answerWithMemory(db, { question, actor, history });
     return NextResponse.json(result, {
       status: result.status === "succeeded" ? 200 : 500,
     });

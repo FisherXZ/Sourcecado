@@ -40,7 +40,8 @@ export async function getOrCreateLatestSession(db: Sql, actor: MemoryActor = DEF
 // dropped INSERT mid-call would otherwise leave an unpaired tool_use row
 // that every future turn re-threads into the model, which providers reject.
 // The `FOR UPDATE` row lock serializes concurrent appends to the same session
-// (reachable in v1 because every client shares DEFAULT_ACTOR): without it, two
+// (still reachable after H1 — one director with two tabs resumes the same
+// latest session, and H2 team sharing widens it): without it, two
 // overlapping transactions can interleave the auto-incremented message ids and
 // drop another turn's row between an assistant tool_use and its tool_result,
 // breaking the same adjacency the transaction exists to protect.

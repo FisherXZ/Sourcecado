@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { setSourceArchived } from "@/lib/memory/sources";
+import { requireActor } from "@/lib/auth/actor";
 
 // Soft-archive (default) or un-archive a source. Body { archived?: boolean } —
 // omit or true to archive, false to restore. 404 if the source is unknown or
@@ -29,7 +30,8 @@ export async function POST(
   }
 
   try {
-    const result = await setSourceArchived(getDb(), { sourceId: id, archived });
+    const actor = await requireActor();
+    const result = await setSourceArchived(getDb(), { sourceId: id, archived, actor });
     if (!result) {
       return NextResponse.json({ error: "source not found" }, { status: 404 });
     }

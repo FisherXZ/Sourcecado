@@ -4,6 +4,8 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import { AppShell } from "@/components/ui";
 import { NAV } from "@/lib/nav";
+import { currentUser } from "@/lib/auth/actor";
+import { signOut } from "@/auth";
 
 const generalSans = localFont({
   src: [
@@ -21,9 +23,13 @@ export const metadata: Metadata = {
   description: "Hosted team sourcing operating system for Codeology",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  // Signed out (i.e. /login) renders bare: the nav and user chip would
+  // otherwise advertise routes the visitor cannot reach.
+  const user = await currentUser();
+
   return (
     <html
       lang="en"
@@ -31,9 +37,31 @@ export default function RootLayout({
       className={`${generalSans.variable} ${GeistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-canvas text-text font-sans">
-        <AppShell nav={NAV} user={{ name: "Sourcing Director", role: "Codeology" }}>
-          {children}
-        </AppShell>
+        {user ? (
+          <AppShell
+            nav={NAV}
+            user={{ name: user.name, role: user.email }}
+            userAction={
+              <form
+                action={async () => {
+                  "use server";
+                  await signOut({ redirectTo: "/login" });
+                }}
+              >
+                <button
+                  type="submit"
+                  className="text-[11px] text-muted underline hover:text-accent-deep"
+                >
+                  Sign out
+                </button>
+              </form>
+            }
+          >
+            {children}
+          </AppShell>
+        ) : (
+          children
+        )}
       </body>
     </html>
   );

@@ -1,4 +1,5 @@
 import type postgres from "postgres";
+import type { MemoryActor } from "./memory/actor";
 
 export type RunStatus = "running" | "succeeded" | "failed" | "cancelled";
 export type RunStepStatus = RunStatus | "skipped";
@@ -24,6 +25,8 @@ export interface RunRecord {
   errorType: string | null;
   errorMessage: string | null;
   error: unknown;
+  // Null for runs with no signed-in user (CLI ingest, maintenance).
+  actor: MemoryActor | null;
   startedAt: Date;
   completedAt: Date | null;
   createdAt: Date;
@@ -109,6 +112,10 @@ export interface StartRunInput {
   title?: string | null;
   input?: unknown;
   metadata?: unknown;
+  // Optional here, unlike on the agent path: CLI ingest and maintenance runs
+  // legitimately have no signed-in user, and runs.actor_* is nullable so those
+  // record as unattributed rather than borrowing someone's identity.
+  actor?: MemoryActor;
 }
 
 export interface FinishRunInput {
@@ -179,8 +186,11 @@ export async function startRun(db: Sql, input: StartRunInput): Promise<RunRecord
   const inputJson = toJson(db, input.input);
   const metadataJson = toJson(db, input.metadata);
   const [row] = await db`
-    INSERT INTO runs (run_type, title, status, input_json, metadata_json)
-    VALUES (${input.runType}, ${input.title ?? null}, 'running', ${inputJson}, ${metadataJson})
+    INSERT INTO runs (run_type, title, status, input_json, metadata_json, actor_type, actor_id)
+    VALUES (
+      ${input.runType}, ${input.title ?? null}, 'running', ${inputJson}, ${metadataJson},
+      ${input.actor?.actorType ?? null}, ${input.actor?.actorId ?? null}
+    )
     RETURNING *
   `;
   return mapRun(row);
@@ -461,11 +471,21 @@ function mapRun(row: Row): RunRecord {
     errorType: nullableString(row.error_type),
     errorMessage: nullableString(row.error_message),
     error: row.error_json ?? null,
+    actor: mapActor(row),
     startedAt: row.started_at as Date,
     completedAt: nullableDate(row.completed_at),
     createdAt: row.created_at as Date,
     updatedAt: row.updated_at as Date,
   };
+}
+
+// Both columns are written together in startRun, so either being null means
+// the run is unattributed.
+function mapActor(row: Row): MemoryActor | null {
+  const actorType = nullableString(row.actor_type);
+  const actorId = nullableString(row.actor_id);
+  if (!actorType || !actorId) return null;
+  return { actorType: actorType as MemoryActor["actorType"], actorId };
 }
 
 function mapRequiredRunStep(row: Row | undefined, id: number): RunStepRecord {

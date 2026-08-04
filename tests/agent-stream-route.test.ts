@@ -13,6 +13,9 @@ vi.mock("@/lib/harness", () => ({
 }));
 vi.mock("@/lib/ledger", () => ({ getRunTrace: getRunTraceMock }));
 vi.mock("@/lib/db", () => ({ getDb: vi.fn().mockReturnValue({}) }));
+vi.mock("@/lib/auth/actor", () => ({
+  requireActor: vi.fn().mockResolvedValue({ actorType: "user", actorId: "1" }),
+}));
 vi.mock("@/lib/context", () => ({
   buildMemoryAnswerInstructions: vi.fn().mockResolvedValue("stub instructions"),
 }));
@@ -23,7 +26,9 @@ vi.mock("@/lib/chat/sessions", () => ({
 }));
 
 import { POST } from "@/app/api/agent/stream/route";
-import { DEFAULT_ACTOR } from "@/lib/memory/actor";
+
+// The signed-in actor the mocked requireActor above resolves to.
+const SIGNED_IN_ACTOR = { actorType: "user", actorId: "1" };
 
 // Minimal transcript shape (system + user + one produced assistant message)
 // for tests that don't care about the exact messages[] content — just that
@@ -287,7 +292,7 @@ describe("POST /api/agent/stream", () => {
       const res = await POST(postRequest({ question: "follow-up question" }));
       await readAll(res);
 
-      expect(getOrCreateLatestSessionMock).toHaveBeenCalledWith(expect.anything(), DEFAULT_ACTOR);
+      expect(getOrCreateLatestSessionMock).toHaveBeenCalledWith(expect.anything(), SIGNED_IN_ACTOR);
       expect(loadSessionMessagesMock).toHaveBeenCalledWith(expect.anything(), 7);
       expect(runAgentMock).toHaveBeenCalledWith(expect.objectContaining({ priorMessages: prior }));
     });

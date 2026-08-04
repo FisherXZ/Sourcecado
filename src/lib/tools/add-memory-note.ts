@@ -10,6 +10,11 @@ export const addMemoryNoteTool: Tool<{ title: string; text: string }, { sourceId
   async execute(args, ctx) {
     // Stamp the writing run so a note produced by a (possibly prompt-injected)
     // chat run is traceable back to that run and archivable.
-    return addMemoryNote(ctx.db, { title: args.title, text: args.text, runId: ctx.runId });
+    return addMemoryNote(ctx.db, {
+      title: args.title,
+      text: args.text,
+      runId: ctx.runId,
+      actor: ctx.actor,
+    });
   },
 };

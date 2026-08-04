@@ -10,12 +10,17 @@ export function AppShell({
   nav,
   activeHref,
   user,
+  userAction,
   inspector,
   children,
 }: {
   nav: NavItem[];
   activeHref?: string;
   user?: { name: string; role: string };
+  // Optional control pinned beside the user chip (H1 uses it for sign-out).
+  // A slot rather than a `onSignOut` prop because AppShell is a client
+  // component and the caller passes a server action.
+  userAction?: ReactNode;
   inspector?: ReactNode;
   children: ReactNode;
 }) {
@@ -69,10 +74,11 @@ export function AppShell({
             <span className="grid h-[26px] w-[26px] place-items-center rounded-full bg-pit text-[11px] font-semibold text-white">
               {user.name.slice(0, 2).toUpperCase()}
             </span>
-            <div>
-              <div className="text-[12.5px] font-medium">{user.name}</div>
-              <div className="text-[11px] text-muted">{user.role}</div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[12.5px] font-medium">{user.name}</div>
+              <div className="truncate text-[11px] text-muted">{user.role}</div>
             </div>
+            {userAction}
           </div>
         )}
       </aside>

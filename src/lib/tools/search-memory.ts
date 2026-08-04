@@ -12,6 +12,9 @@ export const searchMemoryTool: Tool<{ query: string; limit?: number }, MemoryBun
     limit: z.number().int().positive().optional(),
   }),
   async execute(args, ctx) {
-    return searchMemory(ctx.db, { query: args.query, limit: args.limit });
+    // Retrieval permission-filters on the actor before the vector search
+    // (ADR-0001), so passing ctx.actor is what scopes the agent to the
+    // signed-in director's sources instead of every source in the database.
+    return searchMemory(ctx.db, { query: args.query, limit: args.limit, actor: ctx.actor });
   },
 };

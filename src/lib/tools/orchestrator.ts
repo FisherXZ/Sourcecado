@@ -10,6 +10,7 @@ import {
 import type { LlmToolDefinition } from "../llm/types";
 import type { ToolRegistry } from "./registry";
 import type { PermissionClass, Sql, Tool } from "./types";
+import type { MemoryActor } from "../memory/actor";
 
 export const TOOL_RESULT_MAX_CHARS = 16_000;
 
@@ -30,13 +31,14 @@ export interface ExecuteToolInput {
   db: Sql;
   runId: number;
   parentStepId: number;
+  actor: MemoryActor;
 }
 
 // The choke point every tool call passes through: validate → permission gate
 // → execute → ledger log → truncate. Denials and failures return an is_error
 // result; nothing throws.
 export async function executeTool(opts: ExecuteToolInput): Promise<ToolExecutionResult> {
-  const { name, input, registry, allowed, db, runId, parentStepId } = opts;
+  const { name, input, registry, allowed, db, runId, parentStepId, actor } = opts;
   const tool = registry.get(name);
 
   // Ledger rows open unconditionally before any validation so every branch
@@ -80,7 +82,7 @@ export async function executeTool(opts: ExecuteToolInput): Promise<ToolExecution
   }
 
   try {
-    const result = await tool.execute(parsed.data, { db, runId, parentStepId: toolStep.id });
+    const result = await tool.execute(parsed.data, { db, runId, parentStepId: toolStep.id, actor });
     await finishToolCall(db, { toolCallId: toolCall.id, result });
     await finishRunStep(db, { runStepId: toolStep.id, output: result });
     return { content: truncate(`Success: ${JSON.stringify(result)}`), isError: false };
