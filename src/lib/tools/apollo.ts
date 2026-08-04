@@ -38,12 +38,22 @@ export const apolloSearchPeopleArgsSchema = z
   });
 export type ApolloSearchPeopleArgs = z.infer<typeof apolloSearchPeopleArgsSchema>;
 
+// Shape verified live against mixed_people/api_search on 2026-08-04 (50
+// records). Search deliberately withholds contact detail on this plan: no
+// `name`, `email`, or `linkedin_url` is ever sent — the last name arrives
+// obfuscated ("Do***e") and email/phone reduce to existence signals. Reading
+// fields Apollo does not send is what this shape replaces; do not add them back.
 export interface ApolloPersonSummary {
-  name: string | null;
+  apolloId: string | null;
+  firstName: string | null;
+  lastNameObfuscated: string | null;
   title: string | null;
   organizationName: string | null;
-  linkedinUrl: string | null;
-  email: string | null;
+  hasEmail: boolean;
+  // Apollo sends a string here, not a boolean: "Yes" or "Maybe: please request
+  // direct dial via people/bulk_match". Passed through verbatim — collapsing
+  // "Maybe" into false would assert an absence Apollo never claimed.
+  directPhoneStatus: string | null;
 }
 
 export interface ApolloSearchPeopleResult {
@@ -52,18 +62,22 @@ export interface ApolloSearchPeopleResult {
 
 interface ApolloSearchResponse {
   people?: Array<{
-    name?: string;
+    id?: string;
+    first_name?: string;
+    last_name_obfuscated?: string | null;
     title?: string;
+    has_email?: boolean;
+    has_direct_phone?: string;
     organization?: { name?: string };
-    linkedin_url?: string;
-    email?: string;
   }>;
 }
 
 export const apolloSearchPeopleTool: Tool<ApolloSearchPeopleArgs, ApolloSearchPeopleResult> = {
   name: "apollo_search_people",
   description:
-    "Search for people at a target organization via Apollo. Provide organizationName and/or personTitles.",
+    "Search for people at a target organization via Apollo. Provide organizationName and/or personTitles. " +
+    "Returns who exists and their titles only — no email and no full last name. To reach someone, resolve " +
+    "their full name first (web_search / web_fetch), then call apollo_enrich_contact for a verified email.",
   permissionClass: "enrich",
   argsSchema: apolloSearchPeopleArgsSchema,
   async execute(args) {
@@ -75,11 +89,13 @@ export const apolloSearchPeopleTool: Tool<ApolloSearchPeopleArgs, ApolloSearchPe
     })) as ApolloSearchResponse;
 
     const people: ApolloPersonSummary[] = (data.people ?? []).map((p) => ({
-      name: p.name ?? null,
+      apolloId: p.id ?? null,
+      firstName: p.first_name ?? null,
+      lastNameObfuscated: p.last_name_obfuscated ?? null,
       title: p.title ?? null,
       organizationName: p.organization?.name ?? null,
-      linkedinUrl: p.linkedin_url ?? null,
-      email: p.email ?? null,
+      hasEmail: p.has_email ?? false,
+      directPhoneStatus: p.has_direct_phone ?? null,
     }));
     return { people };
   },
