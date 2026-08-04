@@ -1,6 +1,12 @@
 import { lookup } from "node:dns/promises";
 import { getDb } from "@/lib/db";
-import { htmlToText, isBlockedIp, webFetchTool, WEB_FETCH_MAX_CHARS } from "@/lib/tools/web-fetch";
+import { fetchCapped } from "@/lib/tools/web-fetch-http";
+import {
+  htmlToText,
+  isBlockedIp,
+  webFetchTool,
+  WEB_FETCH_MAX_BYTES,
+} from "@/lib/tools/web-fetch";
 
 // SSRF guard resolves hosts via dns.lookup — mock it so execute() tests never
 // touch real DNS. Default: every host resolves to a public address; SSRF tests
@@ -9,15 +15,28 @@ vi.mock("node:dns/promises", () => ({ lookup: vi.fn() }));
 const lookupMock = vi.mocked(lookup);
 const PUBLIC = [{ address: "93.184.216.34", family: 4 }];
 
+// The transport is mocked here so these tests cover the guard and the redirect
+// loop. The transport's own behaviour (pinning, byte cap) is covered against a
+// real socket in web-fetch-http.test.ts.
+vi.mock("@/lib/tools/web-fetch-http", () => ({ fetchCapped: vi.fn() }));
+const fetchMock = vi.mocked(fetchCapped);
+
+const ok = (text: string, contentType: string | null = "text/html", truncated = false) => ({
+  status: 200,
+  statusText: "OK",
+  contentType,
+  location: null,
+  text,
+  truncated,
+});
+
 const ctx = () => ({ db: getDb(), runId: 0, parentStepId: 0 });
 
 describe("webFetchTool", () => {
   beforeEach(() => {
     lookupMock.mockReset();
     lookupMock.mockResolvedValue(PUBLIC as never);
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
+    fetchMock.mockReset();
   });
 
   it("is an enrich-class tool named web_fetch", () => {
@@ -61,12 +80,46 @@ describe("webFetchTool", () => {
 
   it("refuses a host that resolves to a non-public address (SSRF)", async () => {
     lookupMock.mockResolvedValue([{ address: "169.254.169.254", family: 4 }] as never);
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
     await expect(webFetchTool.execute({ url: "https://metadata.evil.test/" }, ctx())).rejects.toThrow(
       /non-public address 169\.254\.169\.254/,
     );
     expect(fetchMock).not.toHaveBeenCalled(); // blocked before any network call
+  });
+
+  it("hands the transport the address it validated, not the hostname (DNS-rebinding pin)", async () => {
+    // The guard resolves once; that exact address must be what the connection
+    // uses. If the transport were left to re-resolve, a hostname whose DNS flips
+    // to 169.254.169.254 between validation and connect would reach the metadata
+    // service — the TOCTOU window PR #18 left open.
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }] as never);
+    fetchMock.mockResolvedValue(ok("<p>hi</p>"));
+
+    await webFetchTool.execute({ url: "https://rebind.test/page" }, ctx());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toMatchObject({
+      url: "https://rebind.test/page",
+      address: "93.184.216.34",
+      family: 4,
+    });
+  });
+
+  it("pins each redirect hop to that hop's own validated address", async () => {
+    lookupMock
+      .mockResolvedValueOnce([{ address: "93.184.216.34", family: 4 }] as never)
+      .mockResolvedValueOnce([{ address: "8.8.8.8", family: 4 }] as never);
+    fetchMock
+      .mockResolvedValueOnce({
+        status: 302, statusText: "Found", contentType: null,
+        location: "https://second.test/landing", text: "", truncated: false,
+      })
+      .mockResolvedValueOnce(ok("<p>done</p>"));
+
+    const result = await webFetchTool.execute({ url: "https://first.test/go" }, ctx());
+
+    expect(result.text).toBe("done");
+    expect(fetchMock.mock.calls[0][0]).toMatchObject({ url: "https://first.test/go", address: "93.184.216.34" });
+    expect(fetchMock.mock.calls[1][0]).toMatchObject({ url: "https://second.test/landing", address: "8.8.8.8" });
   });
 
   it("re-validates on redirect and refuses a redirect to a private address (SSRF)", async () => {
@@ -74,42 +127,40 @@ describe("webFetchTool", () => {
     lookupMock
       .mockResolvedValueOnce(PUBLIC as never)
       .mockResolvedValueOnce([{ address: "169.254.169.254", family: 4 }] as never);
-    const fetchMock = vi.fn().mockResolvedValueOnce({
-      status: 302,
-      statusText: "Found",
-      headers: { get: (h: string) => (h === "location" ? "http://169.254.169.254/latest/meta-data/" : null) },
+    fetchMock.mockResolvedValueOnce({
+      status: 302, statusText: "Found", contentType: null,
+      location: "http://169.254.169.254/latest/meta-data/", text: "", truncated: false,
     });
-    vi.stubGlobal("fetch", fetchMock);
+
     await expect(webFetchTool.execute({ url: "https://redir.test/go" }, ctx())).rejects.toThrow(
       /non-public address 169\.254\.169\.254/,
     );
-    expect(fetchMock).toHaveBeenCalledTimes(1); // second hop refused before fetch
+    expect(fetchMock).toHaveBeenCalledTimes(1); // second hop refused before connecting
+  });
+
+  it("throws a clean error on a redirect with no Location header", async () => {
+    fetchMock.mockResolvedValue({
+      status: 302, statusText: "Found", contentType: null,
+      location: null, text: "", truncated: false,
+    });
+    await expect(webFetchTool.execute({ url: "https://example.com/go" }, ctx())).rejects.toThrow(
+      /redirect 302 with no Location/,
+    );
   });
 
   it("throws a clean error on too many redirects", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        status: 302,
-        statusText: "Found",
-        headers: { get: (h: string) => (h === "location" ? "https://example.com/next" : null) },
-      }),
-    );
+    fetchMock.mockResolvedValue({
+      status: 302, statusText: "Found", contentType: null,
+      location: "https://example.com/next", text: "", truncated: false,
+    });
     await expect(webFetchTool.execute({ url: "https://example.com/start" }, ctx())).rejects.toThrow(
       /too many redirects/,
     );
   });
 
   it("fetches a page and returns HTML-stripped text with the content type", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: { get: () => "text/html; charset=utf-8" },
-        text: async () => "<html><body><h1>Hi</h1><script>evil()</script><p>World</p></body></html>",
-      }),
+    fetchMock.mockResolvedValue(
+      ok("<html><body><h1>Hi</h1><script>evil()</script><p>World</p></body></html>", "text/html; charset=utf-8"),
     );
 
     const result = await webFetchTool.execute({ url: "https://example.com/page" }, ctx());
@@ -120,61 +171,38 @@ describe("webFetchTool", () => {
     expect(result.url).toBe("https://example.com/page");
   });
 
-  it("caps oversized responses and marks them truncated", async () => {
-    const big = "a".repeat(WEB_FETCH_MAX_CHARS + 1000);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: { get: () => "text/plain" },
-        text: async () => big,
-      }),
-    );
+  it("passes the byte cap to the transport and surfaces its truncation flag", async () => {
+    fetchMock.mockResolvedValue(ok("a".repeat(1000), "text/plain", true));
 
     const result = await webFetchTool.execute({ url: "https://example.com/big" }, ctx());
 
+    expect(fetchMock.mock.calls[0][0]).toMatchObject({ maxBytes: WEB_FETCH_MAX_BYTES });
     expect(result.truncated).toBe(true);
-    expect(result.text.length).toBeLessThanOrEqual(WEB_FETCH_MAX_CHARS);
   });
 
   it("throws a clean error on a non-OK response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: "Not Found", headers: { get: () => null } }),
-    );
+    fetchMock.mockResolvedValue({
+      status: 404, statusText: "Not Found", contentType: null,
+      location: null, text: "nope", truncated: false,
+    });
     await expect(webFetchTool.execute({ url: "https://example.com/missing" }, ctx())).rejects.toThrow(
       /Fetch failed: 404/,
     );
   });
 
-  it("throws a clean error when fetch itself rejects (network failure)", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ENOTFOUND example.com")));
-    await expect(webFetchTool.execute({ url: "https://example.com/page" }, ctx())).rejects.toThrow(/ENOTFOUND/);
-  });
-
-  it("throws a clean error when reading the response body fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: { get: () => "text/html" },
-        text: async () => {
-          throw new Error("stream aborted");
-        },
-      }),
-    );
-    await expect(webFetchTool.execute({ url: "https://example.com/page" }, ctx())).rejects.toThrow(/stream aborted/);
+  it("propagates a transport failure", async () => {
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED 93.184.216.34:443"));
+    await expect(webFetchTool.execute({ url: "https://example.com/page" }, ctx())).rejects.toThrow(/ECONNREFUSED/);
   });
 
   it.skipIf(!process.env.SOURCECADO_RUN_LIVE_SMOKE)(
     "live: fetches a real page and strips its HTML",
     async () => {
-      const real = await vi.importActual<typeof import("node:dns/promises")>("node:dns/promises");
-      lookupMock.mockImplementation(real.lookup as never);
+      const realDns = await vi.importActual<typeof import("node:dns/promises")>("node:dns/promises");
+      const realTransport =
+        await vi.importActual<typeof import("@/lib/tools/web-fetch-http")>("@/lib/tools/web-fetch-http");
+      lookupMock.mockImplementation(realDns.lookup as never);
+      fetchMock.mockImplementation(realTransport.fetchCapped);
       const result = await webFetchTool.execute({ url: "https://example.com" }, ctx());
       expect(result.text).toMatch(/Example Domain/i);
     },
