@@ -17,6 +17,11 @@ export const config = {
   matcher: [
     // Excluded: the Auth.js endpoints themselves (sign-in would loop), the
     // unauthenticated health probe, the login page, and Next's static assets.
-    "/((?!api/auth|api/health|login|_next/static|_next/image|favicon.ico).*)",
+    //
+    // Each exclusion is anchored with (?:/|$) rather than left as a bare
+    // prefix. Unanchored, "login" also excludes /loginfoo and "api/health"
+    // also excludes /api/healthcheck — so any future route whose name merely
+    // starts with an exclusion would silently skip authentication.
+    "/((?!api/auth(?:/|$)|api/health(?:/|$)|login(?:/|$)|_next/static/|_next/image/|favicon\\.ico$).*)",
   ],
 };

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getDb } from "@/lib/db";
 import { getRunTrace, type RunStepTrace } from "@/lib/ledger";
 import { isRunInspectorEnabled } from "@/lib/run-inspector-access";
+import { requireActor } from "@/lib/auth/actor";
 
 interface RunPageProps {
   params: Promise<{ id: string }>;
@@ -22,6 +23,18 @@ export default async function RunPage({ params }: RunPageProps) {
 
   const trace = await getRunTrace(getDb(), runId);
   if (!trace) {
+    notFound();
+  }
+
+  // Scope the trace to its owner. A run's steps embed the system prompt (which
+  // carries the owner's memory index), retrieved chunks, and tool results — so
+  // an unscoped /runs/{id} lets any signed-in user page through ids and read
+  // another director's memory. Unattributed runs (CLI/maintenance, actor null)
+  // belong to nobody and are hidden too. 404 rather than 403: the existence of
+  // a run id is itself information.
+  const actor = await requireActor();
+  const owner = trace.actor;
+  if (!owner || owner.actorType !== actor.actorType || owner.actorId !== actor.actorId) {
     notFound();
   }
 

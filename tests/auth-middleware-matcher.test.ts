@@ -29,6 +29,13 @@ describe("middleware matcher", () => {
     "/api/memory/note",
     "/api/memory/sources",
     "/api/memory/import",
+    // Near-misses on the exclusion list. An unanchored prefix exclusion would
+    // let each of these skip authentication entirely.
+    "/loginfoo",
+    "/api/authz",
+    "/api/healthcheck",
+    "/_next/staticfoo",
+    "/favicon.ico.bak",
   ])("protects %s", (path) => {
     expect(isProtected(path)).toBe(true);
   });

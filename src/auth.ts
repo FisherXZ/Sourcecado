@@ -2,6 +2,7 @@ import NextAuth from "next-auth";
 import { authConfig } from "./auth.config";
 import { getDb } from "./lib/db";
 import { upsertUser } from "./lib/auth/users";
+import { isAllowedEmail } from "./lib/auth/allowlist";
 
 // Node-runtime Auth.js instance: the edge-safe config plus the DB-backed `jwt`
 // callback. Server components and route handlers import `auth` from here;
@@ -11,11 +12,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   callbacks: {
     ...authConfig.callbacks,
 
-    // Google sets email_verified=false for some Workspace-delegated accounts.
-    // Refuse those rather than minting a user row keyed to an address the
-    // holder may not control.
+    // Two separate questions, both of which must pass:
+    //   1. does this person control the mailbox (email_verified)? Google sets
+    //      it false for some Workspace-delegated accounts.
+    //   2. do they belong here (isAllowedEmail)? Verification alone would let
+    //      any Gmail account reach chat and memory — and spend Apollo credits
+    //      and model tokens on our keys.
     signIn({ profile }) {
-      return Boolean(profile?.email && profile.email_verified);
+      if (!profile?.email || !profile.email_verified) return false;
+      return isAllowedEmail(profile.email);
     },
 
     // Runs only on sign-in (`profile` is undefined on subsequent token
