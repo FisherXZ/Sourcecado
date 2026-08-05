@@ -141,9 +141,19 @@ export function ChatClient({ initialExchanges = [] }: { initialExchanges?: Resum
                       {e.turn.answer}
                     </div>
                   ) : e.turn.answer ? (
-                    <MessageBubble role="assistant">
-                      <span className="whitespace-pre-wrap">{e.turn.answer}</span>
-                    </MessageBubble>
+                    <>
+                      {/* Sits above the answer so "incomplete" is read before the
+                          text itself. The parent is already an aria-live region,
+                          so no nested role is needed. */}
+                      {e.turn.meta?.status === "truncated" ? (
+                        <div className="rounded-[8px] bg-warn-bg px-3 py-2 text-[13px] text-warn-tx">
+                          Ran out of steps — this answer is incomplete. Ask a follow-up to continue.
+                        </div>
+                      ) : null}
+                      <MessageBubble role="assistant">
+                        <span className="whitespace-pre-wrap">{e.turn.answer}</span>
+                      </MessageBubble>
+                    </>
                   ) : null}
                   {e.turn.meta ? <MetaFooter meta={e.turn.meta} /> : null}
                 </div>

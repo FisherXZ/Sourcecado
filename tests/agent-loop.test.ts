@@ -40,6 +40,19 @@ async function* finalTurn(answer: string): AsyncGenerator<LlmStreamEvent> {
   yield { type: "turn_end", stopReason: "end", usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 } };
 }
 
+// A turn that narrates before calling a tool — the realistic shape of a chained
+// run, and the one that leaves usable partial work behind when steps run out.
+async function* narratedToolCallTurn(
+  text: string,
+  toolName: string,
+  args: unknown
+): AsyncGenerator<LlmStreamEvent> {
+  yield { type: "text_delta", delta: text };
+  yield { type: "tool_call_start", id: "call-1", name: toolName };
+  yield { type: "tool_call_end", id: "call-1", name: toolName, input: args };
+  yield { type: "turn_end", stopReason: "tool_use", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } };
+}
+
 async function seedAgentStep() {
   const db = getDb();
   const run = await startRun(db, { runType: "agent_chat", title: "t", input: {} });
@@ -264,7 +277,7 @@ describe("runAgentLoop", () => {
     });
   });
 
-  it("fails the run when maxSteps is exceeded, reporting the last real stopReason", async () => {
+  it("truncates rather than fails when maxSteps is exceeded, handing back the last assistant text", async () => {
     const { db, runId, parentStepId } = await seedAgentStep();
     const registry = createToolRegistry([echoTool]);
 
@@ -276,12 +289,39 @@ describe("runAgentLoop", () => {
       db,
       runId,
       parentStepId,
+      adapter: sequentialAdapter([
+        () => narratedToolCallTurn("Found 2 candidates so far.", "echo", { text: "again" }),
+      ]),
+    });
+
+    // "truncated", not "failed": the run produced real work, and a caller must be
+    // able to tell "ran out of room" from "the model errored".
+    expect(result.status).toBe("truncated");
+    expect(result.stopReason).toBe("tool_use");
+    expect(result.steps).toBe(3);
+    expect(result.finalText).toBe("Found 2 candidates so far.");
+  });
+
+  it("substitutes a readable notice when the exhausted run left no assistant text", async () => {
+    const { db, runId, parentStepId } = await seedAgentStep();
+    const registry = createToolRegistry([echoTool]);
+
+    const result = await runAgentLoop({
+      messages: [{ role: "system", content: "sys" }, { role: "user", content: "loop forever" }],
+      registry,
+      allowed: ALLOWED,
+      maxSteps: 3,
+      db,
+      runId,
+      parentStepId,
+      // Every turn is a bare tool call — no text block anywhere to carry forward.
       adapter: sequentialAdapter([() => toolCallTurn("echo", { text: "again" })]),
     });
 
-    expect(result.status).toBe("failed");
-    expect(result.stopReason).toBe("tool_use");
-    expect(result.steps).toBe(3);
+    expect(result.status).toBe("truncated");
+    // Never empty: an empty finalText reproduces the blank-bubble bug this fixes.
+    expect(result.finalText).toBeTruthy();
+    expect(result.finalText).toContain("3");
   });
 
   it("converts a streamAgentTurn throw into a synthetic assistant message and stops with stopReason 'error'", async () => {

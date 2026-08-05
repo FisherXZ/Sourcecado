@@ -48,6 +48,12 @@ export async function POST(request: Request) {
     // registry, gate on any tool_start.
     let searchCalledSoFar = false;
     let streamedLive = false;
+    // Exactly what reached the client live. answerFlush *appends* (it writes
+    // another text-delta, which the client concatenates), so any text flushed
+    // that already streamed renders twice. A truncated run's partial answer is
+    // frequently the pre-search narration verbatim, which makes this the common
+    // case rather than an edge one.
+    let streamedText = "";
 
     const result = await answerWithMemory(db, {
       question,
@@ -68,6 +74,7 @@ export async function POST(request: Request) {
           if (event.name === "search_memory") searchCalledSoFar = true;
         } else if (event.type === "llm" && event.event.type === "text_delta" && !searchCalledSoFar) {
           writer.answerDelta(event.event.delta);
+          streamedText += event.event.delta;
           streamedLive = true;
         }
       },
@@ -91,7 +98,20 @@ export async function POST(request: Request) {
     if (streamedLive && !searchCalledSoFar) {
       writer.answerEnd();
     } else if (result.answer) {
-      writer.answerFlush(result.answer);
+      // Send only what the client has not already seen. When the checked answer
+      // begins with the live-streamed prefix, that prefix is dropped and just the
+      // gated tail is flushed; when nothing streamed, `streamedText` is "" and
+      // this is the whole answer, exactly as before. An answer that no longer
+      // starts with what streamed (e.g. citation scrubbing rewrote the prefix)
+      // is flushed whole — the corrected text is worth the visible repeat.
+      const unsent = result.answer.startsWith(streamedText)
+        ? result.answer.slice(streamedText.length)
+        : result.answer;
+      if (unsent) {
+        writer.answerFlush(unsent);
+      } else {
+        writer.answerEnd();
+      }
     } else {
       // Run ended with no authoritative answer (e.g. failed mid-stream after a
       // search_memory gated further live streaming): close any answer part that

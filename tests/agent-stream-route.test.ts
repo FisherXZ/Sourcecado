@@ -116,6 +116,74 @@ describe("POST /api/agent/stream", () => {
     expect(body).toContain("failed");
   });
 
+  it("flushes a truncated run's partial answer and marks it truncated in meta", async () => {
+    // The stream route is the production path — a truncated run must arrive as
+    // readable text plus a status the UI can render a notice from.
+    runAgentMock.mockResolvedValue({
+      runId: 13,
+      status: "truncated",
+      answer: "Found 2 candidates; ran out of steps before verifying emails.",
+      steps: 50,
+      messages: STUB_MESSAGES,
+    });
+    const res = await POST(postRequest({ question: "source me 5 people" }));
+    expect(res.status).toBe(200);
+    const body = await readAll(res);
+
+    expect(body).toContain("Found 2 candidates");
+    expect(body).toContain("data-meta");
+    expect(body).toContain("truncated");
+  });
+
+  it("does not re-flush a truncated run's text that already streamed live", async () => {
+    // Narration streams live (no search yet), search_memory then gates further
+    // streaming, and the run runs out of steps carrying that same narration as
+    // its partial answer. Flushing it whole would render it twice in the chat.
+    runAgentMock.mockImplementation(
+      async (input: { onAgentLoopEvent?: (e: unknown) => unknown }) => {
+        await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "Found 2 candidates. " } });
+        await input.onAgentLoopEvent?.({ type: "tool_start", id: "call-1", name: "search_memory", input: {} });
+        return {
+          runId: 14,
+          status: "truncated",
+          answer: "Found 2 candidates. ",
+          steps: 50,
+          messages: STUB_MESSAGES,
+        };
+      }
+    );
+
+    const body = await readAll(await POST(postRequest({ question: "source me 5 people" })));
+
+    expect((body.match(/Found 2 candidates\./g) ?? []).length).toBe(1);
+    // The answer part is still closed exactly once.
+    expect((body.match(/"type":"text-end"/g) ?? []).length).toBe(1);
+  });
+
+  it("flushes only the part of a truncated answer that was never streamed", async () => {
+    // Same path, but the model produced more text after the search gate closed.
+    // The gated tail must reach the client without repeating the live prefix.
+    runAgentMock.mockImplementation(
+      async (input: { onAgentLoopEvent?: (e: unknown) => unknown }) => {
+        await input.onAgentLoopEvent?.({ type: "llm", event: { type: "text_delta", delta: "Found 2 candidates. " } });
+        await input.onAgentLoopEvent?.({ type: "tool_start", id: "call-1", name: "search_memory", input: {} });
+        return {
+          runId: 15,
+          status: "truncated",
+          answer: "Found 2 candidates. Still verifying emails.",
+          steps: 50,
+          messages: STUB_MESSAGES,
+        };
+      }
+    );
+
+    const body = await readAll(await POST(postRequest({ question: "source me 5 people" })));
+
+    expect((body.match(/Found 2 candidates\./g) ?? []).length).toBe(1);
+    expect(body).toContain("Still verifying emails.");
+    expect((body.match(/"type":"text-end"/g) ?? []).length).toBe(1);
+  });
+
   it("closes the open answer text part when the run fails after narration streamed and a search fired", async () => {
     // Regression for the mixed live-then-search failure path: pre-search
     // narration opens the "answer" text part (answerStarted), search_memory then

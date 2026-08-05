@@ -53,6 +53,34 @@ describe("ChatClient", () => {
     );
   });
 
+  it("renders a truncated run's partial answer alongside a visible out-of-steps notice", async () => {
+    let resolveRun: (turn: unknown) => void = () => {};
+    runChatMock.mockImplementation((_q: string, _h: unknown, onUpdate?: (t: unknown) => void) => {
+      if (!onUpdate) return Promise.resolve({ steps: [], answer: "" });
+      return new Promise((resolve) => {
+        resolveRun = resolve;
+      });
+    });
+
+    render(<ChatClient />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "source me 5 people" } });
+    fireEvent.submit(screen.getByRole("textbox"));
+
+    resolveRun({
+      steps: [{ index: 1, tool: "apollo_search_people", ok: true, detail: "done" }],
+      answer: "Found 2 candidates at Anthropic; still verifying emails.",
+      meta: { runId: 12, status: "truncated", steps: 50, invalidCitations: [] },
+    });
+
+    // The partial work is readable text, not a blank bubble.
+    await waitFor(() =>
+      expect(screen.getByText(/Found 2 candidates at Anthropic/)).toBeInTheDocument()
+    );
+    // ...and the user is told it is incomplete rather than being left to assume
+    // this is the whole answer.
+    expect(screen.getByText(/ran out of steps/i)).toBeInTheDocument();
+  });
+
   it("settles to an error state (no live row, composer re-enabled) when the stream fails", async () => {
     // Guard the teardown no-arg call (vitest cleanup) so only the real run rejects.
     runChatMock.mockImplementation((_q: string, _h: unknown, onUpdate?: (t: unknown) => void) =>

@@ -1,7 +1,7 @@
 import { getDb } from "./db";
 import { failRun, failRunStep, finishRun, finishRunStep, startRun, startRunStep } from "./ledger";
 import { ModelGatewayError } from "./model-gateway";
-import { runAgentLoop, type AgentLoopEvent } from "./agent-loop";
+import { DEFAULT_MAX_STEPS, runAgentLoop, type AgentLoopEvent } from "./agent-loop";
 import type { LlmAdapter, LlmMessage } from "./llm/types";
 import type { ToolRegistry } from "./tools/registry";
 import type { PermissionClass, Sql } from "./tools/types";
@@ -59,7 +59,8 @@ export interface RunAgentInput {
 
 export interface RunAgentResult {
   runId: number;
-  status: "succeeded" | "failed";
+  // "truncated" carries a usable partial answer — see AgentLoopResult.status.
+  status: "succeeded" | "truncated" | "failed";
   answer?: string;
   steps: number;
   // Additive: the full transcript produced by this run (AgentLoopResult.messages),
@@ -68,7 +69,6 @@ export interface RunAgentResult {
 }
 
 const DEFAULT_ALLOWED: PermissionClass[] = ["read", "reason"];
-const DEFAULT_MAX_STEPS = 8;
 // Fallback system message when no `instructions` is supplied. R4's context
 // assembly passes its full sectioned prompt through `instructions` instead of
 // this repo needing another call site change.
@@ -153,16 +153,27 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       onEvent,
     });
 
-    if (result.status === "succeeded") {
-      await finishRunStep(db, {
-        runStepId: agentStep.id,
-        output: { answer: result.finalText, steps: result.steps },
-      });
-      await finishRun(db, { runId: run.id, output: { answer: result.finalText, steps: result.steps } });
-      return { runId: run.id, status: "succeeded", answer: result.finalText, steps: result.steps, messages: result.messages };
+    // A truncated run produced work, so it finishes rather than fails — but the
+    // ledger output carries `truncated` so a trace reader (and any later
+    // quality pass) can tell a complete answer from a cut-off one.
+    if (result.status === "succeeded" || result.status === "truncated") {
+      const output = {
+        answer: result.finalText,
+        steps: result.steps,
+        ...(result.status === "truncated" ? { truncated: true } : {}),
+      };
+      await finishRunStep(db, { runStepId: agentStep.id, output });
+      await finishRun(db, { runId: run.id, output });
+      return {
+        runId: run.id,
+        status: result.status,
+        answer: result.finalText,
+        steps: result.steps,
+        messages: result.messages,
+      };
     }
 
-    const { errorType, errorMessage } = describeLoopFailure(result.stopReason, maxSteps);
+    const { errorType, errorMessage } = describeLoopFailure(result.stopReason);
     await failRunStep(db, { runStepId: agentStep.id, errorType, errorMessage });
     await failRun(db, { runId: run.id, errorType, errorMessage });
     return { runId: run.id, status: "failed", steps: result.steps, messages: result.messages };
@@ -180,15 +191,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   }
 }
 
-function describeLoopFailure(
-  stopReason: string,
-  maxSteps: number
-): { errorType: string; errorMessage: string } {
+// Step exhaustion no longer lands here — it returns `truncated` and finishes the
+// run — so there is deliberately no "tool_use" branch.
+function describeLoopFailure(stopReason: string): { errorType: string; errorMessage: string } {
   if (stopReason === "aborted") {
     return { errorType: "aborted", errorMessage: "Agent run was aborted." };
-  }
-  if (stopReason === "tool_use") {
-    return { errorType: "max_steps_exceeded", errorMessage: `Agent did not finish within ${maxSteps} steps.` };
   }
   if (stopReason === "max_tokens") {
     return { errorType: "max_tokens_exceeded", errorMessage: "Agent loop stopped: model hit its max token limit." };

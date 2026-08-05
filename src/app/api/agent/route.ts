@@ -16,8 +16,10 @@ export async function POST(request: Request) {
     const db = getDb();
     const actor = await requireActor();
     const result = await answerWithMemory(db, { question, actor, history });
+    // A truncated run is a result, not a server error: it carries a real partial
+    // answer, and 500 would put that work out of reach of any HTTP client.
     return NextResponse.json(result, {
-      status: result.status === "succeeded" ? 200 : 500,
+      status: result.status === "failed" ? 500 : 200,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "agent run failed";
