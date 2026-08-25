@@ -43,8 +43,13 @@ npm test
 The DB-backed tests (`tests/db-client.test.ts`, `tests/migrate.test.ts`) require Postgres
 running and `DATABASE_URL` exported (see [Database](#database-local-postgres--pgvector)).
 
+## Club (local desktop)
+
+`desktop/` is Club, a local sidecar + Mac window for one operator. It is separate from this hosted Next.js app. See [desktop/README.md](desktop/README.md).
+
 ## Project structure
 
+- `desktop/` — Club local sidecar (FastAPI) and Tauri window
 - `src/app/` — Next.js 15 app router pages and layouts
 - `src/app/api/health/` — health endpoint
 - `src/app/chat/` — Research Chat page
