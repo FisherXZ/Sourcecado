@@ -1,0 +1,12 @@
+{
+  "identifier": "default",
+  "description": "Main Club window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize"
+  ]
+}
