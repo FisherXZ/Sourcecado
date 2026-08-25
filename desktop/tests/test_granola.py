@@ -116,6 +116,17 @@ def test_mcp_write_tools_are_denied():
     assert decide("mcp__granola__list_meetings").allowed is True
 
 
+def test_unknown_granola_tools_do_not_execute(tmp_path):
+    secrets = SecretStore(tmp_path / "secrets.json")
+    secrets.put("mcp-oauth:granola", {"access_token": "at"})
+    mcp = LiveMcp(secrets=secrets, config_path=tmp_path / "mcp.json")
+    assert mcp.has("mcp__granola__list_meetings") is True
+    assert mcp.has("mcp__granola__send_email") is False
+    ok, result = execute("mcp__granola__send_email", {}, mcp=mcp)
+    assert ok is False
+    assert "unknown" in str(result.get("error") or "").lower()
+
+
 def test_live_mcp_omits_schemas_until_oauth(tmp_path):
     mcp = LiveMcp(secrets=SecretStore(tmp_path / "secrets.json"), config_path=tmp_path / "mcp.json")
     assert mcp.schemas() == []

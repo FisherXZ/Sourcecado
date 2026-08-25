@@ -116,7 +116,7 @@ class LiveMcp:
         ]
 
     def has(self, name: str) -> bool:
-        return name.startswith("mcp__granola__")
+        return any(s["function"]["name"] == name for s in self.schemas())
 
     def call(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         last = name.rsplit("__", 1)[-1]

@@ -7,6 +7,7 @@ jsonl conversations + sqlite memories. Slice 6: remember / update / forget.
 from __future__ import annotations
 
 import asyncio
+import html
 import os
 import re
 import secrets
@@ -484,14 +485,18 @@ def create_app(
     @app.get("/v1/mcp/oauth/callback")
     def mcp_oauth_callback(code: str = "", state: str = "", error: str = ""):
         if error:
-            return HTMLResponse(f"<p>Granola connect failed: {error}</p>", status_code=400)
+            return HTMLResponse(
+                f"<p>Granola connect failed: {html.escape(error)}</p>", status_code=400
+            )
         if not code or not state:
             return HTMLResponse("<p>Granola connect failed: missing code.</p>", status_code=400)
         try:
             app.state.mcp_oauth.finish(code=code, state=state)
             app.state.openai_tools = list(OPENAI_TOOLS) + app.state.mcp.schemas()
         except Exception as exc:
-            return HTMLResponse(f"<p>Granola connect failed: {exc}</p>", status_code=400)
+            return HTMLResponse(
+                f"<p>Granola connect failed: {html.escape(str(exc))}</p>", status_code=400
+            )
         return HTMLResponse("<p>Granola connected. You can close this tab.</p>")
 
     @app.get("/v1/gmail")
@@ -536,7 +541,9 @@ def create_app(
     @app.get("/v1/gmail/callback")
     def gmail_callback(code: str = "", state: str = "", error: str = ""):
         if error:
-            return HTMLResponse(f"<p>Gmail connect failed: {error}</p>", status_code=400)
+            return HTMLResponse(
+                f"<p>Gmail connect failed: {html.escape(error)}</p>", status_code=400
+            )
         if not code or state != app.state.oauth_state or not app.state.oauth_state:
             return HTMLResponse("<p>Gmail connect failed: bad state.</p>", status_code=400)
         client_id, client_secret = google_client_credentials()
@@ -581,7 +588,9 @@ def create_app(
             app.state.calendar = calendar_from_secrets(app.state.secrets, http=app.state.http)
             app.state.oauth_state = ""
         except Exception as exc:
-            return HTMLResponse(f"<p>Gmail connect failed: {exc}</p>", status_code=400)
+            return HTMLResponse(
+                f"<p>Gmail connect failed: {html.escape(str(exc))}</p>", status_code=400
+            )
         return HTMLResponse("<p>Gmail connected. You can close this tab and go back to Sourcecado.</p>")
 
     @app.get("/v1/sessions")

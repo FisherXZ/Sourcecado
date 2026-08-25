@@ -30,8 +30,10 @@ class SecretStore:
     def _save(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        os.chmod(tmp, 0o600)
+        payload = json.dumps(data, indent=2) + "\n"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
         tmp.replace(self.path)
         os.chmod(self.path, 0o600)
 

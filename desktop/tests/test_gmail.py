@@ -294,6 +294,14 @@ def test_gmail_status_connected(tmp_path):
     assert res.json() == {"connected": True, "email": "fisher@example.com"}
 
 
+def test_gmail_callback_error_is_escaped(tmp_path):
+    app = create_app(token=TOKEN, state=tmp_path)
+    res = TestClient(app).get("/v1/gmail/callback?error=%3Cscript%3Exss%3C/script%3E")
+    assert res.status_code == 400
+    assert "<script>" not in res.text
+    assert "&lt;script&gt;" in res.text
+
+
 def test_gmail_connect_requires_oauth_client(tmp_path, monkeypatch):
     monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_SECRET", raising=False)
