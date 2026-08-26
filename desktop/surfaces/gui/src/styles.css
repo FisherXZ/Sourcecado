@@ -73,6 +73,53 @@ body,
   background: var(--accent-tint);
 }
 
+a.session-row {
+  text-decoration: none;
+  display: block;
+}
+
+.route-page {
+  flex: 1;
+  overflow: auto;
+}
+
+.route-page h1 {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.route-page h2 {
+  margin: 20px 0 8px;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.board-bucket {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.board-row {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.board-row:hover {
+  background: var(--raised);
+}
+
 .main {
   flex: 1;
   min-width: 0;

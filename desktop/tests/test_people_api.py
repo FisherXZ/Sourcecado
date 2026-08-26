@@ -75,3 +75,63 @@ def test_get_person_does_not_leak_access_token(tmp_path):
     assert "access_token" not in blob
     assert res.json()["timeline"][0]["payload"]["name"] == "Deck"
     assert res.json()["timeline"][0]["payload"]["id"] == "d1"
+
+
+def test_empty_board_is_three_empty_lists(tmp_path):
+    body = TestClient(_app(tmp_path)).get("/v1/board", headers={TOKEN_HEADER: TOKEN}).json()
+    assert body == {"open": [], "in_conversation": [], "done": []}
+    blob = str(body)
+    assert "amount" not in blob
+    assert "pipeline" not in blob
+    assert "deal" not in blob
+
+
+def test_board_lists_open_person_and_move(tmp_path):
+    app = _app(tmp_path)
+    person = app.state.people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="L",
+        title="Founder",
+        company="Analytic",
+    )
+    app.state.people.set_sequence(person["person_id"], "open", actor="assistant")
+    client = TestClient(app)
+    board = client.get("/v1/board", headers={TOKEN_HEADER: TOKEN}).json()
+    assert [row["person_id"] for row in board["open"]] == [person["person_id"]]
+    moved = client.post(
+        f"/v1/people/{person['person_id']}/sequence",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"state": "in_conversation", "actor": "director"},
+    )
+    assert moved.status_code == 200
+    assert moved.json()["person"]["sequence_state"] == "in_conversation"
+    board = client.get("/v1/board", headers={TOKEN_HEADER: TOKEN}).json()
+    assert board["open"] == []
+    assert [row["person_id"] for row in board["in_conversation"]] == [person["person_id"]]
+    kinds = [row["kind"] for row in app.state.people.timeline(person["person_id"])]
+    assert "state" in kinds
+
+
+def test_board_move_rejects_invalid_state_and_unknown_person(tmp_path):
+    app = _app(tmp_path)
+    person = app.state.people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="L",
+        title="Founder",
+        company="Analytic",
+    )
+    client = TestClient(app)
+    bad = client.post(
+        f"/v1/people/{person['person_id']}/sequence",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"state": "won", "actor": "director"},
+    )
+    assert bad.status_code == 400
+    missing = client.post(
+        f"/v1/people/per_{'0' * 32}/sequence",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"state": "open", "actor": "director"},
+    )
+    assert missing.status_code == 404

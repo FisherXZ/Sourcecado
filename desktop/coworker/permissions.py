@@ -23,11 +23,13 @@ AUTO = frozenset(
         "drive_search",
         "drive_read",
         "calendar_list",
+        "web_search",
     }
 )
 ASK = frozenset(
     {
         "gmail_draft",
+        "gmail_send",
         "apollo_enrich_contact",
         "calendar_create",
         "calendar_update",

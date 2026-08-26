@@ -12,6 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from coworker.apollo import MISSING_KEY, enrich_contact, search_people
+from coworker.web import MISSING_KEY as TAVILY_MISSING, search_web
 from coworker.gmail import GmailError, MissingGmail
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
@@ -77,6 +78,26 @@ MEMORY_UPDATE_SCHEMA: dict[str, Any] = {
                 },
             },
             "required": ["memory_id", "content"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+WEB_SEARCH_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the public web. Returns titles, URLs, and snippets. "
+            "Use for cited research. Not a gate on drafting."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "max_results": {"type": "integer"},
+            },
+            "required": ["query"],
             "additionalProperties": False,
         },
     },
@@ -273,6 +294,28 @@ CALENDAR_UPDATE_SCHEMA: dict[str, Any] = {
     },
 }
 
+GMAIL_SEND_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "gmail_send",
+        "description": (
+            "Send an existing Gmail draft by id. Fisher must Allow first. "
+            "Use after a draft was created and reviewed. Does not create a new message."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "draft_id": {
+                    "type": "string",
+                    "description": "The Gmail draft id to send.",
+                }
+            },
+            "required": ["draft_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 GMAIL_DRAFT_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -340,6 +383,7 @@ OPENAI_TOOLS = [
     GMAIL_SEARCH_SCHEMA,
     GMAIL_READ_SCHEMA,
     GMAIL_DRAFT_SCHEMA,
+    GMAIL_SEND_SCHEMA,
     DRIVE_SEARCH_SCHEMA,
     DRIVE_READ_SCHEMA,
     CALENDAR_LIST_SCHEMA,
@@ -349,6 +393,7 @@ OPENAI_TOOLS = [
     PEOPLE_KEEP_SCHEMA,
     APOLLO_ENRICH_SCHEMA,
     LOAD_SKILL_SCHEMA,
+    WEB_SEARCH_SCHEMA,
 ]
 
 
@@ -381,6 +426,8 @@ def execute(
     skills: Any = None,
     mcp: Any = None,
     people: PersonStore | None = None,
+    session_id: str | None = None,
+    tavily_key: str | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
     if name == "now":
@@ -484,6 +531,21 @@ def execute(
         result = dict(result)
         result["sent"] = False
         return True, result
+    if name == "gmail_send":
+        draft_id = str(args.get("draft_id") or "").strip()
+        if not draft_id:
+            return False, {"error": "draft_id is required"}
+        client = gmail if gmail is not None else MissingGmail()
+        try:
+            result = client.send(draft_id=draft_id)
+        except GmailError as exc:
+            return False, {"error": str(exc)}
+        except Exception as exc:
+            return False, {"error": str(exc)}
+        result = dict(result)
+        result["sent"] = True
+        result["draft_id"] = draft_id
+        return True, result
     if name in {"remember", "memory_update", "memory_forget"}:
         if store is None:
             return False, {"error": "memory store missing"}
@@ -525,7 +587,14 @@ def execute(
                     person_titles=list(titles) if titles else None,
                     limit=int(args.get("limit") or 10),
                 )
-            return True, enrich_contact(
+            person_id = str(args.get("person_id") or "") or None
+            if person_id is None and people is not None and session_id:
+                person_id = people.person_for_session(session_id)
+            if not person_id:
+                return False, {"error": "Bind a person before enriching."}
+            if people is not None and people.get(person_id) is None:
+                return False, {"error": "unknown person"}
+            result = enrich_contact(
                 http=client,
                 api_key=apollo_key,
                 email=str(args.get("email") or "") or None,
@@ -533,6 +602,17 @@ def execute(
                 last_name=str(args.get("lastName") or "") or None,
                 organization_name=str(args.get("organizationName") or "") or None,
             )
+            if people is not None:
+                people.apply_enrichment(
+                    person_id,
+                    name=result.get("name"),
+                    title=result.get("title"),
+                    company=result.get("organizationName"),
+                    email=result.get("email"),
+                    linkedin_url=result.get("linkedinUrl"),
+                    phone=result.get("phone"),
+                )
+            return True, result
         except Exception as exc:
             return False, {"error": str(exc)}
     if name == "people_keep":
@@ -565,4 +645,22 @@ def execute(
                 }
             )
         return True, {"kept": kept}
+    if name == "web_search":
+        if not tavily_key:
+            return False, {"error": TAVILY_MISSING}
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return False, {"error": "query is required"}
+        from coworker.apollo import LiveHttp
+
+        client = http if http is not None else LiveHttp()
+        try:
+            return True, search_web(
+                http=client,
+                api_key=tavily_key,
+                query=query,
+                max_results=int(args.get("max_results") or 5),
+            )
+        except Exception as exc:
+            return False, {"error": str(exc)}
     return False, {"error": f"unknown tool {name}"}

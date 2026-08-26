@@ -56,6 +56,52 @@ def test_keeping_same_apollo_id_updates_instead_of_forking(tmp_path):
     assert store.get(first["person_id"])["title"] == "General Partner"
 
 
+def test_keeping_a_thinner_apollo_row_does_not_blank_the_person_file(tmp_path):
+    store = PersonStore(tmp_path)
+    kept = store.keep_from_apollo(
+        apollo_id="abc123",
+        first_name="Alyssa",
+        last_name_obfuscated="W***n",
+        title="Partner",
+        company="Codeology",
+        target="club research dinner",
+    )
+    again = store.keep_from_apollo(
+        apollo_id="abc123",
+        first_name="Alyssa",
+        last_name_obfuscated=None,
+        title=None,
+        company=None,
+    )
+    assert again["person_id"] == kept["person_id"]
+    assert again["last_name"] == "W***n"
+    assert again["title"] == "Partner"
+    assert again["company"] == "Codeology"
+    assert again["target"] == "club research dinner"
+
+
+def test_blank_apollo_fields_count_as_missing_not_as_a_value(tmp_path):
+    store = PersonStore(tmp_path)
+    store.keep_from_apollo(
+        apollo_id="abc123",
+        first_name="Alyssa",
+        last_name_obfuscated="W***n",
+        title="Partner",
+        company="Codeology",
+    )
+    again = store.keep_from_apollo(
+        apollo_id="abc123",
+        first_name="  ",
+        last_name_obfuscated="",
+        title="",
+        company="   ",
+    )
+    assert again["first_name"] == "Alyssa"
+    assert again["last_name"] == "W***n"
+    assert again["title"] == "Partner"
+    assert again["company"] == "Codeology"
+
+
 def _ada(store: PersonStore) -> dict:
     return store.keep_from_apollo(
         apollo_id="ada",

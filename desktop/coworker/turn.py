@@ -135,7 +135,13 @@ async def run_turn(
         store.replace_all(sid, loaded)
     sys_content = ""
     if system_prompt_fn is not None:
-        sys_content = system_prompt_fn(store, persona, skills)
+        sys_content = system_prompt_fn(
+            store,
+            persona,
+            skills,
+            people=execute_kwargs.get("people"),
+            session_id=sid,
+        )
     history: list[dict[str, Any]] = [{"role": "system", "content": sys_content}] + loaded
     # Caller already appended the user message in WS; scheduler has not.
     if not (loaded and loaded[-1].get("role") == "user" and loaded[-1].get("content") == text):
@@ -240,13 +246,20 @@ async def run_turn(
                 )
                 try:
                     kw = {k: v for k, v in execute_kwargs.items() if not k.startswith("_")}
+                    kw["session_id"] = sid
                     ok, result = execute(call.name, call.arguments, **kw)
                 except Exception as exc:
                     ok, result = False, {"error": str(exc)}
                 if call.name in {"remember", "memory_update", "memory_forget"} and system_prompt_fn:
                     history[0] = {
                         "role": "system",
-                        "content": system_prompt_fn(store, persona, skills),
+                        "content": system_prompt_fn(
+                            store,
+                            persona,
+                            skills,
+                            people=execute_kwargs.get("people"),
+                            session_id=sid,
+                        ),
                     }
                 await _emit(
                     {

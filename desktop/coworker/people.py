@@ -111,10 +111,10 @@ class PersonStore:
                 self._conn.execute(
                     """
                     UPDATE people SET
-                        first_name = ?,
-                        last_name = ?,
-                        title = ?,
-                        company = ?,
+                        first_name = COALESCE(?, first_name),
+                        last_name = COALESCE(?, last_name),
+                        title = COALESCE(?, title),
+                        company = COALESCE(?, company),
                         target = COALESCE(?, target),
                         updated_at = CURRENT_TIMESTAMP
                     WHERE person_id = ?
@@ -167,6 +167,57 @@ class PersonStore:
                 (apollo_id,),
             ).fetchone()
         return self._person_dict(row)
+
+    def apply_enrichment(
+        self,
+        person_id: str,
+        *,
+        name: str | None = None,
+        title: str | None = None,
+        company: str | None = None,
+        email: str | None = None,
+        linkedin_url: str | None = None,
+        phone: str | None = None,
+    ) -> dict[str, Any] | None:
+        first_name = None
+        last_name = None
+        if name:
+            parts = str(name).split(None, 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else None
+        with self._lock:
+            exists = self._conn.execute(
+                "SELECT 1 FROM people WHERE person_id = ?",
+                (person_id,),
+            ).fetchone()
+            if exists is None:
+                return None
+            self._conn.execute(
+                """
+                UPDATE people SET
+                    first_name = COALESCE(?, first_name),
+                    last_name = COALESCE(?, last_name),
+                    title = COALESCE(?, title),
+                    company = COALESCE(?, company),
+                    email = COALESCE(?, email),
+                    linkedin_url = COALESCE(?, linkedin_url),
+                    phone = COALESCE(?, phone),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE person_id = ?
+                """,
+                (
+                    first_name,
+                    last_name,
+                    title,
+                    company,
+                    email,
+                    linkedin_url,
+                    phone,
+                    person_id,
+                ),
+            )
+            self._conn.commit()
+        return self.get(person_id)
 
     def get(self, person_id: str) -> dict[str, Any] | None:
         with self._lock:

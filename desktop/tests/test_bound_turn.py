@@ -1,5 +1,6 @@
 import asyncio
 
+from coworker.apollo import MATCH_URL, FakeHttp
 from coworker.gmail import FakeGmail
 from coworker.inbox import Inbox
 from coworker.people import PersonStore
@@ -344,3 +345,190 @@ def test_denied_draft_does_not_open_sequence(tmp_path):
     assert [row["kind"] for row in people.timeline(ada["person_id"]) if row["kind"] == "draft"] == []
     assert gmail.drafts == []
     assert gmail.sends == []
+
+
+def _enrich_http():
+    return FakeHttp(
+        {
+            MATCH_URL: {
+                "person": {
+                    "name": "Ada Lovelace",
+                    "title": "Founder",
+                    "organization": {"name": "Analytic"},
+                    "linkedin_url": "https://linkedin.com/in/ada",
+                    "email": "ada@analytic.example",
+                    "phone_numbers": [{"raw_number": "+1 555"}],
+                }
+            }
+        }
+    )
+
+
+def _enrich_call():
+    return ToolCall(
+        id="enrich_1",
+        name="apollo_enrich_contact",
+        arguments={
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "organizationName": "Analytic",
+        },
+    )
+
+
+def test_allowed_enrich_writes_email_on_bound_person(tmp_path):
+    people = PersonStore(tmp_path)
+    _keep(tmp_path, people, "sess-ada", _ada())
+    fake = FakeProvider(
+        steps=[
+            {"tool_calls": [_enrich_call()]},
+            {"deltas": ("Got the email.",)},
+        ]
+    )
+    _run(
+        tmp_path=tmp_path,
+        sid="sess-ada",
+        text="enrich Ada",
+        provider=fake,
+        people=people,
+        wait="allow",
+        http=_enrich_http(),
+        apollo_key="test-key",
+    )
+    ada = people.get_by_apollo_id("ada")
+    assert ada is not None
+    assert ada["email"] == "ada@analytic.example"
+    kinds = [row["kind"] for row in people.timeline(ada["person_id"])]
+    assert "enrich" in kinds
+
+
+def test_denied_enrich_does_not_store_email(tmp_path):
+    people = PersonStore(tmp_path)
+    _keep(tmp_path, people, "sess-ada", _ada())
+    fake = FakeProvider(
+        steps=[
+            {"tool_calls": [_enrich_call()]},
+            {"deltas": ("Okay.",)},
+        ]
+    )
+    _run(
+        tmp_path=tmp_path,
+        sid="sess-ada",
+        text="enrich Ada",
+        provider=fake,
+        people=people,
+        wait="deny",
+        http=_enrich_http(),
+        apollo_key="test-key",
+    )
+    ada = people.get_by_apollo_id("ada")
+    assert ada is not None
+    assert ada["email"] is None
+
+
+def test_unbound_enrich_fails_closed(tmp_path):
+    from coworker.tools import execute
+
+    people = PersonStore(tmp_path)
+    http = _enrich_http()
+    ok, result = execute(
+        "apollo_enrich_contact",
+        {
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "organizationName": "Analytic",
+        },
+        people=people,
+        http=http,
+        apollo_key="test-key",
+        session_id="sess-other",
+    )
+    assert ok is False
+    assert "bind" in result["error"].lower() or "person" in result["error"].lower()
+    assert people.get_by_apollo_id("ada") is None
+    assert people.list_board() == {"open": [], "in_conversation": [], "done": []}
+    assert http.calls == []
+
+
+def test_gmail_send_asks_and_execute_sends_draft():
+    from coworker.permissions import decide
+    from coworker.tools import execute
+
+    assert decide("gmail_send").needs_user is True
+    gmail = FakeGmail()
+    gmail.create_draft(to="ada@analytic.example", subject="Dinner", body="Join us")
+    ok, result = execute("gmail_send", {"draft_id": "draft_1"}, gmail=gmail)
+    assert ok is True
+    assert result["sent"] is True
+    assert result["draft_id"] == "draft_1"
+    assert gmail.sends == [{"draft_id": "draft_1"}]
+
+
+def test_allowed_send_files_on_bound_person(tmp_path):
+    people = PersonStore(tmp_path)
+    _keep(tmp_path, people, "sess-ada", _ada())
+    gmail = FakeGmail()
+    gmail.create_draft(to="ada@analytic.example", subject="Dinner", body="Join us")
+    fake = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(id="send_1", name="gmail_send", arguments={"draft_id": "draft_1"})
+                ]
+            },
+            {"deltas": ("Sent.",)},
+        ]
+    )
+    _run(
+        tmp_path=tmp_path,
+        sid="sess-ada",
+        text="send it",
+        provider=fake,
+        people=people,
+        gmail=gmail,
+        wait="allow",
+    )
+    ada = people.get_by_apollo_id("ada")
+    assert ada is not None
+    sends = [row for row in people.timeline(ada["person_id"]) if row["kind"] == "send"]
+    assert len(sends) == 1
+    assert sends[0]["payload"]["sent"] is True
+    assert gmail.sends == [{"draft_id": "draft_1"}]
+
+
+def test_denied_send_does_not_send(tmp_path):
+    people = PersonStore(tmp_path)
+    _keep(tmp_path, people, "sess-ada", _ada())
+    gmail = FakeGmail()
+    gmail.create_draft(to="ada@analytic.example", subject="Dinner", body="Join us")
+    fake = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(id="send_1", name="gmail_send", arguments={"draft_id": "draft_1"})
+                ]
+            },
+            {"deltas": ("Okay.",)},
+        ]
+    )
+    _run(
+        tmp_path=tmp_path,
+        sid="sess-ada",
+        text="send it",
+        provider=fake,
+        people=people,
+        gmail=gmail,
+        wait="deny",
+    )
+    ada = people.get_by_apollo_id("ada")
+    assert ada is not None
+    assert [row["kind"] for row in people.timeline(ada["person_id"]) if row["kind"] == "send"] == []
+    assert gmail.sends == []
+
+
+def test_kernel_says_send_requires_allow():
+    from coworker.server import KERNEL
+
+    assert "gmail_send" in KERNEL
+    assert "Allow" in KERNEL
+    assert "never sends" not in KERNEL

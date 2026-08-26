@@ -67,6 +67,7 @@ class GmailClient(Protocol):
     sends: list[dict[str, Any]]
 
     def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]: ...
+    def send(self, *, draft_id: str) -> dict[str, Any]: ...
 
 
 class FakeGmail:
@@ -91,9 +92,9 @@ class FakeGmail:
             "sent": False,
         }
 
-    def send(self, *args: Any, **kwargs: Any) -> None:
-        self.sends.append({"args": args, "kwargs": kwargs})
-        raise GmailError("gmail_draft never sends")
+    def send(self, *, draft_id: str) -> dict[str, Any]:
+        self.sends.append({"draft_id": draft_id})
+        return {"id": f"msg_{len(self.sends)}", "draft_id": draft_id, "sent": True}
 
     def search(self, query: str, max_results: int = 10) -> dict[str, Any]:
         return {"messages": []}
@@ -121,6 +122,11 @@ class MissingGmail:
             "Gmail is not connected. Click Connect Gmail in the window first."
         )
 
+    def send(self, *, draft_id: str) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
 
 def _raw_message(*, to: str, subject: str, body: str) -> str:
     msg = EmailMessage()
@@ -131,7 +137,7 @@ def _raw_message(*, to: str, subject: str, body: str) -> str:
 
 
 class GmailApi:
-    """Live Gmail drafts. No send()."""
+    """Live Gmail drafts and send-by-draft-id."""
 
     drafts: list[dict[str, Any]]
     sends: list[dict[str, Any]]
@@ -228,6 +234,20 @@ class GmailApi:
             "sent": False,
         }
         self.drafts.append(item)
+        return item
+
+    def send(self, *, draft_id: str) -> dict[str, Any]:
+        data = self._request(
+            "post",
+            f"{DRAFTS_URL}/send",
+            headers={"Content-Type": "application/json"},
+            json={"id": draft_id},
+        ) or {}
+        message_id = str(data.get("id") or "")
+        if not message_id:
+            raise GmailError("Gmail did not return a sent message id.")
+        item = {"id": message_id, "draft_id": draft_id, "sent": True}
+        self.sends.append(item)
         return item
 
     def search(self, query: str, max_results: int = 10) -> dict[str, Any]:

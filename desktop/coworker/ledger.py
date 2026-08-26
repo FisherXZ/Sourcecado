@@ -132,6 +132,18 @@ def event_from_tool(
             },
             tool=name,
         )
+    if name == "gmail_send":
+        return _event(
+            source="gmail",
+            kind="send",
+            summary=f"Sent draft {result.get('draft_id') or arguments.get('draft_id') or ''}".strip(),
+            payload={
+                "draft_id": result.get("draft_id") or arguments.get("draft_id"),
+                "id": result.get("id"),
+                "sent": True,
+            },
+            tool=name,
+        )
     if name == "drive_search":
         files = [
             {"id": row.get("id"), "name": row.get("name")}

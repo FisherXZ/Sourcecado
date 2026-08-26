@@ -120,6 +120,66 @@ export async function renameSession(id: string, title: string): Promise<{ id: st
   return res.json();
 }
 
+export type BoardPerson = {
+  person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  title: string | null;
+  company: string | null;
+  sequence_state: string | null;
+};
+
+export type Board = {
+  open: BoardPerson[];
+  in_conversation: BoardPerson[];
+  done: BoardPerson[];
+};
+
+export type PersonFile = {
+  person: BoardPerson & Record<string, unknown>;
+  brief: {
+    who: string;
+    why: string;
+    learned: string[];
+    missing: string[];
+    sources: string[];
+  };
+  timeline: Array<{
+    event_id: string;
+    source: string;
+    kind: string;
+    summary: string;
+    payload: Record<string, unknown>;
+  }>;
+};
+
+export async function getBoard(): Promise<Board> {
+  const res = await get("/v1/board");
+  if (!res.ok) throw new Error(`board ${res.status}`);
+  return res.json();
+}
+
+export async function getPerson(id: string): Promise<PersonFile> {
+  const res = await get(`/v1/people/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`person ${res.status}`);
+  return res.json();
+}
+
+export async function setPersonSequence(
+  id: string,
+  state: string,
+  actor = "director"
+): Promise<{ person: BoardPerson }> {
+  const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}/sequence`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ state, actor }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `sequence ${res.status}`);
+  return body;
+}
+
 export async function getConversation(): Promise<Conversation> {
   const res = await get("/v1/conversation");
   if (!res.ok) throw new Error(`conversation ${res.status}`);
