@@ -35,6 +35,33 @@ def test_keep_one_apollo_row_files_person_without_email(tmp_path):
     assert person["sequence_state"] is None
 
 
+def test_keep_row_with_missing_apollo_fields_keeps_what_the_file_has(tmp_path):
+    people = PersonStore(tmp_path)
+    ok, first = execute(
+        "people_keep",
+        {"people": [_alyssa()], "target": "club research dinner"},
+        people=people,
+    )
+    assert ok is True
+    person_id = first["kept"][0]["person_id"]
+
+    ok, again = execute(
+        "people_keep",
+        {"people": [{"apolloId": "abc123", "firstName": "Alyssa"}]},
+        people=people,
+    )
+    assert ok is True
+    assert again["kept"][0]["person_id"] == person_id
+    assert again["kept"][0]["title"] == "Partner"
+    assert again["kept"][0]["company"] == "Codeology"
+
+    person = people.get(person_id)
+    assert person["last_name"] == "W***n"
+    assert person["title"] == "Partner"
+    assert person["company"] == "Codeology"
+    assert person["target"] == "club research dinner"
+
+
 def test_keep_same_apollo_id_twice_does_not_fork(tmp_path):
     people = PersonStore(tmp_path)
     first = execute(
