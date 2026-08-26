@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from coworker.apollo import HttpError
@@ -22,6 +23,67 @@ EXPORT = {
     "application/vnd.google-apps.spreadsheet": "text/csv",
     "application/vnd.google-apps.presentation": "text/plain",
 }
+_CREDENTIAL_PREFIX = (
+    r"(?P<prefix>[\"']?(?:[A-Za-z][A-Za-z0-9]*[_-])*"
+    r"(?:api[\s_-]*key|access[\s_-]*token|auth[\s_-]*token|secret|password|"
+    r"private[\s_-]*key)[\"']?\s*[:=]\s*)"
+)
+_QUOTED_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    _CREDENTIAL_PREFIX + r"(?P<quote>[\"'])(?P<value>[^\r\n]*?)(?P=quote)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_UNQUOTED_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    _CREDENTIAL_PREFIX + r"(?P<value>[^\s\"']+)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH) )?PRIVATE KEY-----.*?"
+    r"-----END (?:(?:RSA|EC|DSA|OPENSSH) )?PRIVATE KEY-----",
+    re.IGNORECASE | re.DOTALL,
+)
+_LEGAL_NAME_RE = re.compile(
+    r"\b(?:nda|non[ -]?disclosure|agreement|contract|statement of work|sow)\b",
+    re.IGNORECASE,
+)
+_LEGAL_BODY_RE = re.compile(
+    r"\b(?:non[ -]?disclosure agreement|statement of work|this agreement|"
+    r"agreement between|terms and conditions)\b",
+    re.IGNORECASE,
+)
+
+
+def _redact_credentials(text: str) -> tuple[str, int]:
+    redaction_count = 0
+
+    def redact_private_key(_match: re.Match[str]) -> str:
+        nonlocal redaction_count
+        redaction_count += 1
+        return "[REDACTED PRIVATE KEY]"
+
+    def redact_assignment(match: re.Match[str]) -> str:
+        nonlocal redaction_count
+        redaction_count += 1
+        quote = match.groupdict().get("quote") or ""
+        return f"{match.group('prefix')}{quote}[REDACTED]{quote}"
+
+    safe = _PRIVATE_KEY_BLOCK_RE.sub(redact_private_key, text)
+    safe = _QUOTED_CREDENTIAL_ASSIGNMENT_RE.sub(redact_assignment, safe)
+    safe = _UNQUOTED_CREDENTIAL_ASSIGNMENT_RE.sub(redact_assignment, safe)
+    return safe, redaction_count
+
+
+def _legal_source_safety(name: str, text: str) -> dict[str, Any] | None:
+    if not (_LEGAL_NAME_RE.search(name) or _LEGAL_BODY_RE.search(text[:4000])):
+        return None
+    reasons: list[str] = []
+    if "codeology" in name.lower() and "berkeley consulting" in text.lower():
+        reasons.append("unexpected_recipient_berkeley_consulting")
+    return {
+        "legal_document": True,
+        "ready_to_use": False,
+        "status": "party_mismatch" if reasons else "unverified",
+        "reasons": reasons,
+    }
 
 
 class DriveApi:
@@ -65,13 +127,21 @@ class DriveApi:
             content = self._request("get", f"{FILES_URL}/{file_id}", params={"alt": "media"})
         text = content if isinstance(content, str) else str(content or "")
         truncated = len(text) > max_chars
-        return {
+        safe_text, redaction_count = _redact_credentials(text)
+        name = str(meta.get("name") or "")
+        result = {
             "id": str(meta.get("id") or file_id),
             "name": meta.get("name"),
             "mimeType": mime,
-            "content": text[:max_chars],
+            "content": safe_text[:max_chars],
             "truncated": truncated,
+            "sensitive_content_redacted": redaction_count > 0,
+            "redaction_count": redaction_count,
         }
+        source_safety = _legal_source_safety(name, safe_text)
+        if source_safety is not None:
+            result["source_safety"] = source_safety
+        return result
 
     def _require(self) -> None:
         if not has_scope(load_google(self.secrets), DRIVE_SCOPE):

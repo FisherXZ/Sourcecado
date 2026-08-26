@@ -95,7 +95,10 @@ KERNEL = (
     "apollo_enrich_contact "
     "(ask), web_search (auto). MCP tools are named mcp__server__tool. Do not invent the time, tool "
     "results, emails, or memories. Do not claim you sent or drafted unless the "
-    "matching tool ran and was allowed. Do not send without Allow."
+    "matching tool ran and was allowed. Do not send without Allow. Legal templates "
+    "are source evidence, not ready-to-use agreements. If source_safety.ready_to_use "
+    "is false, verify every named party, date, term, and approval status; record a "
+    "knowledge gap and do not adapt or recommend the document as ready to use."
 )
 
 
