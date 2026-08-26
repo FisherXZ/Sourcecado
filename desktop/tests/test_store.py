@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 
 import pytest
 
@@ -41,6 +42,37 @@ def test_presentation_events_round_trip_in_a_separate_append_only_log(tmp_path):
     assert store.load_events("main") == [event]
     assert not any("version" in message for message in store.load("main"))
     assert (tmp_path / "events" / "main.jsonl").is_file()
+
+
+def test_append_event_once_is_atomic_for_matching_receipts(tmp_path):
+    store = ConversationStore(tmp_path)
+    barrier = threading.Barrier(2)
+    outcomes = [None, None]
+
+    def append_receipt(index):
+        event = {
+            "type": "approval_resolved",
+            "id": "call-1",
+            "resolved_at": "2026-08-26T12:00:00+00:00",
+            "event_id": f"event-{index}",
+        }
+        barrier.wait()
+        outcomes[index] = store.append_event_once(
+            "main",
+            event,
+            matching_fields=("type", "id", "resolved_at"),
+        )
+
+    threads = [threading.Thread(target=append_receipt, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(outcome is not None for outcome in outcomes)
+    assert sum(outcome[1] for outcome in outcomes) == 1
+    assert outcomes[0][0] == outcomes[1][0]
+    assert store.load_events("main") == [outcomes[0][0]]
 
 
 def test_sqlite_index_tracks_title_and_count(tmp_path):

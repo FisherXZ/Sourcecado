@@ -361,22 +361,6 @@ def create_app(
         if not all(item.get(field) for field in required):
             return None
         sid = str(item["session_id"])
-        existing = next(
-            (
-                event
-                for event in store.load_events(sid)
-                if event.get("type") == "approval_resolved"
-                and event.get("id") == item.get("id")
-                and event.get("resolved_at") == item.get("resolved_at")
-            ),
-            None,
-        )
-        if existing is not None:
-            app.state.workspace_runtime.discard_parked_arguments(
-                str(item.get("id") or "")
-            )
-            return existing
-        app.state.workspace_runtime.record_permission_decision(item)
         event = build_event(
             TurnIdentity(
                 session_id=sid,
@@ -403,11 +387,17 @@ def create_app(
             execution_status=str(item.get("execution_status") or "pending"),
             execution_error=item.get("execution_error"),
         )
-        store.append_event(sid, event)
+        persisted, created = store.append_event_once(
+            sid,
+            event,
+            matching_fields=("type", "id", "resolved_at"),
+        )
+        if created:
+            app.state.workspace_runtime.record_permission_decision(item)
         app.state.workspace_runtime.discard_parked_arguments(
             str(item.get("id") or "")
         )
-        return event
+        return persisted
 
     def _claimed_arguments(item: dict[str, Any]) -> dict[str, Any]:
         arguments = dict(item.get("arguments") or {})

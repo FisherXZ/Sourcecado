@@ -428,6 +428,33 @@ class ConversationStore:
                 fh.write(json.dumps(event, ensure_ascii=False) + "\n")
                 fh.flush()
 
+    def append_event_once(
+        self,
+        sid: str,
+        event: dict[str, Any],
+        *,
+        matching_fields: tuple[str, ...],
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically append an event unless its durable identity already exists."""
+        if not matching_fields or any(field not in event for field in matching_fields):
+            raise ValueError("matching event fields must be present")
+        with self._lock:
+            existing = next(
+                (
+                    candidate
+                    for candidate in self.load_events(sid)
+                    if all(
+                        candidate.get(field) == event[field]
+                        for field in matching_fields
+                    )
+                ),
+                None,
+            )
+            if existing is not None:
+                return dict(existing), False
+            self.append_event(sid, event)
+            return dict(event), True
+
     def append(self, sid: str, message: dict[str, Any]) -> None:
         with self._lock:
             path = self._file(sid)

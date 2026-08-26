@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import uuid
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
-from coworker.events import TurnEventStream, TurnIdentity, new_turn_identity
+from coworker.events import TurnEventStream, TurnIdentity, build_event, new_turn_identity
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
 from coworker.permissions import RETRY_SAFE, decide
@@ -526,40 +527,38 @@ async def run_turn(
             await control.send_terminal(event)
 
     async def _approval_receipt(item: dict[str, Any], *, resolution: str) -> None:
-        existing = next(
-            (
-                event
-                for event in store.load_events(sid)
-                if event.get("type") == "approval_resolved"
-                and event.get("id") == item.get("id")
-                and event.get("resolved_at") == item.get("resolved_at")
-            ),
-            None,
-        )
-        if existing is not None:
-            if emit is not None:
-                await emit(existing)
-            return
         workspace_runtime = execute_kwargs.get("workspace_runtime")
-        if workspace_runtime is not None:
-            workspace_runtime.record_permission_decision(item)
-        await _emit(
-            {
-                "type": "approval_resolved",
-                "id": str(item["id"]),
-                "name": str(item["name"]),
-                "resolution": resolution,
-                "decision": item.get("decision"),
-                "actor": item.get("actor"),
-                "requested_at": str(
-                    item.get("requested_at") or item.get("created_at") or _now_iso()
-                ),
-                "resolved_at": str(item.get("resolved_at") or _now_iso()),
-                "scope": str(item.get("scope") or "once"),
-                "execution_status": str(item.get("execution_status") or "pending"),
-                "execution_error": item.get("execution_error"),
-            }
+        event = build_event(
+            events.identity,
+            "approval_resolved",
+            event_id=f"event_{uuid.uuid4().hex}",
+            id=str(item["id"]),
+            name=str(item["name"]),
+            resolution=resolution,
+            decision=item.get("decision"),
+            actor=item.get("actor"),
+            requested_at=str(
+                item.get("requested_at") or item.get("created_at") or _now_iso()
+            ),
+            resolved_at=str(item.get("resolved_at") or _now_iso()),
+            scope=str(item.get("scope") or "once"),
+            execution_status=str(item.get("execution_status") or "pending"),
+            execution_error=item.get("execution_error"),
         )
+        persisted = (
+            workspace_runtime.sanitize_event(event)
+            if workspace_runtime is not None
+            else event
+        )
+        canonical, created = store.append_event_once(
+            sid,
+            persisted,
+            matching_fields=("type", "id", "resolved_at"),
+        )
+        if created and workspace_runtime is not None:
+            workspace_runtime.record_permission_decision(item)
+        if emit is not None:
+            await emit(event if created else canonical)
         if workspace_runtime is not None:
             workspace_runtime.discard_parked_arguments(str(item.get("id") or ""))
 
