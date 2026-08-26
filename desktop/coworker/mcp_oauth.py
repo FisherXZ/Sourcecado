@@ -11,7 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets as pysecrets
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlencode
 
 from coworker.secrets import SecretStore
@@ -20,16 +20,33 @@ RESOURCE = "https://mcp.granola.ai/mcp"
 PRM_URL = "https://mcp.granola.ai/.well-known/oauth-protected-resource"
 
 
+def _open_browser(url: str) -> bool:
+    try:
+        import subprocess
+
+        subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 def _pkce(verifier: str) -> str:
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 class McpOAuth:
-    def __init__(self, secrets: SecretStore, public_url: str, http: Any | None = None) -> None:
+    def __init__(
+        self,
+        secrets: SecretStore,
+        public_url: str,
+        http: Any | None = None,
+        browser_opener: Callable[[str], bool] | None = None,
+    ) -> None:
         self.secrets = secrets
         self.public_url = public_url.rstrip("/")
         self.http = http
+        self.browser_opener = browser_opener or _open_browser
         self._pending: dict[str, str] | None = None
 
     def _client(self) -> Any:
@@ -93,14 +110,7 @@ class McpOAuth:
             }
         )
         url = f"{auth_endpoint}?{query}"
-        opened = False
-        try:
-            import subprocess
-
-            subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            opened = True
-        except Exception:
-            opened = False
+        opened = bool(self.browser_opener(url))
         return {"url": url, "started": True, "opened": opened, "redirect_uri": redirect}
 
     def finish(self, *, code: str, state: str) -> None:

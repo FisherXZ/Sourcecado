@@ -58,13 +58,19 @@ def test_granola_status_needs_auth(tmp_path):
     assert gran["status"] == "available"
 
 
-def test_connect_does_not_persist_forged_token(tmp_path, monkeypatch):
-    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: None)
+def test_connect_does_not_persist_forged_token(tmp_path):
+    opened_urls = []
     http = granola_http()
-    app = create_app(token=TOKEN, state=tmp_path, http=http)
+    app = create_app(
+        token=TOKEN,
+        state=tmp_path,
+        http=http,
+        browser_opener=lambda url: opened_urls.append(url) or True,
+    )
     res = TestClient(app).post("/v1/connectors/granola/connect", headers={TOKEN_HEADER: TOKEN})
     body = res.json()
     assert body["started"] is True
+    assert opened_urls == [body["url"]]
     parsed = urlparse(body["url"])
     assert parsed.netloc == "mcp-auth.granola.ai"
     assert parsed.path.rstrip("/") == "/oauth2/authorize"
@@ -181,9 +187,16 @@ def test_oauth_finish_without_waiter_rejected(tmp_path):
 
 
 def test_oauth_mismatched_state_does_not_consume(tmp_path):
-    oauth = McpOAuth(SecretStore(tmp_path / "secrets.json"), "http://127.0.0.1:8765", http=granola_http())
+    opened_urls = []
+    oauth = McpOAuth(
+        SecretStore(tmp_path / "secrets.json"),
+        "http://127.0.0.1:8765",
+        http=granola_http(),
+        browser_opener=lambda url: opened_urls.append(url) or True,
+    )
     started = oauth.start("granola")
     assert started["started"] is True
+    assert opened_urls == [started["url"]]
     try:
         oauth.finish(code="abc", state="wrong")
     except Exception:
@@ -191,10 +204,14 @@ def test_oauth_mismatched_state_does_not_consume(tmp_path):
     assert getattr(oauth, "_pending", None) is not None
 
 
-def test_oauth_finish_exchanges_code_at_auth_server(tmp_path, monkeypatch):
-    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: None)
+def test_oauth_finish_exchanges_code_at_auth_server(tmp_path):
     http = granola_http()
-    oauth = McpOAuth(SecretStore(tmp_path / "secrets.json"), "http://127.0.0.1:8765", http=http)
+    oauth = McpOAuth(
+        SecretStore(tmp_path / "secrets.json"),
+        "http://127.0.0.1:8765",
+        http=http,
+        browser_opener=lambda _url: True,
+    )
     started = oauth.start("granola")
     state = parse_qs(urlparse(started["url"]).query)["state"][0]
     oauth.finish(code="real-code", state=state)

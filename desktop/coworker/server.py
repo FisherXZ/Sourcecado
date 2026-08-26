@@ -17,7 +17,7 @@ import threading
 import coworker.turn as turn_runtime
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -166,6 +166,16 @@ def state_dir() -> Path:
     return Path.home() / ".config" / "club"
 
 
+def _open_browser(url: str) -> bool:
+    try:
+        import subprocess
+
+        subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 _SECRET_EVENT_KEYS = frozenset(
     {"access_token", "refresh_token", "authorization", "api_key", "token"}
 )
@@ -237,6 +247,7 @@ def create_app(
     apollo_key: str | None = None,
     public_url: str | None = None,
     mcp: Any = None,
+    browser_opener: Callable[[str], bool] | None = None,
 ) -> FastAPI:
     if not token:
         raise ValueError("sidecar token must be non-empty")
@@ -272,10 +283,16 @@ def create_app(
     app.state.apollo_key = apollo_key if apollo_key is not None else os.environ.get("APOLLO_API_KEY")
     app.state.tavily_key = os.environ.get("TAVILY_API_KEY")
     app.state.public_url = public_url or "http://127.0.0.1:8765"
+    app.state.browser_opener = browser_opener or _open_browser
     app.state.oauth_state = ""
     app.state.skills = SkillLoader([BUILTIN_SKILLS, Path(root) / "skills"])
     write_default_mcp_json(Path(root) / "mcp.json")
-    app.state.mcp_oauth = McpOAuth(app.state.secrets, app.state.public_url, http=http)
+    app.state.mcp_oauth = McpOAuth(
+        app.state.secrets,
+        app.state.public_url,
+        http=http,
+        browser_opener=app.state.browser_opener,
+    )
     app.state.mcp = (
         mcp
         if mcp is not None
@@ -1070,14 +1087,7 @@ def create_app(
         url = authorization_url(
             client_id=client_id, redirect_uri=redirect, state=state, extra_scopes=(extra,)
         )
-        opened = False
-        try:
-            import subprocess
-
-            subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            opened = True
-        except Exception:
-            opened = False
+        opened = bool(app.state.browser_opener(url))
         return {"url": url, "opened": opened, "redirect_uri": redirect}
 
     @app.post("/v1/connectors/drive/connect")
@@ -1140,14 +1150,7 @@ def create_app(
         app.state.oauth_state = state
         redirect = f"{app.state.public_url.rstrip('/')}/v1/gmail/callback"
         url = authorization_url(client_id=client_id, redirect_uri=redirect, state=state)
-        opened = False
-        try:
-            import subprocess
-
-            subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            opened = True
-        except Exception:
-            opened = False
+        opened = bool(app.state.browser_opener(url))
         return {"url": url, "opened": opened, "redirect_uri": redirect}
 
     @app.post("/v1/gmail/disconnect")
