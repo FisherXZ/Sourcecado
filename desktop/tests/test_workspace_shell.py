@@ -1,8 +1,9 @@
 import os
-import time
 import shlex
 import shutil
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -496,6 +497,82 @@ def test_restart_reconciliation_terminates_a_surviving_host_process(tmp_path):
         time.sleep(0.02)
     with pytest.raises(ProcessLookupError):
         os.kill(process_id, 0)
+
+
+def test_restart_reconciliation_retries_identity_during_process_startup(
+    monkeypatch,
+):
+    marker = "sourcecado-task-shell_starting"
+    probes = iter(
+        [
+            subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="python launcher", stderr=""
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=f"/bin/bash -c command {marker}",
+                stderr="",
+            ),
+        ]
+    )
+    signals = []
+
+    def probe_process(command, **kwargs):
+        return next(probes)
+
+    monkeypatch.setattr(subprocess, "run", probe_process)
+    monkeypatch.setattr(
+        os,
+        "killpg",
+        lambda process_group_id, sent_signal: signals.append(
+            (process_group_id, sent_signal)
+        ),
+    )
+
+    def process_exists_until_signalled(process_id, sent_signal):
+        assert process_id == 41
+        assert sent_signal == 0
+        if signals:
+            raise ProcessLookupError
+
+    monkeypatch.setattr(os, "kill", process_exists_until_signalled)
+
+    ShellRuntime._terminate_persisted_host_task(
+        {
+            "process_id": 41,
+            "process_group_id": 41,
+            "process_marker": marker,
+        }
+    )
+
+    assert signals == [(41, signal.SIGTERM)]
+
+
+def test_restart_reconciliation_reads_the_untruncated_process_command(
+    monkeypatch,
+):
+    probe_commands = []
+
+    def probe_process(command, **kwargs):
+        probe_commands.append(command)
+        return subprocess.CompletedProcess(
+            args=command, returncode=1, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", probe_process)
+
+    ShellRuntime._terminate_persisted_host_task(
+        {
+            "process_id": 41,
+            "process_group_id": 41,
+            "process_marker": "sourcecado-task-shell_long_command",
+        }
+    )
+
+    assert probe_commands == [
+        ["/bin/ps", "-ww", "-p", "41", "-o", "command="]
+    ]
 
 
 def test_revoking_workspace_stops_its_background_shell_tasks(tmp_path):

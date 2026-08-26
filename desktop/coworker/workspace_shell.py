@@ -611,18 +611,25 @@ class ShellRuntime:
         marker = str(task.get("process_marker") or "")
         if process_id <= 0 or process_group_id <= 0 or not marker:
             return
-        try:
-            probe = subprocess.run(
-                ["/bin/ps", "-p", str(process_id), "-o", "command="],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return
-        if probe.returncode != 0 or marker not in probe.stdout:
-            return
+        identity_deadline = time.monotonic() + 0.5
+        while True:
+            try:
+                probe = subprocess.run(
+                    ["/bin/ps", "-ww", "-p", str(process_id), "-o", "command="],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return
+            if probe.returncode != 0:
+                return
+            if marker in probe.stdout:
+                break
+            if time.monotonic() >= identity_deadline:
+                return
+            time.sleep(0.02)
         try:
             os.killpg(process_group_id, signal.SIGTERM)
         except ProcessLookupError:
