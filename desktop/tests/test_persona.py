@@ -32,6 +32,15 @@ def test_system_prompt_uses_on_duty_body(tmp_path):
     assert buddy.body not in sourcing_prompt
 
 
+def test_system_prompt_blocks_unverified_legal_templates(tmp_path):
+    prompt = system_prompt(ConversationStore(tmp_path), load_persona("sourcing"))
+
+    assert "Legal templates are source evidence, not ready-to-use agreements" in prompt
+    assert "verify every named party" in prompt
+    assert "source_safety.ready_to_use is false" in prompt
+    assert "record a knowledge gap" in prompt
+
+
 def test_parse_rejects_missing_frontmatter():
     try:
         parse_persona("just a body")
