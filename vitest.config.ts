@@ -13,6 +13,7 @@ export default defineConfig({
   esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
+    include: ["tests/**/*.test.{ts,tsx}"],
     fileParallelism: false,
     // fileParallelism alone does not serialize the DB suites (verified:
     // parallel workers race on Postgres catalog resets, 80-118 flaky
