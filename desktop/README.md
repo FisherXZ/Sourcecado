@@ -15,7 +15,7 @@ FastAPI sidecar (coworker/)
         │
         ├── model provider and tool loop
         ├── Apollo, Gmail, Drive, Calendar, Granola, and web connectors
-        ├── permissions and approval gates
+        ├── workspace filesystem, Docker-first shell, permissions, and approval gates
         └── local conversations, person files, schedules, and run ledger
 ```
 
@@ -28,6 +28,8 @@ Copy the root `.env.example` to `~/.config/club/.env`. Existing process environm
 The current model preference is DeepSeek V4 Pro with Kimi K3 as fallback. Google OAuth enables Gmail, Drive, and Calendar. Apollo enrichment and Gmail sending remain explicit, approval-gated actions.
 
 The default local state directory is `~/.config/club/`. Set `CLUB_STATE_DIR` for isolated development or tests. Never commit credentials, API tokens, OAuth grants, or local databases.
+
+Workspace grants and exact host-command approvals are also stored in the local state directory. Docker is optional. When its CLI, daemon, or sandbox image is unavailable, shell commands require an explicit **Not sandboxed** host approval; permanent exact-command approvals remain visible and revocable in Settings.
 
 ## Run from this directory
 

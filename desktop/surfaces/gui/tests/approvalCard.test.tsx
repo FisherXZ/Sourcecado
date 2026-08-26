@@ -40,6 +40,61 @@ function approvalPart(
 }
 
 describe("ApprovalCard", () => {
+  it("shows an unsandboxed shell warning and offers exact permanent approval without leaking command data", () => {
+    const onDecision = vi.fn();
+    const part = {
+      ...approvalPart(),
+      toolName: "shell_exec",
+      args: {
+        grant_id: "grant-1",
+        command: "bash secret-script.sh --token hidden",
+        cwd: ".",
+        environment: { TOKEN: "secret-environment" },
+      },
+      approval: {
+        id: "approval-shell",
+        reason: "Docker is unavailable. This command is not sandboxed and requires approval.",
+      },
+      providerMetadata: {
+        sourcecado: {
+          approvalState: "pending",
+          actor: null,
+          requestedAt: "2026-08-26T12:00:00Z",
+          resolvedAt: null,
+          scope: "once",
+          executionStatus: "pending",
+          executionError: null,
+          resource: {
+            kind: "shell_command",
+            execution_target: "host",
+            command_summary: "bash · 3 arguments",
+            cwd: "/Users/operator/Workspace",
+            fingerprint: "abcdef1234567890",
+            unsandboxed: true,
+          },
+        },
+      },
+    } as ToolCallMessagePartProps;
+
+    const { container } = render(
+      <ApprovalCard part={part} onDecision={onDecision} />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Run workspace command" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Not sandboxed")).toBeInTheDocument();
+    expect(screen.getByText("bash · 3 arguments")).toBeInTheDocument();
+    expect(screen.getByText("/Users/operator/Workspace")).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("secret-script.sh");
+    expect(container).not.toHaveTextContent("secret-environment");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Always allow this exact command" }),
+    );
+    expect(onDecision).toHaveBeenCalledWith(true, "always");
+  });
+
   it("shows Calendar create fields, timezone, and account before approval", () => {
     const part = {
       ...approvalPart(),

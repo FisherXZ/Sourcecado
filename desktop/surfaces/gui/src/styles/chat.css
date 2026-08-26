@@ -471,6 +471,28 @@
   gap: 6px;
 }
 
+.sourcecado-shell-approval-summary {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: var(--warn-bg);
+}
+
+.sourcecado-shell-approval-summary > strong {
+  color: var(--warn);
+}
+
+.sourcecado-shell-approval-summary dl {
+  margin: 9px 0;
+}
+
+.sourcecado-shell-approval-summary p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .sourcecado-approval-actions button,
 .sourcecado-starters button,
 .sourcecado-load-error button {

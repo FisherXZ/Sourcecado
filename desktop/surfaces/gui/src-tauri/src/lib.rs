@@ -1,7 +1,4 @@
-//! Club desktop shell — slice 1 native window.
-//!
-//! Copied jobs from OpenWorker `surfaces/gui/src-tauri/src/lib.rs`, minus updater,
-//! dictation, autostart, and keep-awake. Four jobs only:
+//! Sourcecado desktop shell. It owns four native lifecycle jobs:
 //!   1. pick a free loopback port
 //!   2. start the Python sidecar as a child
 //!   3. inject URL + one-time token before the UI loads
@@ -76,6 +73,7 @@ pub fn run() {
     );
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main(app);
         }))

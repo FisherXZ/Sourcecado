@@ -78,6 +78,27 @@ describe("ActivityGroup", () => {
   });
 
   it.each([
+    ["fs_write", "created", "Created workspace file"],
+    ["fs_write", "updated", "Updated workspace file"],
+    ["fs_move", "moved", "Moved workspace item"],
+    ["fs_trash", "trashed", "Trashed workspace item"],
+    ["shell_exec", "shell_approved", "Ran approved workspace command"],
+    ["shell_exec", "shell_auto_read", "Ran read-only workspace command"],
+    ["fs_write", "stale", "Workspace write was stale"],
+  ])("renders a distinct %s %s receipt", (toolName, receiptType, label) => {
+    render(
+      <ActivityGroup
+        tools={[tool({ toolName, result: { receipt_type: receiptType } })]}
+        messageState="complete"
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: `${label} · Completed` }),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
     ["Running", [tool({ toolName: "private_internal_tool", result: undefined })], "running"],
     ["Failed", [tool({ toolName: "private_internal_tool", result: undefined, isError: true })], "complete"],
     [

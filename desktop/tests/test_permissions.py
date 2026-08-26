@@ -1,11 +1,12 @@
 from coworker.permissions import AUTO, ASK, decide
 from coworker.tools import OPENAI_TOOLS
+from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES
 
 
 def test_openai_tools_are_in_auto_or_ask():
     names = [schema["function"]["name"] for schema in OPENAI_TOOLS]
     for name in names:
-        assert name in AUTO or name in ASK
+        assert name in AUTO or name in ASK or name in WORKSPACE_TOOL_NAMES
     assert AUTO.isdisjoint(ASK)
 
 

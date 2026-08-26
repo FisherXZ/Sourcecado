@@ -1,8 +1,4 @@
-"""Skill loading — SKILL.md folders, catalog in the prompt, body on demand.
-
-Copied from OpenWorker `coworker/skills/base.py`: frontmatter name/description,
-load_skill fetches the full body.
-"""
+"""Sourcecado skill loading: catalog metadata first, instructions on demand."""
 
 from __future__ import annotations
 

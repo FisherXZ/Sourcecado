@@ -1,9 +1,4 @@
-"""ConversationStore — sqlite index + append-only jsonl.
-
-Copied shape from OpenWorker `coworker/conversations.py`:
-  club.db                     sessions(id → title, n_msgs)
-  conversations/<id>.jsonl    one message per line, append only
-"""
+"""Sourcecado conversation state: SQLite index plus append-only JSONL."""
 
 from __future__ import annotations
 

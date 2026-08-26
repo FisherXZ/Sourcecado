@@ -47,10 +47,34 @@ _SAFE_RETRY_TOOLS = RETRY_SAFE
 
 
 def approval_resource(
-    name: str, arguments: dict[str, Any], gmail: Any
+    name: str,
+    arguments: dict[str, Any],
+    gmail: Any,
+    workspace_runtime: Any = None,
 ) -> dict[str, Any] | None:
     """The few fields an operator needs to judge a gmail_send: recipient,
     subject, account. Never the body, tokens, or raw headers (DU-12)."""
+    if name == "shell_exec" and workspace_runtime is not None:
+        try:
+            return workspace_runtime.shell.approval_resource(
+                grant_id=str(arguments.get("grant_id") or ""),
+                command=str(arguments.get("command") or ""),
+                cwd=str(arguments.get("cwd") or "."),
+                environment=(
+                    arguments.get("environment")
+                    if isinstance(arguments.get("environment"), dict)
+                    else {}
+                ),
+            )
+        except Exception:
+            return {
+                "kind": "shell_command",
+                "execution_target": "unknown",
+                "command_summary": "Command details unavailable",
+                "cwd": None,
+                "fingerprint": None,
+                "unsandboxed": True,
+            }
     if name != "gmail_send":
         return None
     draft_id = str(arguments.get("draft_id") or "")
@@ -493,6 +517,9 @@ async def run_turn(
             if emit is not None:
                 await emit(existing)
             return
+        workspace_runtime = execute_kwargs.get("workspace_runtime")
+        if workspace_runtime is not None:
+            workspace_runtime.record_permission_decision(item)
         await _emit(
             {
                 "type": "approval_resolved",
@@ -600,7 +627,16 @@ async def run_turn(
             store.append(sid, tool_msg)
             for call in calls:
                 approval_claimant: str | None = None
-                gate = decide(call.name)
+                approval_scope = "once"
+                approval_fingerprint: str | None = None
+                gate = decide(
+                    call.name,
+                    call.arguments,
+                    workspace_runtime=execute_kwargs.get("workspace_runtime"),
+                    actor=str(execute_kwargs.get("actor") or "assistant"),
+                    session_id=sid,
+                    run_id=events.identity.run_id,
+                )
                 if not gate.allowed and not gate.needs_user:
                     result = {"error": gate.reason or "denied"}
                     had_tool_failure = True
@@ -619,7 +655,10 @@ async def run_turn(
                     continue
                 if gate.needs_user:
                     resource = approval_resource(
-                        call.name, call.arguments, execute_kwargs.get("gmail")
+                        call.name,
+                        call.arguments,
+                        execute_kwargs.get("gmail"),
+                        execute_kwargs.get("workspace_runtime"),
                     )
                     parked = inbox.park(
                         call.name,
@@ -689,6 +728,12 @@ async def run_turn(
                             sid, call, False, result, execute_kwargs
                         )
                         continue
+                    approval_scope = str(claim.item.get("scope") or "once")
+                    approval_resource_payload = claim.item.get("resource")
+                    if isinstance(approval_resource_payload, dict):
+                        raw_fingerprint = approval_resource_payload.get("fingerprint")
+                        if isinstance(raw_fingerprint, str):
+                            approval_fingerprint = raw_fingerprint
                     if choice == "deny":
                         receipt = claim.item
                         _ok, result = inbox.execution_outcome(receipt)
@@ -753,6 +798,11 @@ async def run_turn(
                     kw = {k: v for k, v in execute_kwargs.items() if not k.startswith("_")}
                     kw["session_id"] = sid
                     kw["run_id"] = events.identity.run_id
+                    kw["approval_granted"] = approval_claimant is not None
+                    kw["approval_scope"] = approval_scope
+                    kw["approval_fingerprint"] = approval_fingerprint
+                    if approval_claimant is not None:
+                        kw["actor"] = str(claim.item.get("actor") or "operator")
                     ok, result = await asyncio.to_thread(
                         execute, call.name, call.arguments, **kw
                     )

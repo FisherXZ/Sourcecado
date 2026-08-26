@@ -1,8 +1,4 @@
-"""Scheduler tick — due jobs fire once, overlap skipped.
-
-Copied policy from OpenWorker: run-once-catch-up, skip-on-overlap.
-Run now fires one job without consuming the weekly slot.
-"""
+"""Sourcecado scheduler: run-once catch-up, skip overlap, preserve weekly slots."""
 
 from __future__ import annotations
 

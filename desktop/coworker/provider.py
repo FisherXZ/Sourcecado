@@ -1,9 +1,4 @@
-"""Model access — stream text and optional tool calls.
-
-Copied shape from OpenWorker `coworker/providers/base.py` (`StreamChunk` + a
-client the loop can call). Slice 3 adds tool_calls on the chunk. Secrets stay
-in env; they never enter messages.
-"""
+"""Sourcecado model access: streamed text and typed tool calls."""
 
 from __future__ import annotations
 
