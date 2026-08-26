@@ -1,7 +1,7 @@
 # Sourcecado Product Validation Sprint Roadmap
 
 Date: 2026-08-26  
-Status: baseline executed; at roadmap decision gate  
+Status: baseline executed; at roadmap decision gate
 Product source: `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md`
 
 ## Goal
