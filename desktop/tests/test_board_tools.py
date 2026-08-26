@@ -174,6 +174,98 @@ def test_sent_mail_lets_the_assistant_move_to_in_conversation(tmp_path):
     assert result["person"]["sequence_state"] == "in_conversation"
 
 
+def test_reading_inbound_mail_lets_the_assistant_move_to_in_conversation(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    store.set_sequence(ada["person_id"], "open", actor="director")
+    store.append_event(
+        ada["person_id"],
+        source="gmail",
+        kind="mail",
+        summary="Read mail Re: research dinner",
+        payload={
+            "id": "m1",
+            "from": "ada@analytic.example",
+            "subject": "Re: research dinner",
+        },
+        actor="assistant",
+        tool="gmail_read",
+    )
+    ok, result = execute(
+        "board_mutate",
+        {
+            "action": "transition",
+            "person_id": ada["person_id"],
+            "expected_version": store.get(ada["person_id"])["version"],
+            "to_state": "in_conversation",
+            "rationale_summary": "Ada replied.",
+        },
+        people=store,
+        actor="assistant",
+    )
+    assert ok is True
+    assert result["person"]["sequence_state"] == "in_conversation"
+
+
+def test_gmail_search_mentioning_reply_cannot_move_to_in_conversation(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    store.set_sequence(ada["person_id"], "open", actor="director")
+    store.append_event(
+        ada["person_id"],
+        source="gmail",
+        kind="mail",
+        summary="Searched Gmail for 'Ada reply' (0)",
+        payload={"query": "Ada reply", "ids": []},
+        actor="assistant",
+        tool="gmail_search",
+    )
+    ok, result = execute(
+        "board_mutate",
+        {
+            "action": "transition",
+            "person_id": ada["person_id"],
+            "expected_version": store.get(ada["person_id"])["version"],
+            "to_state": "in_conversation",
+            "rationale_summary": "A search is not a reply.",
+        },
+        people=store,
+        actor="assistant",
+    )
+    assert ok is False
+    assert "in_conversation" in result["error"]
+    assert store.get(ada["person_id"])["sequence_state"] == "open"
+
+
+def test_failed_gmail_send_cannot_move_to_in_conversation(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    store.set_sequence(ada["person_id"], "open", actor="director")
+    store.append_event(
+        ada["person_id"],
+        source="gmail",
+        kind="error",
+        summary="Gmail send failed",
+        payload={"detail": "gmail 500"},
+        actor="assistant",
+        tool="gmail_send",
+    )
+    ok, result = execute(
+        "board_mutate",
+        {
+            "action": "transition",
+            "person_id": ada["person_id"],
+            "expected_version": store.get(ada["person_id"])["version"],
+            "to_state": "in_conversation",
+            "rationale_summary": "A failed send is not outreach.",
+        },
+        people=store,
+        actor="assistant",
+    )
+    assert ok is False
+    assert store.get(ada["person_id"])["sequence_state"] == "open"
+
+
 def test_director_allow_can_move_without_sent_mail(tmp_path):
     store = PersonStore(tmp_path)
     ada = _ada(store)
@@ -340,6 +432,54 @@ def test_delete_hides_the_person_from_the_board_and_keeps_a_receipt(tmp_path):
     assert store.get(ada["person_id"]) is None
     assert store.list_board() == {"open": [], "in_conversation": [], "done": []}
     assert store.timeline(ada["person_id"])[-1]["kind"] == "delete"
+
+
+def test_keep_after_delete_restores_the_same_apollo_person(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    store.set_sequence(ada["person_id"], "open", actor="director")
+    store.delete(
+        ada["person_id"],
+        expected_version=store.get(ada["person_id"])["version"],
+        actor="director",
+        rationale_summary="Remove the duplicate after Allow.",
+    )
+    ok, kept = execute(
+        "people_keep",
+        {
+            "people": [
+                {
+                    "apolloId": "ada",
+                    "firstName": "Ada",
+                    "lastNameObfuscated": "L***e",
+                    "title": "Founder",
+                    "organizationName": "Analytic",
+                }
+            ],
+            "target": "research dinner",
+        },
+        people=store,
+    )
+    assert ok is True
+    person_id = kept["kept"][0]["person_id"]
+    assert person_id == ada["person_id"]
+    restored = store.get(person_id)
+    assert restored is not None
+    assert restored["deleted_at"] in (None, "")
+    assert [row["person_id"] for row in store.list_board()["open"]] == [person_id]
+    ok, opened = execute(
+        "board_mutate",
+        {
+            "action": "transition",
+            "person_id": person_id,
+            "expected_version": restored["version"],
+            "to_state": "open",
+            "rationale_summary": "File Ada again.",
+        },
+        people=store,
+    )
+    assert ok is True
+    assert opened["person"]["sequence_state"] == "open"
 
 
 def test_query_filters_board_people_by_sequence_and_company(tmp_path):

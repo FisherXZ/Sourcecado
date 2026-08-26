@@ -266,14 +266,16 @@ class PersonStore:
 
     def _has_conversation_evidence(self, person_id: str) -> bool:
         for event in self.timeline(person_id):
+            if event.get("kind") == "error":
+                continue
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-            if event.get("kind") == "send" or event.get("tool") == "gmail_send":
+            if event.get("kind") == "send":
                 return True
             if payload.get("sent") is True:
                 return True
             if payload.get("direction") == "inbound":
                 return True
-            if event.get("kind") == "mail" and "reply" in str(event.get("summary") or "").lower():
+            if event.get("kind") == "mail" and event.get("tool") == "gmail_read":
                 return True
         return False
 
@@ -301,6 +303,9 @@ class PersonStore:
                     (apollo,),
                 ).fetchone()
             if existing is not None:
+                restoring = bool(existing["deleted_at"])
+                now = self._now()
+                next_version = int(existing["version"] or 1) + (1 if restoring else 0)
                 self._conn.execute(
                     """
                     UPDATE people SET
@@ -309,7 +314,9 @@ class PersonStore:
                         title = COALESCE(?, title),
                         company = COALESCE(?, company),
                         target = COALESCE(?, target),
-                        updated_at = CURRENT_TIMESTAMP
+                        deleted_at = NULL,
+                        version = ?,
+                        updated_at = ?
                     WHERE person_id = ?
                     """,
                     (
@@ -318,9 +325,22 @@ class PersonStore:
                         title,
                         company,
                         cleaned_target,
+                        next_version,
+                        now,
                         existing["person_id"],
                     ),
                 )
+                if restoring:
+                    self._receipt(
+                        existing["person_id"],
+                        kind="keep",
+                        summary="Restored person file from Apollo keep",
+                        payload={"version": next_version, "apollo_id": apollo},
+                        actor="assistant",
+                        session_id=None,
+                        run_id=None,
+                        tool="people_keep",
+                    )
                 self._conn.commit()
                 row = self._conn.execute(
                     "SELECT * FROM people WHERE person_id = ?",
