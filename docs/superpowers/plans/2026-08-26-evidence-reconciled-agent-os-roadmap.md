@@ -1,207 +1,336 @@
 # Evidence-Reconciled Agent OS Roadmap
 
-Date: 2026-08-26  
-Status: proposed at the product-validation decision gate  
+Date: 2026-08-26
+Status: approved architecture basis
 Evidence: `docs/qa/2026-08-26-golden-workflow-baseline.md`
+Product source: `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md`
 
 ## Product conclusion
 
-Keep the sourcing skills. Do not solve their failures with increasingly long
-skill prose. The two runs exposed five shared operating-system capabilities
-that should form the next implementation sequence.
+Sourcecado is a generic local agent operating system for the club. Sourcing is
+the first department whose work must be proven end to end. Skills improve how
+the agent approaches a job, but durability, tools, artifacts, connectors,
+scheduling, and audit history exist independently of skills.
 
-## Priority 0: skill-run contract and convergence
+The two live sourcing workflows exposed five missing operating-system
+capabilities. Each priority below names one primary implementation donor and a
+minimal Sourcecado port. We do not combine frameworks merely because all three
+contain adjacent ideas.
 
-### Problem
+## Core execution model
 
-Both skills researched successfully but required manual cancellation and a
-second user turn before delivering the requested outcome.
+- A director gives Sourcecado a job as a prompt. The prompt may be freeform,
+  may load one or more skills, or may come from an automation.
+- One Agent Run owns that job through clarification questions, approval waits,
+  tools, interruption, resume, and terminal delivery.
+- Chat and scheduling invoke the same agent engine.
+- Files and cloud documents are deliverables. Assistant prose alone is not a
+  substitute when the job calls for an editable artifact.
+- The Run Ledger preserves the complete semantic agent trace for future evals,
+  without storing hidden chain-of-thought or transport-level token chunks.
 
-### Build
+## Priority 0: Durable Agent Run
 
-- Give each skill invocation one durable run record with skill name, validated
-  inputs, source scope, phases, checkpoints, artifact refs, and terminal state.
-- Reserve a synthesis/delivery phase before the tool or time budget is spent.
-- When the research budget ends, require a useful partial deliverable with
-  completed evidence and explicit gaps instead of another tool round.
-- Preserve partial assistant output and completed phase state on stop/error.
-- Expose current phase and progress in the existing run UI.
+### Observed failure
 
-### Copy
+Both golden workflows found useful evidence but kept researching until the
+operator interrupted them. Each required a second user message saying, in
+effect, "stop using tools and deliver now."
 
-- OpenWorker: mid-turn checkpoint events, persisted compaction state, partial
-  turn preservation, real-file artifact contract.
-- Grok Bot: turn checkpoint/settle boundary and transcript/index workers.
-- OpenClaw: incomplete-turn recovery, detached task status, attempt/terminal
-  records, and final-answer separation from reasoning/tool activity.
+### Primary donor
 
-### Done when
+**OpenWorker's prompt-driven `TurnEngine` lifecycle.**
 
-Each golden skill reaches its director-review deliverable in one run without a
-"stop using tools and answer now" follow-up.
+Copy these concrete behaviors:
 
-## Priority 1: explicit source scope and canonical source registry
+- a prompt enters one engine regardless of whether a skill is loaded;
+- the run can suspend for a human question or approval and continue in place;
+- interruption preserves the visible partial assistant output;
+- unanswered tool calls resume durably after restart;
+- completed model/tool iterations are persistence checkpoints;
+- context compaction preserves canonical history while bounding the outbound
+  model view;
+- automation sends ordinary instructions through the same engine.
 
-### Problem
+Use OpenClaw only as a contract check for the distinction between Session,
+Agent Run, model turn/attempt, approval ownership, and terminal state.
 
-The pitch run expanded to 155 evidence items and unrelated duplicate SOPs. Long
-documents truncated before relevant sections. Current search cannot distinguish
-canonical, stale, restricted, and merely matching sources.
+### Sourcecado port
 
-### Build
+- Preserve Sourcecado's provider adapters, tool execution, approval inbox,
+  semantic events, and replay UI.
+- Add a durable Agent Run around the existing loop rather than replacing the
+  loop wholesale.
+- A run stores stable identity, owning session, trigger, original goal, current
+  state, checkpoints, source and artifact refs, usage, and terminal result.
+- Clarification uses an `ask_user` suspension inside the same run. A later
+  request to revise a completed deliverable becomes a new linked run.
+- Skills are optional context recorded as `skills_loaded`; they are never the
+  execution boundary.
+- Reserve enough budget for terminal delivery. When the work budget ends, the
+  engine returns the best useful partial result with explicit gaps instead of
+  starting another tool round.
+- Scheduled jobs call this same Agent Run entry point with their saved prompt.
 
-- Resolve and persist an exact source scope before research: folder ids,
-  canonical document ids, company/people scope, and allowed connectors.
-- Add canonical-source metadata: purpose, semester, version, approval status,
-  sensitivity, supersedes/superseded-by, and owner.
-- Make Drive folder ingestion/indexing recursive, resumable, idempotent, and
-  outside the interactive step budget.
-- Query indexed chunks later instead of rereading full source bodies.
-- Exclude results outside the selected tree unless the director expands scope.
+### Do not copy
 
-### Copy
-
-- Grok Bot: worker-backed search index and corruption/rebuild behavior.
-- OpenClaw: workspace/source scope, bounded memory indexes, provenance, and
-  background-task progress.
-- OpenWorker: explicit roots and per-session workspace boundaries.
-
-### Related work
-
-Issue #43 is now directly product-proven. Drive MIME truth and cache fixes from
-PR #49 support this path. The broad generic record ontology in PR #47 should
-not be accepted wholesale without reconciling it with the person-file product
-model.
-
-### Done when
-
-The Zoox run reads only the approved pitch sources and company evidence, and the
-outreach run reads only the selected semester/campaign materials.
-
-## Priority 2: first-class deliverables and Google Slides
-
-### Problem
-
-The pitch skill produced strong prose but could not create the actual product:
-an editable company deck. Neither workflow emitted a first-class artifact.
-
-### Build
-
-- Add a Sourcecado artifact record with stable id, type, version, run, source
-  refs, review status, external/local location, and provenance.
-- Add Google Slides read/copy/update behind the existing Google connector:
-  inspect template structure, copy an approved template, apply bounded text and
-  image edits, and return an editable Slides URL.
-- Require approval before creating/copying/updating an external presentation.
-- Render deck, campaign-review set, and follow-up package as artifacts, not only
-  assistant Markdown.
-- Keep Figma out of the critical path initially; record its existing links as
-  source refs and migrate the approved template to Google Slides if necessary.
-
-### Copy
-
-- OpenWorker: workspace/scratch artifacts and addressable artifact panel.
-- OpenClaw: Workboard artifact/proof metadata and immutable attempt receipts.
-- Grok Bot: artifact-aware transcript/checkpoint settlement.
+- OpenWorker's full connector catalog or generic UI.
+- OpenClaw's Gateway/runtime breadth.
+- Skill-specific state machines or hard-coded sourcing phases.
 
 ### Done when
 
-The pitch skill produces an editable, source-linked deck from an approved
-template, and the outreach skill produces an addressable campaign-review
-artifact.
+The outreach and pitch jobs reach their director-review deliverables in one
+Agent Run, including any clarification/approval waits, without a follow-up
+"converge now" prompt.
 
-## Priority 3: connector and capability truth
+## Priority 1: Scoped Knowledge Workspace
 
-### Problem
+### Observed failure
 
-Granola appeared connected but failed at use. Web search was absent from the
-connector preflight and failed for missing Tavily configuration. Drive folder
-listing existed as a tool but was not advertised by the connection catalog.
+The outreach run surfaced 33 Drive matches and the pitch run 155. Duplicate,
+stale, and unrelated sources entered context. Large documents truncated before
+relevant sections.
 
-### Build
+### Product shape
 
-- Derive model tools, connection capabilities, and UI labels from one
-  server-owned capability registry.
-- Add safe live verification per connector and report `ready`, `degraded`, or
-  `unavailable` with a tested-at timestamp.
-- Repair Granola list/read error handling and make its failure class useful.
-- Configure a supported web-search provider or expose its missing configuration
-  before the run starts.
-- Fail the workflow preflight when a required capability is unavailable; allow
-  the director to approve a degraded run.
+The director selects the Codeology Sourcing Drive folder once. Google Drive
+remains authoritative. Sourcecado maintains a local read-only mirror/index of
+that folder with Drive id, folder path, MIME type, modified time, sensitivity,
+and extracted text.
 
-### Copy
+### Primary donor
 
-- OpenWorker: connector descriptors and readiness/recovery model.
-- OpenClaw: atomic runtime generations and capability publication.
+**OpenClaw's Markdown memory index in `packages/memory-host-sdk`.**
 
-### Done when
+Copy only this coherent path:
 
-A green connector in Sourcecado succeeds in the corresponding skill run, and a
-degraded connector is visible before work begins.
+- one explicit indexed path;
+- symlink-safe file discovery and real-path deduplication;
+- hash, modification-time, and size change detection;
+- Markdown chunks with line boundaries;
+- SQLite source/chunk tables and FTS search;
+- incremental resync when files change;
+- bounded snippets with file/line provenance.
 
-## Priority 4: durable transcript economy and scheduled skill parity
+### Sourcecado port
 
-### Problem
+- Mirror supported Drive documents into Sourcecado's local state; never treat
+  the mirror as the authoritative document store.
+- Preserve Drive metadata beside every mirrored file/chunk.
+- Normal agent retrieval uses `search_sources` and `read_source` against this
+  one Knowledge Workspace.
+- Global Drive search remains an explicit scope-expansion action, not the
+  default retrieval path.
+- A human may pin approved SOPs/templates later, but v1 does not ask the model
+  to infer canonical status from filenames or dates.
 
-Two validation conversations generated thousands of persisted deltas and
-multi-megabyte event logs. Scheduling currently stores a raw prompt rather than
-a skill plus validated inputs, and historical receipts still use legacy status
-`ok`.
+### Do not copy
 
-### Build
-
-- Coalesce persisted assistant deltas into bounded snapshots/final messages
-  while retaining live streaming over WebSocket.
-- Add event-log compaction or projection checkpoints without deleting audit
-  receipts, tool outcomes, or final artifacts.
-- Store `skill_name`, validated inputs, source scope, and grants on a scheduled
-  job. Invoke the same skill-run path as chat.
-- Normalize scheduler status and artifacts, including historical receipts.
-- Park unattended approvals in the existing inbox and resume the same run after
-  resolution.
-
-### Copy
-
-- OpenWorker: persisted compaction, automation models, approval inbox, and
-  run-once/skip-overlap scheduler.
-- Grok Bot: transcript window/index separation and automation spend state.
-- OpenClaw: database-first transcript projections and detached-task completion.
+- Vector embeddings, MMR, temporal decay, multimodal memory, session transcript
+  indexing, project annotations, or automatic canonical inference.
+- Grok Bot's separate transcript index worker.
+- OpenWorker's entire filesystem tool suite as part of retrieval.
 
 ### Done when
 
-The outreach skill can be scheduled without a second implementation path, its
-approval pauses/resumes durably, and a long artifact run does not grow the
-transcript by one durable row per streamed token.
+After selecting the Fall 2026 sourcing folder, a Zoox query returns fewer than
+ten relevant scoped results with Drive/source citations and no unrelated global
+Drive matches.
 
-## Proposed implementation sequence
+## Priority 2: Workspace, Shell, and Artifacts
 
-1. Land the narrow Drive/cache truth fixes; avoid merging overlapping PRs
-   blindly.
-2. Add the skill-run record, phases, checkpoint tool, and forced partial/final
-   delivery behavior.
-3. Add source-scope and canonical-source contracts.
-4. Implement the resumable Drive index for selected folders.
-5. Unify capability publication and repair web/Granola preflight.
-6. Add the artifact store and campaign-review artifact.
-7. Add Google Slides read/copy/update and deck artifact UI.
-8. Coalesce transcript persistence and bind scheduler jobs to skills.
-9. Re-run both golden workflows interactively.
-10. Run outreach through scheduling and continue to enrichment/draft/send only
-    after Fisher approves the exact contacts and messages.
+### Observed failure
+
+The pitch workflow produced strong prose but no editable deck. Neither workflow
+produced a durable file artifact. Treating PPTX, DOCX, XLSX, PDF, HTML, and CSV
+as separate platform features would create the wrong abstraction.
+
+### Primary donor
+
+**OpenWorker's Cowork workspace and artifact lifecycle.**
+
+Copy these concrete behaviors:
+
+- one per-run writable scratch workspace;
+- workspace-scoped file read/write and search;
+- a persistent, workspace-rooted, approval-gated shell;
+- `todo_write` as visible execution progress;
+- the instruction to finish with the actual file plus an `artifact:` link;
+- artifact discovery by scanning the run's scratch workspace;
+- preview/read/open/reveal behavior for common file types;
+- scheduled-run artifact collection from files modified during the run.
+
+### Sourcecado port
+
+- Use files in the run workspace as the initial artifact source of truth. The
+  Run Ledger records references and provenance; do not add an artifact database
+  before file-backed artifacts prove insufficient.
+- Add skills that teach the agent how to create and verify common formats using
+  the shell: PPTX, DOCX, XLSX, PDF, HTML, Markdown, CSV, images, and packages.
+- Skills specify the appropriate library/tool, render the output, inspect the
+  rendering, and repair layout/content defects before delivery.
+- Cloud-native Google Slides, Docs, and Sheets remain connector tools. They are
+  not special cases in the artifact runtime.
+- Google Slides is the first cloud artifact adapter required by the pitch
+  workflow; Google Docs and Sheets follow the same connector boundary.
+
+### Do not copy
+
+- OpenClaw's box/remote-computer infrastructure.
+- Grok Bot's canvas/attachment internals.
+- One bespoke runtime subsystem per office format.
+- A restricted artifact-only command language that would grow into a shell.
+
+### Done when
+
+The pitch job creates a real editable PowerPoint artifact in its workspace and,
+when requested, an editable Google Slides copy through the Google connector.
+The outreach job creates a reviewable campaign package as a file artifact.
+
+## Priority 3: Connector Truth
+
+### Observed failure
+
+Granola appeared connected but failed on its first real read. Web search failed
+for missing configuration despite no visible preflight warning. Drive folder
+listing existed as a tool but was absent from the connection catalog.
+
+### Primary donor
+
+**OpenWorker's `ConnectorDescriptor` and `ValidationResult` model.**
+
+Copy these concrete behaviors:
+
+- each connector owns its authentication shape, scopes, setup copy, safe
+  identity, pinned capabilities, and real validator;
+- validation makes a bounded provider call instead of checking only for a
+  stored credential;
+- the same descriptor drives setup, status, and tool publication;
+- connected account, persona default, and session override are separate
+  concerns.
+
+### Sourcecado port
+
+- Create descriptors only for Sourcecado's small connector set.
+- Generate `/v1/connectors`, model tools, and UI capability labels from the same
+  descriptor data.
+- "Connected" means the provider validator passed. Store safe identity,
+  `last_verified_at`, status, and a recovery message.
+- Validate on connect and before a run that requires the connector.
+- Granola validation performs the MCP handshake and a harmless bounded read.
+- Web search becomes a visible connector with configuration/validation state.
+- Failed validation permits a degraded run by default. Block only when the
+  missing capability makes the requested deliverable impossible.
+
+### Do not copy
+
+- OpenWorker's 25-connector catalog, cloud OAuth broker, messaging gateway, or
+  persona connector-management breadth.
+- OpenClaw runtime generations as a second connector system.
+
+### Done when
+
+A green connector succeeds in the corresponding golden workflow. A degraded
+connector is visible before work begins, and the director can choose whether to
+continue when the final deliverable remains possible.
+
+## Priority 4: Semantic Agent Trace
+
+### Observed failure
+
+The two validation conversations persisted roughly 1,900 and 3,300 assistant
+delta events, producing event logs up to 1.2 MB. Sourcecado needs a complete
+trace for later evals, but transport-level token chunks are not the trace.
+
+### Primary donor
+
+**OpenWorker's canonical `engine.messages` plus semantic checkpoint persistence.**
+
+Copy these concrete behaviors:
+
+- stream text/reasoning deltas live to connected clients;
+- keep canonical completed messages and tool results in session history;
+- persist at meaningful checkpoints: user input, waiting approval/question,
+  completed model/tool iteration, and terminal completion/interruption;
+- always perform a final save in cleanup;
+- compact only the outbound model view while preserving canonical history.
+
+### Sourcecado port
+
+- Keep live WebSocket streaming.
+- Coalesce assistant deltas into a completed model-message record for durable
+  storage.
+- Preserve the full semantic trace: original goal and user answers,
+  prompt/context version or hash, model/provider/configuration, completed model
+  turns, tool arguments/results, approvals, sources, checkpoints, timing,
+  usage/cost, artifacts, errors, terminal result, and later human feedback.
+- Keep visible reasoning and structured rationale summaries when present.
+- Never store hidden chain-of-thought.
+- Scheduling already calls the same Sourcecado engine; do not create a second
+  scheduling runtime or require a skill name on a job.
+- Treat legacy scheduler status normalization as a small bug, not an
+  architecture priority.
+
+### Do not copy
+
+- OpenClaw's full database-first transcript projection system.
+- Grok Bot's transcript mirror.
+- Durable per-token stream chunks or hidden model reasoning.
+- A separate skill-aware automation runtime.
+
+### Done when
+
+Reload shows final messages, meaningful progress/tool/approval receipts, and
+terminal state. The trace can be exported for evals without replaying thousands
+of token-delta rows.
+
+## Implementation sequence
+
+1. Reconcile and land the narrow Drive/cache truth fixes; do not merge
+   overlapping branches blindly.
+2. Port the OpenWorker Durable Agent Run lifecycle around Sourcecado's existing
+   loop.
+3. Add the selected Drive Knowledge Workspace and narrow OpenClaw FTS index.
+4. Port OpenWorker's per-run workspace, files/search/shell/todo, and artifact
+   surface.
+5. Create and verify common artifact-format skills; add Google Slides as the
+   first cloud artifact connector.
+6. Replace the hard-coded connector catalog with OpenWorker-style descriptors
+   and real validators; repair Granola/web readiness.
+7. Change delta persistence to the OpenWorker checkpointed semantic trace.
+8. Re-run both golden workflows interactively.
+9. Run an ordinary saved prompt through scheduling and verify the same Agent
+   Run, connector, artifact, approval, and trace paths.
+10. Continue to enrichment, draft creation, and sending only after Fisher
+    approves the exact contacts and messages.
+
+## Existing work disposition
+
+- PR #49's narrow Drive MIME/cache work supports Priority 1 and should be
+  reconciled before new retrieval work.
+- Issue #43 is directly supported by the Knowledge Workspace evidence, but its
+  implementation should follow the approved narrow local-index design.
+- Issue #41 now aligns with Priority 2 when implemented as the OpenWorker-style
+  workspace/files/shell boundary.
+- PR #47's broad generic Board/index ontology is not part of this architecture
+  basis and should not be merged wholesale without product-model review.
+- Issue #40 remains a small scheduler receipt migration/normalization fix.
 
 ## Explicitly deferred
 
 - Generic multi-agent teams and subagent orchestration.
-- A broad CRM/Workboard ontology disconnected from the person-file experience.
-- Arbitrary local filesystem or shell access as a prerequisite.
-- Figma editing before the Google Slides path is proven.
+- A broad CRM/Workboard ontology disconnected from person files.
+- Hosted/team tenancy.
+- Automatic sending or bulk enrichment.
+- Vector retrieval in the first Knowledge Workspace index.
+- Figma editing before local PPTX and Google Slides are proven.
 - More connectors that neither golden workflow requires.
-- Formal automated eval scoring before several accepted/rejected real examples
-  exist.
+- Formal automated scoring before accepted/rejected real examples exist.
 
-## Decision gate
+## Acceptance
 
-Fisher reviews the two local deliverables and this priority order. After that,
-the roadmap becomes executable tickets. Until the review, no enrichment,
-external draft creation, email sending, or Drive/Slides write is authorized.
+The architecture is successful when both golden jobs finish in one Agent Run,
+use the scoped Knowledge Workspace, produce real editable artifacts, degrade
+truthfully when a connector fails, survive interruption/restart, work through
+scheduling, and leave a complete eval-ready semantic trace.

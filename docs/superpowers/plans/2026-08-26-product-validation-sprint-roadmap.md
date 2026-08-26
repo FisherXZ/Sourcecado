@@ -1,7 +1,7 @@
 # Sourcecado Product Validation Sprint Roadmap
 
 Date: 2026-08-26  
-Status: baseline executed; at roadmap decision gate
+Status: baseline executed; architecture basis approved
 Product source: `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md`
 
 ## Goal
@@ -111,9 +111,11 @@ later conversation can use the resulting memory without repeating the work.
 - Connector preflight: complete.
 - Interactive baselines: complete through the director-review gate.
 - Interruption and reload recovery: verified.
-- Gap map and reconciled roadmap: complete.
-- External writes and scheduled-skill rerun: waiting on the decision gate and
-  exact director approvals.
+- Gap map and evidence reconciliation: complete.
+- Core Agent OS architecture interview: complete and approved.
+- Grounded implementation roadmap: complete.
+- External writes and scheduled rerun: waiting on the implementation slices
+  and exact director approvals.
 
 See `docs/qa/2026-08-26-golden-workflow-baseline.md` and
 `docs/superpowers/plans/2026-08-26-evidence-reconciled-agent-os-roadmap.md`.

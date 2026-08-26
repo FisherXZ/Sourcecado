@@ -4,11 +4,15 @@ This file tracks product-level gaps only. Implementation checklists belong in da
 
 ## Current spring
 
-- Finish the target → Apollo candidates → keep person flow in the active desktop UI.
-- Complete the review → enrich → approve → Gmail send path with ledger coverage for every costly or external action.
-- Make Open, In conversation, and Done reliable as the sourcing director's operating picture.
-- Keep the living brief and handoff summary synchronized with a person's Gmail, Drive, Calendar, web, and meeting-note evidence.
-- Close the remaining desktop accessibility, crash recovery, and responsive QA findings recorded in current plans and QA reports.
+- Build the Durable Agent Run around the existing loop using OpenWorker's prompt-driven lifecycle, question/approval suspension, partial preservation, durable resume, checkpoints, and compaction.
+- Let the director select one Drive Knowledge Workspace and maintain a local read-only FTS index using the approved narrow OpenClaw memory-host design.
+- Port OpenWorker's per-run scratch workspace, files/search/persistent shell/todo tools, and file-backed Artifact surface; teach common formats through Skills and add Google-native connector tools.
+- Replace hard-coded connection status/tool copy with OpenWorker-style Connector Descriptors and real provider validators.
+- Preserve an eval-ready Semantic Agent Trace while keeping token-stream deltas ephemeral.
+- Re-run the outreach campaign and company pitch package until both finish in one Agent Run and produce accepted editable Artifacts.
+
+The approved architecture and implementation order are recorded in
+`docs/superpowers/plans/2026-08-26-evidence-reconciled-agent-os-roadmap.md`.
 
 ## Deliberately later
 
