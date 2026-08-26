@@ -479,6 +479,15 @@ h1 {
   .app-rail-nav :where(a, button) {
     min-height: 44px;
   }
+
+  .thread-action {
+    width: 44px;
+    flex: 0 0 44px;
+  }
+
+  .command-results button {
+    min-height: 44px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

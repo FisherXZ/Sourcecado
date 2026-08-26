@@ -217,7 +217,16 @@ def test_reconnect_resume_drains_offline_queue_items(tmp_path, monkeypatch):
         with client.websocket_connect(
             "/ws/chat", subprotocols=["club", TOKEN]
         ) as ws:
-            # The reconnect contract pushes an authoritative snapshot first.
+            # Reconnect contract: the ended run's ORIGINAL terminal event is
+            # replayed first, then the authoritative queue snapshot.
+            terminal = ws.receive_json()
+            assert terminal["type"] == "turn_end"
+            assert terminal["state"] == "complete"
+            assert terminal == next(
+                e
+                for e in built.state.store.load_events(sid)
+                if e["type"] == "turn_end"
+            )
             connection = ws.receive_json()
             assert connection["type"] == "queue_snapshot"
             assert connection["status"] == "connection"

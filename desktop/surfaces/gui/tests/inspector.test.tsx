@@ -103,6 +103,24 @@ describe("Inspector", () => {
     );
   });
 
+  it("moves focus into the panel when it opens, and again when the selected target changes", () => {
+    render(
+      <InspectorProvider threadId="thread-alpha">
+        <Harness />
+      </InspectorProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Cached target" }));
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    const heading = within(inspector).getByRole("heading", { level: 2 });
+    expect(heading).toHaveTextContent("Cached evidence");
+    expect(heading).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Failed target" }));
+    expect(heading).toHaveTextContent("Failed artifact");
+    expect(heading).toHaveFocus();
+  });
+
   it("Escape closes selection and returns focus, while a thread switch clears it", async () => {
     const view = render(
       <InspectorProvider threadId="thread-alpha">

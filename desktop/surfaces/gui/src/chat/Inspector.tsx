@@ -101,6 +101,17 @@ export function useInspector(): InspectorContextValue {
 
 export function Inspector() {
   const { selected, close } = useInspector();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  // DU-10: the panel must receive focus when it opens (desktop pane,
+  // tablet overlay, and narrow full-screen alike), not just return focus
+  // on close. Re-fires on every new `selected` too, since selecting a
+  // different row while the panel is already open swaps its content much
+  // like a navigation.
+  useEffect(() => {
+    if (selected) headingRef.current?.focus();
+  }, [selected]);
+
   if (!selected) return null;
   const externalUrl = safeExternalUrl(selected.externalUrl);
   return (
@@ -108,7 +119,7 @@ export function Inspector() {
       <header>
         <div>
           <p className="eyebrow">{selected.kind} detail</p>
-          <h2>{selected.title || "Provenance detail"}</h2>
+          <h2 ref={headingRef} tabIndex={-1}>{selected.title || "Provenance detail"}</h2>
         </div>
         <button type="button" aria-label="Close inspector" onClick={close}>
           Close

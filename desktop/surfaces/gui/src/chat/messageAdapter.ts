@@ -343,9 +343,14 @@ export function convertStructuredMessage(
       custom: {
         sourcecadoState: message.state,
         sourcecadoPartIds: message.parts.map((part) => part.id),
-        ...(message.parts.some((part) => part.type === "notice")
-          ? { sourcecadoNotice: true }
-          : {}),
+        ...(() => {
+          const notice = message.parts.find(
+            (part): part is SourcecadoNoticePart => part.type === "notice",
+          );
+          return notice
+            ? { sourcecadoNotice: true, sourcecadoNoticeCode: notice.code }
+            : {};
+        })(),
         ...(message.parts.some((part) => part.type === "artifact")
           ? {
               sourcecadoArtifacts: message.parts

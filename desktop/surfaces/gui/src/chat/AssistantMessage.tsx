@@ -9,6 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ActivityGroup } from "./ActivityGroup";
 import { ApprovalCard } from "./ApprovalCard";
+import { useLastApprovalDelivery } from "./approvalDelivery";
 import { SourceCitation } from "./SourceCitation";
 import { useInspector } from "./Inspector";
 
@@ -37,12 +38,24 @@ function AssistantText({ text }: TextMessagePartProps) {
 }
 
 function SafeToolFallback(part: ToolCallMessagePartProps) {
+  const lastDelivery = useLastApprovalDelivery();
   if (!part.approval) return null;
   return (
     <ApprovalCard
       part={part}
       onDecision={async (approved) => {
+        // assistant-ui's respondToApproval bridge discards the adapter's
+        // return value, so the real delivery outcome is read back out of
+        // lastDelivery (see approvalDelivery.tsx) right after this
+        // synchronous call completes.
         part.respondToApproval({ approved });
+        const delivery = lastDelivery.current;
+        if (delivery?.state === "dropped") {
+          throw new Error(delivery.reason);
+        }
+        if (delivery?.state === "queued") {
+          return "queued";
+        }
       }}
     />
   );
@@ -52,6 +65,8 @@ export function AssistantMessage() {
   const message = useAuiState((state) => state.message);
   const sourcecadoState = message.metadata.custom?.sourcecadoState;
   const notice = message.metadata.custom?.sourcecadoNotice === true;
+  const transportNotice =
+    message.metadata.custom?.sourcecadoNoticeCode === "transport";
   const prose = message.content
     .filter((part) => part.type === "text")
     .map((part) => (part.type === "text" ? part.text : ""))
@@ -76,7 +91,9 @@ export function AssistantMessage() {
     >
       {notice ? (
         <p className="sourcecado-notice-title">
-          Some conversation history is unavailable.
+          {transportNotice
+            ? "Connection problem."
+            : "Some conversation history is unavailable."}
         </p>
       ) : null}
       <MessagePrimitive.Parts
@@ -92,7 +109,11 @@ export function AssistantMessage() {
         <p className="sourcecado-terminal-receipt">Run cancelled.</p>
       ) : null}
       {notice ? (
-        <p className="sourcecado-notice-detail">Available messages are shown.</p>
+        <p className="sourcecado-notice-detail">
+          {transportNotice
+            ? "Sourcecado will keep trying to reconnect."
+            : "Available messages are shown."}
+        </p>
       ) : null}
       {copyable ? (
         <button

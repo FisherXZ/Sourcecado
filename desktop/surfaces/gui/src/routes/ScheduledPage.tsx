@@ -39,6 +39,11 @@ const RUN_STATUS_LABELS: Record<ScheduleRunStatus, string> = {
   failed: "Failed",
   waiting_approval: "Waiting for approval",
   partial: "Partial",
+  // A routine cut short by a restart. Distinct from "Failed" on purpose: the
+  // routine did not break, it was interrupted, and telling an operator their
+  // automation failed when it was merely cut short sends them debugging a
+  // problem that does not exist.
+  interrupted: "Interrupted",
 };
 
 function draftFromTemplate(template: ScheduleTemplate): CreateDraft {
@@ -232,7 +237,7 @@ function ScheduleReceipt({ receipt }: { receipt: ScheduleRun }) {
           {receipt.artifacts.map((artifact) => (
             <li key={artifact.id}>
               {artifact.externalUrl ? (
-                <a href={artifact.externalUrl} target="_blank" rel="noreferrer">
+                <a href={artifact.externalUrl} target="_blank" rel="noopener noreferrer">
                   {artifact.title}
                 </a>
               ) : (

@@ -10,10 +10,12 @@ import {
   getSessions,
   hasToken,
   openChat,
+  type CommandDelivery,
   type ConnectionStatus,
   type SourcecadoSocketEvent,
   type QueueItem,
 } from "../api";
+import { ApprovalDeliveryProvider } from "../chat/approvalDelivery";
 import { restoreConversation } from "../chat/restoreConversation";
 import { SourcecadoRuntimeProvider } from "../chat/SourcecadoRuntimeProvider";
 import {
@@ -78,8 +80,10 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
   );
   const runningThreadsRef = useRef(new Set<string>());
   const activeRunsRef = useRef(new Map<string, string>());
+  const pendingCancelsRef = useRef(new Set<string>());
   const nextLegacyIndexRef = useRef(new Map<string, number>());
   const connectionStatusRef = useRef<ConnectionStatus>("connected");
+  const lastApprovalDeliveryRef = useRef<CommandDelivery | null>(null);
   const [activeThreadId, setActiveThreadId] = useState(initialThreadId);
   const [title, setTitle] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(initialThreadId));
@@ -180,10 +184,17 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
       } else if ("version" in applied) {
         const threadId = applied.session_id;
         if (applied.type === "turn_start") {
-          runningThreadsRef.current.add(threadId);
           activeRunsRef.current.set(threadId, applied.run_id);
-          if (threadId === activeThreadRef.current) {
-            setAnnouncement("Run started.");
+          if (pendingCancelsRef.current.delete(threadId)) {
+            // Stop was already clicked while this run had no id yet (see
+            // handleCancel). Honor it now instead of resurrecting the
+            // "running" UI for a run the operator already stopped.
+            chatRef.current?.cancel?.(threadId, applied.run_id);
+          } else {
+            runningThreadsRef.current.add(threadId);
+            if (threadId === activeThreadRef.current) {
+              setAnnouncement("Run started.");
+            }
           }
         } else if (applied.type === "turn_stopping") {
           if (threadId === activeThreadRef.current) {
@@ -270,17 +281,30 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
   }
 
   function handleApproval(options: RespondToToolApprovalOptions) {
-    chatRef.current?.approve(
+    lastApprovalDeliveryRef.current = chatRef.current?.approve(
       options.approvalId,
       options.approved ? "allow" : "deny",
-    );
+    ) ?? { state: "dropped", reason: "Sourcecado is not connected." };
   }
 
   function handleCancel() {
     const threadId = activeThreadRef.current;
+    if (!threadId || !runningThreadsRef.current.has(threadId)) return;
     const runId = activeRunsRef.current.get(threadId);
-    if (!threadId || !runId) return;
-    chatRef.current?.cancel?.(threadId, runId);
+    if (runId) {
+      chatRef.current?.cancel?.(threadId, runId);
+      return;
+    }
+    // The composer sent this message but the sidecar hasn't announced
+    // turn_start yet, so there is no run id to cancel. Stop must never be a
+    // silent no-op here: end the optimistic "running" state locally now
+    // (so the operator isn't stuck if turn_start never arrives at all),
+    // and deliver the cancel the moment turn_start supplies a run id, in
+    // case the run is already live server-side.
+    pendingCancelsRef.current.add(threadId);
+    runningThreadsRef.current.delete(threadId);
+    setAnnouncement("Run cancelled.");
+    refresh();
   }
 
   function handleQueueRetry(itemId: string) {
@@ -380,6 +404,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
 
   return (
     <main className="chat-page">
+      <ApprovalDeliveryProvider deliveryRef={lastApprovalDeliveryRef}>
       <RecoveryProvider onAction={handleRecovery}>
       <InspectorProvider threadId={activeThreadId}>
       <SourcecadoRuntimeProvider
@@ -411,6 +436,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
       </SourcecadoRuntimeProvider>
       </InspectorProvider>
       </RecoveryProvider>
+      </ApprovalDeliveryProvider>
     </main>
   );
 }

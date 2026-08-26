@@ -1,7 +1,48 @@
-import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import type { SessionRow } from "../api";
 import type { AppRoute } from "./route";
+
+// Mirrors the off-canvas breakpoint in styles/shell.css's
+// `@media (max-width: 1179px)` block. Below it the rail is a fixed edge
+// sheet hidden by a CSS transform when closed; a transform alone never
+// removes an element from the tab order or the accessibility tree, so the
+// closed sheet is additionally marked `inert` here. Above the breakpoint
+// the rail is a permanently visible static sidebar and must stay focusable
+// regardless of `open` (which nothing ever sets true there, since the
+// hamburger trigger that would set it is itself CSS-hidden at that width).
+const NARROW_RAIL_QUERY = "(max-width: 1179px)";
+
+function useNarrowRail(): boolean {
+  const [narrow, setNarrow] = useState(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return false;
+    }
+    try {
+      return window.matchMedia(NARROW_RAIL_QUERY).matches;
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    let mql: MediaQueryList;
+    try {
+      mql = window.matchMedia(NARROW_RAIL_QUERY);
+    } catch {
+      return;
+    }
+    const onChange = () => setNarrow(mql.matches);
+    onChange();
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  return narrow;
+}
 
 type Props = {
   open: boolean;
@@ -20,6 +61,18 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, onNe
   const pinned = sessions?.filter((session) => session.pinned) || [];
   const recent = sessions?.filter((session) => !session.pinned) || [];
   const railRef = useRef<HTMLElement>(null);
+  const narrow = useNarrowRail();
+  const offScreen = narrow && !open;
+
+  // `inert` isn't in @types/react's HTMLAttributes yet, so it's set as a
+  // real DOM attribute rather than a JSX prop. This removes the closed
+  // sheet's contents from both the tab order and the accessibility tree.
+  useEffect(() => {
+    const node = railRef.current;
+    if (!node) return;
+    if (offScreen) node.setAttribute("inert", "");
+    else node.removeAttribute("inert");
+  }, [offScreen]);
 
   function trapFocus(event: KeyboardEvent<HTMLElement>) {
     if (!open || event.key !== "Tab") return;
@@ -120,10 +173,12 @@ function ThreadGroup({
   onPin: (session: SessionRow) => void;
   onRename: (session: SessionRow, title: string) => Promise<void>;
 }) {
-  const labelId = `thread-group-${label.toLowerCase().replaceAll(" ", "-")}`;
   return (
     <section className="thread-group" role="group" aria-label={label}>
-      <p id={labelId} className="thread-group-label">{label.replace(" threads", "")}</p>
+      {/* The group's accessible name comes from aria-label above (kept
+          fuller, e.g. "Pinned threads") rather than this shortened visible
+          text (e.g. "Pinned"), so this heading is not id-referenced. */}
+      <p className="thread-group-label">{label.replace(" threads", "")}</p>
       {sessions.length === 0 ? (
         <p className="thread-empty">No conversations yet</p>
       ) : sessions.map((session) => (

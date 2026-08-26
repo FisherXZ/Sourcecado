@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
@@ -293,20 +294,36 @@ class RunCoordinator:
 
     def __init__(self) -> None:
         self._controls: dict[tuple[str, str], RunControl] = {}
+        self._lock = threading.Lock()
 
-    def register(self, control: RunControl) -> None:
-        key = (control.identity.session_id, control.identity.run_id)
-        self._controls[key] = control
+    def register(self, control: RunControl) -> bool:
+        """Admit at most one live run per session; evict superseded terminals."""
+        session_id = control.identity.session_id
+        key = (session_id, control.identity.run_id)
+        with self._lock:
+            stale: list[tuple[str, str]] = []
+            for (sid, rid), existing in self._controls.items():
+                if sid != session_id:
+                    continue
+                if not existing.terminal:
+                    return False
+                stale.append((sid, rid))
+            for old in stale:
+                del self._controls[old]
+            self._controls[key] = control
+            return True
 
     def get(self, session_id: str, run_id: str) -> RunControl | None:
-        return self._controls.get((session_id, run_id))
+        with self._lock:
+            return self._controls.get((session_id, run_id))
 
-    def live(self) -> list[RunControl]:
-        return [
-            control
-            for control in self._controls.values()
-            if not control.terminal
-        ]
+    def latest_per_session(self) -> list[RunControl]:
+        """The most recently registered control for each session."""
+        with self._lock:
+            latest: dict[str, RunControl] = {}
+            for (sid, _), control in self._controls.items():
+                latest[sid] = control
+            return list(latest.values())
 
     async def cancel(self, session_id: str, run_id: str) -> bool:
         control = self.get(session_id, run_id)
@@ -315,10 +332,11 @@ class RunCoordinator:
         return await control.request_cancel()
 
     def active_for(self, session_id: str) -> RunControl | None:
-        for (sid, _), control in reversed(tuple(self._controls.items())):
-            if sid == session_id and not control.terminal:
-                return control
-        return None
+        with self._lock:
+            for (sid, _), control in reversed(tuple(self._controls.items())):
+                if sid == session_id and not control.terminal:
+                    return control
+            return None
 
 
 def close_open_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -528,7 +546,9 @@ async def run_turn(
                 session_id=sid,
             )
         history = [{"role": "system", "content": sys_content}] + loaded
-        # Caller already appended the user message in WS; scheduler has not.
+        # run_turn appends the user message for every caller. Skip only when
+        # the transcript already ends with this exact text — a rerun of a turn
+        # that died right after persisting its user message.
         if not (loaded and loaded[-1].get("role") == "user" and loaded[-1].get("content") == text):
             user_msg = {"role": "user", "content": text}
             history.append(user_msg)

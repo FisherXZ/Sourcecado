@@ -151,10 +151,13 @@ export function ApprovalCard({
   onDecision,
 }: {
   readonly part: ToolCallMessagePartProps;
-  readonly onDecision: (approved: boolean) => Promise<void> | void;
+  readonly onDecision: (
+    approved: boolean,
+  ) => Promise<"queued" | void> | "queued" | void;
 }) {
   const audit = auditOf(part);
   const [submitting, setSubmitting] = useState(false);
+  const [submitQueued, setSubmitQueued] = useState(false);
   const [submitOutcomeUnknown, setSubmitOutcomeUnknown] = useState(false);
   const [submitFailed, setSubmitFailed] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
@@ -213,8 +216,10 @@ export function ApprovalCard({
     setSubmitting(true);
     setSubmitFailed(false);
     setSubmitOutcomeUnknown(false);
+    setSubmitQueued(false);
     try {
-      await onDecision(approved);
+      const outcome = await onDecision(approved);
+      if (outcome === "queued") setSubmitQueued(true);
     } catch {
       setSubmitting(false);
       setSubmitFailed(true);
@@ -261,7 +266,9 @@ export function ApprovalCard({
   return (
     <section
       className="sourcecado-approval-card"
-      aria-busy={(submitting && !submitOutcomeUnknown) || undefined}
+      aria-busy={
+        (submitting && !submitOutcomeUnknown && !submitQueued) || undefined
+      }
     >
       <h2 ref={headingRef} tabIndex={-1}>
         {presentation.label}
@@ -357,6 +364,11 @@ export function ApprovalCard({
         <p>
           Outcome is unknown. Sourcecado didn’t confirm this decision before
           its wait ended. Verify the external resource before retrying.
+        </p>
+      ) : submitQueued ? (
+        <p>
+          Waiting for the connection. Your decision will send once
+          Sourcecado reconnects.
         </p>
       ) : submitting ? (
         <p>Submitting decision…</p>

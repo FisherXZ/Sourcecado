@@ -702,6 +702,46 @@ describe("SourcecadoChatStore restore-while-streaming", () => {
     expect(assistants[0]?.state).toBe("running");
   });
 
+  it("completes a frozen running message when the reconnect re-sync replays the missed tail", () => {
+    // T1/B1 composed seam: the transport's reconnect re-sync replays the
+    // events a run emitted while the socket was down. Pins that the store
+    // turns that replay into a finished message with the full text, and that
+    // a sidecar over-replay of an already-delivered delta cannot double it.
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    store.replaceThread("thread-alpha", []);
+    store.applyChatEvent(liveStart);
+    store.applyChatEvent(liveHello);
+
+    // Socket gap: the run streams on and completes server-side. The re-sync
+    // replays the undelivered tail through the same applyChatEvent path.
+    store.applyChatEvent(liveWorld);
+    store.applyChatEvent({
+      ...raceEnvelope,
+      event_id: "event-live-4",
+      type: "turn_end",
+      text: "Hello world",
+      state: "complete",
+    });
+    // The sidecar may over-replay an already-delivered event; identity wins.
+    store.applyChatEvent(liveHello);
+
+    const assistant = store
+      .messagesFor("thread-alpha")
+      .find((message) => message.role === "assistant");
+    expect(assistant?.state).toBe("complete");
+    expect(assistant?.parts).toEqual([
+      {
+        type: "text",
+        id: "part-live-1",
+        text: "Hello world",
+        state: "complete",
+      },
+    ]);
+  });
+
   it("does not re-apply a snapshot event that is later replayed over the socket", () => {
     const store = new SourcecadoChatStore(
       [{ id: "thread-alpha", messages: [] }],
@@ -795,6 +835,7 @@ describe("SourcecadoChatStore transport events", () => {
     const [message] = store.messagesFor("thread-alpha");
     expect(message?.parts[0]).toMatchObject({
       type: "notice",
+      code: "transport",
       message:
         "The sidecar connection is down and the retry buffer is full; the command was dropped.",
     });

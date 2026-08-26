@@ -347,6 +347,52 @@ describe("ConnectionsPage", () => {
     expect(window.location.hash).toBe("#/connections/gmail");
   });
 
+  it("clears a stale authorization-failed alert once a later focus reports the connector is actually connected", async () => {
+    const gmailConnected = connector({
+      ...gmailAvailable,
+      status: "connected",
+      catalogGroup: "connected",
+      email: "operator@example.com",
+      missingScopes: [],
+      health: { category: "healthy", label: "Ready", message: "This connection is ready to use." },
+      recovery: null,
+      availableActions: ["disconnect"],
+    });
+    window.location.hash = "#/connections/gmail";
+    api.getConnectors
+      // Initial load.
+      .mockResolvedValueOnce({ connectors: [gmailAvailable] })
+      // A premature refocus mid-consent: the operator hasn't finished yet,
+      // so the connector genuinely still reads unauthorized.
+      .mockResolvedValueOnce({ connectors: [gmailAvailable] })
+      // They return again after actually finishing consent.
+      .mockResolvedValueOnce({ connectors: [gmailConnected] });
+    api.connectConnector.mockResolvedValue({
+      url: "https://provider.example/authorize",
+      opened: true,
+    });
+
+    render(<ConnectionsPage connectorId="gmail" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect Gmail" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Connecting Gmail" })).toBeDisabled(),
+    );
+
+    fireEvent.focus(window);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Authorization didn’t complete");
+
+    fireEvent.focus(window);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Disconnect Gmail" })).toBeInTheDocument(),
+    );
+    // The earlier failure banner must not survive next to a Connected row --
+    // it would tell the operator two contradictory things about Gmail.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("Authorization didn’t complete")).not.toBeInTheDocument();
+  });
+
   it("represents a server-reported authorizing state with the stable disabled action", async () => {
     const gmailAuthorizing = connector({
       ...gmailAvailable,

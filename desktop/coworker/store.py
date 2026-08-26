@@ -181,6 +181,12 @@ class ConversationStore:
                 paused INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS recovery_commands (
+                session_id TEXT NOT NULL,
+                command_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, command_id)
+            );
             CREATE INDEX IF NOT EXISTS chat_queue_session_position
                 ON chat_queue(session_id, position);
             """
@@ -284,6 +290,19 @@ class ConversationStore:
         self._reconcile_orphaned_inbox_executions()
         self._reconcile_orphaned_queue_items()
         self._reconcile_orphaned_runs()
+        self._reconcile_orphaned_recovery_commands()
+
+    def _reconcile_orphaned_recovery_commands(self) -> None:
+        """Drop in-flight recovery claims from the prior process.
+
+        A claim only serializes concurrent sockets while the work runs; the
+        durable duplicate guard is the tool_recovery event checked before
+        claiming. A claim whose process died mid-work must not silence the
+        command forever.
+        """
+        with self._lock:
+            self._conn.execute("DELETE FROM recovery_commands")
+            self._conn.commit()
 
     def _reconcile_orphaned_inbox_executions(self) -> None:
         """Close claims from the prior process without replaying external writes."""
@@ -1170,6 +1189,30 @@ class ConversationStore:
                     (position, session_id, str(row["id"])),
                 )
             self._conn.commit()
+
+    def claim_recovery_command(self, session_id: str, command_id: str) -> bool:
+        """Atomically claim one recovery command; False when already claimed.
+
+        Same shape as queue_commands: the claim closes the window between two
+        sockets sending the same command. Callers check the event log for a
+        recorded tool_recovery outcome before claiming.
+        """
+        if not valid_session_id(session_id):
+            raise ValueError("invalid session id")
+        if not command_id:
+            raise ValueError("recovery command requires command_id")
+        now = datetime.now(UTC).isoformat()
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                INSERT OR IGNORE INTO recovery_commands
+                    (session_id, command_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (session_id, command_id, now),
+            )
+            self._conn.commit()
+        return cursor.rowcount == 1
 
     def apply_queue_command(
         self, session_id: str, command: dict[str, Any]

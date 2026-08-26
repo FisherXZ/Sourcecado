@@ -38,7 +38,7 @@ describe("Warm Operator thread styles", () => {
       /\.sourcecado-queue\s*\{[^}]*min-width:\s*0;[^}]*max-width:[^;]+;/,
     );
     expect(styles).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-queue-actions button\s*\{[^}]*min-height:\s*44px;/,
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-queue-actions button[,\s]*\{?[^}]*min-height:\s*44px;/,
     );
   });
 

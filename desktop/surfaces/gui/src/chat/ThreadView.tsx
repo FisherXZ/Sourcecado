@@ -82,6 +82,11 @@ export function ThreadView({
         role="log"
         aria-label="Conversation"
         aria-busy={loading || undefined}
+        // role="log" carries an IMPLICIT aria-live="polite"; omitting the
+        // attribute does not disable that. Streaming is announced instead
+        // through the dedicated .sourcecado-run-announcement status region
+        // below, so the transcript itself must be explicitly non-live.
+        aria-live="off"
         tabIndex={0}
       >
         {loading ? (

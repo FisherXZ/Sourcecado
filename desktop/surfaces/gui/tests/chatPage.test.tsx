@@ -59,6 +59,7 @@ describe("ChatPage Warm Operator thread", () => {
     writeText.mockReset();
     chatSend.mockReset();
     chatApprove.mockReset();
+    chatApprove.mockReturnValue({ state: "delivered" });
     chatCancel.mockReset();
     chatQueue.mockReset();
     chatRecover.mockReset();
@@ -167,7 +168,11 @@ describe("ChatPage Warm Operator thread", () => {
 
     const log = await screen.findByRole("log", { name: "Conversation" });
     expect(log).toHaveAttribute("tabindex", "0");
-    expect(log).not.toHaveAttribute("aria-live");
+    // role="log" carries an IMPLICIT aria-live="polite" -- omitting the
+    // attribute does not disable that, it just leaves the implicit value in
+    // place. Only an explicit "off" makes the transcript actually non-live,
+    // as the dedicated .sourcecado-run-announcement status region intends.
+    expect(log).toHaveAttribute("aria-live", "off");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "Recruiting",
@@ -306,6 +311,34 @@ describe("ChatPage Warm Operator thread", () => {
     expect(notice).toHaveTextContent("Some conversation history is unavailable");
     expect(notice).toHaveTextContent("Unsupported chat event version 99");
     expect(notice).toHaveTextContent("Available messages are shown");
+  });
+
+  it("frames a live transport error as a connection problem, not a false history gap", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [{ role: "user", content: "Keep this visible." }],
+      events: [],
+    });
+
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByText("Keep this visible.");
+
+    act(() => {
+      onChatEvent?.({
+        type: "error",
+        message:
+          "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+      });
+    });
+
+    const notice = await screen.findByRole("note");
+    expect(notice).toHaveTextContent("Connection problem.");
+    expect(notice).toHaveTextContent(
+      "The sidecar connection is down and the retry buffer is full",
+    );
+    expect(notice).not.toHaveTextContent("Some conversation history is unavailable");
+    expect(notice).not.toHaveTextContent("Available messages are shown");
   });
 
   it("keeps isolated drafts when switching away from and back to a thread", async () => {
@@ -539,6 +572,47 @@ describe("ChatPage Warm Operator thread", () => {
     expect(composer).toHaveValue("Keep this next prompt");
   });
 
+  it("does not leave Stop as a silent no-op before turn_start arrives", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+    const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(composer, { target: { value: "Find candidates" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    const stop = await screen.findByRole("button", { name: "Stop run" });
+    fireEvent.click(stop);
+
+    // No run id exists yet -- the click must still take effect instead of
+    // being silently swallowed, and it must not fire cancel() with no id.
+    expect(chatCancel).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Stop run" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Run cancelled.");
+
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        type: "turn_start",
+        session_id: "thread-alpha",
+        run_id: "run-late",
+        event_id: "late-event-start",
+        message_id: "assistant-late",
+        part_id: "assistant-late-part",
+        state: "running",
+      });
+    });
+
+    // The already-clicked stop is honored retroactively once a run id
+    // finally arrives, in case the run is already live server-side.
+    expect(chatCancel).toHaveBeenCalledWith("thread-alpha", "run-late");
+    expect(screen.queryByRole("button", { name: "Stop run" })).not.toBeInTheDocument();
+  });
+
   it("restores a cancelled run as a durable transcript receipt", async () => {
     const envelope = {
       version: 2,
@@ -662,8 +736,10 @@ describe("ChatPage Warm Operator thread", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Run started.");
     act(() => onChatEvent?.(terminal));
     expect(screen.getByRole("status")).toHaveTextContent(expected);
-    expect(screen.getByRole("log", { name: "Conversation" })).not.toHaveAttribute(
+    // Same non-live guarantee must hold once a run reaches a terminal state.
+    expect(screen.getByRole("log", { name: "Conversation" })).toHaveAttribute(
       "aria-live",
+      "off",
     );
   });
 
@@ -827,6 +903,90 @@ describe("ChatPage Warm Operator thread", () => {
     await waitFor(() =>
       expect(chatApprove).toHaveBeenCalledWith("approval-draft", "allow"),
     );
+  });
+
+  it("re-enables Allow/Deny with a real failure when the transport drops the approval decision", async () => {
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-approval-dropped",
+      message_id: "assistant-approval-dropped",
+      part_id: "assistant-approval-dropped-part",
+    } as const;
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Approval dropped",
+      messages: [],
+      events: [
+        { ...envelope, type: "turn_start", event_id: "approval-dropped-0", state: "running" },
+        {
+          ...envelope,
+          type: "permission_required",
+          event_id: "approval-dropped-1",
+          id: "approval-dropped",
+          name: "gmail_draft",
+          arguments: { to: "alyssa@example.com", subject: "Hello", body: "Body" },
+          reason: "Creating a draft changes Gmail.",
+        },
+      ],
+    });
+    chatApprove.mockReturnValue({
+      state: "dropped",
+      reason: "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+    });
+
+    render(<ChatPage sessionId="thread-alpha" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Allow once" }),
+    );
+
+    expect(
+      await screen.findByRole("alert"),
+    ).toHaveTextContent("decision couldn’t be saved");
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+  });
+
+  it("does not re-offer a queued approval decision and explains it is waiting for the connection", async () => {
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-approval-queued",
+      message_id: "assistant-approval-queued",
+      part_id: "assistant-approval-queued-part",
+    } as const;
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Approval queued",
+      messages: [],
+      events: [
+        { ...envelope, type: "turn_start", event_id: "approval-queued-0", state: "running" },
+        {
+          ...envelope,
+          type: "permission_required",
+          event_id: "approval-queued-1",
+          id: "approval-queued",
+          name: "gmail_draft",
+          arguments: { to: "alyssa@example.com", subject: "Hello", body: "Body" },
+          reason: "Creating a draft changes Gmail.",
+        },
+      ],
+    });
+    chatApprove.mockReturnValue({ state: "queued" });
+
+    render(<ChatPage sessionId="thread-alpha" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Allow once" }),
+    );
+
+    expect(
+      await screen.findByText(/waiting for the connection/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("ignores a stale load response after the route selects another thread", async () => {

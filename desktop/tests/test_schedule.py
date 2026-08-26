@@ -552,3 +552,41 @@ def test_store_reopen_heals_orphaned_running_run_to_interrupted(tmp_path):
     assert healed["finished_at"]
     assert "restarted" in healed["summary"].lower()
     assert "success" not in healed["summary"].lower()
+
+
+def test_scheduled_run_statuses_stay_inside_the_shared_contract(tmp_path):
+    """S4: every status the sidecar writes to the runs table is declared, so
+    the client never coerces an honest outcome into 'Failed'."""
+    from coworker.automation.scheduler import (
+        RECEIPT_STATUSES,
+        SCHEDULE_RUN_STATUSES,
+    )
+
+    # The full declared vocabulary, including the restart reconciler's status.
+    assert set(RECEIPT_STATUSES.values()) <= SCHEDULE_RUN_STATUSES
+    assert "running" in SCHEDULE_RUN_STATUSES
+    assert "interrupted" in SCHEDULE_RUN_STATUSES
+    # run_turn's whole status vocabulary is mapped; nothing passes through.
+    assert set(RECEIPT_STATUSES) == {"ok", "error", "waiting", "partial", "stopped"}
+
+    store = ConversationStore(tmp_path)
+    scheduler = Scheduler(store, Inbox(store))
+    job = store.add_job("0 9 * * 1", "weekly")
+    # A scheduled run that exhausts its step budget did real, incomplete work.
+    receipt = scheduler.run_job(
+        int(job["id"]),
+        runner=lambda j: {"status": "stopped", "text": "hit the step limit"},
+    )
+    assert receipt["status"] == "partial"
+    assert receipt["status"] in SCHEDULE_RUN_STATUSES
+
+    # The restart reconciler's status is part of the same contract.
+    store.start_run(
+        int(job["id"]),
+        session_id=f"sched-{job['id']}",
+        started_at="2026-08-26T00:00:00+00:00",
+    )
+    reopened = ConversationStore(tmp_path)
+    statuses = [run["status"] for run in reopened.list_schedule()["runs"]]
+    assert "interrupted" in statuses
+    assert set(statuses) <= SCHEDULE_RUN_STATUSES

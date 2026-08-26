@@ -311,15 +311,22 @@ def test_ws_cancel_for_another_thread_cannot_stop_the_active_run(tmp_path):
                 "run_id": events[0]["run_id"],
             }
         )
-        while events[-1]["type"] not in {"turn_stopped", "turn_end", "error"}:
+        while events[-1]["type"] not in {"turn_stopped", "turn_end"}:
             events.append(ws.receive_json())
 
+    # The mismatched cancel is answered, not silently absorbed (m1) — an
+    # unenveloped transport error frame, distinct from the run error event.
+    rejected = next(e for e in events if e["type"] == "error")
+    assert "not found" in rejected["message"]
+    assert "run_id" not in rejected  # not a run terminal
+    # And the stale cancel neither stops the run nor pauses the other thread.
     assert events[-1]["type"] == "turn_end"
     assert events[-1]["state"] == "complete"
     assert "still running" in "".join(
         event.get("delta", "") for event in events
     )
     assert "turn_stopping" not in [event["type"] for event in events]
+    assert built.state.store.queue_paused("thread-beta") is False
 
 
 def test_ws_queue_add_during_run_persists_and_acknowledges_without_steering(tmp_path):

@@ -27,12 +27,21 @@ ROUTINE_TEMPLATES = (
     },
 )
 SUPPORTED_CADENCES = {"weekly_monday_0900": "0 9 * * 1"}
+# Maps every run_turn status onto the shared run-status contract. "stopped"
+# from a scheduled run can only mean the step budget ran out (nothing can
+# cancel a scheduled turn): real but incomplete work, so it reads as partial.
 RECEIPT_STATUSES = {
     "ok": "success",
     "error": "failed",
     "waiting": "waiting_approval",
     "partial": "partial",
+    "stopped": "partial",
 }
+# The full vocabulary the runs table may carry, shared with the client.
+# "interrupted" is written by the store's restart reconciler.
+SCHEDULE_RUN_STATUSES = frozenset(
+    {"running", "success", "failed", "waiting_approval", "partial", "interrupted"}
+)
 
 
 def now_iso() -> str:

@@ -293,7 +293,7 @@ function ConnectorDetail({
         <aside className="connection-action-error" role="alert">
           <strong>Authorization window didn’t open</strong>
           <p>Open the authorization page, finish there, then return to Sourcecado.</p>
-          <a href={activeInteraction.url} target="_blank" rel="noreferrer">
+          <a href={activeInteraction.url} target="_blank" rel="noopener noreferrer">
             Open {connector.title} authorization
           </a>
         </aside>
@@ -377,19 +377,24 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
     try {
       const body = await getConnectors();
       setState({ status: "loaded", connectors: body.connectors });
-      if (options?.oauthReturn) {
-        setInteraction((current) => {
-          if (current?.kind !== "awaiting_return") return current;
-          const refreshed = body.connectors.find((item) => item.id === current.connectorId);
-          if (
-            refreshed &&
-            (refreshed.status === "connected" || refreshed.status === "missing_scopes")
-          ) {
-            return null;
-          }
+      setInteraction((current) => {
+        if (!current) return current;
+        const refreshed = body.connectors.find((item) => item.id === current.connectorId);
+        const authorized =
+          refreshed &&
+          (refreshed.status === "connected" || refreshed.status === "missing_scopes");
+        // A window regaining focus is not evidence authorization failed --
+        // but a connector actually reading connected IS evidence it
+        // succeeded, no matter which interaction state this was left in.
+        // Otherwise a stale "didn't complete" banner can outlive the
+        // `awaiting_return` state that produced it and contradict a
+        // catalog row that has since flipped to Connected.
+        if (authorized) return null;
+        if (options?.oauthReturn && current.kind === "awaiting_return") {
           return { connectorId: current.connectorId, kind: "authorization_failed" };
-        });
-      }
+        }
+        return current;
+      });
       return true;
     } catch {
       if (options?.initial) setState({ status: "failed" });

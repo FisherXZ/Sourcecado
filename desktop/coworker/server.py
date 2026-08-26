@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import logging
 import os
 import re
 import secrets
@@ -196,6 +197,14 @@ def _ws_token_ok(ws: WebSocket, expected: str) -> bool:
     return any(_tokens_match(c, expected) for c in candidates)
 
 
+# Execution states that carry a final outcome; matches the overwrite guard in
+# ConversationStore.complete_inbox_execution. Receipts are only ever built
+# from items in one of these states.
+_TERMINAL_EXECUTION = frozenset(
+    {"succeeded", "failed", "not_run", "cancelled", "expired", "interrupted"}
+)
+
+
 async def _await_permission(
     call_id: str, inbox: Inbox, control: RunControl | None = None
 ) -> str:
@@ -367,7 +376,8 @@ def create_app(
 
     async def _publish_live_events(events: list[dict[str, Any]]) -> None:
         for event in events:
-            for owner_loop, sender in tuple(app.state.live_event_senders):
+            for registration in tuple(app.state.live_event_senders):
+                owner_loop, sender, _alive = registration
                 try:
                     current_loop = asyncio.get_running_loop()
                     if owner_loop is current_loop:
@@ -378,7 +388,7 @@ def create_app(
                         )
                         await asyncio.wrap_future(future)
                 except Exception:
-                    app.state.live_event_senders.discard((owner_loop, sender))
+                    app.state.live_event_senders.discard(registration)
 
     async def _execute_claimed_approval(
         item: dict[str, Any], *, claimant: str
@@ -719,8 +729,8 @@ def create_app(
         app.state.persona = nxt
         return {"persona": {"id": nxt.id, "name": nxt.name}}
 
-    @app.get("/v1/inbox")
-    async def inbox_list():
+    async def _reap_and_publish_expired() -> None:
+        """Persist and broadcast receipts for freshly reaped approvals."""
         expired = store.reap_overdue_inbox()
         receipts = [
             receipt
@@ -729,6 +739,10 @@ def create_app(
         ]
         if receipts:
             await _publish_live_events(receipts)
+
+    @app.get("/v1/inbox")
+    async def inbox_list():
+        await _reap_and_publish_expired()
         return {"items": app.state.inbox.pending()}
 
     @app.post("/v1/inbox/{item_id}")
@@ -1253,11 +1267,14 @@ def create_app(
         return {"id": row["session_id"], "title": row["title"], "n_msgs": row["n_msgs"]}
 
     @app.get("/v1/sessions/{sid}")
-    def sessions_get(sid: str):
+    async def sessions_get(sid: str):
         store = app.state.store
         row = store.index(sid)
         if row is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        # A restored thread must not show a live-looking card for an
+        # already-expired approval: reap and persist receipts first.
+        await _reap_and_publish_expired()
         if not sid.startswith("sched-"):
             store.set_open_session(sid)
         return {
@@ -1311,19 +1328,29 @@ def create_app(
         tasks: set[asyncio.Task[Any]] = set()
         socket_live = True
 
-        async def _send(event: dict[str, Any]) -> None:
+        async def _send_locked(event: dict[str, Any]) -> None:
             nonlocal socket_live
             if not socket_live:
                 return
             try:
-                async with send_lock:
-                    await ws.send_json(event)
+                await ws.send_json(event)
             except Exception:
                 # The window went away mid-run. A dead transport must never
                 # drive durable state: stop live updates, keep the run going.
                 socket_live = False
 
-        sender_registration = (asyncio.get_running_loop(), _send)
+        async def _send(event: dict[str, Any]) -> None:
+            async with send_lock:
+                await _send_locked(event)
+
+        async def _broadcast(event: dict[str, Any]) -> None:
+            """Deliver one event to every attached socket, not just this one."""
+            await _publish_live_events([event])
+
+        def _socket_alive() -> bool:
+            return socket_live
+
+        sender_registration = (asyncio.get_running_loop(), _send, _socket_alive)
         app.state.live_event_senders.add(sender_registration)
 
         def _queue_snapshot(
@@ -1385,7 +1412,7 @@ def create_app(
 
         async def _persist_and_send(event: dict[str, Any]) -> None:
             store.append_event(str(event["session_id"]), event)
-            await _send(event)
+            await _broadcast(event)
 
         async def _retry_failed_step(command: dict[str, Any]) -> None:
             session_id = str(command.get("session_id") or "")
@@ -1397,6 +1424,10 @@ def create_app(
             existing = _recovery_event_for_command(session_id, command_id)
             if existing is not None:
                 await _send(existing)
+                return
+            if not store.claim_recovery_command(session_id, command_id):
+                # Another socket owns this command (S3); its outcome will
+                # broadcast to every window when the work finishes.
                 return
             context = _failed_step(session_id, run_id, call_id)
             if context is None:
@@ -1461,22 +1492,26 @@ def create_app(
                 )
                 await _persist_and_send(recovery)
                 return
-            ok, result = await asyncio.to_thread(
-                turn_runtime.execute,
-                name,
-                arguments,
-                store=store,
-                gmail=app.state.gmail,
-                drive=app.state.drive,
-                calendar=app.state.calendar,
-                http=app.state.http,
-                apollo_key=app.state.apollo_key,
-                tavily_key=app.state.tavily_key,
-                skills=app.state.skills,
-                mcp=app.state.mcp,
-                people=app.state.people,
-                session_id=session_id,
-            )
+            try:
+                ok, result = await asyncio.to_thread(
+                    turn_runtime.execute,
+                    name,
+                    arguments,
+                    store=store,
+                    gmail=app.state.gmail,
+                    drive=app.state.drive,
+                    calendar=app.state.calendar,
+                    http=app.state.http,
+                    apollo_key=app.state.apollo_key,
+                    tavily_key=app.state.tavily_key,
+                    skills=app.state.skills,
+                    mcp=app.state.mcp,
+                    people=app.state.people,
+                    session_id=session_id,
+                )
+            except Exception as exc:
+                # The claim is held: this command must still record an outcome.
+                ok, result = False, {"error": str(exc)}
             result = dict(result)
             retried_failure = (
                 _tool_failure(
@@ -1531,6 +1566,8 @@ def create_app(
             if existing is not None:
                 await _send(existing)
                 return
+            if not store.claim_recovery_command(session_id, command_id):
+                return
             context = _failed_step(session_id, run_id, call_id)
             if context is None:
                 return
@@ -1571,10 +1608,12 @@ def create_app(
             run_sid: str,
             *,
             queue_item_id: str | None = None,
-        ) -> RunControl:
+        ) -> RunControl | None:
             identity = new_turn_identity(run_sid)
             control = RunControl(identity)
-            coordinator.register(control)
+            if not coordinator.register(control):
+                # Another run already owns this session (S2): never fork it.
+                return None
 
             async def _run() -> None:
                 async def _wait(call_id: str) -> str:
@@ -1603,7 +1642,7 @@ def create_app(
                         "mcp": app.state.mcp,
                         "people": app.state.people,
                     },
-                    emit=_send,
+                    emit=_broadcast,
                     wait_permission=_wait,
                     system_prompt_fn=system_prompt,
                     identity=control.identity,
@@ -1632,7 +1671,7 @@ def create_app(
                 if status == "stopped":
                     store.set_queue_paused(run_sid, True)
                     if store.list_queue(run_sid):
-                        await _send(
+                        await _broadcast(
                             _queue_snapshot(
                                 run_sid,
                                 command_id=f"terminal:{control.identity.run_id}",
@@ -1640,9 +1679,12 @@ def create_app(
                             )
                         )
                     return
-                if not socket_live:
-                    # The socket driving this drain is gone. Park undelivered
-                    # items instead of consuming them with nobody watching.
+                if not any(
+                    alive()
+                    for _, _, alive in tuple(app.state.live_event_senders)
+                ):
+                    # No window is watching any more. Park undelivered items
+                    # instead of consuming them headless.
                     if store.mark_queue_offline(run_sid):
                         await _publish_live_events(
                             [
@@ -1657,19 +1699,28 @@ def create_app(
                         )
                     return
                 claimed = store.claim_next_queue(run_sid)
-                await _send(
-                    _queue_snapshot(
-                        run_sid,
-                        command_id=f"terminal:{control.identity.run_id}",
-                        status="draining" if claimed is not None else "idle",
-                    )
-                )
+                launched: RunControl | None = None
                 if claimed is not None:
-                    await _launch(
+                    # Launch before any await so no chat frame can slip into
+                    # the claim->launch window and fork the session (S2).
+                    launched = await _launch(
                         str(claimed["text"]),
                         run_sid,
                         queue_item_id=str(claimed["id"]),
                     )
+                    if launched is None:
+                        # Another run won the session between claim and
+                        # launch; hand the item back to the queue.
+                        store.finish_queue_item(
+                            run_sid, str(claimed["id"]), state="waiting"
+                        )
+                await _broadcast(
+                    _queue_snapshot(
+                        run_sid,
+                        command_id=f"terminal:{control.identity.run_id}",
+                        status="draining" if launched is not None else "idle",
+                    )
+                )
 
             task = asyncio.create_task(_run())
             tasks.add(task)
@@ -1679,29 +1730,73 @@ def create_app(
                 # A cancelled or crashed task never sent a terminal; mark the
                 # control dead so nothing claims execution on its behalf.
                 control.abandon()
+                if not done.cancelled() and done.exception() is not None:
+                    logging.getLogger("coworker.server").error(
+                        "run task for %s crashed outside run_turn",
+                        control.identity.run_id,
+                        exc_info=done.exception(),
+                    )
 
             task.add_done_callback(_finalize)
             return control
 
-        # Reconnect contract: a new socket first hears every live run's
-        # ORIGINAL turn_start (same event_id, so clients dedupe by identity)
-        # and one authoritative queue snapshot per session holding items.
-        for live_control in coordinator.live():
-            original_start = next(
-                (
-                    event
-                    for event in store.load_events(
-                        live_control.identity.session_id
-                    )
-                    if event.get("type") == "turn_start"
-                    and event.get("run_id") == live_control.identity.run_id
-                ),
-                None,
+        async def _kick_drain(sid: str) -> None:
+            """Claim and launch the next queued item when nothing is running."""
+            if coordinator.active_for(sid) is not None:
+                return
+            claimed = store.claim_next_queue(sid)
+            if claimed is None:
+                return
+            # Launch before any await so no other frame can fork the session.
+            launched = await _launch(
+                str(claimed["text"]), sid, queue_item_id=str(claimed["id"])
             )
-            if original_start is not None:
-                await _send(original_start)
+            if launched is None:
+                store.finish_queue_item(sid, str(claimed["id"]), state="waiting")
+                return
+            await _broadcast(
+                _queue_snapshot(
+                    sid,
+                    command_id=f"drain-{secrets.token_hex(8)}",
+                    status="draining",
+                )
+            )
+
+        # Reconnect contract: a new socket first hears, per session with a
+        # run started by this process, either the live run's ORIGINAL
+        # turn_start or the ended run's ORIGINAL terminal event (same
+        # event_id, so clients dedupe by identity), then one authoritative
+        # queue snapshot per session holding items. Collection is fully
+        # synchronous, so nothing published after registration is missed.
+        replay_frames: list[dict[str, Any]] = []
+        for replay_control in coordinator.latest_per_session():
+            run_events = store.load_events(replay_control.identity.session_id)
+            replay_run_id = replay_control.identity.run_id
+            if not replay_control.terminal:
+                frame = next(
+                    (
+                        event
+                        for event in run_events
+                        if event.get("type") == "turn_start"
+                        and event.get("run_id") == replay_run_id
+                    ),
+                    None,
+                )
+            else:
+                frame = next(
+                    (
+                        event
+                        for event in reversed(run_events)
+                        if event.get("type")
+                        in ("turn_end", "turn_stopped", "error")
+                        and event.get("run_id") == replay_run_id
+                    ),
+                    None,
+                )
+            if frame is not None:
+                replay_frames.append(frame)
         for queue_sid in store.sessions_with_queue():
-            await _send(
+            replay_frames.append(
                 _queue_snapshot(
                     queue_sid,
                     command_id=f"connection-{secrets.token_hex(8)}",
@@ -1710,6 +1805,11 @@ def create_app(
             )
 
         try:
+            async with send_lock:
+                # Hold the send lock across the replay: a live event published
+                # mid-replay queues behind it and arrives after, in order.
+                for frame in replay_frames:
+                    await _send_locked(frame)
             while True:
                 if not socket_live:
                     break
@@ -1733,10 +1833,15 @@ def create_app(
                     scope = str(incoming.get("scope") or "once").strip() or "once"
                     if call_id and decision in {"allow", "deny"}:
                         pending_item = app.state.inbox.get(call_id)
-                        if (
-                            pending_item is not None
-                            and pending_item.get("kind") == "recovery_approval"
-                        ):
+                        if pending_item is None:
+                            # Never answer an operator action with silence (S5).
+                            await _send(
+                                {
+                                    "type": "error",
+                                    "message": f"approval {call_id} not found",
+                                }
+                            )
+                        elif pending_item.get("kind") == "recovery_approval":
                             await _resolve_recovery_approval(
                                 call_id,
                                 decision,
@@ -1744,7 +1849,7 @@ def create_app(
                                 scope=scope,
                                 claimant=f"recovery-ws:{secrets.token_hex(16)}",
                             )
-                        elif pending_item is not None:
+                        else:
                             item_run_id = str(pending_item.get("run_id") or "")
                             item_sid = str(
                                 pending_item.get("session_id") or ""
@@ -1782,18 +1887,9 @@ def create_app(
                                     if approval is not None:
                                         await _send(approval)
                                 elif not turn_alive:
-                                    if decision == "deny":
-                                        if claim.decision_recorded:
-                                            approval = (
-                                                _persist_approval_receipt(
-                                                    claim.item
-                                                )
-                                            )
-                                            if approval is not None:
-                                                await _publish_live_events(
-                                                    [approval]
-                                                )
-                                    elif claim.claimed and claim.owned:
+                                    if decision == "allow" and (
+                                        claim.claimed and claim.owned
+                                    ):
                                         receipt = (
                                             await _execute_claimed_approval(
                                                 claim.item,
@@ -1807,11 +1903,72 @@ def create_app(
                                             await _publish_live_events(
                                                 [approval]
                                             )
+                                    elif (
+                                        str(claim.item.get("execution_status"))
+                                        in _TERMINAL_EXECUTION
+                                    ):
+                                        # Fresh deny, or an idempotent
+                                        # re-click: answer with the honest
+                                        # receipt, never silence (S5).
+                                        approval = _persist_approval_receipt(
+                                            claim.item
+                                        )
+                                        if approval is not None:
+                                            await _publish_live_events(
+                                                [approval]
+                                            )
+                                    else:
+                                        # Resolved, execution still running
+                                        # under another claimant: its receipt
+                                        # broadcasts on completion.
+                                        await _send(
+                                            {
+                                                "type": "error",
+                                                "message": (
+                                                    "approval resolved "
+                                                    "elsewhere; outcome "
+                                                    "pending"
+                                                ),
+                                            }
+                                        )
+                            else:
+                                # Stale action — expired, cancelled, or
+                                # resolved the other way (S5).
+                                stale = app.state.inbox.get(call_id)
+                                if stale is not None and (
+                                    str(stale.get("execution_status"))
+                                    in _TERMINAL_EXECUTION
+                                ):
+                                    approval = _persist_approval_receipt(stale)
+                                    if approval is not None:
+                                        await _publish_live_events([approval])
+                                else:
+                                    await _send(
+                                        {
+                                            "type": "error",
+                                            "message": (
+                                                "approval resolved elsewhere; "
+                                                "outcome pending"
+                                            ),
+                                        }
+                                    )
                     continue
                 if command_type == "cancel":
                     sid = str(incoming.get("session_id") or "")
                     run_id = str(incoming.get("run_id") or "")
                     if sid and run_id:
+                        if coordinator.get(sid, run_id) is None:
+                            # A run this process no longer tracks: a stale
+                            # Stop must not silently pause the drain (m1).
+                            await _send(
+                                {
+                                    "type": "error",
+                                    "message": f"run {run_id} not found",
+                                }
+                            )
+                            continue
+                        # Pause before cancelling so a run that just finished
+                        # cannot drain the next item past the operator's Stop.
                         store.set_queue_paused(sid, True)
                         await coordinator.cancel(sid, run_id)
                         if store.list_queue(sid):
@@ -1860,24 +2017,8 @@ def create_app(
                             await _send({"type": "error", "message": str(exc)})
                             continue
                         await _send(acknowledgement)
-                        if (
-                            command_type in {"queue_resume", "queue_retry"}
-                            and coordinator.active_for(sid) is None
-                        ):
-                            claimed = store.claim_next_queue(sid)
-                            if claimed is not None:
-                                await _send(
-                                    _queue_snapshot(
-                                        sid,
-                                        command_id=str(incoming.get("command_id") or ""),
-                                        status="draining",
-                                    )
-                                )
-                                await _launch(
-                                    str(claimed["text"]),
-                                    sid,
-                                    queue_item_id=str(claimed["id"]),
-                                )
+                        if command_type in {"queue_resume", "queue_retry"}:
+                            await _kick_drain(sid)
                     continue
                 if command_type != "chat":
                     continue
@@ -1899,7 +2040,17 @@ def create_app(
                 if not sid:
                     sid = store.create_session()["session_id"]
                 store.set_open_session(sid)
-                if coordinator.active_for(sid) is not None:
+                queue_busy = not store.queue_paused(sid) and any(
+                    item["state"] in ("waiting", "retrying", "reconnecting")
+                    for item in store.list_queue(sid)
+                )
+                launched: RunControl | None = None
+                if coordinator.active_for(sid) is None and not queue_busy:
+                    launched = await _launch(text, sid)
+                if launched is None:
+                    # A run is active or older items are draining ahead of
+                    # this message: join the queue instead of forking the
+                    # session or jumping the line (S2).
                     command_id = str(
                         incoming.get("command_id") or f"command_{secrets.token_hex(8)}"
                     )
@@ -1917,8 +2068,7 @@ def create_app(
                             },
                         )
                     )
-                    continue
-                await _launch(text, sid)
+                    await _kick_drain(sid)
         except WebSocketDisconnect:
             pass
         finally:

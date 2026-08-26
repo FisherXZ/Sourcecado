@@ -434,6 +434,13 @@
   color: var(--text);
 }
 
+@media (max-width: 767px) {
+  .sourcecado-copy-action {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
 .sourcecado-notice {
   max-width: 620px;
   margin-top: 12px;
@@ -662,8 +669,10 @@
     font-size: 16px;
   }
 
-  .welcome-actions :where(a, button) {
+  .welcome-actions :where(a, button),
+  .unavailable-thread-page a {
     min-height: 44px;
+    min-width: 44px;
   }
 }
 
@@ -811,6 +820,13 @@
 .sourcecado-activity-failed > button,
 .sourcecado-activity-partial > button {
   color: var(--error);
+}
+
+@media (max-width: 767px) {
+  .sourcecado-activity > button {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 
 .sourcecado-activity > ol {
@@ -1544,6 +1560,15 @@
 }
 
 @media (max-width: 767px) {
+  .sourcecado-approval-card > button,
+  .sourcecado-approval-receipt > button,
+  .sourcecado-recovery-actions :where(button, a) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@media (max-width: 767px) {
   .sourcecado-queue {
     width: calc(100% - 32px);
   }
@@ -1559,8 +1584,11 @@
     justify-content: flex-start;
   }
 
-  .sourcecado-queue-actions button {
+  .sourcecado-queue > button,
+  .sourcecado-queue-actions button,
+  .sourcecado-queue form button {
     min-height: 44px;
+    min-width: 44px;
   }
 }
 

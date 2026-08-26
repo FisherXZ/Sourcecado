@@ -44,7 +44,8 @@ export type ScheduleRunStatus =
   | "success"
   | "failed"
   | "waiting_approval"
-  | "partial";
+  | "partial"
+  | "interrupted";
 
 export type ScheduleJob = {
   id: number;
@@ -315,6 +316,7 @@ const SCHEDULE_RUN_STATUSES = new Set<ScheduleRunStatus>([
   "failed",
   "waiting_approval",
   "partial",
+  "interrupted",
 ]);
 
 function numberValue(value: unknown, fallback = 0): number {
@@ -748,23 +750,115 @@ const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
 const PENDING_COMMAND_LIMIT = 50;
 
+/**
+ * Synchronous fate of a command handed to the transport. "delivered" means it
+ * was written to an open socket now; "queued" means it is buffered and will
+ * flush on reconnect; "dropped" means it will never be sent — callers must
+ * surface that to the operator rather than implying the command is in flight.
+ */
+export type CommandDelivery =
+  | { readonly state: "delivered" }
+  | { readonly state: "queued" }
+  | { readonly state: "dropped"; readonly reason: string };
+
 export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
-  send: (text: string, sessionId: string) => void;
-  cancel: (sessionId: string, runId: string) => void;
-  queue: (command: QueueCommand) => void;
-  recover: (command: RecoveryCommand) => void;
-  approve: (id: string, decision: "allow" | "deny") => void;
+  send: (text: string, sessionId: string) => CommandDelivery;
+  cancel: (sessionId: string, runId: string) => CommandDelivery;
+  queue: (command: QueueCommand) => CommandDelivery;
+  recover: (command: RecoveryCommand) => CommandDelivery;
+  approve: (id: string, decision: "allow" | "deny") => CommandDelivery;
   close: () => void;
 } {
   const token = apiToken();
   const protocols = token ? ["club", token] : ["club"];
   let ws: WebSocket | null = null;
   let disposed = false;
+  let terminal = false;
   let attempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const pending: unknown[] = [];
   const queueSnapshots = new Map<string, QueueSnapshotEvent>();
   let syntheticCommandNumber = 0;
+  // Reconnect re-sync bookkeeping: which runs are open on which session, the
+  // last event id delivered per session, and sessions with a delivered chat
+  // command still waiting for its turn_start. A run that reaches a terminal
+  // state while the socket is down would otherwise stay "running" forever.
+  const openRuns = new Map<string, Set<string>>();
+  const lastDeliveredEvent = new Map<string, string>();
+  const awaitingTurnStart = new Set<string>();
+  let resyncDepth = 0;
+  const resyncBuffer: SourcecadoSocketEvent[] = [];
+
+  function trackEnvelope(event: ProtocolChatEvent) {
+    lastDeliveredEvent.set(event.session_id, event.event_id);
+    if (event.type === "turn_start") {
+      const runs = openRuns.get(event.session_id) ?? new Set<string>();
+      runs.add(event.run_id);
+      openRuns.set(event.session_id, runs);
+      awaitingTurnStart.delete(event.session_id);
+      return;
+    }
+    if (
+      event.type === "turn_end" ||
+      event.type === "turn_stopped" ||
+      event.type === "error"
+    ) {
+      openRuns.get(event.session_id)?.delete(event.run_id);
+    }
+  }
+
+  function dispatch(event: SourcecadoSocketEvent) {
+    if (event.type === "queue_snapshot") {
+      queueSnapshots.set(event.session_id, event);
+    } else if ("version" in event) {
+      trackEnvelope(event);
+    }
+    onEvent(event);
+  }
+
+  // After a drop, fetch each interesting session's durable event log and
+  // replay the tail this socket never delivered. The store dedupes by
+  // event_id, so overlap with anything the sidecar replays itself is safe;
+  // live socket events are held until the tail lands to preserve order.
+  async function resyncMissedEvents() {
+    const sessions = new Set<string>(awaitingTurnStart);
+    for (const [sessionId, runs] of openRuns) {
+      if (runs.size > 0) sessions.add(sessionId);
+    }
+    if (sessions.size === 0) return;
+    resyncDepth += 1;
+    try {
+      for (const sessionId of sessions) {
+        try {
+          const conversation = await getSession(sessionId);
+          if (disposed) return;
+          const events = conversation.events.filter(
+            (event): event is ProtocolChatEvent => "version" in event,
+          );
+          const lastId = lastDeliveredEvent.get(sessionId);
+          const lastIndex =
+            lastId === undefined
+              ? -1
+              : events.findIndex((event) => event.event_id === lastId);
+          for (const event of events.slice(lastIndex + 1)) dispatch(event);
+          awaitingTurnStart.delete(sessionId);
+        } catch {
+          if (disposed) return;
+          onEvent({
+            type: "error",
+            message:
+              "Reconnected, but the conversation re-sync failed. Reload to see the latest run state.",
+            session_id: sessionId,
+          });
+        }
+      }
+    } finally {
+      resyncDepth -= 1;
+      if (resyncDepth === 0 && !disposed) {
+        for (const event of resyncBuffer.splice(0)) dispatch(event);
+      }
+    }
+  }
 
   // Re-emits the last authoritative queue snapshot per session; while the
   // socket is down, deliverable items are shown as offline/reconnecting.
@@ -810,15 +904,24 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
       emitQueueStates();
       for (const payload of pending.splice(0)) {
         socket.send(JSON.stringify(payload));
+        const command = payload as { type?: unknown; session_id?: unknown };
+        if (
+          command.type === "chat" &&
+          typeof command.session_id === "string"
+        ) {
+          awaitingTurnStart.add(command.session_id);
+        }
       }
+      void resyncMissedEvents();
     };
     socket.onmessage = (ev) => {
       try {
         const parsed = parseSocketEvent(JSON.parse(String(ev.data)));
-        if (parsed.type === "queue_snapshot") {
-          queueSnapshots.set(parsed.session_id, parsed);
+        if (resyncDepth > 0) {
+          resyncBuffer.push(parsed);
+          return;
         }
-        onEvent(parsed);
+        dispatch(parsed);
       } catch {
         onEvent(parseChatEvent(undefined));
       }
@@ -826,7 +929,17 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
     socket.onclose = (ev) => {
       if (disposed || socket !== ws) return;
       if (ev.code === 1008) {
+        terminal = true;
         onEvent({ type: "error", message: "sidecar rejected the socket (token)" });
+        if (pending.length > 0) {
+          onEvent({
+            type: "error",
+            message: `${pending.length} queued command${
+              pending.length === 1 ? "" : "s"
+            } dropped because the sidecar rejected the connection token.`,
+          });
+          pending.length = 0;
+        }
         onEvent({
           type: "connection_change",
           status: "offline",
@@ -847,39 +960,53 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
     };
   }
 
-  function push(payload: unknown) {
-    if (disposed) return;
+  function push(payload: unknown): CommandDelivery {
+    if (disposed) {
+      return {
+        state: "dropped",
+        reason: "The chat connection is closed; the command was dropped.",
+      };
+    }
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(payload));
-      return;
+      return { state: "delivered" };
+    }
+    if (terminal) {
+      const reason =
+        "The sidecar rejected the connection token; the command was dropped.";
+      onEvent({ type: "error", message: reason });
+      return { state: "dropped", reason };
     }
     if (pending.length >= PENDING_COMMAND_LIMIT) {
-      onEvent({
-        type: "error",
-        message:
-          "The sidecar connection is down and the retry buffer is full; the command was dropped.",
-      });
-      return;
+      const reason =
+        "The sidecar connection is down and the retry buffer is full; the command was dropped.";
+      onEvent({ type: "error", message: reason });
+      return { state: "dropped", reason };
     }
     pending.push(payload);
+    return { state: "queued" };
   }
 
   connect();
   return {
     send(text: string, sessionId: string) {
-      push({ type: "chat", text, session_id: sessionId });
+      const delivery = push({ type: "chat", text, session_id: sessionId });
+      // A delivered send may start a run whose turn_start we never see if the
+      // socket drops immediately; remember it so reconnect re-syncs it.
+      if (delivery.state === "delivered") awaitingTurnStart.add(sessionId);
+      return delivery;
     },
     cancel(sessionId: string, runId: string) {
-      push({ type: "cancel", session_id: sessionId, run_id: runId });
+      return push({ type: "cancel", session_id: sessionId, run_id: runId });
     },
     queue(command: QueueCommand) {
-      push(command);
+      return push(command);
     },
     recover(command: RecoveryCommand) {
-      push(command);
+      return push(command);
     },
     approve(id: string, decision: "allow" | "deny") {
-      push({ type: "permission", id, decision });
+      return push({ type: "permission", id, decision });
     },
     close() {
       disposed = true;

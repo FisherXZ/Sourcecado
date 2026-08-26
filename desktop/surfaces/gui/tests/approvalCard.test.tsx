@@ -172,6 +172,21 @@ describe("ApprovalCard", () => {
     expect(onDecision).toHaveBeenCalledWith(true);
   });
 
+  it("does not re-offer a queued decision and explains it is waiting for the connection", async () => {
+    const onDecision = vi.fn().mockResolvedValue("queued");
+    render(<ApprovalCard part={approvalPart()} onDecision={onDecision} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+
+    expect(
+      await screen.findByText(/waiting for the connection/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("Submitting decision…")).not.toBeInTheDocument();
+  });
+
   it("retains enabled recovery after a failed submission", async () => {
     const onDecision = vi.fn().mockRejectedValue(new Error("offline"));
     render(<ApprovalCard part={approvalPart()} onDecision={onDecision} />);

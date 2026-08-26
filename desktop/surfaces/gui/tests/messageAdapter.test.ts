@@ -321,3 +321,44 @@ describe("convertStructuredMessage approval resource", () => {
     expect(part?.providerMetadata?.sourcecado?.resource).toBeNull();
   });
 });
+
+describe("convertStructuredMessage notices", () => {
+  const noticeMessage = (code: string, message: string) =>
+    ({
+      id: "thread-alpha:notice:1",
+      role: "assistant",
+      state: "partial",
+      parts: [
+        {
+          type: "notice",
+          id: "thread-alpha:notice:1:part",
+          code,
+          message,
+          recoverable: true,
+        },
+      ],
+    }) as const;
+
+  it("exposes a transport notice's code so it is not framed as missing history", () => {
+    const converted = convertStructuredMessage(
+      noticeMessage(
+        "transport",
+        "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+      ),
+    );
+
+    expect(converted.metadata?.custom?.sourcecadoNotice).toBe(true);
+    expect(converted.metadata?.custom?.sourcecadoNoticeCode).toBe("transport");
+  });
+
+  it("exposes a history notice's code for the missing-history framing", () => {
+    const converted = convertStructuredMessage(
+      noticeMessage("malformed_event", "Malformed event from sidecar."),
+    );
+
+    expect(converted.metadata?.custom?.sourcecadoNotice).toBe(true);
+    expect(converted.metadata?.custom?.sourcecadoNoticeCode).toBe(
+      "malformed_event",
+    );
+  });
+});
