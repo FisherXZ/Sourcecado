@@ -6,6 +6,7 @@ import json
 from typing import Any, Awaitable, Callable
 
 from coworker.inbox import Inbox
+from coworker.ledger import record_tool_on_person
 from coworker.permissions import decide
 from coworker.provider import ToolCall
 from coworker.store import ConversationStore
@@ -79,6 +80,19 @@ def _tool_result_message(call: ToolCall, payload: dict[str, Any]) -> dict[str, A
     }
 
 
+def _record_person_file(
+    sid: str,
+    call: ToolCall,
+    ok: bool,
+    result: dict[str, Any],
+    execute_kwargs: dict,
+) -> None:
+    people = execute_kwargs.get("people")
+    if people is None:
+        return
+    record_tool_on_person(people, sid, call.name, call.arguments, result, ok=ok)
+
+
 def _persist_closed(store: ConversationStore, sid: str, history: list[dict[str, Any]]) -> None:
     closed = close_open_tool_calls(history)
     if closed == history:
@@ -121,7 +135,13 @@ async def run_turn(
         store.replace_all(sid, loaded)
     sys_content = ""
     if system_prompt_fn is not None:
-        sys_content = system_prompt_fn(store, persona, skills)
+        sys_content = system_prompt_fn(
+            store,
+            persona,
+            skills,
+            people=execute_kwargs.get("people"),
+            session_id=sid,
+        )
     history: list[dict[str, Any]] = [{"role": "system", "content": sys_content}] + loaded
     # Caller already appended the user message in WS; scheduler has not.
     if not (loaded and loaded[-1].get("role") == "user" and loaded[-1].get("content") == text):
@@ -168,6 +188,7 @@ async def run_turn(
                     denied = _tool_result_message(call, result)
                     history.append(denied)
                     store.append(sid, denied)
+                    _record_person_file(sid, call, False, result, execute_kwargs)
                     continue
                 if gate.needs_user:
                     inbox.park(call.name, call.arguments, item_id=call.id)
@@ -197,6 +218,7 @@ async def run_turn(
                         )
                         history.append(_tool_result_message(call, result))
                         store.append(sid, _tool_result_message(call, result))
+                        _record_person_file(sid, call, ok, result, execute_kwargs)
                         continue
                     if choice == "deny":
                         result = {"error": "denied by user"}
@@ -212,6 +234,7 @@ async def run_turn(
                         denied = _tool_result_message(call, result)
                         history.append(denied)
                         store.append(sid, denied)
+                        _record_person_file(sid, call, False, result, execute_kwargs)
                         continue
                 await _emit(
                     {
@@ -223,13 +246,20 @@ async def run_turn(
                 )
                 try:
                     kw = {k: v for k, v in execute_kwargs.items() if not k.startswith("_")}
+                    kw["session_id"] = sid
                     ok, result = execute(call.name, call.arguments, **kw)
                 except Exception as exc:
                     ok, result = False, {"error": str(exc)}
                 if call.name in {"remember", "memory_update", "memory_forget"} and system_prompt_fn:
                     history[0] = {
                         "role": "system",
-                        "content": system_prompt_fn(store, persona, skills),
+                        "content": system_prompt_fn(
+                            store,
+                            persona,
+                            skills,
+                            people=execute_kwargs.get("people"),
+                            session_id=sid,
+                        ),
                     }
                 await _emit(
                     {
@@ -243,6 +273,7 @@ async def run_turn(
                 tool_result = _tool_result_message(call, result)
                 history.append(tool_result)
                 store.append(sid, tool_result)
+                _record_person_file(sid, call, ok, result, execute_kwargs)
         else:
             await _emit({"type": "error", "message": f"Stopped after {MAX_STEPS} tool steps."})
             return {"status": "stopped", "text": last_text}

@@ -1,4 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
+import { BoardView } from "./Board";
+import { PersonFileView } from "./PersonFile";
 import {
   connectGmail,
   createSession,
@@ -32,6 +34,23 @@ import {
   type Settings,
   type StoredMessage,
 } from "./api";
+
+type Route =
+  | { kind: "chat" }
+  | { kind: "board" }
+  | { kind: "people"; id: string };
+
+function parseHash(hash: string): Route {
+  if (hash === "#/board") return { kind: "board" };
+  if (hash.startsWith("#/people/") && hash.length > "#/people/".length) {
+    try {
+      return { kind: "people", id: decodeURIComponent(hash.slice("#/people/".length)) };
+    } catch {
+      return { kind: "chat" };
+    }
+  }
+  return { kind: "chat" };
+}
 
 type Item =
   | { kind: "user"; id: number; text: string }
@@ -74,6 +93,17 @@ export function App() {
   const chatRef = useRef<ReturnType<typeof openChat> | null>(null);
   const liveId = useRef<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [route, setRoute] = useState<Route>(() =>
+    typeof window === "undefined" ? { kind: "chat" } : parseHash(window.location.hash)
+  );
+
+  useEffect(() => {
+    function onHash() {
+      setRoute(parseHash(window.location.hash));
+    }
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   useEffect(() => {
     if (!hasToken()) {
@@ -242,6 +272,7 @@ export function App() {
   }
 
   async function onNewChat() {
+    window.location.hash = "";
     const created = await createSession();
     setSessionId(created.id);
     setItems([]);
@@ -250,6 +281,7 @@ export function App() {
   }
 
   async function onOpenSession(id: string) {
+    window.location.hash = "";
     const conv = await getSession(id);
     setSessionId(id);
     const restored = itemsFromMessages(conv.messages);
@@ -282,6 +314,9 @@ export function App() {
         <button type="button" className="strip-btn" onClick={() => onNewChat().catch((err: unknown) => setBanner(err instanceof Error ? err.message : String(err)))}>
           New chat
         </button>
+        <a className={`session-row ${route.kind === "board" ? "active" : ""}`} href="#/board">
+          Board
+        </a>
         <nav className="session-list">
           {sessions.map((row) => (
             <button
@@ -313,12 +348,17 @@ export function App() {
         </p>
       </header>
 
+      {route.kind === "board" ? (
+        <BoardView />
+      ) : route.kind === "people" ? (
+        <PersonFileView personId={route.id} />
+      ) : (
       <section className="transcript" aria-live="polite">
         {items.length === 0 && (
           <p className="empty">
             {persona?.id === "sourcing"
               ? "Sourcing on duty. Shortlists, drafts for review, why-now."
-              : "Generic buddy on duty. Ask, remember, draft (never send)."}
+              : "Generic buddy on duty. Ask, remember, draft, send with Allow."}
           </p>
         )}
         {items.map((item) =>
@@ -335,18 +375,24 @@ export function App() {
             </article>
           ) : item.kind === "approval" ? (
             <article key={item.id} className={`approval-card ${item.resolved ? "resolved" : "pending"}`}>
-              <p className="tool-name">{item.name}</p>
-              <p className="tool-result">{formatArgs(item.arguments)}</p>
+              <p className="tool-name">{approvalTitle(item)}</p>
+              <p className="tool-result">{approvalBody(item)}</p>
               <p className="approval-reason">{item.reason}</p>
               {item.resolved ? (
-                <p className="approval-resolved">{item.resolved === "allow" ? "allowed" : "denied"}</p>
+                <p className="approval-resolved">
+                  {item.resolved === "allow"
+                    ? item.name === "gmail_send"
+                      ? "sent"
+                      : "allowed"
+                    : "denied"}
+                </p>
               ) : (
                 <div className="approval-actions">
                   <button type="button" className="deny" onClick={() => onApprove(item.id, "deny")}>
                     Deny
                   </button>
                   <button type="button" className="allow" onClick={() => onApprove(item.id, "allow")}>
-                    Allow
+                    {item.name === "gmail_send" || item.name === "gmail_draft" ? "Allow once" : "Allow"}
                   </button>
                 </div>
               )}
@@ -359,6 +405,7 @@ export function App() {
         )}
         <div ref={bottomRef} />
       </section>
+      )}
 
       <aside className="connector-strip">
         <p>
@@ -563,6 +610,7 @@ export function App() {
 
       {banner && <p className="status warn">{banner}</p>}
 
+      {route.kind === "chat" && (
       <form className="composer" onSubmit={onSubmit}>
         <textarea
           value={draft}
@@ -581,9 +629,36 @@ export function App() {
           Send
         </button>
       </form>
+      )}
       </div>
     </main>
   );
+}
+
+function strArg(args: Record<string, unknown>, key: string): string {
+  const value = args[key];
+  return typeof value === "string" ? value : "";
+}
+
+function approvalTitle(item: Extract<Item, { kind: "approval" }>): string {
+  if (item.name === "gmail_draft") return "Gmail draft";
+  if (item.name === "gmail_send") return "Send Gmail draft";
+  return item.name;
+}
+
+function approvalBody(item: Extract<Item, { kind: "approval" }>): string {
+  if (item.name === "gmail_draft") {
+    const to = strArg(item.arguments, "to");
+    const subject = strArg(item.arguments, "subject");
+    const body = strArg(item.arguments, "body");
+    const preview = body.length > 240 ? `${body.slice(0, 240)}…` : body;
+    return [to && `To ${to}`, subject, preview, "Not sent"].filter(Boolean).join("\n");
+  }
+  if (item.name === "gmail_send") {
+    const draftId = strArg(item.arguments, "draft_id");
+    return [draftId && `Draft ${draftId}`, "This will send the reviewed draft."].filter(Boolean).join("\n");
+  }
+  return formatArgs(item.arguments);
 }
 
 function formatResult(result: Record<string, unknown> | undefined): string {
@@ -596,6 +671,7 @@ function formatResult(result: Record<string, unknown> | undefined): string {
   if (result.updated === true) return `updated #${result.id}`;
   if (result.forgotten === true) return `forgot #${result.id}`;
   if (result.drafted === true) return `draft ${result.id} · not sent`;
+  if (result.sent === true) return `sent ${result.draft_id || result.id || ""}`.trim();
   if (Array.isArray(result.people)) return `${result.people.length} people`;
   return JSON.stringify(result);
 }

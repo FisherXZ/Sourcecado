@@ -174,7 +174,7 @@ def test_gmail_api_posts_to_drafts_never_send(tmp_path):
     assert DRAFTS_URL in http.calls[0]["url"]
     assert "send" not in http.calls[0]["url"]
     assert "send" not in str(http.calls)
-    assert not hasattr(GmailApi, "send") or not callable(getattr(api, "send", None))
+    assert api.sends == []
 
 
 def test_gmail_api_http_403_raises_gmail_error(tmp_path):
@@ -455,6 +455,7 @@ def test_gmail_search_is_auto_and_draft_still_asks():
     assert decide("gmail_read").needs_user is False
     assert decide("gmail_draft").needs_user is True
     assert decide("gmail_send").allowed is False
+    assert decide("gmail_send").needs_user is True
 
 
 def test_gmail_search_execute_fake_http(tmp_path):

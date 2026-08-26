@@ -3,6 +3,7 @@ import os
 import pytest
 
 from coworker.apollo import MATCH_URL, SEARCH_URL, FakeHttp, LiveHttp, search_people
+from coworker.people import PersonStore
 from coworker.tools import execute
 
 
@@ -41,7 +42,7 @@ def test_apollo_search_does_not_invent_emails():
     assert http.calls[0]["headers"]["x-api-key"] == "test-key"
 
 
-def test_apollo_enrich_returns_contact():
+def test_apollo_enrich_returns_contact(tmp_path):
     http = FakeHttp(
         {
             MATCH_URL: {
@@ -56,16 +57,28 @@ def test_apollo_enrich_returns_contact():
             }
         }
     )
+    people = PersonStore(tmp_path)
+    person = people.keep_from_apollo(
+        apollo_id="tim",
+        first_name="Tim",
+        last_name_obfuscated="Z",
+        title="CEO",
+        company="Apollo",
+    )
+    people.bind_session("sess-tim", person["person_id"])
     ok, result = execute(
         "apollo_enrich_contact",
         {"firstName": "Tim", "lastName": "Zheng", "organizationName": "Apollo"},
         http=http,
         apollo_key="test-key",
+        people=people,
+        session_id="sess-tim",
     )
     assert ok is True
     assert result["name"] == "Tim Zheng"
     assert result["email"] == "tim@apollo.io"
     assert result["organizationName"] == "Apollo.io"
+    assert people.get(person["person_id"])["email"] == "tim@apollo.io"
 
 
 def test_apollo_missing_key_fails_clearly():
