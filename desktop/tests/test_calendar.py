@@ -25,11 +25,19 @@ EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 def test_calendar_connect_url_requests_full_google_grant(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "cid")
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "sec")
-    res = TestClient(create_app(token=TOKEN, state=tmp_path)).post(
+    opened_urls = []
+    res = TestClient(
+        create_app(
+            token=TOKEN,
+            state=tmp_path,
+            browser_opener=lambda url: opened_urls.append(url) or True,
+        )
+    ).post(
         "/v1/connectors/calendar/connect", headers={TOKEN_HEADER: TOKEN}
     )
     assert res.status_code == 200
     decoded = unquote(res.json()["url"])
+    assert opened_urls == [res.json()["url"]]
     assert CALENDAR_SCOPE in decoded
     assert COMPOSE_SCOPE in decoded
     assert READ_SCOPE in decoded

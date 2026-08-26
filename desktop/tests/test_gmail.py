@@ -312,6 +312,22 @@ def test_gmail_connect_requires_oauth_client(tmp_path, monkeypatch):
     assert "GOOGLE_OAUTH_CLIENT_ID" in res.json()["error"]
 
 
+def test_gmail_connect_uses_injected_browser_opener(tmp_path, monkeypatch):
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "sec")
+    opened_urls = []
+    app = create_app(
+        token=TOKEN,
+        state=tmp_path,
+        browser_opener=lambda url: opened_urls.append(url) or True,
+    )
+
+    res = TestClient(app).post("/v1/gmail/connect", headers={TOKEN_HEADER: TOKEN})
+
+    assert res.status_code == 200
+    assert opened_urls == [res.json()["url"]]
+
+
 def test_auth_url_includes_readonly_and_compose():
     url = authorization_url(
         client_id="cid",

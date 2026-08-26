@@ -329,11 +329,19 @@ def test_ws_drive_read_redacts_filename_before_provider_events_and_persistence(t
 def test_drive_connect_url_requests_readonly(tmp_path, monkeypatch):
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "cid")
     monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_SECRET", "sec")
-    res = TestClient(create_app(token=TOKEN, state=tmp_path)).post(
+    opened_urls = []
+    res = TestClient(
+        create_app(
+            token=TOKEN,
+            state=tmp_path,
+            browser_opener=lambda url: opened_urls.append(url) or True,
+        )
+    ).post(
         "/v1/connectors/drive/connect", headers={TOKEN_HEADER: TOKEN}
     )
     assert res.status_code == 200
     decoded = unquote(res.json()["url"])
+    assert opened_urls == [res.json()["url"]]
     assert DRIVE_SCOPE in decoded
     assert COMPOSE_SCOPE in decoded
     assert READ_SCOPE in decoded
