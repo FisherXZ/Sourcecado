@@ -1,69 +1,84 @@
 # Sourcecado
 
-Sourcecado is a hosted team sourcing operating system for Codeology. It preserves contacts, sourcing history, source citations, knowledge gaps, outcomes, and human feedback — and surfaces an autonomous sourcing agent that tells Sourcing Directors what to do next.
+Sourcecado is a local-first desktop assistant for Codeology sourcing directors. It helps one operator find people, prepare tailored outreach, keep active conversations moving, and leave behind a useful person file for the next officer.
 
-## Getting started
+The current product is the Python sidecar and React/Tauri desktop app in `desktop/`. The retired hosted Next.js implementation is preserved under `archive/hosted-web/`; it is historical reference, not the default runtime.
 
-```bash
-npm install
-npm run dev
-```
+## Current product
 
-Open [http://localhost:3000](http://localhost:3000) to see the app. Navigate to `/chat` for the Research Chat interface.
+- Chat is home: the sourcing director gives Sourcecado a target and works with the assistant in a thread.
+- Apollo supplies candidate people; enrichment is deliberate because it spends credits.
+- Gmail, Drive, Calendar, Granola, and web research add context to a person file.
+- The board tracks people through Open, In conversation, and Done.
+- Sending requires a human approval in Sourcecado. There is no auto-send or background bulk enrichment.
+- State and credentials remain local for the current one-operator build.
 
-## Database (local Postgres + pgvector)
+The current product specification is [Sourcecado as the sourcing director's assistant](docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md).
 
-The app uses Postgres with the `vector` extension. `DATABASE_URL` is read from the
-environment (there is no `.env` auto-loading yet), so export it before running migrations
-or DB-backed tests.
+## Prerequisites
 
-```bash
-docker compose up -d          # Postgres + pgvector on :5432
-export DATABASE_URL=postgresql://sourcecado:sourcecado@localhost:5432/sourcecado
-npm run migrate               # enables pgvector + applies the baseline migration
-```
+- macOS for the native Tauri window
+- Python 3.13+
+- Node.js 24 (see `.nvmrc`)
+- Rust via `rustup` for the native build only
 
-`.env.example` documents the connection variables. Migrations live in `src/migrations/`
-and are applied in filename order; `npm run migrate` is idempotent.
+## Set up
 
-## Health check
-
-```
-GET /api/health → { "status": "ok" }
-```
-
-Ping this endpoint to confirm the app is up.
-
-## Run tests
+From the repository root:
 
 ```bash
-npm test
+make setup
+cp .env.example ~/.config/club/.env
 ```
 
-The DB-backed tests (`tests/db-client.test.ts`, `tests/migrate.test.ts`) require Postgres
-running and `DATABASE_URL` exported (see [Database](#database-local-postgres--pgvector)).
+Fill in the credentials you intend to use. Sourcecado never reads credentials from a committed repository file.
 
-## Club (local desktop)
+## Run
 
-`desktop/` is Club, a local sidecar + Mac window for one operator. It is separate from this hosted Next.js app. See [desktop/README.md](desktop/README.md).
+Browser development uses two terminals:
 
-## Project structure
+```bash
+make sidecar
+```
 
-- `desktop/` — Club local sidecar (FastAPI) and Tauri window
-- `src/app/` — Next.js 15 app router pages and layouts
-- `src/app/api/health/` — health endpoint
-- `src/app/chat/` — Research Chat page
-- `tests/` — Vitest test suite
-- `docs/` — design specs, ADRs, and roadmap documents
+```bash
+make gui
+```
 
-## Documentation
+Open [http://127.0.0.1:5180](http://127.0.0.1:5180). Start the sidecar first so Vite can read the local API token.
 
-- [AGENTS.md](AGENTS.md) — product direction, roadmap guardrails, and agent architecture
-- [CHANGELOG.md](CHANGELOG.md) — version history
-- [CONTEXT.md](CONTEXT.md) — domain language and sourcing terminology
-- [TODOS.md](TODOS.md) — open work items and known issues
-- [docs/superpowers/specs/](docs/superpowers/specs/) — full design specs
+For the native macOS window:
 
-## Legacy CLI
+```bash
+make native
+```
 
-The original `sourcyavo` CLI (ingest / refresh / ask) and its SQLite storage layer were removed in v0.2.0. Postgres + pgvector (`src/lib/memory/`) replaced them, and the web app is the only interface. `npm run ingest` and `npm run refresh` still exist, but they run against Postgres via `src/lib/`.
+## Verify
+
+```bash
+make test
+make build
+```
+
+`make test` runs the Python sidecar suite and the GUI Vitest suite. `make build` type-checks and bundles the GUI. CI runs the same active-stack checks; the archived hosted app is intentionally excluded.
+
+## Repository map
+
+- `desktop/coworker/` — local FastAPI sidecar, agent loop, tools, connectors, permissions, and persistence
+- `desktop/surfaces/gui/` — React/Vite interface and Tauri shell
+- `desktop/tests/` — Python tests
+- `docs/` — current product records, ADRs, QA evidence, plans, and historical design documents
+- `archive/hosted-web/` — retired Next.js/Postgres implementation, kept intact for reference
+- `scratchpad/` — non-authoritative working artifacts
+
+See [docs/README.md](docs/README.md) for the documentation map and [archive/README.md](archive/README.md) for archive policy.
+
+## Local state
+
+Runtime data and secrets are deliberately outside source control:
+
+- `~/.config/club/.env` — provider and connector credentials
+- `~/.config/club/` — sidecar token and default local state
+- `CLUB_STATE_DIR` — optional state-directory override for tests or isolated runs
+
+Do not delete or migrate local state as part of repository cleanup without an explicit backup and migration plan.

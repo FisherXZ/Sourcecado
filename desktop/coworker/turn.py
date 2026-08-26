@@ -116,7 +116,14 @@ def _failure_class(detail: str) -> str:
         return "permission"
     if any(
         marker in lower
-        for marker in ("required", "invalid", "must be", "must provide", "malformed")
+        for marker in (
+            "required",
+            "requires",
+            "invalid",
+            "must be",
+            "must provide",
+            "malformed",
+        )
     ):
         return "validation"
     return "unknown"

@@ -1,9 +1,9 @@
 # Sourcecado as the sourcing director's assistant
 
 Date: 2026-08-25
-Status: Draft for review
-Spring: the next product pass after the operator window
-Supersedes as product shape: the "Monday packet / ranked shortlist" framing from the 2026-08-25 gap pass. The 2026-06-08 OS design still holds as the long-term club brain. This doc is what Sourcecado is *for*.
+Status: Current product source of truth (adopted 2026-08-26)
+Spring: the active local product pass after the operator window
+Supersedes as product shape and implementation scope: the "Monday packet / ranked shortlist" framing and the hosted-team build. The 2026-06-08 OS design remains prior art for identity, citations, and durable memory; it is not binding current scope. This document is what Sourcecado is *for*.
 
 **How to read this.** The product is the sourcing director's job, done with an assistant. Use cases are the source of truth. Surfaces exist because those use cases need a place to live. If you are implementing, start from the job and the scenes. Do not start from the locked conditions at the bottom. Those are constraints on the use cases, not a backlog.
 

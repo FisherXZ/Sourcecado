@@ -346,7 +346,7 @@ This is how a later officer uses the ledger. Do not dump raw JSON payloads into 
 
 #### What to build
 
-Club has no web research tool today. Add `web_search` (and `web_fetch` if the hosted SSRF guard can be copied without dragging in the Next.js tree) so the person file can cite the public web.
+Club has no web research tool today. Add `web_search` (and `web_fetch` if the hosted SSRF guard can be adapted from `archive/hosted-web/` without coupling the active runtime to the archive) so the person file can cite the public web.
 
 The mapper in SD-02 already names the source `web`. This ticket adds the tool, AUTO for search, and ledger writes through SD-04.
 

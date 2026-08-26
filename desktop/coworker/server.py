@@ -87,7 +87,7 @@ KERNEL = (
     "Tools: now (America/Los_Angeles clock, auto), remember / memory_update / "
     "memory_forget (auto), load_skill (auto), gmail_search / gmail_read (auto), "
     "gmail_draft (ask), gmail_send (ask; sends a reviewed draft after Allow), "
-    "drive_search / drive_list_folder / drive_read (auto, readonly), "
+    "drive_search / drive_list_folder / drive_read (auto, readonly; list folders before reading files), "
     "calendar_list (auto; upcoming from now unless a time range is given), "
     "calendar_create / calendar_update (ask, no delete), "
     "apollo_search_people (no emails), people_keep (auto; file curated search "

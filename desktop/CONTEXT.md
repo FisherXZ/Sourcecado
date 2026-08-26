@@ -1,6 +1,6 @@
-# Club
+# Sourcecado desktop runtime
 
-Local sidecar and window for Fisher. One operator, one Google login, one weekly job.
+Runtime-specific language for the local sidecar and window. Product/domain language lives in the root `CONTEXT.md`; that file wins if terminology conflicts.
 
 ## Language
 
@@ -19,3 +19,11 @@ _Avoid_: interval, now+7
 **Sched session**:
 The transcript for a job run, keyed `sched-{id}`. It never appears on the session rail.
 _Avoid_: scheduled chat, hidden chat
+
+**Local state directory**:
+The directory containing Sourcecado's local databases, tokens, and connector state. It defaults to `~/.config/club/` and can be overridden with `CLUB_STATE_DIR` for isolated runs.
+_Avoid_: repository data directory, shared tenant storage
+
+**Approval**:
+A durable decision attached to one concrete external or credit-sensitive action, such as enriching a person or sending a reviewed Gmail message. Approval is not a blanket grant.
+_Avoid_: auto-send permission, silent confirmation

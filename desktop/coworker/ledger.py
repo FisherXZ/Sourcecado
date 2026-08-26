@@ -164,7 +164,9 @@ def event_from_tool(
             for row in (result.get("files") or [])
             if isinstance(row, dict)
         ]
-        folder_id = str(result.get("id") or arguments.get("folder_id") or "")
+        folder_id = str(
+            result.get("id") or result.get("folder_id") or arguments.get("folder_id") or ""
+        )
         return _event(
             source="drive",
             kind="file",

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: lint + typecheck + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: sourcecado
+          POSTGRES_USER: sourcecado
+          POSTGRES_PASSWORD: sourcecado
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sourcecado -d sourcecado"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # The only variable the suite needs. Provider keys are deliberately
+      # absent: measured 2026-08-04, the suite is identical without them, and
+      # the two live smoke tests stay gated behind SOURCECADO_RUN_LIVE_SMOKE.
+      DATABASE_URL: postgresql://sourcecado:sourcecado@localhost:5432/sourcecado
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Suites call runMigrations() themselves and 000_baseline.sql runs
+      # CREATE EXTENSION vector, so an empty database is all that's required.
+      # Runs serialized (vitest maxWorkers: 1) — ~60s locally.
+      - name: Test
+        run: npm test

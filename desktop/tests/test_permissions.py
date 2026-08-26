@@ -62,4 +62,5 @@ def test_retry_safe_tools_are_defined_with_the_permission_sets():
     # A retry that skips a fresh approval must never cover an ASK tool.
     assert RETRY_SAFE <= AUTO
     assert RETRY_SAFE.isdisjoint(ASK)
+    assert "drive_list_folder" in RETRY_SAFE
     assert turn._SAFE_RETRY_TOOLS == RETRY_SAFE

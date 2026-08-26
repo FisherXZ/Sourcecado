@@ -1,77 +1,29 @@
-# Sourcecado Agent Context
+# Sourcecado agent context
 
-## High-Level Product Direction
+Read [AGENTS.md](AGENTS.md) before changing the repository. It is the canonical agent guidance.
 
-Sourcecado is becoming a hosted team sourcing operating system for Codeology.
-The memory layer is pillar one: it preserves contacts, sourcing history,
-source citations, knowledge gaps, outcomes, and human feedback. Pillar two is
-an autonomous sourcing agent that tells Sourcing Directors what to do next and
-produces review-ready work.
+The short version:
 
-The two-month direction is a weekly sourcing loop: configure a routine, pull or
-enrich contacts through Apollo, research with Gmail/Drive/Notion/web context,
-resolve identities, record sourcing signals, rank who to work, create Gmail
-drafts, record usage in the run ledger, capture human feedback, and feed that
-back into memory.
+- The active product is the local Python/FastAPI plus React/Vite/Tauri stack under `desktop/`.
+- The hosted Next.js/Postgres stack under `archive/hosted-web/` is historical and excluded from active CI.
+- Chat is home, the board is the operating picture, and the person file is the durable domain object.
+- Apollo enrichment and Gmail sending require explicit human action; never add auto-enrich or auto-send.
+- Keep secrets, OAuth grants, tokens, and runtime databases outside the repository.
+- The current product source of truth is `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md`.
+- `docs/README.md` explains which dated documents are current and which are historical.
 
-Sourcecado owns its own domain runtime and should borrow patterns from
-OpenClaw and Hermes for tools, routines, ledgers, and memory loops. Do not make
-OpenClaw, Hermes, or MCP the core dependency for the near-term build.
+## Design system
 
-## Roadmap Guardrails
-
-- Build a hosted team app, not just a local CLI.
-- Prioritize agent/tool orchestration and memory architecture over app polish.
-- Use real Apollo API, Gmail drafts, web search, Google Drive, and Notion where
-  practical.
-- Keep Apify in the connector boundary, but defer LinkedIn/Apify v2.
-- Gmail sending exists but is approval-gated. `gmail_send` sends an existing
-  draft and requires an explicit Allow for each send; it shipped in commit
-  8ed9cb7. Draft creation stays the default path. Unattended, bulk, and
-  auto-approved sending remain out of scope.
-- Store run steps, tool calls, artifacts, source refs, feedback, and rationale
-  summaries.
-- Treat sourcing signals and identity resolution as v1 primitives.
-- Track Apollo credits, web calls, Apify runs, Gmail quota-sensitive actions,
-  and model usage in the run ledger.
-- Keep the first UI to routine setup, run result, and run contact. Gmail draft
-  review can be a popup; memory can live under settings.
-- Defer formal routine/agent versioning, test contact suites, and eval prep to
-  v2.
-
-For the current full design, read
-`docs/superpowers/specs/2026-06-08-sourcecado-autonomous-sourcing-os-design.md`.
-
-## Design System
-
-Always read `DESIGN.md` before making any visual or UI decisions.
-All font choices, colors, spacing, and aesthetic direction are defined there
-("Warm Operator" — data-dense operator tool with warm neutrals + avocado accent).
-Do not deviate without explicit user approval.
-In QA mode, flag any code that doesn't match DESIGN.md.
-
-## gstack
-
-Use the `/browse` skill from gstack for all web browsing. Never use `mcp__claude-in-chrome__*` tools.
-
-Available gstack skills:
-/office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /setup-gbrain, /retro, /investigate, /document-release, /document-generate, /codex, /cso, /autoplan, /plan-devex-review, /devex-review, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, /learn
+Read `DESIGN.md` before visual or UI work. Preserve the Warm Operator direction unless the user approves a change.
 
 ## Skill routing
 
-When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+When the request matches an available skill, invoke it before acting.
 
-Key routing rules:
-- Product ideas/brainstorming → invoke /office-hours
-- Strategy/scope → invoke /plan-ceo-review
-- Architecture → invoke /plan-eng-review
-- Design system/plan review → invoke /design-consultation or /plan-design-review
-- Full review pipeline → invoke /autoplan
-- Bugs/errors → invoke /investigate
-- QA/testing site behavior → invoke /qa or /qa-only
-- Code review/diff check → invoke /review
-- Visual polish → invoke /design-review
-- Ship/deploy/PR → invoke /ship or /land-and-deploy
-- Save progress → invoke /context-save
-- Resume context → invoke /context-restore
-- Author a backlog-ready spec/issue → invoke /spec
+- Product shaping → `/office-hours`
+- Architecture and implementation plans → `/plan-eng-review`
+- Bugs and regressions → `/investigate`
+- Browser QA → `/qa` or `/qa-only`
+- Diff review → `/review`
+- Visual review → `/design-review`
+- Shipping and pull requests → `/ship`

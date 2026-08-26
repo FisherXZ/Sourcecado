@@ -207,7 +207,7 @@ DRIVE_SEARCH_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "drive_search",
-        "description": "Search Google Drive files. Readonly.",
+        "description": "Search Google Drive file names and text. Readonly. This is fuzzy text search, not Drive query syntax; use drive_list_folder to open a folder.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -220,28 +220,11 @@ DRIVE_SEARCH_SCHEMA: dict[str, Any] = {
     },
 }
 
-DRIVE_READ_SCHEMA: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "drive_read",
-        "description": "Read a Google Drive file. Readonly.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "file_id": {"type": "string"},
-                "max_chars": {"type": "integer"},
-            },
-            "required": ["file_id"],
-            "additionalProperties": False,
-        },
-    },
-}
-
 DRIVE_LIST_FOLDER_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "drive_list_folder",
-        "description": "List one Google Drive folder by its exact id. Readonly and parent-scoped.",
+        "description": "List the direct children of a Google Drive folder by folder id. Readonly. Call again for child folders to traverse a tree.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -250,6 +233,23 @@ DRIVE_LIST_FOLDER_SCHEMA: dict[str, Any] = {
                 "page_token": {"type": "string"},
             },
             "required": ["folder_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+DRIVE_READ_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "drive_read",
+        "description": "Read one Google Drive file by id. Readonly. Folder ids are listed, not downloaded; prefer drive_list_folder for traversal.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "max_chars": {"type": "integer"},
+            },
+            "required": ["file_id"],
             "additionalProperties": False,
         },
     },

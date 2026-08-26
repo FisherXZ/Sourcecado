@@ -6,78 +6,38 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    name: lint + typecheck + test
+  sidecar:
+    name: Python sidecar
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_DB: sourcecado
-          POSTGRES_USER: sourcecado
-          POSTGRES_PASSWORD: sourcecado
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U sourcecado -d sourcecado"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      # The only variable the suite needs. Provider keys are deliberately
-      # absent: measured 2026-08-04, the suite is identical without them, and
-      # the two live smoke tests stay gated behind SOURCECADO_RUN_LIVE_SMOKE.
-      DATABASE_URL: postgresql://sourcecado:sourcecado@localhost:5432/sourcecado
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - name: Install
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      # Suites call runMigrations() themselves and 000_baseline.sql runs
-      # CREATE EXTENSION vector, so an empty database is all that's required.
-      # Runs serialized (vitest maxWorkers: 1) — ~60s locally.
-      - name: Test
-        run: npm test
-
-  desktop:
-    name: desktop sidecar + gui
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    # The root `test` job never touches desktop/: tsconfig.json excludes it
-    # (commit fec5700) and npm test only covers the root package. Without this
-    # job the desktop suites run on nobody's machine but the author's, which is
-    # how PR #33 merged with a failing test. CodeRabbit also skips large PRs
-    # (#35 hit its 100-file limit), so this is the only automated gate here.
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+          cache: pip
+          cache-dependency-path: desktop/requirements.txt
 
-      - name: Install sidecar deps
-        run: pip install -r desktop/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install -r desktop/requirements.txt
 
-      - name: Sidecar tests
+      - name: Test
         working-directory: desktop
         run: pytest -q
+
+  gui:
+    name: Desktop GUI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: desktop/surfaces/gui
+
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
@@ -85,19 +45,11 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/surfaces/gui/package-lock.json
 
-      - name: Install GUI deps
-        working-directory: desktop/surfaces/gui
+      - name: Install dependencies
         run: npm ci
 
-      # Node 24 per .nvmrc. Newer Node (26+) installs a globalThis.localStorage
-      # that shadows jsdom's and is undefined without --localstorage-file, which
-      # fails every test touching window.localStorage. Measured 2026-08-26:
-      # green on Node 22 and 24, fails on 26. tests/setup.ts polyfills it so the
-      # suite does not depend on which Node you happen to have.
-      - name: GUI tests
-        working-directory: desktop/surfaces/gui
+      - name: Test
         run: npm test
 
-      - name: GUI build
-        working-directory: desktop/surfaces/gui
+      - name: Typecheck and build
         run: npm run build

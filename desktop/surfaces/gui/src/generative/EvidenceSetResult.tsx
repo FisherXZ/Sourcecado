@@ -111,7 +111,7 @@ function driveItems(tool: ToolCallMessagePart): EvidenceItem[] {
         title: text(file.name) ?? "Untitled Drive file",
         excerpt: text(file.excerpt) ?? text(file.snippet),
         context: [
-          tool.toolName === "drive_list_folder" ? "Folder item" : "Search match",
+          tool.toolName === "drive_list_folder" ? "Folder child" : "Search match",
           mime,
         ].filter(Boolean).join(" · "),
         externalUrl:

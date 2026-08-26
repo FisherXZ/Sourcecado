@@ -22,6 +22,7 @@ FILES_URL = "https://www.googleapis.com/drive/v3/files"
 FORMS_URL = "https://forms.googleapis.com/v1/forms"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 FORM_MIME = "application/vnd.google-apps.form"
+FILE_FIELDS = "id,name,mimeType,modifiedTime,parents,webViewLink"
 EXPORT = {
     "application/vnd.google-apps.document": "text/plain",
     "application/vnd.google-apps.spreadsheet": "text/csv",
@@ -111,6 +112,23 @@ def _source_reference(
     }
 
 
+def _file_row(row: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    parents = row.get("parents")
+    raw_name = row.get("name")
+    safe_name, redaction_count = _redact_credentials(str(raw_name or ""))
+    return (
+        {
+            "id": row.get("id"),
+            "name": safe_name if raw_name is not None else None,
+            "mimeType": row.get("mimeType"),
+            "modifiedTime": row.get("modifiedTime"),
+            "parents": list(parents) if isinstance(parents, list) else [],
+            "webViewLink": row.get("webViewLink"),
+        },
+        redaction_count,
+    )
+
+
 class DriveApi:
     def __init__(self, secrets: SecretStore, *, http: Any, client_id: str, client_secret: str) -> None:
         self.secrets = secrets
@@ -127,36 +145,26 @@ class DriveApi:
             params={
                 "q": f"(name contains '{q}' or fullText contains '{q}') and trashed=false",
                 "pageSize": max(1, min(int(max_results), 10)),
-                "fields": "files(id,name,mimeType,modifiedTime,size,parents,webViewLink)",
+                "fields": f"files({FILE_FIELDS})",
             },
         ) or {}
-        files = []
+        files: list[dict[str, Any]] = []
         redaction_count = 0
         for row in data.get("files") or []:
-            raw_name = row.get("name")
-            safe_name, name_redaction_count = _redact_credentials(str(raw_name or ""))
-            redaction_count += name_redaction_count
-            files.append(
-                {
-                    "id": row.get("id"),
-                    "name": safe_name if raw_name is not None else None,
-                    "mimeType": row.get("mimeType"),
-                    "modifiedTime": row.get("modifiedTime"),
-                    "parents": list(row.get("parents") or []),
-                    "webViewLink": row.get("webViewLink"),
-                    "status": "metadata_only",
-                }
-            )
+            if not isinstance(row, dict):
+                continue
+            safe_row, row_redaction_count = _file_row(row)
+            safe_row["status"] = "metadata_only"
+            files.append(safe_row)
+            redaction_count += row_redaction_count
         return {
             "files": files,
             "sources": [
-                {
-                    "id": str(row.get("id") or ""),
-                    "title": str(row.get("name") or "Drive file"),
-                    "url": row.get("webViewLink"),
-                    "provider": "Google Drive",
-                    "truncated": False,
-                }
+                _source_reference(
+                    str(row.get("id") or ""),
+                    str(row.get("name") or "") or None,
+                    row.get("webViewLink"),
+                )
                 for row in files
                 if row.get("id")
             ],
@@ -169,7 +177,7 @@ class DriveApi:
         meta = self._request(
             "get",
             f"{FILES_URL}/{file_id}",
-            params={"fields": "id,name,mimeType,modifiedTime,size,parents,webViewLink"},
+            params={"fields": FILE_FIELDS},
         ) or {}
         mime = str(meta.get("mimeType") or "")
         if mime == FOLDER_MIME:
@@ -327,47 +335,54 @@ class DriveApi:
         folder_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self._require()
-        params: dict[str, Any] = {
-            "q": f"'{folder_id}' in parents and trashed=false",
-            "pageSize": max(1, min(int(max_results), 100)),
-            "fields": (
-                "nextPageToken,files("
-                "id,name,mimeType,modifiedTime,size,parents,webViewLink)"
-            ),
-        }
-        if page_token:
-            params["pageToken"] = page_token
-        data = self._request("get", FILES_URL, params=params) or {}
-        redaction_count = 0
+        fid = folder_id.strip()
+        if not fid:
+            raise GmailError("folder_id is required")
+        escaped = fid.replace("'", "\\'")
+        limit = max(1, min(int(max_results), 1000))
         files: list[dict[str, Any]] = []
-        for row in data.get("files") or []:
-            safe_name, count = _redact_credentials(str(row.get("name") or ""))
-            redaction_count += count
-            files.append(
-                {
-                    "id": row.get("id"),
-                    "name": safe_name if row.get("name") is not None else None,
-                    "mimeType": row.get("mimeType"),
-                    "modifiedTime": row.get("modifiedTime"),
-                    "parents": list(row.get("parents") or []),
-                    "webViewLink": row.get("webViewLink"),
-                }
-            )
+        redaction_count = 0
+        current_token: str | None = page_token
+        next_page_token: Any = None
+        follow_pages = page_token is None
+        while len(files) < limit:
+            params: dict[str, Any] = {
+                "q": f"'{escaped}' in parents and trashed=false",
+                "pageSize": min(limit - len(files), 100),
+                "fields": f"nextPageToken,files({FILE_FIELDS})",
+            }
+            if current_token:
+                params["pageToken"] = current_token
+            data = self._request("get", FILES_URL, params=params) or {}
+            for row in data.get("files") or []:
+                if not isinstance(row, dict):
+                    continue
+                safe_row, row_redaction_count = _file_row(row)
+                files.append(safe_row)
+                redaction_count += row_redaction_count
+                if len(files) >= limit:
+                    break
+            next_page_token = data.get("nextPageToken")
+            next_token = str(next_page_token or "")
+            if not follow_pages or not next_token or next_token == current_token:
+                break
+            current_token = next_token
         meta = folder_meta or {}
         safe_folder_name, folder_count = _redact_credentials(str(meta.get("name") or ""))
         redaction_count += folder_count
         return {
-            "id": str(meta.get("id") or folder_id),
+            "id": str(meta.get("id") or fid),
+            "folder_id": fid,
             "name": safe_folder_name if meta.get("name") is not None else None,
             "mimeType": FOLDER_MIME,
             "modifiedTime": meta.get("modifiedTime"),
             "parents": list(meta.get("parents") or []),
             "webViewLink": meta.get("webViewLink"),
             "status": "metadata_only",
-            "files": files,
+            "files": files[:limit],
             "sources": [
                 _source_reference(
-                    str(meta.get("id") or folder_id),
+                    str(meta.get("id") or fid),
                     safe_folder_name,
                     meta.get("webViewLink"),
                 ),
@@ -377,11 +392,11 @@ class DriveApi:
                         str(file.get("name") or "") or None,
                         file.get("webViewLink"),
                     )
-                    for file in files
+                    for file in files[:limit]
                     if file.get("id")
                 ],
             ],
-            "nextPageToken": data.get("nextPageToken"),
+            "nextPageToken": next_page_token,
             "truncated": False,
             "sensitive_content_redacted": redaction_count > 0,
             "redaction_count": redaction_count,
