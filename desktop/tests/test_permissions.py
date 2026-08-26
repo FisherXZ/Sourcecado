@@ -53,3 +53,13 @@ def test_apollo_search_auto_enrich_asks():
     enrich = decide("apollo_enrich_contact")
     assert enrich.allowed is False
     assert enrich.needs_user is True
+
+
+def test_retry_safe_tools_are_defined_with_the_permission_sets():
+    from coworker import turn
+    from coworker.permissions import RETRY_SAFE
+
+    # A retry that skips a fresh approval must never cover an ASK tool.
+    assert RETRY_SAFE <= AUTO
+    assert RETRY_SAFE.isdisjoint(ASK)
+    assert turn._SAFE_RETRY_TOOLS == RETRY_SAFE

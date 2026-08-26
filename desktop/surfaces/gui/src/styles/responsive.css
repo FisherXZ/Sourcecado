@@ -1,0 +1,17 @@
+/* Cross-cutting responsive rules that apply across more than one route or
+   component family. Component-local breakpoint tweaks stay co-located in
+   their own file (chat.css, route.css, shell.css) instead of here.
+
+   Two breakpoint systems are in play by design, not by drift:
+   - 1179px / 767px: the app shell's own tiers (rail collapses below 1180px,
+     touch sizing kicks in below 768px), used throughout shell/chat/route.
+   - 375 / 768 / 1024 / 1280 / 1440: the QA screenshot ladder (DU-18) used to
+     verify layout at named device widths, not a per-component media query.
+   A new breakpoint value should match the first system unless it is a
+   deliberate, documented exception. */
+
+@media (max-width: 1179px) {
+  #root :where(input, textarea, select) {
+    font-size: 16px;
+  }
+}

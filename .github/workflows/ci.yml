@@ -54,3 +54,50 @@ jobs:
       # Runs serialized (vitest maxWorkers: 1) — ~60s locally.
       - name: Test
         run: npm test
+
+  desktop:
+    name: desktop sidecar + gui
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # The root `test` job never touches desktop/: tsconfig.json excludes it
+    # (commit fec5700) and npm test only covers the root package. Without this
+    # job the desktop suites run on nobody's machine but the author's, which is
+    # how PR #33 merged with a failing test. CodeRabbit also skips large PRs
+    # (#35 hit its 100-file limit), so this is the only automated gate here.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install sidecar deps
+        run: pip install -r desktop/requirements.txt
+
+      - name: Sidecar tests
+        working-directory: desktop
+        run: pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: desktop/surfaces/gui/package-lock.json
+
+      - name: Install GUI deps
+        working-directory: desktop/surfaces/gui
+        run: npm ci
+
+      # Node 24 per .nvmrc. Newer Node (26+) installs a globalThis.localStorage
+      # that shadows jsdom's and is undefined without --localstorage-file, which
+      # fails every test touching window.localStorage. Measured 2026-08-26:
+      # green on Node 22 and 24, fails on 26. tests/setup.ts polyfills it so the
+      # suite does not depend on which Node you happen to have.
+      - name: GUI tests
+        working-directory: desktop/surfaces/gui
+        run: npm test
+
+      - name: GUI build
+        working-directory: desktop/surfaces/gui
+        run: npm run build

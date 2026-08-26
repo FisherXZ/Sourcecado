@@ -25,7 +25,10 @@ OpenClaw, Hermes, or MCP the core dependency for the near-term build.
 - Use real Apollo API, Gmail drafts, web search, Google Drive, and Notion where
   practical.
 - Keep Apify in the connector boundary, but defer LinkedIn/Apify v2.
-- Create Gmail drafts only; actual sending and approve-to-send are deferred.
+- Gmail sending exists but is approval-gated. `gmail_send` sends an existing
+  draft and requires an explicit Allow for each send; it shipped in commit
+  8ed9cb7. Draft creation stays the default path. Unattended, bulk, and
+  auto-approved sending remain out of scope.
 - Store run steps, tool calls, artifacts, source refs, feedback, and rationale
   summaries.
 - Treat sourcing signals and identity resolution as v1 primitives.

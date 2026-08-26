@@ -1,3 +1,32 @@
+import {
+  parseChatEvent,
+  parseSocketEvent,
+  type ChatEvent,
+  type ChatEventEnvelope,
+  type ConnectionChangeEvent,
+  type ConnectionStatus,
+  type ProtocolChatEvent,
+  type QueueSnapshotEvent,
+  type RecoverableChatNotice,
+  type QueueCommand,
+  type RecoveryCommand,
+  type SourcecadoQueueItem,
+  type SourcecadoSocketEvent,
+} from "./chat/protocol";
+
+export { parseChatEvent };
+export type {
+  ChatEvent,
+  ChatEventEnvelope,
+  ConnectionChangeEvent,
+  ConnectionStatus,
+  ProtocolChatEvent,
+  RecoverableChatNotice,
+  QueueCommand,
+  RecoveryCommand,
+  SourcecadoSocketEvent,
+};
+
 declare const __CLUB_DEV_TOKEN__: string;
 
 export type Health = {
@@ -10,9 +39,59 @@ export type Health = {
 
 export type PersonaInfo = { id: string; name: string; tools: string[] };
 
+export type ScheduleRunStatus =
+  | "running"
+  | "success"
+  | "failed"
+  | "waiting_approval"
+  | "partial"
+  | "interrupted";
+
+export type ScheduleJob = {
+  id: number;
+  name: string;
+  templateId: string;
+  cadence: string;
+  cron: string;
+  prompt: string;
+  createdAt: string;
+  nextRunAt: string | null;
+};
+
+export type ScheduleArtifact = {
+  id: string;
+  artifactType: string;
+  title: string;
+  externalUrl: string | null;
+};
+
+export type ScheduleRun = {
+  id: number;
+  jobId: number;
+  status: ScheduleRunStatus;
+  result: string;
+  summary: string;
+  createdAt: string;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number;
+  sessionId: string;
+  waitingApprovalCount: number;
+  artifacts: ScheduleArtifact[];
+};
+
+export type ScheduleTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  cadences: string[];
+  defaultPrompt: string;
+};
+
 export type Schedule = {
-  jobs: Array<{ id: number; cron: string; prompt: string; created_at: string; next_run_at?: string | null }>;
-  runs: Array<{ id: number; job_id: number; status: string; result: string | null; created_at: string }>;
+  jobs: ScheduleJob[];
+  runs: ScheduleRun[];
+  templates: ScheduleTemplate[];
 };
 
 export type Hello = { message: string; piece: string; window: string };
@@ -21,6 +100,7 @@ export type StoredMessage = {
   role: string;
   content?: string | null;
   name?: string;
+  message_id?: string;
   tool_call_id?: string;
   tool_calls?: Array<{
     id?: string;
@@ -32,16 +112,12 @@ export type Conversation = {
   id: string;
   title: string | null;
   messages: StoredMessage[];
+  events: ChatEvent[];
+  queue?: QueueItem[];
+  queue_paused?: boolean;
 };
 
-export type ChatEvent =
-  | { type: "turn_start" }
-  | { type: "assistant_delta"; delta: string }
-  | { type: "permission_required"; id: string; name: string; arguments: Record<string, unknown>; reason: string }
-  | { type: "tool_started"; id: string; name: string; arguments: Record<string, unknown> }
-  | { type: "tool_finished"; id: string; name: string; ok: boolean; result: Record<string, unknown> }
-  | { type: "turn_end"; text: string }
-  | { type: "error"; message: string };
+export type QueueItem = SourcecadoQueueItem;
 
 const httpBase = (): string =>
   window.__CLUB_HTTP__ ||
@@ -85,12 +161,30 @@ export type SessionRow = {
   session_id: string;
   title: string | null;
   n_msgs: number;
+  pinned: boolean;
+  opened_at: string | null;
   updated_at: string;
 };
 
-export async function getSessions(): Promise<{ sessions: SessionRow[]; open_id: string | null }> {
+export type SessionListing = {
+  sessions: SessionRow[];
+  open_id: string | null;
+  last_destination?: string | null;
+};
+
+export async function getSessions(): Promise<SessionListing> {
   const res = await get("/v1/sessions");
   if (!res.ok) throw new Error(`sessions ${res.status}`);
+  return res.json();
+}
+
+export async function setLastDestination(destination: string): Promise<{ destination: string }> {
+  const res = await fetch(`${httpBase()}/v1/navigation`, {
+    method: "PATCH",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ destination }),
+  });
+  if (!res.ok) throw new Error(`navigation ${res.status}`);
   return res.json();
 }
 
@@ -107,7 +201,16 @@ export async function getSession(id: string): Promise<Conversation> {
   const res = await get(`/v1/sessions/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`session ${res.status}`);
   const body = await res.json();
-  return { id: body.id, title: body.title, messages: body.messages };
+  return {
+    id: body.id,
+    title: body.title,
+    messages: body.messages,
+    events: Array.isArray(body.events) ? body.events.map(parseChatEvent) : [],
+    ...(Array.isArray(body.queue) ? { queue: body.queue } : {}),
+    ...(typeof body.queue_paused === "boolean"
+      ? { queue_paused: body.queue_paused }
+      : {}),
+  };
 }
 
 export async function renameSession(id: string, title: string): Promise<{ id: string; title: string }> {
@@ -120,9 +223,76 @@ export async function renameSession(id: string, title: string): Promise<{ id: st
   return res.json();
 }
 
-export async function getConversation(): Promise<Conversation> {
-  const res = await get("/v1/conversation");
-  if (!res.ok) throw new Error(`conversation ${res.status}`);
+export type BoardPerson = {
+  person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  title: string | null;
+  company: string | null;
+  sequence_state: string | null;
+};
+
+export type Board = {
+  open: BoardPerson[];
+  in_conversation: BoardPerson[];
+  done: BoardPerson[];
+};
+
+export type PersonFile = {
+  person: BoardPerson & Record<string, unknown>;
+  brief: {
+    who: string;
+    why: string;
+    learned: string[];
+    missing: string[];
+    sources: string[];
+  };
+  timeline: Array<{
+    event_id: string;
+    source: string;
+    kind: string;
+    summary: string;
+    payload: Record<string, unknown>;
+  }>;
+};
+
+export async function getBoard(): Promise<Board> {
+  const res = await get("/v1/board");
+  if (!res.ok) throw new Error(`board ${res.status}`);
+  return res.json();
+}
+
+export async function getPerson(id: string): Promise<PersonFile> {
+  const res = await get(`/v1/people/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`person ${res.status}`);
+  return res.json();
+}
+
+export async function setPersonSequence(
+  id: string,
+  state: string,
+  actor = "director"
+): Promise<{ person: BoardPerson }> {
+  const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}/sequence`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ state, actor }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `sequence ${res.status}`);
+  return body;
+}
+
+export async function pinSession(
+  id: string,
+  pinned: boolean,
+): Promise<{ id: string; title: string | null; pinned: boolean }> {
+  const res = await fetch(`${httpBase()}/v1/sessions/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ pinned }),
+  });
+  if (!res.ok) throw new Error(`pin ${res.status}`);
   return res.json();
 }
 
@@ -132,20 +302,177 @@ export async function getPersona(): Promise<PersonaInfo> {
   return res.json();
 }
 
-export async function getSchedule(): Promise<Schedule> {
-  const res = await get("/v1/schedule");
-  if (!res.ok) throw new Error(`schedule ${res.status}`);
+export type SkillInfo = { name: string; description: string };
+
+export async function getSkills(): Promise<{ skills: SkillInfo[] }> {
+  const res = await get("/v1/skills");
+  if (!res.ok) throw new Error(`skills ${res.status}`);
   return res.json();
 }
 
-export async function runScheduleJob(id: number): Promise<{ run: { id: number; status: string } }> {
+const SCHEDULE_RUN_STATUSES = new Set<ScheduleRunStatus>([
+  "running",
+  "success",
+  "failed",
+  "waiting_approval",
+  "partial",
+  "interrupted",
+]);
+
+function numberValue(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeScheduleJob(value: unknown): ScheduleJob {
+  const raw = record(value);
+  return {
+    id: numberValue(raw.id),
+    name: text(raw.name, text(raw.prompt, "Routine")),
+    templateId: text(raw.template_id, "legacy"),
+    cadence: text(raw.cadence, text(raw.cron)),
+    cron: text(raw.cron),
+    prompt: text(raw.prompt),
+    createdAt: text(raw.created_at),
+    nextRunAt: typeof raw.next_run_at === "string" ? raw.next_run_at : null,
+  };
+}
+
+function normalizeScheduleArtifact(value: unknown): ScheduleArtifact {
+  const raw = record(value);
+  let externalUrl: string | null = null;
+  if (typeof raw.external_url === "string") {
+    try {
+      const parsed = new URL(raw.external_url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        externalUrl = parsed.toString();
+      }
+    } catch {
+      externalUrl = null;
+    }
+  }
+  return {
+    id: text(raw.id, "artifact"),
+    artifactType: text(raw.artifact_type, "artifact"),
+    title: text(raw.title, "Generated artifact"),
+    externalUrl,
+  };
+}
+
+function normalizeScheduleRun(value: unknown): ScheduleRun {
+  const raw = record(value);
+  const rawStatus = text(raw.status) as ScheduleRunStatus;
+  const status = SCHEDULE_RUN_STATUSES.has(rawStatus) ? rawStatus : "failed";
+  return {
+    id: numberValue(raw.id),
+    jobId: numberValue(raw.job_id),
+    status,
+    result: text(raw.result),
+    summary: text(raw.summary, text(raw.result)),
+    createdAt: text(raw.created_at),
+    startedAt: text(raw.started_at, text(raw.created_at)),
+    finishedAt: typeof raw.finished_at === "string" ? raw.finished_at : null,
+    durationMs: numberValue(raw.duration_ms),
+    sessionId: text(raw.session_id, `sched-${numberValue(raw.job_id)}`),
+    waitingApprovalCount: numberValue(raw.waiting_approval_count),
+    artifacts: Array.isArray(raw.artifacts)
+      ? raw.artifacts.map(normalizeScheduleArtifact)
+      : [],
+  };
+}
+
+function normalizeScheduleTemplate(value: unknown): ScheduleTemplate {
+  const raw = record(value);
+  return {
+    id: text(raw.id),
+    name: text(raw.name, "Routine template"),
+    description: text(raw.description),
+    cadences: textList(raw.cadences),
+    defaultPrompt: text(raw.default_prompt),
+  };
+}
+
+export class ScheduleApiError extends Error {
+  code: "invalid_routine" | "already_running" | "request_failed";
+  fieldErrors: Record<string, string>;
+
+  constructor(
+    code: "invalid_routine" | "already_running" | "request_failed",
+    message: string,
+    fieldErrors: Record<string, string> = {},
+  ) {
+    super(message);
+    this.name = "ScheduleApiError";
+    this.code = code;
+    this.fieldErrors = fieldErrors;
+  }
+}
+
+function safeFieldErrors(value: unknown): Record<string, string> {
+  const raw = record(value);
+  return Object.fromEntries(
+    Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+  );
+}
+
+export async function getSchedule(): Promise<Schedule> {
+  const res = await get("/v1/schedule");
+  if (!res.ok) throw new Error(`schedule ${res.status}`);
+  const body = record(await res.json());
+  return {
+    jobs: Array.isArray(body.jobs) ? body.jobs.map(normalizeScheduleJob) : [],
+    runs: Array.isArray(body.runs) ? body.runs.map(normalizeScheduleRun) : [],
+    templates: Array.isArray(body.templates)
+      ? body.templates.map(normalizeScheduleTemplate)
+      : [],
+  };
+}
+
+export async function createScheduleJob(input: {
+  templateId: string;
+  cadence: string;
+  name: string;
+  prompt: string;
+}): Promise<ScheduleJob> {
+  const res = await fetch(`${httpBase()}/v1/schedule`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      template_id: input.templateId,
+      cadence: input.cadence,
+      name: input.name,
+      prompt: input.prompt,
+    }),
+  });
+  const body = record(await res.json());
+  if (!res.ok) {
+    if (body.error === "invalid_routine") {
+      throw new ScheduleApiError(
+        "invalid_routine",
+        "Review the highlighted routine fields.",
+        safeFieldErrors(body.fields),
+      );
+    }
+    throw new ScheduleApiError("request_failed", "The routine could not be created.");
+  }
+  return normalizeScheduleJob(body.job);
+}
+
+export async function runScheduleJob(id: number): Promise<{ run: ScheduleRun }> {
   const res = await fetch(`${httpBase()}/v1/schedule/${id}/run`, {
     method: "POST",
     headers: { "X-Club-Token": apiToken() },
   });
-  const body = await res.json();
-  if (!res.ok) throw new Error(body.error || `schedule run ${res.status}`);
-  return body;
+  const body = record(await res.json());
+  if (!res.ok) {
+    if (body.error === "already_running") {
+      throw new ScheduleApiError(
+        "already_running",
+        "This routine is already running. Wait for its current receipt.",
+      );
+    }
+    throw new ScheduleApiError("request_failed", "The routine could not be started.");
+  }
+  return { run: normalizeScheduleRun(body.run) };
 }
 
 export type GmailStatus = { connected: boolean; email: string | null };
@@ -196,6 +523,8 @@ export type InboxItem = {
   arguments: Record<string, unknown>;
   state: string;
   decision?: string | null;
+  session_id?: string | null;
+  run_id?: string | null;
 };
 
 export async function getInbox(): Promise<{ items: InboxItem[] }> {
@@ -213,17 +542,132 @@ export async function resolveInbox(id: string, decision: "allow" | "deny"): Prom
   if (!res.ok) throw new Error(`inbox ${res.status}`);
 }
 
+export type ConnectorId = "gmail" | "drive" | "calendar" | "apollo" | "granola";
+export type ConnectorStatus =
+  | "connected"
+  | "available"
+  | "authorizing"
+  | "missing_scopes"
+  | "degraded"
+  | "failed"
+  | "reconnect_required";
+export type ConnectorCatalogGroup = "connected" | "available";
+export type ConnectorAction =
+  | "connect"
+  | "reconnect"
+  | "disconnect"
+  | "view_guidance";
+
 export type Connector = {
-  id: string;
+  id: ConnectorId;
   title: string;
-  status: string;
+  description: string;
+  status: ConnectorStatus;
+  catalogGroup: ConnectorCatalogGroup;
   email: string | null;
+  requiredScopes: string[];
+  missingScopes: string[];
+  health: { category: string; label: string; message: string };
+  recovery: { category: string; actionLabel: string; message: string } | null;
+  supportedActions: string[];
+  availableActions: ConnectorAction[];
+  repairRoute: string;
+  authorizationGroup: "google" | "granola" | null;
 };
+
+const CONNECTOR_IDS = new Set<ConnectorId>([
+  "gmail",
+  "drive",
+  "calendar",
+  "apollo",
+  "granola",
+]);
+const CONNECTOR_STATUSES = new Set<ConnectorStatus>([
+  "connected",
+  "available",
+  "authorizing",
+  "missing_scopes",
+  "degraded",
+  "failed",
+  "reconnect_required",
+]);
+const CONNECTOR_ACTIONS = new Set<ConnectorAction>([
+  "connect",
+  "reconnect",
+  "disconnect",
+  "view_guidance",
+]);
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function text(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function textList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function normalizeConnector(value: unknown): Connector | null {
+  const raw = record(value);
+  const id = text(raw.id) as ConnectorId;
+  if (!CONNECTOR_IDS.has(id)) return null;
+  const rawStatus = text(raw.status) as ConnectorStatus;
+  const status = CONNECTOR_STATUSES.has(rawStatus) ? rawStatus : "failed";
+  const rawGroup = text(raw.catalog_group);
+  const catalogGroup: ConnectorCatalogGroup =
+    rawGroup === "connected" || rawGroup === "available"
+      ? rawGroup
+      : status === "available" || status === "failed"
+        ? "available"
+        : "connected";
+  const rawHealth = record(raw.health);
+  const rawRecovery = raw.recovery === null ? null : record(raw.recovery);
+  const authorizationGroup = text(raw.authorization_group);
+  return {
+    id,
+    title: text(raw.title, id),
+    description: text(raw.description),
+    status,
+    catalogGroup,
+    email: typeof raw.email === "string" ? raw.email : null,
+    requiredScopes: textList(raw.required_scopes),
+    missingScopes: textList(raw.missing_scopes),
+    health: {
+      category: text(rawHealth.category, "unknown"),
+      label: text(rawHealth.label, "Needs attention"),
+      message: text(rawHealth.message, "Refresh this connection to check its status."),
+    },
+    recovery:
+      rawRecovery === null
+        ? null
+        : {
+            category: text(rawRecovery.category, "retry"),
+            actionLabel: text(rawRecovery.action_label, "Try again"),
+            message: text(rawRecovery.message, "Try the connection again."),
+          },
+    supportedActions: textList(raw.supported_actions),
+    availableActions: textList(raw.available_actions).filter(
+      (action): action is ConnectorAction => CONNECTOR_ACTIONS.has(action as ConnectorAction),
+    ),
+    repairRoute: `#/connections/${encodeURIComponent(id)}`,
+    authorizationGroup:
+      authorizationGroup === "google" || authorizationGroup === "granola"
+        ? authorizationGroup
+        : null,
+  };
+}
 
 export async function getConnectors(): Promise<{ connectors: Connector[] }> {
   const res = await get("/v1/connectors");
   if (!res.ok) throw new Error(`connectors ${res.status}`);
-  return res.json();
+  const body = record(await res.json());
+  const connectors = Array.isArray(body.connectors)
+    ? body.connectors.map(normalizeConnector).filter((item): item is Connector => item !== null)
+    : [];
+  return { connectors };
 }
 
 export async function connectDrive(): Promise<{ url: string; opened?: boolean }> {
@@ -256,6 +700,39 @@ export async function connectGranola(): Promise<{ started: boolean; url?: string
   return body;
 }
 
+export type ConnectorAuthorization = {
+  url?: string;
+  opened?: boolean;
+  started?: boolean;
+  redirect_uri?: string;
+};
+
+export async function connectConnector(
+  id: Exclude<ConnectorId, "apollo">,
+): Promise<ConnectorAuthorization> {
+  if (id === "gmail") return connectGmail();
+  if (id === "drive") return connectDrive();
+  if (id === "calendar") return connectCalendar();
+  return connectGranola();
+}
+
+export async function disconnectConnector(
+  id: Exclude<ConnectorId, "apollo">,
+): Promise<{ connected: false; disconnected: ConnectorId[] }> {
+  const path =
+    id === "granola" ? "/v1/connectors/granola/disconnect" : "/v1/gmail/disconnect";
+  const res = await fetch(`${httpBase()}${path}`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken() },
+  });
+  if (!res.ok) throw new Error(`connector disconnect ${res.status}`);
+  const body = record(await res.json());
+  const disconnected = textList(body.disconnected).filter((item): item is ConnectorId =>
+    CONNECTOR_IDS.has(item as ConnectorId),
+  );
+  return { connected: false, disconnected };
+}
+
 export async function disconnectGmail(): Promise<GmailStatus> {
   const res = await fetch(`${httpBase()}/v1/gmail/disconnect`, {
     method: "POST",
@@ -269,41 +746,273 @@ export function hasToken(): boolean {
   return apiToken().length > 0;
 }
 
-export function openChat(onEvent: (event: ChatEvent) => void): {
-  send: (text: string, sessionId: string) => void;
-  approve: (id: string, decision: "allow" | "deny") => void;
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 10_000;
+const PENDING_COMMAND_LIMIT = 50;
+
+/**
+ * Synchronous fate of a command handed to the transport. "delivered" means it
+ * was written to an open socket now; "queued" means it is buffered and will
+ * flush on reconnect; "dropped" means it will never be sent — callers must
+ * surface that to the operator rather than implying the command is in flight.
+ */
+export type CommandDelivery =
+  | { readonly state: "delivered" }
+  | { readonly state: "queued" }
+  | { readonly state: "dropped"; readonly reason: string };
+
+export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
+  send: (text: string, sessionId: string) => CommandDelivery;
+  cancel: (sessionId: string, runId: string) => CommandDelivery;
+  queue: (command: QueueCommand) => CommandDelivery;
+  recover: (command: RecoveryCommand) => CommandDelivery;
+  approve: (id: string, decision: "allow" | "deny") => CommandDelivery;
   close: () => void;
 } {
   const token = apiToken();
   const protocols = token ? ["club", token] : ["club"];
-  const ws = new WebSocket(`${wsBase()}/ws/chat`, protocols);
-  ws.onmessage = (ev) => {
-    try {
-      onEvent(JSON.parse(String(ev.data)) as ChatEvent);
-    } catch {
-      onEvent({ type: "error", message: "bad event from sidecar" });
-    }
-  };
-  ws.onerror = () => onEvent({ type: "error", message: "socket error" });
-  ws.onclose = (ev) => {
-    if (ev.code === 1008) onEvent({ type: "error", message: "sidecar rejected the socket (token)" });
-  };
-  function push(payload: unknown) {
-    if (ws.readyState !== WebSocket.OPEN) {
-      onEvent({ type: "error", message: "socket not open yet" });
+  let ws: WebSocket | null = null;
+  let disposed = false;
+  let terminal = false;
+  let attempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const pending: unknown[] = [];
+  const queueSnapshots = new Map<string, QueueSnapshotEvent>();
+  let syntheticCommandNumber = 0;
+  // Reconnect re-sync bookkeeping: which runs are open on which session, the
+  // last event id delivered per session, and sessions with a delivered chat
+  // command still waiting for its turn_start. A run that reaches a terminal
+  // state while the socket is down would otherwise stay "running" forever.
+  const openRuns = new Map<string, Set<string>>();
+  const lastDeliveredEvent = new Map<string, string>();
+  const awaitingTurnStart = new Set<string>();
+  let resyncDepth = 0;
+  const resyncBuffer: SourcecadoSocketEvent[] = [];
+
+  function trackEnvelope(event: ProtocolChatEvent) {
+    lastDeliveredEvent.set(event.session_id, event.event_id);
+    if (event.type === "turn_start") {
+      const runs = openRuns.get(event.session_id) ?? new Set<string>();
+      runs.add(event.run_id);
+      openRuns.set(event.session_id, runs);
+      awaitingTurnStart.delete(event.session_id);
       return;
     }
-    ws.send(JSON.stringify(payload));
+    if (
+      event.type === "turn_end" ||
+      event.type === "turn_stopped" ||
+      event.type === "error"
+    ) {
+      openRuns.get(event.session_id)?.delete(event.run_id);
+    }
   }
+
+  function dispatch(event: SourcecadoSocketEvent) {
+    if (event.type === "queue_snapshot") {
+      queueSnapshots.set(event.session_id, event);
+    } else if ("version" in event) {
+      trackEnvelope(event);
+    }
+    onEvent(event);
+  }
+
+  // After a drop, fetch each interesting session's durable event log and
+  // replay the tail this socket never delivered. The store dedupes by
+  // event_id, so overlap with anything the sidecar replays itself is safe;
+  // live socket events are held until the tail lands to preserve order.
+  async function resyncMissedEvents() {
+    const sessions = new Set<string>(awaitingTurnStart);
+    for (const [sessionId, runs] of openRuns) {
+      if (runs.size > 0) sessions.add(sessionId);
+    }
+    if (sessions.size === 0) return;
+    resyncDepth += 1;
+    try {
+      for (const sessionId of sessions) {
+        try {
+          const conversation = await getSession(sessionId);
+          if (disposed) return;
+          const events = conversation.events.filter(
+            (event): event is ProtocolChatEvent => "version" in event,
+          );
+          const lastId = lastDeliveredEvent.get(sessionId);
+          const lastIndex =
+            lastId === undefined
+              ? -1
+              : events.findIndex((event) => event.event_id === lastId);
+          for (const event of events.slice(lastIndex + 1)) dispatch(event);
+          awaitingTurnStart.delete(sessionId);
+        } catch {
+          if (disposed) return;
+          onEvent({
+            type: "error",
+            message:
+              "Reconnected, but the conversation re-sync failed. Reload to see the latest run state.",
+            session_id: sessionId,
+          });
+        }
+      }
+    } finally {
+      resyncDepth -= 1;
+      if (resyncDepth === 0 && !disposed) {
+        for (const event of resyncBuffer.splice(0)) dispatch(event);
+      }
+    }
+  }
+
+  // Re-emits the last authoritative queue snapshot per session; while the
+  // socket is down, deliverable items are shown as offline/reconnecting.
+  function emitQueueStates(state?: "offline" | "reconnecting") {
+    for (const snapshot of queueSnapshots.values()) {
+      onEvent({
+        ...snapshot,
+        command_id: `connection-${++syntheticCommandNumber}`,
+        status: "connection",
+        items: state
+          ? snapshot.items.map((item) =>
+              item.state === "waiting" || item.state === "sending"
+                ? { ...item, state }
+                : item,
+            )
+          : snapshot.items,
+      });
+    }
+  }
+
+  function scheduleReconnect() {
+    const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
+    attempt += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      emitQueueStates("reconnecting");
+      connect();
+    }, delay);
+  }
+
+  function connect() {
+    const socket = new WebSocket(`${wsBase()}/ws/chat`, protocols);
+    ws = socket;
+    socket.onopen = () => {
+      if (disposed) return;
+      attempt = 0;
+      onEvent({
+        type: "connection_change",
+        status: "connected",
+        attempt: 0,
+        reason: "Connected to the sidecar.",
+      });
+      emitQueueStates();
+      for (const payload of pending.splice(0)) {
+        socket.send(JSON.stringify(payload));
+        const command = payload as { type?: unknown; session_id?: unknown };
+        if (
+          command.type === "chat" &&
+          typeof command.session_id === "string"
+        ) {
+          awaitingTurnStart.add(command.session_id);
+        }
+      }
+      void resyncMissedEvents();
+    };
+    socket.onmessage = (ev) => {
+      try {
+        const parsed = parseSocketEvent(JSON.parse(String(ev.data)));
+        if (resyncDepth > 0) {
+          resyncBuffer.push(parsed);
+          return;
+        }
+        dispatch(parsed);
+      } catch {
+        onEvent(parseChatEvent(undefined));
+      }
+    };
+    socket.onclose = (ev) => {
+      if (disposed || socket !== ws) return;
+      if (ev.code === 1008) {
+        terminal = true;
+        onEvent({ type: "error", message: "sidecar rejected the socket (token)" });
+        if (pending.length > 0) {
+          onEvent({
+            type: "error",
+            message: `${pending.length} queued command${
+              pending.length === 1 ? "" : "s"
+            } dropped because the sidecar rejected the connection token.`,
+          });
+          pending.length = 0;
+        }
+        onEvent({
+          type: "connection_change",
+          status: "offline",
+          attempt,
+          reason: "The sidecar rejected the connection token.",
+        });
+        emitQueueStates("offline");
+        return;
+      }
+      onEvent({
+        type: "connection_change",
+        status: "reconnecting",
+        attempt: attempt + 1,
+        reason: `The sidecar connection closed (code ${ev.code}). Reconnecting.`,
+      });
+      emitQueueStates("offline");
+      scheduleReconnect();
+    };
+  }
+
+  function push(payload: unknown): CommandDelivery {
+    if (disposed) {
+      return {
+        state: "dropped",
+        reason: "The chat connection is closed; the command was dropped.",
+      };
+    }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+      return { state: "delivered" };
+    }
+    if (terminal) {
+      const reason =
+        "The sidecar rejected the connection token; the command was dropped.";
+      onEvent({ type: "error", message: reason });
+      return { state: "dropped", reason };
+    }
+    if (pending.length >= PENDING_COMMAND_LIMIT) {
+      const reason =
+        "The sidecar connection is down and the retry buffer is full; the command was dropped.";
+      onEvent({ type: "error", message: reason });
+      return { state: "dropped", reason };
+    }
+    pending.push(payload);
+    return { state: "queued" };
+  }
+
+  connect();
   return {
     send(text: string, sessionId: string) {
-      push({ type: "chat", text, session_id: sessionId });
+      const delivery = push({ type: "chat", text, session_id: sessionId });
+      // A delivered send may start a run whose turn_start we never see if the
+      // socket drops immediately; remember it so reconnect re-syncs it.
+      if (delivery.state === "delivered") awaitingTurnStart.add(sessionId);
+      return delivery;
+    },
+    cancel(sessionId: string, runId: string) {
+      return push({ type: "cancel", session_id: sessionId, run_id: runId });
+    },
+    queue(command: QueueCommand) {
+      return push(command);
+    },
+    recover(command: RecoveryCommand) {
+      return push(command);
     },
     approve(id: string, decision: "allow" | "deny") {
-      push({ type: "permission", id, decision });
+      return push({ type: "permission", id, decision });
     },
     close() {
-      ws.close();
+      disposed = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      ws?.close();
     },
   };
 }

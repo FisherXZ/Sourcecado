@@ -1,0 +1,56 @@
+/* Warm Operator design tokens. Every color is defined once, here, and consumed
+   everywhere else via var(). Values come straight from DESIGN.md. */
+:root {
+  --canvas: #FAF8F3;
+  --surface: #FEFDFB;
+  --raised: #F5F2EA;
+  --text: #2B2722;
+  --muted: #6B6259;
+  --border: #E7E3DA;
+  --accent: #5B8C2A;
+  --accent-deep: #3E5E1C;
+  --accent-tint: #EBF1DF;
+  --pit: #C2703D;
+  --warn: #92591B;
+  --warn-bg: #FBEFD8;
+  --error: #9B3B2E;
+  --error-bg: #FBE6E1;
+}
+
+/* Follow the system theme by default. :root[data-theme] lets a future user
+   override win in either direction once that setting exists. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #1A1815;
+    --surface: #232019;
+    --raised: #2C2821;
+    --text: #F0EBE2;
+    --muted: #A8A096;
+    --border: #3A352D;
+    --accent: #8FBF5C;
+    --accent-deep: #B7DC8C;
+    --accent-tint: #2C3320;
+    --pit: #D98A57;
+    --warn: #E0B062;
+    --warn-bg: #3A2E16;
+    --error: #E08A77;
+    --error-bg: #3A211B;
+  }
+}
+
+:root[data-theme="dark"] {
+  --canvas: #1A1815;
+  --surface: #232019;
+  --raised: #2C2821;
+  --text: #F0EBE2;
+  --muted: #A8A096;
+  --border: #3A352D;
+  --accent: #8FBF5C;
+  --accent-deep: #B7DC8C;
+  --accent-tint: #2C3320;
+  --pit: #D98A57;
+  --warn: #E0B062;
+  --warn-bg: #3A2E16;
+  --error: #E08A77;
+  --error-bg: #3A211B;
+}

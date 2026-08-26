@@ -67,12 +67,28 @@ class GmailClient(Protocol):
     sends: list[dict[str, Any]]
 
     def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]: ...
+    def send(self, *, draft_id: str) -> dict[str, Any]: ...
+    def get_draft(self, *, draft_id: str) -> dict[str, Any]: ...
 
 
 class FakeGmail:
     def __init__(self) -> None:
         self.drafts: list[dict[str, Any]] = []
         self.sends: list[dict[str, Any]] = []
+        self.account_email: str | None = None
+
+    def account(self) -> str | None:
+        return self.account_email
+
+    def get_draft(self, *, draft_id: str) -> dict[str, Any]:
+        for item in self.drafts:
+            if item["id"] == draft_id:
+                return {
+                    "id": item["id"],
+                    "to": item["to"],
+                    "subject": item["subject"],
+                }
+        raise GmailError(f"Draft {draft_id} was not found.")
 
     def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]:
         item = {
@@ -91,9 +107,9 @@ class FakeGmail:
             "sent": False,
         }
 
-    def send(self, *args: Any, **kwargs: Any) -> None:
-        self.sends.append({"args": args, "kwargs": kwargs})
-        raise GmailError("gmail_draft never sends")
+    def send(self, *, draft_id: str) -> dict[str, Any]:
+        self.sends.append({"draft_id": draft_id})
+        return {"id": f"msg_{len(self.sends)}", "draft_id": draft_id, "sent": True}
 
     def search(self, query: str, max_results: int = 10) -> dict[str, Any]:
         return {"messages": []}
@@ -121,6 +137,19 @@ class MissingGmail:
             "Gmail is not connected. Click Connect Gmail in the window first."
         )
 
+    def send(self, *, draft_id: str) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
+    def get_draft(self, *, draft_id: str) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
+    def account(self) -> str | None:
+        return None
+
 
 def _raw_message(*, to: str, subject: str, body: str) -> str:
     msg = EmailMessage()
@@ -131,7 +160,7 @@ def _raw_message(*, to: str, subject: str, body: str) -> str:
 
 
 class GmailApi:
-    """Live Gmail drafts. No send()."""
+    """Live Gmail drafts and send-by-draft-id."""
 
     drafts: list[dict[str, Any]]
     sends: list[dict[str, Any]]
@@ -229,6 +258,45 @@ class GmailApi:
         }
         self.drafts.append(item)
         return item
+
+    def send(self, *, draft_id: str) -> dict[str, Any]:
+        data = self._request(
+            "post",
+            f"{DRAFTS_URL}/send",
+            headers={"Content-Type": "application/json"},
+            json={"id": draft_id},
+        ) or {}
+        message_id = str(data.get("id") or "")
+        if not message_id:
+            raise GmailError("Gmail did not return a sent message id.")
+        item = {"id": message_id, "draft_id": draft_id, "sent": True}
+        self.sends.append(item)
+        return item
+
+    def get_draft(self, *, draft_id: str) -> dict[str, Any]:
+        for item in self.drafts:
+            if str(item.get("id")) == draft_id:
+                return dict(item)
+        try:
+            data = self._request(
+                "get",
+                f"{DRAFTS_URL}/{draft_id}",
+                params={"format": "metadata"},
+            ) or {}
+        except GmailError:
+            raise
+        except Exception as exc:
+            raise _from_http_error(exc) from exc
+        payload = ((data.get("message") or {}).get("payload")) or {}
+        headers = _header_map(payload)
+        return {
+            "id": draft_id,
+            "to": headers.get("to", ""),
+            "subject": headers.get("subject", ""),
+        }
+
+    def account(self) -> str | None:
+        return load_google(self.secrets).get("email")
 
     def search(self, query: str, max_results: int = 10) -> dict[str, Any]:
         listing = self._request(

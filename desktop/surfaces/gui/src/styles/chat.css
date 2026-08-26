@@ -1,0 +1,1603 @@
+/* Warm Operator conversation: chat route, thread, composer, queue,
+   activity, inspector, and generative tool result renderers. */
+
+.welcome-page,
+.unavailable-thread-page,
+.boot-page {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.welcome-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.welcome-actions a,
+.welcome-actions button,
+.unavailable-thread-page a {
+  min-height: 40px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.welcome-actions button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.chat-page {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sourcecado-chat-workspace {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.sourcecado-chat-workspace:has(.sourcecado-inspector) {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.sourcecado-inspector {
+  width: 360px;
+  min-width: 0;
+  height: 100%;
+  padding: 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.sourcecado-inspector > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sourcecado-inspector > header h2,
+.sourcecado-inspector > header p {
+  margin: 0;
+}
+
+.sourcecado-inspector > header h2 {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.sourcecado-inspector button,
+.sourcecado-inspector a,
+.sourcecado-source-citation,
+.sourcecado-artifacts button,
+.sourcecado-inspect-tool {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sourcecado-inspector a {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.sourcecado-source-citation,
+.sourcecado-artifacts button,
+.sourcecado-inspect-tool {
+  color: var(--accent-deep);
+}
+
+.sourcecado-source-citation {
+  min-height: 28px;
+  margin: 3px 6px 3px 0;
+  background: var(--accent-tint);
+}
+
+.sourcecado-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.sourcecado-inspect-tool {
+  margin-top: 3px;
+  background: transparent;
+}
+
+.sourcecado-inspector-content,
+.sourcecado-inspector-error {
+  padding-top: 18px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.sourcecado-inspector-content > :first-child,
+.sourcecado-inspector-error > :first-child {
+  margin-top: 0;
+}
+
+.sourcecado-inspector-content details {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-inspector-content summary {
+  padding: 12px 0;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sourcecado-inspector-content pre {
+  max-width: 100%;
+  margin: 0 0 14px;
+  padding: 10px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-inspector-badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  margin: 0 5px 8px 0;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.sourcecado-inspector-error {
+  color: var(--error);
+}
+
+.sourcecado-inspector-error :where(button, a) {
+  margin: 8px 7px 0 0;
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.sourcecado-inspector-skeleton {
+  width: 100%;
+  height: 176px;
+  margin-top: 20px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
+  background-size: 200% 100%;
+  animation: shell-shimmer 1.4s linear infinite;
+}
+
+.sourcecado-thread {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+@media (max-width: 1179px) {
+  .sourcecado-chat-workspace:has(.sourcecado-inspector) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sourcecado-inspector {
+    position: fixed;
+    z-index: 60;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(380px, calc(100vw - 32px));
+    height: 100vh;
+    border-left: 1px solid var(--border);
+  }
+
+  .sourcecado-thread-header {
+    padding-top: 72px;
+  }
+}
+
+@media (max-width: 767px) {
+  .sourcecado-inspector {
+    width: 100%;
+    padding: 16px;
+    border-left: 0;
+  }
+
+  .sourcecado-inspector button,
+  .sourcecado-inspector a,
+  .sourcecado-source-citation,
+  .sourcecado-artifacts button,
+  .sourcecado-inspect-tool {
+    min-height: 44px;
+  }
+}
+
+.sourcecado-thread-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 24px max(24px, calc((100% - 760px) / 2));
+  border-bottom: 1px solid var(--border);
+  background: var(--canvas);
+}
+
+.sourcecado-thread-header > div {
+  min-width: 0;
+}
+
+.sourcecado-thread-header h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-persona-badge {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sourcecado-transcript {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 32px max(24px, calc((100% - 760px) / 2)) 40px;
+  scroll-padding-bottom: 40px;
+}
+
+.sourcecado-assistant-message {
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.sourcecado-user-message {
+  width: fit-content;
+  max-width: min(72%, 660px);
+  align-self: flex-end;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--accent-tint);
+  color: var(--text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-user-message p,
+.sourcecado-markdown > :first-child,
+.sourcecado-notice > :first-child {
+  margin-top: 0;
+}
+
+.sourcecado-user-message p,
+.sourcecado-markdown > :last-child,
+.sourcecado-notice > :last-child {
+  margin-bottom: 0;
+}
+
+.sourcecado-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-markdown :where(p, ul, ol, pre, blockquote, .sourcecado-table-scroll) {
+  margin: 0 0 14px;
+}
+
+.sourcecado-markdown :where(ul, ol) {
+  padding-left: 24px;
+}
+
+.sourcecado-markdown li + li {
+  margin-top: 5px;
+}
+
+.sourcecado-markdown :where(h2, h3, h4) {
+  margin: 24px 0 10px;
+  line-height: 1.25;
+  letter-spacing: -.015em;
+}
+
+.sourcecado-markdown h2 {
+  font-size: 19px;
+}
+
+.sourcecado-markdown h3 {
+  font-size: 16px;
+}
+
+.sourcecado-markdown a {
+  color: var(--accent-deep);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.sourcecado-markdown code {
+  border-radius: 4px;
+  background: var(--raised);
+  font: .9em ui-monospace, "Geist Mono", monospace;
+}
+
+.sourcecado-markdown :not(pre) > code {
+  padding: 2px 5px;
+}
+
+.sourcecado-markdown pre {
+  max-width: 100%;
+  padding: 14px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.sourcecado-markdown pre code {
+  background: transparent;
+  white-space: pre;
+}
+
+.sourcecado-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.sourcecado-table-scroll table {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.sourcecado-table-scroll :where(th, td) {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.sourcecado-table-scroll th {
+  background: var(--raised);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.sourcecado-copy-action {
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sourcecado-copy-action:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+@media (max-width: 767px) {
+  .sourcecado-copy-action {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+.sourcecado-notice {
+  max-width: 620px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sourcecado-notice {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.sourcecado-notice-title {
+  font-weight: 650;
+}
+
+.sourcecado-notice-detail {
+  color: var(--muted);
+}
+
+.sourcecado-approval-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sourcecado-approval-actions button,
+.sourcecado-starters button,
+.sourcecado-load-error button {
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sourcecado-approval-actions button:last-child {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.sourcecado-empty-thread,
+.sourcecado-load-error {
+  width: min(620px, 100%);
+  margin: auto;
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.sourcecado-empty-thread > p:not(.eyebrow),
+.sourcecado-load-error p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.sourcecado-starters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.sourcecado-starters button {
+  min-height: 54px;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.sourcecado-load-error {
+  border-color: var(--error);
+  background: var(--error-bg);
+}
+
+.sourcecado-load-error button {
+  margin-top: 14px;
+  border-color: var(--error);
+  color: var(--error);
+  font-weight: 600;
+}
+
+.sourcecado-transcript-skeleton {
+  display: grid;
+  width: min(680px, 100%);
+  gap: 22px;
+}
+
+.sourcecado-transcript-skeleton span {
+  display: block;
+  width: 78%;
+  height: 64px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
+  background-size: 200% 100%;
+  animation: shell-shimmer 1.4s linear infinite;
+}
+
+.sourcecado-transcript-skeleton span:nth-child(2) {
+  width: 42%;
+  height: 42px;
+  justify-self: end;
+}
+
+.sourcecado-transcript-skeleton span:nth-child(3) {
+  width: 64%;
+  height: 92px;
+}
+
+.sourcecado-run-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sourcecado-composer {
+  display: grid;
+  width: min(808px, calc(100% - 48px));
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  justify-self: center;
+  align-items: end;
+  padding: 14px 0 18px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-composer textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 160px;
+  overflow-y: auto;
+  resize: none;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.sourcecado-composer > button {
+  min-width: 68px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--surface);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.sourcecado-composer > button:disabled {
+  border-color: var(--border);
+  background: var(--raised);
+  color: var(--muted);
+  cursor: default;
+}
+
+.sourcecado-composer-running {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-thread-header {
+    padding: 72px 16px 18px;
+  }
+
+  .sourcecado-thread-header h1 {
+    font-size: 21px;
+  }
+
+  .sourcecado-transcript {
+    gap: 20px;
+    padding: 24px 16px 28px;
+  }
+
+  .sourcecado-assistant-message {
+    font-size: 16px;
+  }
+
+  .sourcecado-user-message {
+    max-width: 88%;
+    font-size: 15px;
+  }
+
+  .sourcecado-starters {
+    grid-template-columns: 1fr;
+  }
+
+  .sourcecado-starters button,
+  .sourcecado-approval-actions button,
+  .sourcecado-load-error button {
+    min-height: 44px;
+  }
+
+  .sourcecado-composer {
+    width: calc(100% - 32px);
+    padding-bottom: 12px;
+  }
+
+  .sourcecado-composer textarea {
+    font-size: 16px;
+  }
+
+  .welcome-actions :where(a, button),
+  .unavailable-thread-page a {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@media (max-height: 520px) {
+  .sourcecado-composer textarea {
+    max-height: 96px;
+  }
+}
+
+.sourcecado-queue {
+  width: min(808px, calc(100% - 48px));
+  min-width: 0;
+  max-width: 808px;
+  justify-self: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-queue > .eyebrow {
+  display: inline-block;
+  margin: 0 10px 8px 0;
+}
+
+.sourcecado-queue > button,
+.sourcecado-queue-actions button,
+.sourcecado-queue form button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sourcecado-queue ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-queue li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--raised);
+}
+
+.sourcecado-queue li > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-queue li > strong {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sourcecado-queue-actions {
+  display: grid;
+  grid-template-columns: repeat(5, 64px);
+  justify-content: end;
+  gap: 4px;
+}
+
+.sourcecado-queue-action-slot {
+  display: flex;
+  justify-content: center;
+}
+
+.sourcecado-queue form {
+  display: flex;
+  min-width: 0;
+  gap: 5px;
+}
+
+.sourcecado-queue form input {
+  min-width: 0;
+  flex: 1;
+  padding: 7px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.sourcecado-terminal-receipt {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sourcecado-answer-results {
+  display: grid;
+  gap: 10px;
+}
+
+.sourcecado-answer-results > * {
+  margin-top: 0;
+}
+
+.sourcecado-activity {
+  max-width: 680px;
+  margin-top: 14px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sourcecado-activity > button {
+  min-height: 34px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sourcecado-activity > button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.sourcecado-activity-running > button {
+  color: var(--accent-deep);
+}
+
+.sourcecado-activity-failed > button,
+.sourcecado-activity-partial > button {
+  color: var(--error);
+}
+
+@media (max-width: 767px) {
+  .sourcecado-activity > button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+.sourcecado-activity > ol {
+  display: grid;
+  gap: 0;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-activity > ol > li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-activity > ol > li > .sourcecado-activity-row-copy > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-activity > ol > li > strong {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sourcecado-apollo-result {
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 12px 0 2px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.sourcecado-apollo-result > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sourcecado-apollo-result h3,
+.sourcecado-apollo-result p {
+  margin: 0;
+}
+
+.sourcecado-apollo-result h3 {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.sourcecado-apollo-result header p,
+.sourcecado-apollo-result > ol > li > p,
+.sourcecado-apollo-empty > p,
+.sourcecado-apollo-fallback > p {
+  margin-top: 3px;
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-apollo-result button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sourcecado-apollo-result > ol {
+  display: grid;
+  gap: 0;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-apollo-result > ol > li {
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+}
+
+.sourcecado-apollo-result .sourcecado-apollo-candidate-name {
+  max-width: 100%;
+  padding: 0;
+  overflow-wrap: anywhere;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.sourcecado-apollo-credit-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--warn);
+}
+
+.sourcecado-apollo-credit-note p,
+.sourcecado-approval-card > .sourcecado-approval-credit-note {
+  color: var(--warn);
+}
+
+.sourcecado-apollo-empty,
+.sourcecado-apollo-fallback {
+  padding-bottom: 10px;
+}
+
+.sourcecado-apollo-empty > button {
+  margin-top: 10px;
+}
+
+.sourcecado-apollo-enriched > .sourcecado-apollo-candidate-name {
+  margin-top: 10px;
+}
+
+.sourcecado-apollo-skeleton {
+  display: grid;
+  max-width: 100%;
+  gap: 0;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-apollo-skeleton li {
+  display: grid;
+  gap: 7px;
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-apollo-skeleton span {
+  display: block;
+  width: min(220px, 62%);
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
+  background-size: 200% 100%;
+  animation: shell-shimmer 1.4s linear infinite;
+}
+
+.sourcecado-apollo-skeleton span:last-child {
+  width: min(320px, 86%);
+}
+
+@media (max-width: 767px) {
+  .sourcecado-apollo-result button {
+    min-height: 44px;
+  }
+
+  .sourcecado-apollo-result > header,
+  .sourcecado-apollo-credit-note {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.sourcecado-gmail-draft {
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 12px 0 2px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.sourcecado-gmail-draft > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sourcecado-gmail-draft h3,
+.sourcecado-gmail-draft p,
+.sourcecado-gmail-approval-preview p {
+  margin: 0;
+}
+
+.sourcecado-gmail-draft h3 {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.sourcecado-gmail-draft > header strong,
+.sourcecado-gmail-approval-preview > strong {
+  display: inline-flex;
+  margin-top: 4px;
+  color: var(--warn);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.sourcecado-gmail-draft > p,
+.sourcecado-gmail-fallback > p {
+  margin-top: 6px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-gmail-body-preview {
+  margin-top: 10px;
+}
+
+.sourcecado-gmail-body {
+  padding: 10px 0;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-gmail-draft button,
+.sourcecado-gmail-approval-preview button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sourcecado-gmail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-gmail-approval-preview {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--warn);
+  background: var(--surface);
+}
+
+.sourcecado-gmail-failed {
+  margin: 8px 0 0;
+  color: var(--error);
+  font-weight: 600;
+}
+
+.sourcecado-gmail-creating > ol {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-gmail-creating li span {
+  display: block;
+  width: min(360px, 82%);
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
+  background-size: 200% 100%;
+  animation: shell-shimmer 1.4s linear infinite;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-gmail-draft button,
+  .sourcecado-gmail-approval-preview button {
+    min-height: 44px;
+  }
+
+  .sourcecado-gmail-draft > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.sourcecado-calendar-result {
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 12px 0 2px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.sourcecado-calendar-result > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sourcecado-calendar-result h3,
+.sourcecado-calendar-result p,
+.sourcecado-calendar-approval-summary p {
+  margin: 0;
+}
+
+.sourcecado-calendar-result h3 {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.sourcecado-calendar-result > p,
+.sourcecado-calendar-result > ol > li > p,
+.sourcecado-calendar-empty > p,
+.sourcecado-calendar-fallback > p {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-calendar-result > ol {
+  display: grid;
+  gap: 0;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-calendar-result > ol > li {
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+}
+
+.sourcecado-calendar-result button,
+.sourcecado-calendar-approval-summary button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sourcecado-calendar-result .sourcecado-calendar-event-title {
+  max-width: 100%;
+  padding: 0;
+  overflow-wrap: anywhere;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.sourcecado-calendar-write-result > header strong {
+  display: inline-flex;
+  margin-top: 4px;
+  color: var(--accent-deep);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.sourcecado-calendar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-calendar-description {
+  margin-top: 10px;
+}
+
+.sourcecado-calendar-description > p {
+  padding: 9px 0;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-calendar-approval-summary {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--warn);
+  background: var(--surface);
+}
+
+.sourcecado-calendar-failed {
+  margin: 8px 0 0;
+  color: var(--error);
+  font-weight: 600;
+}
+
+.sourcecado-calendar-loading li {
+  display: grid;
+  gap: 7px;
+}
+
+.sourcecado-calendar-loading li span {
+  display: block;
+  width: min(320px, 76%);
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
+  background-size: 200% 100%;
+  animation: shell-shimmer 1.4s linear infinite;
+}
+
+.sourcecado-calendar-loading li span:last-child {
+  width: min(220px, 54%);
+}
+
+@media (max-width: 767px) {
+  .sourcecado-calendar-result button,
+  .sourcecado-calendar-approval-summary button {
+    min-height: 44px;
+  }
+
+  .sourcecado-calendar-result > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.sourcecado-evidence-set {
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 12px 0 2px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.sourcecado-evidence-set > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sourcecado-evidence-set h3,
+.sourcecado-evidence-set p {
+  margin: 0;
+}
+
+.sourcecado-evidence-set h3 {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.sourcecado-evidence-set > p,
+.sourcecado-evidence-set > ol > li > p,
+.sourcecado-evidence-empty > p,
+.sourcecado-evidence-fallback > p,
+.sourcecado-evidence-unavailable > p {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-evidence-set > ol {
+  display: grid;
+  gap: 0;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-evidence-set > ol > li {
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+}
+
+.sourcecado-evidence-set button {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sourcecado-evidence-set .sourcecado-evidence-title {
+  max-width: 100%;
+  padding: 0;
+  overflow-wrap: anywhere;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.sourcecado-evidence-excerpt {
+  margin-top: 7px;
+}
+
+.sourcecado-evidence-excerpt > p {
+  padding: 8px 0;
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-evidence-badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  margin: 7px 5px 0 0;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.sourcecado-evidence-partial {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-left: 2px solid var(--warn);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.sourcecado-evidence-partial p {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.sourcecado-evidence-loading li {
+  display: grid;
+  gap: 7px;
+}
+
+.sourcecado-evidence-loading li span {
+  display: block;
+  width: min(340px, 78%);
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
+  background-size: 200% 100%;
+  animation: shell-shimmer 1.4s linear infinite;
+}
+
+.sourcecado-evidence-loading li span:last-child {
+  width: min(240px, 58%);
+}
+
+@media (max-width: 767px) {
+  .sourcecado-evidence-set button {
+    min-height: 44px;
+  }
+
+  .sourcecado-evidence-set > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.sourcecado-approval-card {
+  max-width: 620px;
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: var(--warn-bg);
+}
+
+.sourcecado-approval-card h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.sourcecado-approval-card > p {
+  margin: 9px 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.sourcecado-approval-card dl {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0;
+}
+
+.sourcecado-approval-card dl > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.sourcecado-approval-card :where(dt, dd) {
+  margin: 0;
+}
+
+.sourcecado-approval-card dt {
+  color: var(--muted);
+}
+
+.sourcecado-approval-card dd {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.sourcecado-approval-card > button,
+.sourcecado-approval-receipt > button {
+  min-height: 38px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sourcecado-approval-details {
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 7px;
+  background: var(--raised);
+}
+
+.sourcecado-approval-details pre {
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.sourcecado-approval-receipt {
+  max-width: 620px;
+  margin-top: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sourcecado-approval-receipt > button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.sourcecado-approval-receipt > div {
+  margin-top: 5px;
+  padding: 9px;
+  border-left: 2px solid var(--border);
+}
+
+.sourcecado-approval-receipt p {
+  margin: 3px 0;
+}
+
+.sourcecado-activity-row-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.sourcecado-activity-row-copy > p {
+  margin: 4px 0;
+  color: var(--muted);
+  white-space: normal;
+}
+
+.sourcecado-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sourcecado-recovery-actions :where(button, a) {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sourcecado-failure-detail {
+  max-width: 100%;
+  margin: 8px 0 0;
+  padding: 9px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--error);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-approval-card > button,
+  .sourcecado-approval-receipt > button,
+  .sourcecado-recovery-actions :where(button, a) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  .sourcecado-queue {
+    width: calc(100% - 32px);
+  }
+
+  .sourcecado-queue li {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .sourcecado-queue-actions {
+    display: flex;
+    flex-wrap: wrap;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .sourcecado-queue > button,
+  .sourcecado-queue-actions button,
+  .sourcecado-queue form button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-transcript-skeleton span,
+  .sourcecado-apollo-skeleton span,
+  .sourcecado-gmail-creating li span,
+  .sourcecado-calendar-loading li span,
+  .sourcecado-evidence-loading li span {
+    animation: none;
+  }
+}

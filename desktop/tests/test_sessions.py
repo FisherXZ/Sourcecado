@@ -28,10 +28,52 @@ def test_patch_title(tmp_path):
     assert listed["sessions"][0]["title"] == "Alyssa"
 
 
+def test_patch_pin_persists_without_requiring_a_title(tmp_path):
+    c = client(tmp_path)
+    sid = c.post("/v1/sessions", headers={TOKEN_HEADER: TOKEN}).json()["id"]
+
+    res = c.patch(
+        f"/v1/sessions/{sid}",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"pinned": True},
+    )
+
+    assert res.status_code == 200
+    assert res.json()["pinned"] is True
+    listed = c.get("/v1/sessions", headers={TOKEN_HEADER: TOKEN}).json()
+    assert listed["sessions"][0]["pinned"] is True
+
+
 def test_get_unknown_session_404(tmp_path):
     c = client(tmp_path)
     res = c.get("/v1/sessions/does-not-exist", headers={TOKEN_HEADER: TOKEN})
     assert res.status_code == 404
+
+
+def test_get_session_records_it_as_the_open_recent_thread(tmp_path):
+    c = client(tmp_path)
+    first = c.post("/v1/sessions", headers={TOKEN_HEADER: TOKEN}).json()["id"]
+    c.post("/v1/sessions", headers={TOKEN_HEADER: TOKEN})
+
+    assert c.get(f"/v1/sessions/{first}", headers={TOKEN_HEADER: TOKEN}).status_code == 200
+
+    listing = c.get("/v1/sessions", headers={TOKEN_HEADER: TOKEN}).json()
+    assert listing["open_id"] == first
+    assert listing["sessions"][0]["session_id"] == first
+
+
+def test_last_destination_round_trips_through_session_boot_payload(tmp_path):
+    c = client(tmp_path)
+
+    saved = c.patch(
+        "/v1/navigation",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"destination": "#/skills"},
+    )
+
+    assert saved.status_code == 200
+    listing = client(tmp_path).get("/v1/sessions", headers={TOKEN_HEADER: TOKEN}).json()
+    assert listing["last_destination"] == "#/skills"
 
 
 def test_ws_rejects_path_escape_session_id(tmp_path):
@@ -63,6 +105,40 @@ def test_ws_chat_uses_named_session(tmp_path):
     assert body["title"] == "hello there"
 
 
+def test_session_restore_returns_the_exact_persisted_v2_events(tmp_path):
+    app = create_app(
+        token=TOKEN,
+        provider=FakeProvider(deltas=("Hello ", "world")),
+        state=tmp_path,
+    )
+    c = TestClient(app)
+    sid = c.post("/v1/sessions", headers={TOKEN_HEADER: TOKEN}).json()["id"]
+
+    with c.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "text": "hello there", "session_id": sid})
+        streamed = []
+        while True:
+            event = ws.receive_json()
+            streamed.append(event)
+            if event["type"] in ("turn_end", "error"):
+                break
+
+    restored = c.get(
+        f"/v1/sessions/{sid}", headers={TOKEN_HEADER: TOKEN}
+    ).json()
+    assert app.state.store.load_events(sid) == streamed
+    assert restored["events"] == streamed
+    assert restored["messages"] == [
+        {"role": "user", "content": "hello there"},
+        {
+            "role": "assistant",
+            "content": "Hello world",
+            # identity stamp: lets restore merge transcript and events
+            "message_id": streamed[0]["message_id"],
+        },
+    ]
+
+
 def test_new_session_does_not_read_old_transcript(tmp_path):
     app = create_app(token=TOKEN, provider=FakeProvider(), state=tmp_path)
     app.state.store.append("old", {"role": "user", "content": "secret old chat"})
@@ -91,3 +167,21 @@ def test_ws_two_sessions_do_not_leak_history(tmp_path):
     assert any("alpha secret" in str(m.get("content")) for m in msgs_a)
     assert not any("alpha secret" in str(m.get("content")) for m in msgs_b)
     assert any("bravo only" in str(m.get("content")) for m in msgs_b)
+
+
+def test_session_with_torn_jsonl_lines_still_returns_200(tmp_path):
+    c = client(tmp_path)
+    sid = c.post("/v1/sessions", headers={TOKEN_HEADER: TOKEN}).json()["id"]
+    store = c.app.state.store
+    store.append(sid, {"role": "user", "content": "hi"})
+    with open(store.conv_dir / f"{sid}.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"role": "assistant", "content": "torn mid-wr\n')
+    store.append_event(sid, {"type": "marker"})
+    with open(store.event_dir / f"{sid}.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"type": "torn')
+
+    res = c.get(f"/v1/sessions/{sid}", headers={TOKEN_HEADER: TOKEN})
+
+    assert res.status_code == 200
+    assert res.json()["messages"] == [{"role": "user", "content": "hi"}]
+    assert res.json()["events"] == [{"type": "marker"}]

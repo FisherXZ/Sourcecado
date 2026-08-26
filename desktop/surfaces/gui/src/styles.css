@@ -1,327 +1,243 @@
-:root {
-  --canvas: #FAF8F3;
-  --surface: #FEFDFB;
-  --raised: #F5F2EA;
-  --text: #2B2722;
-  --muted: #6B6259;
-  --border: #E7E3DA;
-  --accent: #5B8C2A;
-  --accent-deep: #3E5E1C;
-  --accent-tint: #EBF1DF;
-  --pit: #C2703D;
-  --warn: #92591B;
-  --warn-bg: #FBEFD8;
-  --error: #9B3B2E;
-  --error-bg: #FBE6E1;
+@import "./styles/tokens.css";
+@import "./styles/shell.css";
+@import "./styles/chat.css";
+@import "./styles/route.css";
+@import "./styles/responsive.css";
+
+/* Board and person-file routes. This stays here (not in styles/route.css)
+   because tests/boardPersonStyles.test.ts reads src/styles.css directly
+   via fs and is owned by the component agent working on Board.tsx /
+   PersonFile.tsx in this review pass, not by this stylesheet split.
+   Fast-follow: move it into styles/route.css once that test reads the
+   split file instead. */
+.board-page,
+.person-page {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
 }
 
-* {
-  box-sizing: border-box;
+.board-page-header > p:last-child,
+.person-page-header > p:last-child {
+  max-width: 680px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
 }
 
-html,
-body,
-#root {
-  margin: 0;
-  height: 100%;
-  background: var(--canvas);
-  color: var(--text);
-  font-family: "General Sans", "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
-  letter-spacing: 0;
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 24px;
 }
 
-.app {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: row;
-  gap: 0;
-}
-
-.rail {
-  width: 232px;
-  flex: 0 0 232px;
-  background: var(--raised);
-  border-right: 1px solid var(--border);
-  padding: 16px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.session-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow: auto;
-}
-
-.session-row {
-  text-align: left;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.session-row.active {
-  background: var(--accent-tint);
-}
-
-.main {
-  flex: 1;
+.board-bucket,
+.person-summary-card,
+.person-sequence,
+.person-section {
   min-width: 0;
-  padding: 24px 24px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.connector-strip {
-  padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--raised);
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--muted);
-  font-family: "Geist Mono", ui-monospace, monospace;
-}
-
-.top {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-}
-
-.eyebrow {
-  margin: 0 0 4px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  font-family: ui-monospace, "Geist Mono", monospace;
-}
-
-h1 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.025em;
-}
-
-.model {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  font-family: ui-monospace, "Geist Mono", monospace;
-}
-
-.transcript {
-  flex: 1;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 8px 0;
-}
-
-.empty {
-  margin: auto;
-  color: var(--muted);
-}
-
-.bubble {
-  max-width: 85%;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
   background: var(--surface);
 }
 
-.bubble p {
-  margin: 0;
-  white-space: pre-wrap;
+.board-bucket {
+  overflow: hidden;
 }
 
-.bubble.user {
-  align-self: flex-end;
-  background: var(--accent-tint);
-  border-color: transparent;
-}
-
-.bubble.assistant {
-  align-self: flex-start;
-}
-
-.tool-card {
-  align-self: flex-start;
-  max-width: 85%;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+.board-bucket-heading {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
   background: var(--raised);
-  font-family: ui-monospace, "Geist Mono", monospace;
-  font-size: 12px;
 }
 
-.tool-card.live {
-  border-color: var(--accent);
-}
-
-.tool-name {
-  margin: 0 0 4px;
-  color: var(--accent-deep);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.tool-result {
+.board-bucket-heading h2,
+.person-page h2 {
   margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.board-bucket-heading span {
   color: var(--muted);
-}
-
-.approval-card {
-  align-self: flex-start;
-  max-width: 85%;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--warn-bg);
-}
-
-.approval-card.pending {
-  border-color: var(--warn);
-}
-
-.approval-card.resolved {
-  background: var(--raised);
-}
-
-.approval-reason {
-  margin: 6px 0 0;
-  color: var(--warn);
   font-size: 12px;
 }
 
-.approval-resolved {
+.board-rows {
+  display: grid;
+}
+
+.board-row {
+  display: flex;
+  min-height: 64px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.board-row:last-child {
+  border-bottom: 0;
+}
+
+.board-row:hover {
+  background: var(--raised);
+}
+
+.board-row:focus-visible,
+.person-back-link:focus-visible,
+.person-sequence-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.board-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-row span,
+.board-bucket-empty,
+.person-empty,
+.person-timeline-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.board-bucket-empty {
+  margin: 0;
+  padding: 18px 16px;
+}
+
+.person-back-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  margin-bottom: 12px;
+  color: var(--accent-deep);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.person-sequence,
+.person-section {
+  margin-top: 20px;
+  padding: 20px;
+}
+
+.person-sequence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.person-sequence-action {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.person-sequence-action.is-active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.person-sequence-action:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.person-sequence-error {
+  margin: 12px 0 0;
+  color: var(--error);
+}
+
+.person-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.person-summary-card {
+  padding: 18px 20px;
+}
+
+.person-summary-card p,
+.person-section > p {
   margin: 8px 0 0;
   color: var(--muted);
-  font-family: ui-monospace, "Geist Mono", monospace;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  line-height: 1.55;
 }
 
-.approval-actions {
-  display: flex;
+.person-section ul {
+  display: grid;
   gap: 8px;
-  justify-content: flex-end;
+  margin: 12px 0 0;
+  padding-left: 20px;
+}
+
+.person-timeline {
+  display: grid;
+  gap: 0;
   margin-top: 10px;
 }
 
-.approval-actions button {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 6px;
-  font: inherit;
-  font-weight: 500;
-  cursor: pointer;
+.person-timeline-entry {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
 }
 
-.approval-actions .allow {
-  border: 0;
-  background: var(--accent);
-  color: #FEFDFB;
+.person-timeline-entry:last-child {
+  border-bottom: 0;
 }
 
-.approval-actions .deny {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-}
-
-.status.warn {
+.person-timeline-entry p {
   margin: 0;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--warn-bg);
-  color: var(--warn);
+  line-height: 1.5;
 }
 
-.composer {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
+.person-timeline-entry .person-timeline-meta {
+  margin-bottom: 4px;
+  font-family: ui-monospace, "Geist Mono", monospace;
 }
 
-.composer textarea {
-  flex: 1;
-  resize: none;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
+@media (max-width: 1179px) {
+  .board-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-.composer textarea:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+@media (max-width: 767px) {
+  .board-grid,
+  .person-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .person-sequence-actions {
+    display: grid;
+  }
+
+  .person-sequence-action {
+    width: 100%;
+  }
 }
 
-.composer button {
-  height: 40px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--accent);
-  color: #FEFDFB;
-  font: inherit;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.composer button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.schedule-strip {
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--raised);
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--muted);
-  font-family: "Geist Mono", ui-monospace, monospace;
-}
-
-.schedule-strip strong {
-  color: var(--text);
-  font-weight: 500;
-}
-
-.strip-btn {
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}

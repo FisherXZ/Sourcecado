@@ -1,7 +1,7 @@
 """Google OAuth — one identity, incremental scopes.
 
-Tokens never go in the prompt. Send is in the Gmail grant so later send
-can reuse this login; the tool catalog still has no gmail_send.
+Tokens never go in the prompt. Send is in the Gmail grant. gmail_send asks
+before users.drafts.send.
 """
 
 from __future__ import annotations
