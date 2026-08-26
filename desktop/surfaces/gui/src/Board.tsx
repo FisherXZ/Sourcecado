@@ -2,30 +2,46 @@ import { useEffect, useState } from "react";
 
 import { getBoard, type Board, type BoardPerson } from "./api";
 
-function label(person: BoardPerson): string {
-  const name = [person.first_name, person.last_name].filter(Boolean).join(" ");
-  const job = [person.title, person.company].filter(Boolean).join(" · ");
-  return job ? `${name || "Unknown"} · ${job}` : name || "Unknown";
+function label(person: BoardPerson): { name: string; detail: string | null } {
+  const name = [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
+  const detail = [person.title, person.company].filter(Boolean).join(" · ");
+  return { name, detail: detail || null };
 }
 
 function Bucket({
+  id,
   title,
   people,
 }: {
+  id: string;
   title: string;
   people: BoardPerson[];
 }) {
+  const headingId = `board-${id}-heading`;
   return (
-    <section className="board-bucket">
-      <h2>{title}</h2>
+    <section className="board-bucket" aria-labelledby={headingId}>
+      <div className="board-bucket-heading">
+        <h2 id={headingId}>{title}</h2>
+        <span aria-label={`${people.length} people`}>{people.length}</span>
+      </div>
       {people.length === 0 ? (
-        <p className="empty">None</p>
+        <p className="board-bucket-empty">None</p>
       ) : (
-        people.map((person) => (
-          <a key={person.person_id} className="board-row" href={`#/people/${person.person_id}`}>
-            {label(person)}
-          </a>
-        ))
+        <div className="board-rows">
+          {people.map((person) => {
+            const copy = label(person);
+            return (
+              <a
+                key={person.person_id}
+                className="board-row"
+                href={`#/people/${encodeURIComponent(person.person_id)}`}
+              >
+                <strong>{copy.name}</strong>
+                {copy.detail ? <span>{copy.detail}</span> : null}
+              </a>
+            );
+          })}
+        </div>
       )}
     </section>
   );
@@ -33,32 +49,64 @@ function Bucket({
 
 export function BoardView() {
   const [board, setBoard] = useState<Board | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    getBoard()
-      .then(setBoard)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, []);
+    let active = true;
+    setFailed(false);
+    getBoard().then(
+      (next) => {
+        if (active) setBoard(next);
+      },
+      () => {
+        if (active) setFailed(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [attempt]);
 
   const empty =
-    board &&
+    board !== null &&
     board.open.length === 0 &&
     board.in_conversation.length === 0 &&
     board.done.length === 0;
 
   return (
-    <div className="route-page">
-      <h1>Board</h1>
-      {error ? <p className="empty">{error}</p> : null}
-      {empty ? <p className="empty">No one in motion.</p> : null}
+    <main className="route-page board-page">
+      <header className="board-page-header">
+        <p className="eyebrow">Sourcing workspace</p>
+        <h1>Board</h1>
+        <p>Keep active people moving from open research to completed follow-up.</p>
+      </header>
+      {board === null && !failed ? <p role="status">Loading board…</p> : null}
+      {failed ? (
+        <section className="route-error" role="alert">
+          <p>Couldn’t load the board.</p>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            Retry
+          </button>
+        </section>
+      ) : null}
+      {empty ? (
+        <section className="route-empty" role="status">
+          <h2>No one in motion</h2>
+          <p>Keep a person from sourcing results to add them here.</p>
+        </section>
+      ) : null}
       {board && !empty ? (
         <div className="board-grid">
-          <Bucket title="Open" people={board.open} />
-          <Bucket title="In conversation" people={board.in_conversation} />
-          <Bucket title="Done" people={board.done} />
+          <Bucket id="open" title="Open" people={board.open} />
+          <Bucket
+            id="conversation"
+            title="In conversation"
+            people={board.in_conversation}
+          />
+          <Bucket id="done" title="Done" people={board.done} />
         </div>
       ) : null}
-    </div>
+    </main>
   );
 }

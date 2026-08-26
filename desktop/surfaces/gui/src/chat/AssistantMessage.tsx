@@ -1,0 +1,154 @@
+import {
+  MessagePrimitive,
+  useAuiState,
+  type TextMessagePartProps,
+  type ToolCallMessagePartProps,
+  type ToolCallMessagePart,
+} from "@assistant-ui/react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { ActivityGroup } from "./ActivityGroup";
+import { ApprovalCard } from "./ApprovalCard";
+import { SourceCitation } from "./SourceCitation";
+import { useInspector } from "./Inspector";
+
+function AssistantText({ text }: TextMessagePartProps) {
+  return (
+    <div className="sourcecado-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ children, ...props }) => (
+            <a {...props} target="_blank" rel="noreferrer noopener">
+              {children}
+            </a>
+          ),
+          table: ({ children, ...props }) => (
+            <div className="sourcecado-table-scroll">
+              <table {...props}>{children}</table>
+            </div>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function SafeToolFallback(part: ToolCallMessagePartProps) {
+  if (!part.approval) return null;
+  return (
+    <ApprovalCard
+      part={part}
+      onDecision={async (approved) => {
+        part.respondToApproval({ approved });
+      }}
+    />
+  );
+}
+
+export function AssistantMessage() {
+  const message = useAuiState((state) => state.message);
+  const sourcecadoState = message.metadata.custom?.sourcecadoState;
+  const notice = message.metadata.custom?.sourcecadoNotice === true;
+  const prose = message.content
+    .filter((part) => part.type === "text")
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("\n");
+  const copyable =
+    message.status?.type === "complete" && prose.trim().length > 0;
+  const tools = message.content.filter(
+    (part): part is ToolCallMessagePart => part.type === "tool-call",
+  );
+  const artifacts = Array.isArray(
+    message.metadata.custom?.sourcecadoArtifacts,
+  )
+    ? (message.metadata.custom?.sourcecadoArtifacts as Array<
+        Record<string, unknown>
+      >)
+    : [];
+
+  return (
+    <MessagePrimitive.Root
+      className={`sourcecado-assistant-message${notice ? " sourcecado-notice" : ""}`}
+      {...(notice ? { role: "note" } : {})}
+    >
+      {notice ? (
+        <p className="sourcecado-notice-title">
+          Some conversation history is unavailable.
+        </p>
+      ) : null}
+      <MessagePrimitive.Parts
+        components={{
+          Text: AssistantText,
+          Source: SourceCitation,
+          tools: { Fallback: SafeToolFallback },
+        }}
+      />
+      <ActivityGroup tools={tools} messageState={sourcecadoState} />
+      {artifacts.length > 0 ? <ArtifactControls artifacts={artifacts} /> : null}
+      {sourcecadoState === "cancelled" ? (
+        <p className="sourcecado-terminal-receipt">Run cancelled.</p>
+      ) : null}
+      {notice ? (
+        <p className="sourcecado-notice-detail">Available messages are shown.</p>
+      ) : null}
+      {copyable ? (
+        <button
+          type="button"
+          className="sourcecado-copy-action"
+          onClick={() => void navigator.clipboard?.writeText(prose)}
+        >
+          Copy response
+        </button>
+      ) : null}
+    </MessagePrimitive.Root>
+  );
+}
+
+function ArtifactControls({
+  artifacts,
+}: {
+  readonly artifacts: readonly Record<string, unknown>[];
+}) {
+  const { select } = useInspector();
+  return (
+    <div className="sourcecado-artifacts" aria-label="Artifacts">
+      {artifacts.map((artifact) => {
+        const id = String(artifact.id ?? "artifact");
+        const title = String(artifact.title ?? "Generated artifact");
+        return (
+          <button
+            key={id}
+            type="button"
+            aria-label={`Artifact: ${title}`}
+            onClick={(event) =>
+              select(
+                {
+                  kind: "artifact",
+                  id,
+                  title,
+                  status: "success",
+                  preview:
+                    typeof artifact.preview === "string"
+                      ? artifact.preview
+                      : null,
+                  externalUrl:
+                    typeof artifact.external_url === "string"
+                      ? artifact.external_url
+                      : null,
+                  stale: artifact.stale === true,
+                  truncated: artifact.truncated === true,
+                },
+                event.currentTarget,
+              )
+            }
+          >
+            {title}
+          </button>
+        );
+      })}
+    </div>
+  );
+}

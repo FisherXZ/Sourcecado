@@ -14,8 +14,8 @@ class Boundary extends Component<{ children: ReactNode }, { err: string | null }
   render() {
     if (this.state.err) {
       return (
-        <main className="app">
-          <p className="status warn">{this.state.err}</p>
+        <main className="fatal-error-shell">
+          <p className="fatal-error-message">{this.state.err}</p>
         </main>
       );
     }

@@ -6,80 +6,142 @@ const STATES = [
   { id: "open", label: "Open" },
   { id: "in_conversation", label: "In conversation" },
   { id: "done", label: "Done" },
-];
+] as const;
 
 export function PersonFileView({ personId }: { personId: string }) {
   const [file, setFile] = useState<PersonFile | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [moving, setMoving] = useState<string | null>(null);
+  const [moveFailed, setMoveFailed] = useState(false);
 
   useEffect(() => {
-    getPerson(personId)
-      .then(setFile)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, [personId]);
+    let active = true;
+    setFailed(false);
+    setFile(null);
+    getPerson(personId).then(
+      (next) => {
+        if (active) setFile(next);
+      },
+      () => {
+        if (active) setFailed(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [attempt, personId]);
 
   async function move(state: string) {
-    await setPersonSequence(personId, state);
-    setFile(await getPerson(personId));
+    if (moving) return;
+    setMoving(state);
+    setMoveFailed(false);
+    try {
+      await setPersonSequence(personId, state);
+      setFile(await getPerson(personId));
+    } catch {
+      setMoveFailed(true);
+    } finally {
+      setMoving(null);
+    }
   }
 
-  if (error) {
+  if (failed) {
     return (
-      <div className="route-page">
+      <main className="route-page person-page">
         <h1>Person</h1>
-        <p className="empty">{error}</p>
-      </div>
+        <section className="route-error" role="alert">
+          <p>Couldn’t load this person file.</p>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            Retry
+          </button>
+          <a href="#/board">Back to Board</a>
+        </section>
+      </main>
     );
   }
+
   if (!file) {
     return (
-      <div className="route-page">
+      <main className="route-page person-page" aria-busy="true">
         <h1>Person</h1>
-        <p className="empty">Loading…</p>
-      </div>
+        <p role="status">Loading person file…</p>
+      </main>
     );
   }
 
   return (
-    <div className="route-page">
-      <p className="eyebrow">
-        <a href="#/board">Board</a>
-      </p>
-      <h1>{file.brief.who || "Person"}</h1>
-      <p>{file.brief.why}</p>
-      <p className="eyebrow">Missing: {file.brief.missing.join(", ") || "none"}</p>
-      <p className="eyebrow">Sources: {file.brief.sources.join(", ") || "none"}</p>
-      <div className="approval-actions">
-        {STATES.map((state) => (
-          <button
-            key={state.id}
-            type="button"
-            className={file.person.sequence_state === state.id ? "allow" : "strip-btn"}
-            onClick={() => move(state.id).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))}
-          >
-            {state.label}
-          </button>
-        ))}
-      </div>
-      <h2>Learned</h2>
-      {file.brief.learned.length === 0 ? (
-        <p className="empty">Nothing filed yet.</p>
-      ) : (
-        <ul>
-          {file.brief.learned.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      )}
-      <h2>Timeline</h2>
-      {file.timeline.map((event) => (
-        <article key={event.event_id} className="tool-card">
-          <p className="tool-name">
-            {event.source} · {event.kind}
+    <main className="route-page person-page">
+      <header className="person-page-header">
+        <a className="person-back-link" href="#/board">← Board</a>
+        <p className="eyebrow">Person file</p>
+        <h1>{file.brief.who || "Person"}</h1>
+        {file.brief.why ? <p>{file.brief.why}</p> : null}
+      </header>
+
+      <section className="person-sequence" aria-labelledby="person-sequence-heading">
+        <h2 id="person-sequence-heading">Sequence state</h2>
+        <div className="person-sequence-actions">
+          {STATES.map((state) => {
+            const active = file.person.sequence_state === state.id;
+            return (
+              <button
+                key={state.id}
+                type="button"
+                className={`person-sequence-action ${active ? "is-active" : ""}`}
+                aria-pressed={active}
+                disabled={moving !== null}
+                onClick={() => void move(state.id)}
+              >
+                {moving === state.id ? "Updating…" : state.label}
+              </button>
+            );
+          })}
+        </div>
+        {moveFailed ? (
+          <p className="person-sequence-error" role="alert">
+            Couldn’t update the sequence state. Try again.
           </p>
-          <p className="tool-result">{event.summary}</p>
-        </article>
-      ))}
-    </div>
+        ) : null}
+      </section>
+
+      <div className="person-summary-grid">
+        <section className="person-summary-card">
+          <h2>Knowledge gaps</h2>
+          <p>{file.brief.missing.join(", ") || "None recorded"}</p>
+        </section>
+        <section className="person-summary-card">
+          <h2>Sources</h2>
+          <p>{file.brief.sources.join(", ") || "None recorded"}</p>
+        </section>
+      </div>
+
+      <section className="person-section" aria-labelledby="person-learned-heading">
+        <h2 id="person-learned-heading">Learned</h2>
+        {file.brief.learned.length === 0 ? (
+          <p className="person-empty">Nothing filed yet.</p>
+        ) : (
+          <ul>
+            {file.brief.learned.map((line) => <li key={line}>{line}</li>)}
+          </ul>
+        )}
+      </section>
+
+      <section className="person-section" aria-labelledby="person-timeline-heading">
+        <h2 id="person-timeline-heading">Timeline</h2>
+        {file.timeline.length === 0 ? (
+          <p className="person-empty">No sourcing activity yet.</p>
+        ) : (
+          <div className="person-timeline">
+            {file.timeline.map((event) => (
+              <article key={event.event_id} className="person-timeline-entry">
+                <p className="person-timeline-meta">{event.source} · {event.kind}</p>
+                <p>{event.summary}</p>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </main>
   );
 }

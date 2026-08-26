@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import os
 import re
 import secrets
+import threading
+import coworker.turn as turn_runtime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +22,13 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from coworker.automation.scheduler import Scheduler
+from coworker.automation.scheduler import (
+    ROUTINE_TEMPLATES,
+    SUPPORTED_CADENCES,
+    Scheduler,
+    next_monday_0900,
+    now_iso,
+)
 from coworker.calendar import calendar_from_secrets
 from coworker.connectors.google_oauth import (
     CALENDAR_SCOPE,
@@ -37,6 +47,7 @@ from coworker.connectors.google_oauth import (
     save_google,
 )
 from coworker.drive import drive_from_secrets
+from coworker.events import build_event, new_turn_identity, TurnIdentity
 from coworker.gmail import gmail_from_secrets
 from coworker.inbox import Inbox
 from coworker.mcp import FakeMcp, LiveMcp, write_default_mcp_json
@@ -50,7 +61,13 @@ from coworker.provider import ToolCall, provider_from_env
 from coworker.secrets import SecretStore
 from coworker.store import ConversationStore, valid_session_id
 from coworker.tools import OPENAI_TOOLS, execute
-from coworker.turn import close_open_tool_calls, run_turn
+from coworker.turn import (
+    close_open_tool_calls,
+    _tool_failure,
+    RunControl,
+    RunCoordinator,
+    run_turn,
+)
 
 _UNSET = object()
 
@@ -179,26 +196,16 @@ def _ws_token_ok(ws: WebSocket, expected: str) -> bool:
     return any(_tokens_match(c, expected) for c in candidates)
 
 
-async def _await_permission(ws: WebSocket, call_id: str, inbox: Inbox) -> str:
+async def _await_permission(
+    call_id: str, inbox: Inbox, control: RunControl | None = None
+) -> str:
     while True:
+        if control is not None and control.cancel_requested.is_set():
+            return "cancel"
         item = inbox.get(call_id)
         if item and item.get("state") == "resolved" and item.get("decision") in ("allow", "deny"):
             return str(item["decision"])
-        try:
-            incoming = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
-        except TimeoutError:
-            continue
-        except Exception:
-            await asyncio.sleep(0.2)
-            continue
-        if incoming.get("type") != "permission":
-            continue
-        if str(incoming.get("id") or "") != call_id:
-            continue
-        decision = str(incoming.get("decision") or "").strip().lower()
-        if decision in ("allow", "deny"):
-            inbox.resolve(call_id, decision)
-            return decision
+        await asyncio.sleep(0.05)
 
 
 def _close_open_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -302,7 +309,289 @@ def create_app(
         )
 
     app.state.scheduler.job_runner = _default_job_runner
-    app.state.tool_results: dict[str, tuple[bool, dict[str, Any]]] = {}
+    app.state.run_coordinator = RunCoordinator()
+    app.state.live_event_senders: set[Any] = set()
+    recovery_projection_lock = threading.RLock()
+
+    def _persist_approval_receipt(
+        item: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if item is None:
+            return None
+        required = ("session_id", "run_id", "message_id", "part_id")
+        if not all(item.get(field) for field in required):
+            return None
+        sid = str(item["session_id"])
+        existing = next(
+            (
+                event
+                for event in store.load_events(sid)
+                if event.get("type") == "approval_resolved"
+                and event.get("id") == item.get("id")
+                and event.get("resolved_at") == item.get("resolved_at")
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        event = build_event(
+            TurnIdentity(
+                session_id=sid,
+                run_id=str(item["run_id"]),
+                message_id=str(item["message_id"]),
+                part_id=str(item["part_id"]),
+            ),
+            "approval_resolved",
+            event_id=f"event_{secrets.token_hex(16)}",
+            id=str(item["id"]),
+            name=str(item["name"]),
+            resolution=(
+                "allowed"
+                if item.get("decision") == "allow"
+                else "denied"
+                if item.get("decision") == "deny"
+                else str(item.get("state") or "cancelled")
+            ),
+            decision=item.get("decision"),
+            actor=item.get("actor"),
+            requested_at=str(item.get("requested_at") or item.get("created_at")),
+            resolved_at=str(item.get("resolved_at")),
+            scope=str(item.get("scope") or "once"),
+            execution_status=str(item.get("execution_status") or "pending"),
+            execution_error=item.get("execution_error"),
+        )
+        store.append_event(sid, event)
+        return event
+
+    async def _publish_live_events(events: list[dict[str, Any]]) -> None:
+        for event in events:
+            for owner_loop, sender in tuple(app.state.live_event_senders):
+                try:
+                    current_loop = asyncio.get_running_loop()
+                    if owner_loop is current_loop:
+                        await sender(event)
+                    else:
+                        future = asyncio.run_coroutine_threadsafe(
+                            sender(event), owner_loop
+                        )
+                        await asyncio.wrap_future(future)
+                except Exception:
+                    app.state.live_event_senders.discard((owner_loop, sender))
+
+    def _replace_recovery_tool_result(
+        item: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        session_id = str(item.get("session_id") or "")
+        original_call_id = str(item.get("original_call_id") or "")
+        if not session_id or not original_call_id:
+            return
+        messages = store.load(session_id)
+        for index, message in enumerate(messages):
+            if (
+                message.get("role") == "tool"
+                and message.get("tool_call_id") == original_call_id
+            ):
+                messages[index] = {
+                    **message,
+                    "name": str(item.get("name") or message.get("name") or "tool"),
+                    "content": json.dumps(result, ensure_ascii=False),
+                }
+                store.replace_all(session_id, messages)
+                return
+
+    async def _project_recovery_terminal(
+        item: dict[str, Any],
+        *,
+        decision: str,
+        ok: bool,
+        result: dict[str, Any],
+    ) -> None:
+        session_id = str(item.get("session_id") or "")
+        run_id = str(item.get("run_id") or "")
+        command_id = str(item.get("recovery_command_id") or "")
+        original_call_id = str(item.get("original_call_id") or "")
+        message_id = str(item.get("message_id") or "")
+        part_id = str(item.get("part_id") or "")
+        if not all(
+            (session_id, run_id, command_id, original_call_id, message_id, part_id)
+        ):
+            return
+        to_publish: list[dict[str, Any]] = []
+        with recovery_projection_lock:
+            existing_events = store.load_events(session_id)
+            if any(
+                event.get("type") == "tool_recovery"
+                and event.get("command_id") == command_id
+                and event.get("status") != "approval_required"
+                for event in existing_events
+            ):
+                return
+            pending_recovery = next(
+                (
+                    event
+                    for event in reversed(existing_events)
+                    if event.get("type") == "tool_recovery"
+                    and event.get("command_id") == command_id
+                    and event.get("status") == "approval_required"
+                ),
+                None,
+            )
+            original_failure = (
+                dict(pending_recovery.get("failure") or {})
+                if pending_recovery is not None
+                else {}
+            )
+            identity = TurnIdentity(
+                session_id=session_id,
+                run_id=run_id,
+                message_id=message_id,
+                part_id=part_id,
+            )
+            name = str(item.get("name") or "tool")
+            recovery_failure = None
+            interrupted = item.get("execution_status") == "interrupted"
+            if decision == "allow" and not interrupted:
+                _replace_recovery_tool_result(item, result)
+                if not ok:
+                    recovery_failure = _tool_failure(
+                        ToolCall(
+                            id=original_call_id,
+                            name=name,
+                            arguments=dict(item.get("arguments") or {}),
+                        ),
+                        result,
+                        identity,
+                    )
+                existing_finished = next(
+                    (
+                        event
+                        for event in existing_events
+                        if event.get("type") == "tool_finished"
+                        and event.get("recovery_command_id") == command_id
+                    ),
+                    None,
+                )
+                if existing_finished is None:
+                    finished = build_event(
+                        identity,
+                        "tool_finished",
+                        event_id=f"event_{secrets.token_hex(16)}",
+                        id=original_call_id,
+                        name=name,
+                        ok=ok,
+                        result=result,
+                        finished_at=datetime.now(UTC).isoformat(),
+                        recovery_command_id=command_id,
+                        **(
+                            {"failure": recovery_failure}
+                            if recovery_failure
+                            else {}
+                        ),
+                    )
+                    store.append_event(session_id, finished)
+                    to_publish.append(finished)
+            approval = _persist_approval_receipt(item)
+            if approval is not None:
+                to_publish.append(approval)
+            status = (
+                "interrupted"
+                if interrupted
+                else "denied"
+                if decision == "deny"
+                else "succeeded"
+                if ok
+                else "failed"
+            )
+            outcome = (
+                str(item.get("execution_error") or "Recovery outcome is unknown.")
+                if interrupted
+                else "Retry was denied; prior successful work was preserved."
+                if decision == "deny"
+                else "Failed step recovered."
+                if ok
+                else "Retry failed; successful prior work was preserved."
+            )
+            recovery = build_event(
+                identity,
+                "tool_recovery",
+                event_id=f"event_{secrets.token_hex(16)}",
+                command_id=command_id,
+                call_id=original_call_id,
+                name=name,
+                action="retry",
+                status=status,
+                outcome=outcome,
+                **(
+                    {"failure": recovery_failure or original_failure}
+                    if status in {"failed", "interrupted"}
+                    else {}
+                ),
+            )
+            store.append_event(session_id, recovery)
+            to_publish.append(recovery)
+        await _publish_live_events(to_publish)
+
+    async def _resolve_recovery_approval(
+        item_id: str,
+        decision: str,
+        *,
+        actor: str,
+        scope: str,
+        claimant: str,
+    ) -> tuple[Any, dict[str, Any], bool, dict[str, Any]] | None:
+        item = app.state.inbox.get(item_id)
+        if item is None or item.get("kind") != "recovery_approval":
+            return None
+        claim = app.state.inbox.decide_and_claim(
+            item_id,
+            decision,
+            actor=actor,
+            scope=scope,
+            claimant=claimant,
+        )
+        if claim is None:
+            return None
+        if decision == "allow" and claim.claimed and claim.owned:
+            try:
+                ok, result = await asyncio.to_thread(
+                    turn_runtime.execute,
+                    item["name"],
+                    item["arguments"],
+                    store=store,
+                    gmail=app.state.gmail,
+                    drive=app.state.drive,
+                    calendar=app.state.calendar,
+                    http=app.state.http,
+                    apollo_key=app.state.apollo_key,
+                    tavily_key=app.state.tavily_key,
+                    skills=app.state.skills,
+                    mcp=app.state.mcp,
+                    people=app.state.people,
+                    session_id=str(item.get("session_id") or ""),
+                )
+                result = dict(result)
+            except Exception as exc:
+                ok, result = False, {"error": str(exc)}
+            receipt = app.state.inbox.complete_execution(
+                item_id,
+                claimant=claimant,
+                ok=ok,
+                result=result,
+            )
+        elif decision == "deny":
+            receipt = claim.item
+        else:
+            receipt = await app.state.inbox.wait_for_execution(item_id)
+        if receipt is None:
+            return None
+        ok, result = app.state.inbox.execution_outcome(receipt)
+        await _project_recovery_terminal(
+            receipt,
+            decision=decision,
+            ok=ok,
+            result=result,
+        )
+        return claim, receipt, ok, result
 
     app.add_middleware(
         CORSMiddleware,
@@ -394,36 +683,118 @@ def create_app(
     async def inbox_resolve(item_id: str, request: Request):
         payload = await request.json()
         decision = str(payload.get("decision") or "").strip().lower()
+        actor = str(payload.get("actor") or "operator").strip() or "operator"
+        scope = str(payload.get("scope") or "once").strip() or "once"
         item = app.state.inbox.get(item_id)
         if item is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        resolved = app.state.inbox.resolve(item_id, decision)
-        if resolved is None:
-            return JSONResponse({"error": "already resolved"}, status_code=409)
-        if decision == "deny":
-            app.state.tool_results[item_id] = (False, {"error": "denied by user"})
-            return {"ok": False, "item": resolved, "result": {"error": "denied by user"}}
-        ok, result = execute(
-            item["name"],
-            item["arguments"],
-            store=app.state.store,
-            gmail=app.state.gmail,
-            drive=app.state.drive,
-            calendar=app.state.calendar,
-            http=app.state.http,
-            apollo_key=app.state.apollo_key,
-            tavily_key=app.state.tavily_key,
-            skills=app.state.skills,
-            mcp=app.state.mcp,
-            people=app.state.people,
+        claimant = f"http:{secrets.token_hex(16)}"
+        if item.get("kind") == "recovery_approval":
+            resolved = await _resolve_recovery_approval(
+                item_id,
+                decision,
+                actor=actor,
+                scope=scope,
+                claimant=claimant,
+            )
+            if resolved is None:
+                return JSONResponse(
+                    {"error": "resolved elsewhere"}, status_code=409
+                )
+            claim, receipt, ok, result = resolved
+            response = {"ok": ok, "item": receipt, "result": result}
+            if not claim.decision_recorded:
+                response["idempotent"] = True
+            return response
+        claim = app.state.inbox.decide_and_claim(
+            item_id,
+            decision,
+            actor=actor,
+            scope=scope,
+            claimant=claimant,
         )
-        app.state.tool_results[item_id] = (ok, result)
-        return {"ok": ok, "item": resolved, "result": result}
+        if claim is None:
+            return JSONResponse({"error": "resolved elsewhere"}, status_code=409)
+        if decision == "deny":
+            receipt = claim.item
+            if claim.decision_recorded:
+                _persist_approval_receipt(receipt)
+        elif claim.claimed and claim.owned:
+            try:
+                ok, result = await asyncio.to_thread(
+                    execute,
+                    item["name"],
+                    item["arguments"],
+                    store=app.state.store,
+                    gmail=app.state.gmail,
+                    drive=app.state.drive,
+                    calendar=app.state.calendar,
+                    http=app.state.http,
+                    apollo_key=app.state.apollo_key,
+                    tavily_key=app.state.tavily_key,
+                    skills=app.state.skills,
+                    mcp=app.state.mcp,
+                    people=app.state.people,
+                    session_id=str(item.get("session_id") or ""),
+                )
+            except Exception as exc:
+                ok, result = False, {"error": str(exc)}
+            receipt = app.state.inbox.complete_execution(
+                item_id,
+                claimant=claimant,
+                ok=ok,
+                result=result,
+            )
+            _persist_approval_receipt(receipt)
+        else:
+            receipt = await app.state.inbox.wait_for_execution(item_id)
+        if receipt is None:
+            return JSONResponse({"error": "execution unavailable"}, status_code=409)
+        if receipt.get("execution_status") == "interrupted":
+            approval = _persist_approval_receipt(receipt)
+            if approval is not None:
+                await _publish_live_events([approval])
+        ok, result = app.state.inbox.execution_outcome(receipt)
+        response = {"ok": ok, "item": receipt, "result": result}
+        if not claim.decision_recorded:
+            response["idempotent"] = True
+        return response
 
     @app.post("/v1/schedule/tick")
     def schedule_tick():
         runs = app.state.scheduler.tick()
         return {"runs": runs}
+
+    @app.post("/v1/schedule", status_code=201)
+    async def schedule_create(request: Request):
+        payload = await request.json()
+        template_id = str(payload.get("template_id") or "").strip()
+        cadence = str(payload.get("cadence") or "").strip()
+        name = str(payload.get("name") or "").strip()
+        prompt = str(payload.get("prompt") or "").strip()
+        template_ids = {str(item["id"]) for item in ROUTINE_TEMPLATES}
+        fields: dict[str, str] = {}
+        if template_id not in template_ids:
+            fields["template_id"] = "Choose a supported template."
+        if cadence not in SUPPORTED_CADENCES:
+            fields["cadence"] = "Choose a supported cadence."
+        if not name or len(name) > 80:
+            fields["name"] = "Enter a name up to 80 characters."
+        if not prompt or len(prompt) > 2000:
+            fields["prompt"] = "Enter instructions up to 2,000 characters."
+        if fields:
+            return JSONResponse(
+                {"error": "invalid_routine", "fields": fields}, status_code=400
+            )
+        job = app.state.store.add_job(
+            SUPPORTED_CADENCES[cadence],
+            prompt,
+            next_run_at=next_monday_0900(now_iso()),
+            name=name,
+            template_id=template_id,
+            cadence=cadence,
+        )
+        return {"job": job}
 
     @app.post("/v1/schedule/{job_id}/run")
     def schedule_run(job_id: int):
@@ -432,55 +803,204 @@ def create_app(
         except KeyError:
             return JSONResponse({"error": "not found"}, status_code=404)
         except RuntimeError:
-            return JSONResponse({"error": "already running"}, status_code=409)
+            return JSONResponse(
+                {
+                    "error": "already_running",
+                    "message": "This routine is already running. Wait for its current receipt.",
+                },
+                status_code=409,
+            )
         return {"run": run}
 
     @app.get("/v1/schedule")
     def schedule():
-        return app.state.store.list_schedule()
+        return {**app.state.store.list_schedule(), "templates": list(ROUTINE_TEMPLATES)}
 
     @app.get("/v1/connectors")
     def connectors():
         profile = load_google(app.state.secrets)
         email = profile.get("email")
         refresh = bool(profile.get("refresh_token"))
-        gmail_ok = refresh and (
-            (has_scope(profile, COMPOSE_SCOPE) and has_scope(profile, READ_SCOPE))
-            or (not profile.get("scopes") and refresh)
-        )
         granola = app.state.secrets.get("mcp-oauth:granola") or {}
+
+        def normalized_connector(
+            *,
+            connector_id: str,
+            title: str,
+            description: str,
+            status: str,
+            catalog_group: str,
+            connector_email: str | None,
+            required_scopes: list[str],
+            missing_scopes: list[str],
+            supported_actions: list[str],
+            available_actions: list[str],
+            authorization_group: str | None = None,
+            manual_configuration: bool = False,
+        ) -> dict[str, Any]:
+            if status == "connected":
+                health = {
+                    "category": "healthy",
+                    "label": "Configured" if manual_configuration else "Ready",
+                    "message": "This connection is ready to use.",
+                }
+                recovery = None
+            elif status == "missing_scopes":
+                health = {
+                    "category": "attention",
+                    "label": "Missing permissions",
+                    "message": "Additional permission is required before every action can run.",
+                }
+                recovery = {
+                    "category": "grant_scopes",
+                    "action_label": "Finish setup",
+                    "message": "Reconnect and approve the listed permissions.",
+                }
+            else:
+                health = {
+                    "category": "setup_required",
+                    "label": "Available",
+                    "message": "This connection has not been set up yet.",
+                }
+                recovery = {
+                    "category": "configure" if manual_configuration else "connect",
+                    "action_label": "View setup guide" if manual_configuration else "Connect",
+                    "message": (
+                        "Set APOLLO_API_KEY in the local Sourcecado environment, then restart Sourcecado."
+                        if manual_configuration
+                        else "Start authorization, then return to this detail page."
+                    ),
+                }
+            return {
+                "id": connector_id,
+                "title": title,
+                "description": description,
+                "status": status,
+                "catalog_group": catalog_group,
+                "email": connector_email,
+                "required_scopes": required_scopes,
+                "missing_scopes": missing_scopes,
+                "health": health,
+                "recovery": recovery,
+                "supported_actions": supported_actions,
+                "available_actions": available_actions,
+                "repair_route": f"#/connections/{connector_id}",
+                "authorization_group": authorization_group,
+            }
+
+        gmail_required = ["Read Gmail messages", "Create Gmail drafts"]
+        gmail_missing = list(gmail_required) if not refresh else []
+        if refresh and profile.get("scopes"):
+            if not has_scope(profile, READ_SCOPE):
+                gmail_missing.append("Read Gmail messages")
+            if not has_scope(profile, COMPOSE_SCOPE):
+                gmail_missing.append("Create Gmail drafts")
+        gmail_status = (
+            "available" if not refresh else "missing_scopes" if gmail_missing else "connected"
+        )
+        drive_missing = [] if refresh and has_scope(profile, DRIVE_SCOPE) else ["Read Drive files"]
+        drive_status = (
+            "available" if not refresh else "missing_scopes" if drive_missing else "connected"
+        )
+        calendar_missing = (
+            [] if refresh and has_calendar_access(profile) else ["View and update calendar events"]
+        )
+        calendar_status = (
+            "available"
+            if not refresh
+            else "missing_scopes"
+            if calendar_missing
+            else "connected"
+        )
+        granola_connected = bool(granola.get("access_token") or granola.get("refresh_token"))
+        apollo_configured = bool(app.state.apollo_key)
         return {
             "connectors": [
-                {
-                    "id": "gmail",
-                    "title": "Gmail",
-                    "status": "connected" if gmail_ok else "missing",
-                    "email": email if gmail_ok else None,
-                },
-                {
-                    "id": "drive",
-                    "title": "Drive",
-                    "status": "connected" if refresh and has_scope(profile, DRIVE_SCOPE) else "missing",
-                    "email": email if has_scope(profile, DRIVE_SCOPE) else None,
-                },
-                {
-                    "id": "calendar",
-                    "title": "Calendar",
-                    "status": "connected" if refresh and has_calendar_access(profile) else "missing",
-                    "email": email if has_calendar_access(profile) else None,
-                },
-                {
-                    "id": "apollo",
-                    "title": "Apollo",
-                    "status": "configured" if app.state.apollo_key else "missing",
-                    "email": None,
-                },
-                {
-                    "id": "granola",
-                    "title": "Granola",
-                    "status": "connected" if granola.get("access_token") or granola.get("refresh_token") else "missing",
-                    "email": None,
-                },
+                normalized_connector(
+                    connector_id="gmail",
+                    title="Gmail",
+                    description="Search email and create review-only drafts.",
+                    status=gmail_status,
+                    catalog_group="connected" if refresh else "available",
+                    connector_email=email if refresh else None,
+                    required_scopes=gmail_required,
+                    missing_scopes=gmail_missing,
+                    supported_actions=["Search and read email", "Create drafts for review"],
+                    available_actions=(
+                        ["connect"]
+                        if not refresh
+                        else ["reconnect", "disconnect"]
+                        if gmail_status == "missing_scopes"
+                        else ["disconnect"]
+                    ),
+                    authorization_group="google",
+                ),
+                normalized_connector(
+                    connector_id="drive",
+                    title="Google Drive",
+                    description="Search and read files from the connected Google account.",
+                    status=drive_status,
+                    catalog_group="connected" if refresh else "available",
+                    connector_email=email if refresh else None,
+                    required_scopes=["Read Drive files"],
+                    missing_scopes=drive_missing if refresh else ["Read Drive files"],
+                    supported_actions=["Search files", "Read files"],
+                    available_actions=(
+                        ["connect"]
+                        if not refresh
+                        else ["reconnect", "disconnect"]
+                        if drive_status == "missing_scopes"
+                        else ["disconnect"]
+                    ),
+                    authorization_group="google",
+                ),
+                normalized_connector(
+                    connector_id="calendar",
+                    title="Google Calendar",
+                    description="Review, create, and update calendar events.",
+                    status=calendar_status,
+                    catalog_group="connected" if refresh else "available",
+                    connector_email=email if refresh else None,
+                    required_scopes=["View and update calendar events"],
+                    missing_scopes=(
+                        calendar_missing if refresh else ["View and update calendar events"]
+                    ),
+                    supported_actions=["List events", "Create and update events"],
+                    available_actions=(
+                        ["connect"]
+                        if not refresh
+                        else ["reconnect", "disconnect"]
+                        if calendar_status == "missing_scopes"
+                        else ["disconnect"]
+                    ),
+                    authorization_group="google",
+                ),
+                normalized_connector(
+                    connector_id="apollo",
+                    title="Apollo",
+                    description="Search people and enrich sourcing records.",
+                    status="connected" if apollo_configured else "available",
+                    catalog_group="connected" if apollo_configured else "available",
+                    connector_email=None,
+                    required_scopes=[],
+                    missing_scopes=[],
+                    supported_actions=["Search people", "Enrich contacts"],
+                    available_actions=["view_guidance"],
+                    manual_configuration=True,
+                ),
+                normalized_connector(
+                    connector_id="granola",
+                    title="Granola",
+                    description="Search and read meeting context.",
+                    status="connected" if granola_connected else "available",
+                    catalog_group="connected" if granola_connected else "available",
+                    connector_email=None,
+                    required_scopes=[],
+                    missing_scopes=[],
+                    supported_actions=["Search meeting notes", "Read meeting context"],
+                    available_actions=["disconnect"] if granola_connected else ["connect"],
+                    authorization_group="granola",
+                ),
             ]
         }
 
@@ -528,7 +1048,7 @@ def create_app(
     def granola_disconnect():
         app.state.secrets.delete("mcp-oauth:granola")
         app.state.openai_tools = list(OPENAI_TOOLS) + app.state.mcp.schemas()
-        return {"connected": False}
+        return {"connected": False, "disconnected": ["granola"]}
 
     @app.get("/v1/mcp/oauth/callback")
     def mcp_oauth_callback(code: str = "", state: str = "", error: str = ""):
@@ -584,7 +1104,13 @@ def create_app(
         app.state.secrets.delete(GMAIL_KEY)
         app.state.secrets.delete(GOOGLE_KEY)
         app.state.gmail = gmail_from_secrets(app.state.secrets, http=app.state.http)
-        return {"connected": False, "email": None}
+        app.state.drive = drive_from_secrets(app.state.secrets, http=app.state.http)
+        app.state.calendar = calendar_from_secrets(app.state.secrets, http=app.state.http)
+        return {
+            "connected": False,
+            "email": None,
+            "disconnected": ["gmail", "drive", "calendar"],
+        }
 
     @app.get("/v1/gmail/callback")
     def gmail_callback(code: str = "", state: str = "", error: str = ""):
@@ -673,7 +1199,17 @@ def create_app(
     @app.get("/v1/sessions")
     def sessions_list():
         store = app.state.store
-        return {"sessions": store.list_sessions(), "open_id": store.open_session_id()}
+        return {
+            "sessions": store.list_sessions(),
+            "open_id": store.open_session_id(),
+            "last_destination": store.get_setting("last_destination"),
+        }
+
+    @app.patch("/v1/navigation")
+    async def navigation_patch(request: Request):
+        destination = str((await request.json()).get("destination") or "")
+        app.state.store.set_setting("last_destination", destination)
+        return {"destination": destination}
 
     @app.post("/v1/sessions")
     def sessions_create():
@@ -688,17 +1224,32 @@ def create_app(
         row = store.index(sid)
         if row is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        return {"id": sid, "title": row["title"], "messages": store.load(sid)}
+        if not sid.startswith("sched-"):
+            store.set_open_session(sid)
+        return {
+            "id": sid,
+            "title": row["title"],
+            "messages": store.load(sid),
+            "events": store.load_events(sid),
+            "queue": store.list_queue(sid),
+            "queue_paused": store.queue_paused(sid),
+        }
 
     @app.patch("/v1/sessions/{sid}")
     async def sessions_patch(sid: str, request: Request):
         payload = await request.json()
-        title = str(payload.get("title") or "")
-        row = app.state.store.rename_session(sid, title)
+        row = app.state.store.index(sid)
         if row is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        app.state.store.set_open_session(sid)
-        return {"id": sid, "title": row["title"]}
+        if "title" in payload:
+            title = str(payload.get("title") or "")
+            row = app.state.store.rename_session(sid, title)
+            if row is None:
+                return JSONResponse({"error": "not found"}, status_code=404)
+            app.state.store.set_open_session(sid)
+        if "pinned" in payload:
+            row = app.state.store.set_session_pinned(sid, bool(payload["pinned"]))
+        return {"id": sid, "title": row["title"], "pinned": row["pinned"]}
 
     @app.get("/v1/conversation")
     def conversation():
@@ -721,28 +1272,271 @@ def create_app(
             return
         await ws.accept(subprotocol="club")
         store: ConversationStore = app.state.store
-        try:
-            while True:
-                incoming = await ws.receive_json()
-                if incoming.get("type") != "chat":
-                    continue
-                text = str(incoming.get("text") or "").strip()
-                if not text:
-                    continue
-                sid = str(incoming.get("session_id") or store.open_session_id() or "")
-                if sid and not valid_session_id(sid):
-                    await ws.send_json({"type": "error", "message": "invalid session"})
-                    continue
-                if not sid:
-                    sid = store.create_session()["session_id"]
-                store.set_open_session(sid)
+        coordinator: RunCoordinator = app.state.run_coordinator
+        send_lock = asyncio.Lock()
+        tasks: set[asyncio.Task[Any]] = set()
 
-                async def _wait(call_id: str, _sid: str = sid) -> str:
-                    return await _await_permission(ws, call_id, app.state.inbox)
+        async def _send(event: dict[str, Any]) -> None:
+            async with send_lock:
+                await ws.send_json(event)
 
-                await run_turn(
-                    text=text,
-                    sid=sid,
+        sender_registration = (asyncio.get_running_loop(), _send)
+        app.state.live_event_senders.add(sender_registration)
+
+        def _queue_snapshot(
+            session_id: str, *, command_id: str, status: str
+        ) -> dict[str, Any]:
+            return {
+                "version": 2,
+                "type": "queue_snapshot",
+                "session_id": session_id,
+                "command_id": command_id,
+                "status": status,
+                "paused": store.queue_paused(session_id),
+                "items": store.list_queue(session_id),
+            }
+
+        def _recovery_event_for_command(
+            session_id: str, command_id: str
+        ) -> dict[str, Any] | None:
+            return next(
+                (
+                    event
+                    for event in reversed(store.load_events(session_id))
+                    if event.get("type") == "tool_recovery"
+                    and event.get("command_id") == command_id
+                ),
+                None,
+            )
+
+        def _failed_step(
+            session_id: str, run_id: str, call_id: str
+        ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+            events = store.load_events(session_id)
+            failed = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if event.get("type") == "tool_finished"
+                    and event.get("run_id") == run_id
+                    and event.get("id") == call_id
+                    and event.get("ok") is False
+                    and isinstance(event.get("failure"), dict)
+                ),
+                None,
+            )
+            started = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if event.get("type") in {"tool_started", "permission_required"}
+                    and event.get("run_id") == run_id
+                    and event.get("id") == call_id
+                    and isinstance(event.get("arguments"), dict)
+                ),
+                None,
+            )
+            if failed is None or started is None:
+                return None
+            return failed, started
+
+        async def _persist_and_send(event: dict[str, Any]) -> None:
+            store.append_event(str(event["session_id"]), event)
+            await _send(event)
+
+        async def _retry_failed_step(command: dict[str, Any]) -> None:
+            session_id = str(command.get("session_id") or "")
+            run_id = str(command.get("run_id") or "")
+            call_id = str(command.get("call_id") or "")
+            command_id = str(command.get("command_id") or "")
+            if not all((session_id, run_id, call_id, command_id)):
+                return
+            existing = _recovery_event_for_command(session_id, command_id)
+            if existing is not None:
+                await _send(existing)
+                return
+            context = _failed_step(session_id, run_id, call_id)
+            if context is None:
+                return
+            failed, started = context
+            failure = dict(failed["failure"])
+            identity = TurnIdentity(
+                session_id=session_id,
+                run_id=run_id,
+                message_id=str(failed["message_id"]),
+                part_id=str(failed["part_id"]),
+            )
+            name = str(failed.get("name") or started.get("name") or "tool")
+            arguments = dict(started["arguments"])
+            if not failure.get("retry_safe"):
+                approval_id = f"recovery_{secrets.token_hex(8)}"
+                parked = app.state.inbox.park(
+                    name,
+                    arguments,
+                    item_id=approval_id,
+                    reason="Retrying this action can create another external change.",
+                    session_id=session_id,
+                    run_id=run_id,
+                    message_id=identity.message_id,
+                    part_id=identity.part_id,
+                    kind="recovery_approval",
+                    recovery_command_id=command_id,
+                    original_call_id=call_id,
+                )
+                permission = build_event(
+                    identity,
+                    "permission_required",
+                    event_id=f"event_{secrets.token_hex(16)}",
+                    id=approval_id,
+                    name=name,
+                    arguments=arguments,
+                    reason=str(parked.get("reason") or "Retry requires approval."),
+                    requested_at=parked["requested_at"],
+                    scope=parked["scope"],
+                    recovery_command_id=command_id,
+                    original_call_id=call_id,
+                    failure=failure,
+                )
+                await _persist_and_send(permission)
+                recovery = build_event(
+                    identity,
+                    "tool_recovery",
+                    event_id=f"event_{secrets.token_hex(16)}",
+                    command_id=command_id,
+                    call_id=call_id,
+                    name=name,
+                    action="retry",
+                    status="approval_required",
+                    outcome="Unsafe retry requires a fresh approval.",
+                    failure=failure,
+                    approval_id=approval_id,
+                )
+                await _persist_and_send(recovery)
+                return
+            ok, result = await asyncio.to_thread(
+                turn_runtime.execute,
+                name,
+                arguments,
+                store=store,
+                gmail=app.state.gmail,
+                drive=app.state.drive,
+                calendar=app.state.calendar,
+                http=app.state.http,
+                apollo_key=app.state.apollo_key,
+                tavily_key=app.state.tavily_key,
+                skills=app.state.skills,
+                mcp=app.state.mcp,
+                people=app.state.people,
+                session_id=session_id,
+            )
+            result = dict(result)
+            retried_failure = (
+                _tool_failure(
+                    ToolCall(id=call_id, name=name, arguments=arguments),
+                    result,
+                    identity,
+                )
+                if not ok
+                else None
+            )
+            finished = build_event(
+                identity,
+                "tool_finished",
+                event_id=f"event_{secrets.token_hex(16)}",
+                id=call_id,
+                name=name,
+                ok=ok,
+                result=result,
+                finished_at=datetime.now(UTC).isoformat(),
+                recovery_command_id=command_id,
+                **({"failure": retried_failure} if retried_failure else {}),
+            )
+            await _persist_and_send(finished)
+            recovery = build_event(
+                identity,
+                "tool_recovery",
+                event_id=f"event_{secrets.token_hex(16)}",
+                command_id=command_id,
+                call_id=call_id,
+                name=name,
+                action="retry",
+                status="succeeded" if ok else "failed",
+                outcome=(
+                    "Failed step recovered."
+                    if ok
+                    else "Retry failed; successful prior work was preserved."
+                ),
+                failure=retried_failure or failure,
+            )
+            await _persist_and_send(recovery)
+
+        async def _record_recovery_choice(
+            command: dict[str, Any], *, action: str
+        ) -> None:
+            session_id = str(command.get("session_id") or "")
+            run_id = str(command.get("run_id") or "")
+            call_id = str(command.get("call_id") or "")
+            command_id = str(command.get("command_id") or "")
+            if not all((session_id, run_id, call_id, command_id)):
+                return
+            existing = _recovery_event_for_command(session_id, command_id)
+            if existing is not None:
+                await _send(existing)
+                return
+            context = _failed_step(session_id, run_id, call_id)
+            if context is None:
+                return
+            failed, _started = context
+            failure = dict(failed["failure"])
+            identity = TurnIdentity(
+                session_id=session_id,
+                run_id=run_id,
+                message_id=str(failed["message_id"]),
+                part_id=str(failed["part_id"]),
+            )
+            source = str(failure.get("source") or "this source")
+            if action == "repair":
+                status = "awaiting_repair"
+                outcome = f"Opened connection repair for {source}."
+            else:
+                status = "skipped"
+                outcome = (
+                    f"Continued without {source}; available work remains partial."
+                )
+            recovery = build_event(
+                identity,
+                "tool_recovery",
+                event_id=f"event_{secrets.token_hex(16)}",
+                command_id=command_id,
+                call_id=call_id,
+                name=str(failed.get("name") or "tool"),
+                action=action,
+                status=status,
+                outcome=outcome,
+                failure=failure,
+                repair_route=failure.get("repair_route"),
+            )
+            await _persist_and_send(recovery)
+
+        async def _launch(
+            run_text: str,
+            run_sid: str,
+            *,
+            queue_item_id: str | None = None,
+        ) -> RunControl:
+            identity = new_turn_identity(run_sid)
+            control = RunControl(identity)
+            coordinator.register(control)
+
+            async def _run() -> None:
+                async def _wait(call_id: str) -> str:
+                    return await _await_permission(
+                        call_id, app.state.inbox, control
+                    )
+
+                result = await run_turn(
+                    text=run_text,
+                    sid=run_sid,
                     store=store,
                     provider=app.state.provider,
                     persona=app.state.persona,
@@ -760,13 +1554,195 @@ def create_app(
                         "skills": app.state.skills,
                         "mcp": app.state.mcp,
                         "people": app.state.people,
-                        "_tool_results": app.state.tool_results,
                     },
-                    emit=ws.send_json,
+                    emit=_send,
                     wait_permission=_wait,
                     system_prompt_fn=system_prompt,
+                    identity=control.identity,
+                    control=control,
                 )
+                status = str(result.get("status") or "error")
+                if queue_item_id is not None:
+                    if status in {"ok", "partial"}:
+                        store.finish_queue_item(
+                            run_sid, queue_item_id, state="complete"
+                        )
+                    elif status == "stopped":
+                        store.finish_queue_item(
+                            run_sid,
+                            queue_item_id,
+                            state="interrupted",
+                            error="Run cancelled before completion.",
+                        )
+                    else:
+                        store.finish_queue_item(
+                            run_sid,
+                            queue_item_id,
+                            state="failed",
+                            error="Run failed before completion.",
+                        )
+                if status == "stopped":
+                    store.set_queue_paused(run_sid, True)
+                    if store.list_queue(run_sid):
+                        await _send(
+                            _queue_snapshot(
+                                run_sid,
+                                command_id=f"terminal:{control.identity.run_id}",
+                                status="paused",
+                            )
+                        )
+                    return
+                claimed = store.claim_next_queue(run_sid)
+                await _send(
+                    _queue_snapshot(
+                        run_sid,
+                        command_id=f"terminal:{control.identity.run_id}",
+                        status="draining" if claimed is not None else "idle",
+                    )
+                )
+                if claimed is not None:
+                    await _launch(
+                        str(claimed["text"]),
+                        run_sid,
+                        queue_item_id=str(claimed["id"]),
+                    )
+
+            task = asyncio.create_task(_run())
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+            return control
+
+        try:
+            while True:
+                incoming = await ws.receive_json()
+                command_type = incoming.get("type")
+                if command_type == "permission":
+                    call_id = str(incoming.get("id") or "")
+                    decision = str(incoming.get("decision") or "").strip().lower()
+                    actor = str(incoming.get("actor") or "operator").strip() or "operator"
+                    scope = str(incoming.get("scope") or "once").strip() or "once"
+                    if call_id and decision in {"allow", "deny"}:
+                        pending_item = app.state.inbox.get(call_id)
+                        if (
+                            pending_item is not None
+                            and pending_item.get("kind") == "recovery_approval"
+                        ):
+                            await _resolve_recovery_approval(
+                                call_id,
+                                decision,
+                                actor=actor,
+                                scope=scope,
+                                claimant=f"recovery-ws:{secrets.token_hex(16)}",
+                            )
+                        elif pending_item is not None:
+                            claim = app.state.inbox.decide_and_claim(
+                                call_id,
+                                decision,
+                                actor=actor,
+                                scope=scope,
+                                claimant=(
+                                    f"turn:{pending_item.get('run_id') or call_id}"
+                                ),
+                            )
+                            if (
+                                claim is not None
+                                and claim.item.get("execution_status")
+                                == "interrupted"
+                            ):
+                                approval = _persist_approval_receipt(claim.item)
+                                if approval is not None:
+                                    await _send(approval)
+                    continue
+                if command_type == "cancel":
+                    sid = str(incoming.get("session_id") or "")
+                    run_id = str(incoming.get("run_id") or "")
+                    if sid and run_id:
+                        store.set_queue_paused(sid, True)
+                        await coordinator.cancel(sid, run_id)
+                        if store.list_queue(sid):
+                            await _send(
+                                _queue_snapshot(
+                                    sid,
+                                    command_id=f"cancel:{run_id}",
+                                    status="paused",
+                                )
+                            )
+                    continue
+                if command_type == "retry_failed_step":
+                    await _retry_failed_step(incoming)
+                    continue
+                if command_type == "repair_connection":
+                    await _record_recovery_choice(incoming, action="repair")
+                    continue
+                if command_type == "continue_without_source":
+                    await _record_recovery_choice(incoming, action="continue")
+                    continue
+                if command_type in {
+                    "queue_add",
+                    "queue_edit",
+                    "queue_move",
+                    "queue_remove",
+                    "queue_retry",
+                    "queue_resume",
+                }:
+                    sid = str(incoming.get("session_id") or "")
+                    if sid and valid_session_id(sid):
+                        acknowledgement = store.apply_queue_command(sid, incoming)
+                        await _send(acknowledgement)
+                        if (
+                            command_type in {"queue_resume", "queue_retry"}
+                            and coordinator.active_for(sid) is None
+                        ):
+                            claimed = store.claim_next_queue(sid)
+                            if claimed is not None:
+                                await _send(
+                                    _queue_snapshot(
+                                        sid,
+                                        command_id=str(incoming.get("command_id") or ""),
+                                        status="draining",
+                                    )
+                                )
+                                await _launch(
+                                    str(claimed["text"]),
+                                    sid,
+                                    queue_item_id=str(claimed["id"]),
+                                )
+                    continue
+                if command_type != "chat":
+                    continue
+                text = str(incoming.get("text") or "").strip()
+                if not text:
+                    continue
+                sid = str(incoming.get("session_id") or store.open_session_id() or "")
+                if sid and not valid_session_id(sid):
+                    await ws.send_json({"type": "error", "message": "invalid session"})
+                    continue
+                if not sid:
+                    sid = store.create_session()["session_id"]
+                store.set_open_session(sid)
+                if coordinator.active_for(sid) is not None:
+                    command_id = str(
+                        incoming.get("command_id") or f"command_{secrets.token_hex(8)}"
+                    )
+                    item_id = str(
+                        incoming.get("item_id") or f"queue_{secrets.token_hex(8)}"
+                    )
+                    await _send(
+                        store.apply_queue_command(
+                            sid,
+                            {
+                                "type": "queue_add",
+                                "command_id": command_id,
+                                "item_id": item_id,
+                                "text": text,
+                            },
+                        )
+                    )
+                    continue
+                await _launch(text, sid)
         except WebSocketDisconnect:
-            return
+            pass
+        finally:
+            app.state.live_event_senders.discard(sender_registration)
 
     return app
