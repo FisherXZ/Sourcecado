@@ -203,9 +203,16 @@ class DockerSandbox:
                     timeout=2,
                     check=False,
                 )
-                result["daemon_available"] = daemon.returncode == 0
-                if daemon.returncode == 0:
-                    result["server_version"] = daemon.stdout.strip() or None
+                server_version = daemon.stdout.strip()
+                daemon_error = daemon.stderr.casefold()
+                result["daemon_available"] = bool(
+                    daemon.returncode == 0
+                    and server_version
+                    and "cannot connect" not in daemon_error
+                    and "error during connect" not in daemon_error
+                )
+                if result["daemon_available"]:
+                    result["server_version"] = server_version
                     image = subprocess.run(
                         [binary, "image", "inspect", self.image, "--format", "{{.Id}}"],
                         capture_output=True,
@@ -213,7 +220,11 @@ class DockerSandbox:
                         timeout=2,
                         check=False,
                     )
-                    result["image_available"] = image.returncode == 0
+                    result["image_available"] = bool(
+                        image.returncode == 0
+                        and image.stdout.strip()
+                        and "cannot connect" not in image.stderr.casefold()
+                    )
             except (OSError, subprocess.TimeoutExpired):
                 pass
         result["available"] = bool(

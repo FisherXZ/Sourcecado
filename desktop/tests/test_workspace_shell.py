@@ -144,6 +144,23 @@ def test_docker_exec_passes_the_exact_command_without_outer_shell_expansion():
     assert shlex.quote(command) in invocation[-1]
 
 
+def test_docker_diagnostics_rejects_empty_success_with_connection_error(monkeypatch):
+    def disconnected(*_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            args=["docker"],
+            returncode=0,
+            stdout="\n",
+            stderr="Cannot connect to the Docker daemon",
+        )
+
+    monkeypatch.setattr(subprocess, "run", disconnected)
+
+    diagnostics = DockerSandbox(docker_binary="docker").diagnostics()
+
+    assert diagnostics["daemon_available"] is False
+    assert diagnostics["available"] is False
+
+
 def test_live_docker_sandbox_mounts_workspace_without_host_state_when_available(
     tmp_path,
 ):
