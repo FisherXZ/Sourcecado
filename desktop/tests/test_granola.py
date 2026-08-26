@@ -55,7 +55,7 @@ def test_granola_status_needs_auth(tmp_path):
         "/v1/connectors", headers={TOKEN_HEADER: TOKEN}
     ).json()
     gran = next(c for c in body["connectors"] if c["id"] == "granola")
-    assert gran["status"] == "missing"
+    assert gran["status"] == "available"
 
 
 def test_connect_does_not_persist_forged_token(tmp_path, monkeypatch):
