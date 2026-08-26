@@ -279,6 +279,31 @@ def test_granola_mcp_read_files_as_meeting():
     )
 
 
+def test_classified_drive_extraction_failure_files_as_failed_status():
+    event = event_from_tool(
+        "drive_read",
+        {"file_id": "broken-docx"},
+        {
+            "id": "broken-docx",
+            "name": "broken.docx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "status": "failed",
+            "reason": "malformed_office_archive",
+        },
+        ok=True,
+    )
+    assert event is not None
+    assert event["kind"] == "file"
+    assert event["payload"] == {
+        "id": "broken-docx",
+        "name": "broken.docx",
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "status": "failed",
+        "truncated": False,
+        "reason": "malformed_office_archive",
+    }
+
+
 def test_failed_drive_read_files_as_error():
     event = event_from_tool(
         "drive_read",

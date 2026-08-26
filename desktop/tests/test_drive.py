@@ -16,6 +16,7 @@ from coworker.connectors.google_oauth import (
     save_google,
 )
 from coworker.drive import DriveApi
+from coworker.ledger import event_from_tool
 from coworker.permissions import decide
 from coworker.provider import FakeProvider, ToolCall
 from coworker.secrets import SecretStore
@@ -532,7 +533,7 @@ def test_drive_read_classifies_malformed_office_archive_without_leaking_bytes(
     assert raw.decode() not in json.dumps(out)
 
 
-def test_drive_tool_marks_extraction_failure_as_a_failed_tool_result(tmp_path):
+def test_classified_drive_extraction_failure_files_status_not_unknown_error(tmp_path):
     secrets = SecretStore(tmp_path / "secrets.json")
     save_google(secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
     drive = DriveApi(
@@ -547,10 +548,19 @@ def test_drive_tool_marks_extraction_failure_as_a_failed_tool_result(tmp_path):
     )
 
     ok, result = execute("drive_read", {"file_id": "broken-docx"}, drive=drive)
+    event = event_from_tool(
+        "drive_read", {"file_id": "broken-docx"}, result, ok=ok
+    )
 
-    assert ok is False
+    assert ok is True
     assert result["status"] == "failed"
     assert result["reason"] == "malformed_office_archive"
+    assert "content" not in result
+    assert event is not None
+    assert event["kind"] == "file"
+    assert event["payload"]["status"] == "failed"
+    assert event["payload"]["reason"] == "malformed_office_archive"
+    assert event["payload"].get("detail") != "unknown error"
 
 
 def test_drive_tool_returns_sanitized_failed_status_for_genuine_auth_failure(tmp_path):

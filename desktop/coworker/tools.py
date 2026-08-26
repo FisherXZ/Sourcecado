@@ -514,7 +514,7 @@ def execute(
             if not fid:
                 return False, {"error": "file_id is required"}
             result = drive.read(fid, int(args.get("max_chars") or 20000))
-            return result.get("status") != "failed", result
+            return True, result
         except Exception as exc:
             return False, {"status": "failed", "error": str(exc)}
     if name in {"calendar_list", "calendar_create", "calendar_update"}:

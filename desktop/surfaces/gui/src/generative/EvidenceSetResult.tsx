@@ -376,6 +376,9 @@ export function EvidenceSetResult({
             {item.extractionStatus === "unsupported" ? (
               <span className="sourcecado-evidence-badge">Unsupported format</span>
             ) : null}
+            {item.extractionStatus === "failed" ? (
+              <span className="sourcecado-evidence-badge">Read failed</span>
+            ) : null}
             {item.excerpt ? <EvidenceExcerpt excerpt={item.excerpt} /> : null}
           </li>
         ))}

@@ -245,15 +245,31 @@ describe("Evidence set result", () => {
           reason: "unsupported_mime_type",
         },
       ),
+      tool(
+        "call-drive-failed",
+        "drive_read",
+        { file_id: "broken-docx" },
+        {
+          id: "broken-docx",
+          name: "broken.docx",
+          mimeType:
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          status: "failed",
+          reason: "malformed_office_archive",
+        },
+      ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 2 sources · Completed" }),
+      screen.getByRole("button", { name: "Checked 3 sources · Completed" }),
     );
 
     expect(screen.getByText("Metadata only")).toBeInTheDocument();
     expect(screen.getByText("Unsupported format")).toBeInTheDocument();
+    expect(screen.getByText("Read failed")).toBeInTheDocument();
     expect(screen.getByText("Interest form")).toBeInTheDocument();
     expect(screen.getByText("Headshot")).toBeInTheDocument();
+    expect(screen.getByText("broken.docx")).toBeInTheDocument();
+    expect(screen.queryByText(/unavailable/i)).not.toBeInTheDocument();
   });
 
   it("renders exact Drive folder listings as scoped evidence", () => {
