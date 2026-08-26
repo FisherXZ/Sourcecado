@@ -35,7 +35,7 @@ def test_keep_one_apollo_row_files_person_without_email(tmp_path):
     assert person["sequence_state"] is None
 
 
-def test_keep_row_with_missing_apollo_fields_keeps_what_the_file_has(tmp_path):
+def test_keep_row_with_blank_apollo_fields_keeps_what_the_file_has(tmp_path):
     people = PersonStore(tmp_path)
     ok, first = execute(
         "people_keep",
@@ -47,7 +47,17 @@ def test_keep_row_with_missing_apollo_fields_keeps_what_the_file_has(tmp_path):
 
     ok, again = execute(
         "people_keep",
-        {"people": [{"apolloId": "abc123", "firstName": "Alyssa"}]},
+        {
+            "people": [
+                {
+                    "apolloId": "abc123",
+                    "firstName": "Alyssa",
+                    "lastNameObfuscated": "",
+                    "title": "",
+                    "organizationName": "   ",
+                }
+            ]
+        },
         people=people,
     )
     assert ok is True
