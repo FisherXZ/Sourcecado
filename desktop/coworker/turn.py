@@ -6,6 +6,7 @@ import json
 from typing import Any, Awaitable, Callable
 
 from coworker.inbox import Inbox
+from coworker.ledger import record_tool_on_person
 from coworker.permissions import decide
 from coworker.provider import ToolCall
 from coworker.store import ConversationStore
@@ -77,6 +78,19 @@ def _tool_result_message(call: ToolCall, payload: dict[str, Any]) -> dict[str, A
         "tool_call_id": call.id,
         "content": json.dumps(payload),
     }
+
+
+def _record_person_file(
+    sid: str,
+    call: ToolCall,
+    ok: bool,
+    result: dict[str, Any],
+    execute_kwargs: dict,
+) -> None:
+    people = execute_kwargs.get("people")
+    if people is None:
+        return
+    record_tool_on_person(people, sid, call.name, call.arguments, result, ok=ok)
 
 
 def _persist_closed(store: ConversationStore, sid: str, history: list[dict[str, Any]]) -> None:
@@ -168,6 +182,7 @@ async def run_turn(
                     denied = _tool_result_message(call, result)
                     history.append(denied)
                     store.append(sid, denied)
+                    _record_person_file(sid, call, False, result, execute_kwargs)
                     continue
                 if gate.needs_user:
                     inbox.park(call.name, call.arguments, item_id=call.id)
@@ -197,6 +212,7 @@ async def run_turn(
                         )
                         history.append(_tool_result_message(call, result))
                         store.append(sid, _tool_result_message(call, result))
+                        _record_person_file(sid, call, ok, result, execute_kwargs)
                         continue
                     if choice == "deny":
                         result = {"error": "denied by user"}
@@ -212,6 +228,7 @@ async def run_turn(
                         denied = _tool_result_message(call, result)
                         history.append(denied)
                         store.append(sid, denied)
+                        _record_person_file(sid, call, False, result, execute_kwargs)
                         continue
                 await _emit(
                     {
@@ -243,6 +260,7 @@ async def run_turn(
                 tool_result = _tool_result_message(call, result)
                 history.append(tool_result)
                 store.append(sid, tool_result)
+                _record_person_file(sid, call, ok, result, execute_kwargs)
         else:
             await _emit({"type": "error", "message": f"Stopped after {MAX_STEPS} tool steps."})
             return {"status": "stopped", "text": last_text}

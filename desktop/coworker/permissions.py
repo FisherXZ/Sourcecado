@@ -16,6 +16,7 @@ AUTO = frozenset(
         "memory_update",
         "memory_forget",
         "apollo_search_people",
+        "people_keep",
         "load_skill",
         "gmail_search",
         "gmail_read",

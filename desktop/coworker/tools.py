@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from coworker.apollo import MISSING_KEY, enrich_contact, search_people
 from coworker.gmail import GmailError, MissingGmail
+from coworker.people import PersonStore
 from coworker.store import ConversationStore
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -96,6 +97,34 @@ APOLLO_SEARCH_SCHEMA: dict[str, Any] = {
                 "personTitles": {"type": "array", "items": {"type": "string"}},
                 "limit": {"type": "integer"},
             },
+            "additionalProperties": False,
+        },
+    },
+}
+
+PEOPLE_KEEP_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "people_keep",
+        "description": (
+            "File curated Apollo search rows into person files. Use after "
+            "apollo_search_people when the director names who to keep. "
+            "Does not enrich and does not send. Never invent the target."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "people": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Apollo search rows to keep.",
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Why the director wants to write these people.",
+                },
+            },
+            "required": ["people"],
             "additionalProperties": False,
         },
     },
@@ -317,6 +346,7 @@ OPENAI_TOOLS = [
     CALENDAR_CREATE_SCHEMA,
     CALENDAR_UPDATE_SCHEMA,
     APOLLO_SEARCH_SCHEMA,
+    PEOPLE_KEEP_SCHEMA,
     APOLLO_ENRICH_SCHEMA,
     LOAD_SKILL_SCHEMA,
 ]
@@ -350,6 +380,7 @@ def execute(
     apollo_key: str | None = None,
     skills: Any = None,
     mcp: Any = None,
+    people: PersonStore | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
     if name == "now":
@@ -504,4 +535,34 @@ def execute(
             )
         except Exception as exc:
             return False, {"error": str(exc)}
+    if name == "people_keep":
+        if people is None:
+            return False, {"error": "people store missing"}
+        rows = args.get("people") or []
+        if not isinstance(rows, list):
+            return False, {"error": "people must be a list"}
+        target = str(args.get("target") or "").strip() or None
+        kept: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                return False, {"error": "people rows must be objects"}
+            person = people.keep_from_apollo(
+                apollo_id=str(row.get("apolloId") or "") or None,
+                first_name=row.get("firstName"),
+                last_name_obfuscated=row.get("lastNameObfuscated"),
+                title=row.get("title"),
+                company=row.get("organizationName"),
+                target=target,
+            )
+            kept.append(
+                {
+                    "person_id": person["person_id"],
+                    "apollo_id": person["apollo_id"],
+                    "first_name": person["first_name"],
+                    "last_name": person["last_name"],
+                    "title": person["title"],
+                    "company": person["company"],
+                }
+            )
+        return True, {"kept": kept}
     return False, {"error": f"unknown tool {name}"}
