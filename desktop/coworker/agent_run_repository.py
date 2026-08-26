@@ -92,7 +92,11 @@ class _AgentRunRepositoryBase:
                 ).fetchone()
                 if row is None:
                     raise KeyError(run_id)
-                if str(row["current_state"]) in TERMINAL_AGENT_RUN_STATES:
+                current_state = str(row["current_state"])
+                if current_state in TERMINAL_AGENT_RUN_STATES or current_state in {
+                    "waiting_approval",
+                    "waiting_question",
+                }:
                     self._conn.commit()
                     return None
                 active_owner = row["lease_owner"]
@@ -113,7 +117,10 @@ class _AgentRunRepositoryBase:
                         lease_owner = ?, lease_expires_at = ?,
                         version = version + 1, updated_at = ?
                     WHERE run_id = ? AND version = ?
-                      AND current_state NOT IN ('complete', 'partial', 'stopped', 'failed')
+                      AND current_state NOT IN (
+                          'waiting_approval', 'waiting_question',
+                          'complete', 'partial', 'stopped', 'failed'
+                      )
                       AND (
                           lease_owner IS NULL OR lease_expires_at IS NULL
                           OR lease_expires_at <= ? OR lease_owner = ?
@@ -135,7 +142,11 @@ class _AgentRunRepositoryBase:
                     ).fetchone()
                     if current is None:
                         raise KeyError(run_id)
-                    if str(current["current_state"]) in TERMINAL_AGENT_RUN_STATES:
+                    current_state = str(current["current_state"])
+                    if current_state in TERMINAL_AGENT_RUN_STATES or current_state in {
+                        "waiting_approval",
+                        "waiting_question",
+                    }:
                         self._conn.commit()
                         return None
                     if (
@@ -652,7 +663,7 @@ class AgentRunRepository(_AgentRunRepositoryBase):
         usage_delta: dict[str, int | float] | None = None,
         terminal_result: dict[str, Any] | None = None,
         now: datetime | None = None,
-    ) -> tuple[AgentRunLease, dict[str, Any]]:
+    ) -> tuple[AgentRunLease | None, dict[str, Any]]:
         _validate_checkpoint(kind, state)
         stamp = _timestamp(now)
         with self._lock:
@@ -674,12 +685,17 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                 next_continuation = merge_continuation(
                     json_object(row["continuation"]), continuation
                 )
+                waiting = values["state"] in {
+                    "waiting_approval",
+                    "waiting_question",
+                }
                 cursor = self._conn.execute(
                     """
                     UPDATE agent_runs SET
                         current_state = ?, checkpoint_sequence = ?,
                         skills_loaded = ?, source_refs = ?, artifact_refs = ?,
                         usage = ?, terminal_result = ?, continuation = ?,
+                        lease_owner = ?, lease_expires_at = ?,
                         version = version + 1, updated_at = ?, finished_at = ?
                     WHERE run_id = ? AND version = ? AND lease_owner = ?
                       AND lease_expires_at > ?
@@ -694,6 +710,8 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                         values["usage"],
                         values["terminal_result"],
                         _json(next_continuation),
+                        None if waiting else lease.owner_id,
+                        None if waiting else lease.expires_at,
                         stamp,
                         values["finished_at"],
                         lease.run_id,
@@ -734,7 +752,8 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                 raise
         if checkpoint_row is None:
             raise RuntimeError("Agent Run checkpoint insert did not persist")
-        return _lease_from_row(run_row), _checkpoint_row(checkpoint_row)
+        next_lease = None if waiting else _lease_from_row(run_row)
+        return next_lease, _checkpoint_row(checkpoint_row)
 
     def release_lease(
         self,
@@ -787,7 +806,10 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     SELECT * FROM agent_runs
                     WHERE (
                         lease_owner IS NOT NULL
-                        AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                        AND (
+                            current_state IN ('waiting_approval', 'waiting_question')
+                            OR lease_expires_at IS NULL OR lease_expires_at <= ?
+                        )
                     ) OR (
                         lease_owner IS NULL AND current_state = 'running'
                     )
@@ -799,9 +821,25 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     state = str(row["current_state"])
                     run_id = str(row["run_id"])
                     version = int(row["version"])
+                    if state in {"waiting_approval", "waiting_question"}:
+                        cursor = self._conn.execute(
+                            """
+                            UPDATE agent_runs SET
+                                lease_owner = NULL, lease_expires_at = NULL,
+                                version = version + 1, updated_at = ?
+                            WHERE run_id = ? AND version = ?
+                              AND current_state = ? AND lease_owner IS NOT NULL
+                            """,
+                            (stamp, run_id, version, state),
+                        )
+                        if cursor.rowcount == 1:
+                            current = self._conn.execute(
+                                "SELECT * FROM agent_runs WHERE run_id = ?",
+                                (run_id,),
+                            ).fetchone()
+                            recovered.append(_run_row(current))
+                        continue
                     if state in TERMINAL_AGENT_RUN_STATES or state in {
-                        "waiting_approval",
-                        "waiting_question",
                         "interrupted",
                     }:
                         if row["lease_owner"] is None:

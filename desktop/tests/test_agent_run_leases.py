@@ -168,6 +168,191 @@ def test_agent_run_resume_migration_rolls_back_schema_and_marker_on_failure(
     assert marker is None
 
 
+def test_legacy_running_run_is_interrupted_for_review_once(tmp_path):
+    db_path = tmp_path / "club.db"
+    with sqlite3.connect(db_path) as db:
+        db.executescript(
+            """
+            CREATE TABLE schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            CREATE TABLE agent_runs (
+                run_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                parent_run_id TEXT,
+                trigger TEXT NOT NULL,
+                original_goal TEXT NOT NULL,
+                current_state TEXT NOT NULL,
+                provider_model_id TEXT,
+                checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
+                skills_loaded TEXT NOT NULL DEFAULT '[]',
+                source_refs TEXT NOT NULL DEFAULT '[]',
+                artifact_refs TEXT NOT NULL DEFAULT '[]',
+                usage TEXT NOT NULL DEFAULT '{}',
+                terminal_result TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                finished_at TEXT
+            );
+            CREATE TABLE agent_run_checkpoints (
+                run_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (run_id, sequence)
+            );
+            INSERT INTO agent_runs VALUES (
+                'run-legacy-success', 'thread-lease', NULL, 'chat',
+                'Continue the legacy run', 'running', 'fake', 1,
+                '[]', '[]', '[]', '{}', NULL,
+                '2026-08-26T00:00:00+00:00',
+                '2026-08-26T00:00:00+00:00',
+                '2026-08-26T00:00:00+00:00', NULL
+            );
+            INSERT INTO agent_run_checkpoints VALUES (
+                'run-legacy-success', 1, 'run_started', '{}',
+                '2026-08-26T00:00:00+00:00'
+            );
+            """
+        )
+
+    first = ConversationStore(tmp_path)
+    migrated = first.get_agent_run("run-legacy-success")
+    assert migrated is not None
+    assert migrated["current_state"] == "interrupted"
+    assert migrated["continuation"]["cursor"]["phase"] == "review_required"
+    assert migrated["version"] == 1
+    assert [
+        item["kind"]
+        for item in first.list_agent_run_checkpoints("run-legacy-success")
+    ] == ["run_started", "process_interrupted"]
+
+    reopened = ConversationStore(tmp_path)
+    assert reopened.get_agent_run("run-legacy-success") == migrated
+    assert [
+        item["kind"]
+        for item in reopened.list_agent_run_checkpoints("run-legacy-success")
+    ] == ["run_started", "process_interrupted"]
+
+
+@pytest.mark.parametrize(
+    ("state", "kind", "interaction_kind"),
+    (
+        ("waiting_approval", "waiting_approval", "approval"),
+        ("waiting_question", "user_input", "question"),
+    ),
+)
+def test_waiting_checkpoint_atomically_releases_and_fences_lease(
+    tmp_path, state, kind, interaction_kind
+):
+    store = ConversationStore(tmp_path)
+    _start(store)
+    lease = store.agent_runs.acquire_lease(
+        "run-lease", "owner-a", 0, 30, now=NOW
+    )
+    assert lease is not None
+    continuation = {
+        **_continuation(state),
+        "pending_interaction": {
+            "kind": interaction_kind,
+            "id": f"{interaction_kind}-1",
+        },
+    }
+    continuation.pop("pending_tool")
+
+    next_lease, checkpoint = store.agent_runs.checkpoint_leased(
+        lease,
+        kind,
+        continuation,
+        payload={"id": f"{interaction_kind}-1"},
+        state=state,
+        now=NOW,
+    )
+
+    assert next_lease is None
+    assert checkpoint["sequence"] == 2
+    run = store.get_agent_run("run-lease")
+    assert run["current_state"] == state
+    assert run["continuation"] == continuation
+    assert run["version"] == lease.version + 1
+    with sqlite3.connect(tmp_path / "club.db") as db:
+        owner, expires = db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            ("run-lease",),
+        ).fetchone()
+    assert owner is None
+    assert expires is None
+    assert (
+        store.agent_runs.acquire_lease(
+            "run-lease", "owner-b", run["version"], 30, now=NOW
+        )
+        is None
+    )
+    fenced = (
+        lambda: store.agent_runs.renew_lease(lease, 30, now=NOW),
+        lambda: store.agent_runs.update_continuation(
+            lease, continuation, now=NOW
+        ),
+        lambda: store.agent_runs.checkpoint_leased(
+            lease, kind, continuation, state=state, now=NOW
+        ),
+        lambda: store.agent_runs.release_lease(lease, now=NOW),
+    )
+    for call in fenced:
+        with pytest.raises(agent_runs.AgentRunLeaseLost):
+            call()
+
+
+@pytest.mark.parametrize("state", ("waiting_approval", "waiting_question"))
+def test_reconcile_clears_unexpired_legacy_waiting_lease_without_interrupting(
+    tmp_path, state
+):
+    store = ConversationStore(tmp_path)
+    _start(store)
+    lease = store.agent_runs.acquire_lease(
+        "run-lease", "owner-a", 0, 30, now=NOW
+    )
+    assert lease is not None
+    continuation = {
+        **_continuation(state),
+        "pending_interaction": {
+            "kind": "approval" if state == "waiting_approval" else "question",
+            "id": "interaction-1",
+        },
+    }
+    continuation.pop("pending_tool")
+    with store._lock:
+        store._conn.execute(
+            """
+            UPDATE agent_runs SET current_state = ?, continuation = ?
+            WHERE run_id = ?
+            """,
+            (state, json.dumps(continuation), "run-lease"),
+        )
+        store._conn.commit()
+
+    recovered = store.agent_runs.reconcile_expired_leases(now=NOW)
+
+    assert [row["run_id"] for row in recovered] == ["run-lease"]
+    run = store.get_agent_run("run-lease")
+    assert run["current_state"] == state
+    assert run["continuation"] == continuation
+    assert run["version"] == lease.version + 1
+    assert [
+        item["kind"] for item in store.list_agent_run_checkpoints("run-lease")
+    ] == ["run_started"]
+    with sqlite3.connect(tmp_path / "club.db") as db:
+        owner, expires = db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            ("run-lease",),
+        ).fetchone()
+    assert owner is None
+    assert expires is None
+
+
 def test_continuation_projection_drops_unsafe_unknown_and_oversize_input(tmp_path):
     store = ConversationStore(tmp_path)
     _start(store)
@@ -613,7 +798,6 @@ def test_reconcile_expired_leases_classifies_work_without_duplicate_checkpoints(
         "run-model",
         "run-safe-tool",
         "run-unsafe-tool",
-        "run-waiting",
         "run-terminal",
     }
 
