@@ -38,10 +38,16 @@ def project_continuation(value: Any) -> dict[str, Any]:
 
     identity = raw.get("identity")
     if isinstance(identity, dict):
-        projected["identity"] = {
-            "message_id": _safe_text(identity.get("message_id"), MAX_SAFE_ID),
-            "part_id": _safe_text(identity.get("part_id"), MAX_SAFE_ID),
+        safe_identity = {
+            key: safe
+            for key, limit in (
+                ("message_id", MAX_SAFE_ID),
+                ("part_id", MAX_SAFE_ID),
+            )
+            if (safe := _safe_text(identity.get(key), limit)) is not None
         }
+        if safe_identity:
+            projected["identity"] = safe_identity
 
     cursor = raw.get("cursor")
     if isinstance(cursor, dict):
@@ -49,55 +55,64 @@ def project_continuation(value: Any) -> dict[str, Any]:
         phase = cursor.get("phase")
         if phase in _PHASES:
             safe_cursor["phase"] = phase
-        for key in (
-            "step_index",
-            "next_tool_index",
-            "transcript_prefix_count",
-            "event_prefix_count",
-        ):
+        for key in ("step_index", "next_tool_index"):
             if key in cursor:
                 safe_cursor[key] = _nonnegative_int(cursor.get(key))
-        for key in (
-            "transcript_prefix_sha256",
-            "event_prefix_sha256",
-        ):
-            if key in cursor:
-                safe_cursor[key] = valid_sha256(cursor.get(key))
+        for prefix in ("transcript", "event"):
+            count_key = f"{prefix}_prefix_count"
+            digest_key = f"{prefix}_prefix_sha256"
+            count = cursor.get(count_key)
+            digest = valid_sha256(cursor.get(digest_key))
+            if _is_nonnegative_int(count) and digest is not None:
+                safe_cursor[count_key] = count
+                safe_cursor[digest_key] = digest
         projected["cursor"] = safe_cursor
 
     visible = raw.get("visible_partial")
     if isinstance(visible, dict):
-        projected["visible_partial"] = {
-            "message_id": _safe_text(visible.get("message_id"), MAX_SAFE_ID),
+        safe_visible = {
             "text_length": _nonnegative_int(visible.get("text_length")),
             "truncated": bool(visible.get("truncated", False)),
         }
+        message_id = _safe_text(visible.get("message_id"), MAX_SAFE_ID)
+        if message_id is not None:
+            safe_visible["message_id"] = message_id
+        projected["visible_partial"] = safe_visible
 
     interaction = raw.get("pending_interaction")
+    interaction_id = (
+        _safe_text(interaction.get("id"), MAX_SAFE_ID)
+        if isinstance(interaction, dict)
+        else None
+    )
     if (
         isinstance(interaction, dict)
         and interaction.get("kind") in {"approval", "question"}
+        and interaction_id
     ):
         projected["pending_interaction"] = {
             "kind": interaction["kind"],
-            "id": _safe_text(interaction.get("id"), MAX_SAFE_ID),
+            "id": interaction_id,
         }
 
     pending_tool = raw.get("pending_tool")
     if isinstance(pending_tool, dict):
         retry_class = pending_tool.get("retry_class")
         status = pending_tool.get("status")
-        if retry_class in {"safe", "consequential"} and status in {
-            "not_started",
-            "in_flight",
-            "outcome_unknown",
-        }:
+        attempt_id = _safe_text(pending_tool.get("attempt_id"), MAX_SAFE_ID)
+        call_id = _safe_text(pending_tool.get("call_id"), MAX_SAFE_ID)
+        name = _safe_text(pending_tool.get("name"), MAX_TOOL_NAME)
+        if (
+            retry_class in {"safe", "consequential"}
+            and status in {"not_started", "in_flight", "outcome_unknown"}
+            and attempt_id
+            and call_id
+            and name
+        ):
             projected["pending_tool"] = {
-                "attempt_id": _safe_text(
-                    pending_tool.get("attempt_id"), MAX_SAFE_ID
-                ),
-                "call_id": _safe_text(pending_tool.get("call_id"), MAX_SAFE_ID),
-                "name": _safe_text(pending_tool.get("name"), MAX_TOOL_NAME),
+                "attempt_id": attempt_id,
+                "call_id": call_id,
+                "name": name,
                 "retry_class": retry_class,
                 "status": status,
             }
@@ -144,20 +159,18 @@ def merge_continuation(
     """Merge one snapshot while enforcing append-only and monotonic fields."""
     if not isinstance(incoming, dict):
         raise ValueError("continuation must be an object")
+    _validate_incoming_prefix_pairs(incoming)
     old = project_continuation(existing)
     new = project_continuation(incoming)
     merged = dict(old)
     merged["schema_version"] = 1
 
     if "identity" in incoming:
-        if "identity" in new:
-            for key, old_value in old.get("identity", {}).items():
-                new_value = new["identity"].get(key)
-                if old_value and new_value and new_value != old_value:
-                    raise ValueError("continuation identity cannot change")
-            merged["identity"] = {**old.get("identity", {}), **new["identity"]}
-        else:
-            merged.pop("identity", None)
+        candidate = _require_identity(incoming["identity"])
+        established = old.get("identity")
+        if established and candidate != established:
+            raise ValueError("continuation identity cannot change")
+        merged["identity"] = candidate
 
     if "cursor" in incoming:
         old_cursor = old.get("cursor", {})
@@ -241,11 +254,46 @@ def valid_sha256(value: Any) -> str | None:
     return lowered if _HEX_SHA256.fullmatch(lowered) is not None else None
 
 
-def _safe_text(value: Any, limit: int) -> str:
-    return redact_sensitive_assignments(str(value or ""))[:limit]
+def _safe_text(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return redact_sensitive_assignments(value)[:limit]
 
 
 def _nonnegative_int(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0
     return max(0, int(value))
+
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _require_identity(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError("continuation identity must be an object")
+    message_id = _safe_text(value.get("message_id"), MAX_SAFE_ID)
+    part_id = _safe_text(value.get("part_id"), MAX_SAFE_ID)
+    if not message_id or not part_id:
+        raise ValueError("continuation identity requires message_id and part_id")
+    return {"message_id": message_id, "part_id": part_id}
+
+
+def _validate_incoming_prefix_pairs(incoming: dict[str, Any]) -> None:
+    cursor = incoming.get("cursor")
+    if not isinstance(cursor, dict):
+        return
+    for prefix in ("transcript", "event"):
+        count_key = f"{prefix}_prefix_count"
+        digest_key = f"{prefix}_prefix_sha256"
+        has_count = count_key in cursor
+        has_digest = digest_key in cursor
+        if not has_count and not has_digest:
+            continue
+        if not has_count or not has_digest:
+            raise ValueError(f"continuation {prefix} prefix requires count and digest")
+        if not _is_nonnegative_int(cursor[count_key]):
+            raise ValueError(f"continuation {count_key} must be nonnegative")
+        if valid_sha256(cursor[digest_key]) is None:
+            raise ValueError(f"continuation {digest_key} must be a SHA-256 digest")

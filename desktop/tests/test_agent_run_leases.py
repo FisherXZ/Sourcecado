@@ -34,18 +34,22 @@ def _continuation(
     receipts=None,
     budgets=None,
 ):
+    cursor = {
+        "phase": phase,
+        "step_index": step_index,
+        "next_tool_index": 0,
+    }
+    if transcript_sha is not None:
+        cursor.update(
+            {
+                "transcript_prefix_count": transcript_count,
+                "transcript_prefix_sha256": transcript_sha,
+            }
+        )
     return {
         "schema_version": 1,
         "identity": {"message_id": "message-1", "part_id": "part-1"},
-        "cursor": {
-            "phase": phase,
-            "step_index": step_index,
-            "next_tool_index": 0,
-            "transcript_prefix_count": transcript_count,
-            "transcript_prefix_sha256": transcript_sha,
-            "event_prefix_count": 0,
-            "event_prefix_sha256": None,
-        },
+        "cursor": cursor,
         "visible_partial": {
             "message_id": "message-1",
             "text_length": 12,
@@ -372,7 +376,6 @@ def test_continuation_projection_drops_unsafe_unknown_and_oversize_input(tmp_pat
             },
             "cursor": {
                 **_continuation()["cursor"],
-                "transcript_prefix_sha256": "not-a-digest",
                 "free_form_model_output": "private model prose",
             },
             "visible_partial": {
@@ -407,7 +410,7 @@ def test_continuation_projection_drops_unsafe_unknown_and_oversize_input(tmp_pat
     }
     assert continuation["identity"]["message_id"] == "m" * 256
     assert continuation["identity"]["part_id"] == "part-1 token=[REDACTED]"
-    assert continuation["cursor"]["transcript_prefix_sha256"] is None
+    assert "transcript_prefix_sha256" not in continuation["cursor"]
     assert continuation["visible_partial"] == {
         "message_id": "message-1",
         "text_length": 0,
