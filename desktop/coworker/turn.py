@@ -8,6 +8,7 @@ import threading
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
+from coworker.agent_runs import safe_error_summary
 from coworker.events import TurnEventStream, TurnIdentity, new_turn_identity
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
@@ -448,17 +449,33 @@ async def run_turn(
     system_prompt_fn: Callable[..., str] | None = None,
     identity: TurnIdentity | None = None,
     control: RunControl | None = None,
+    trigger: str = "chat",
+    parent_run_id: str | None = None,
 ) -> dict[str, Any]:
     events = TurnEventStream(
         identity=identity or new_turn_identity(sid),
         store=store,
         emit=emit,
     )
+    # The Agent Run is the durable authority and intentionally exists before
+    # the presentation stream's turn_start event.
+    store.start_agent_run(
+        run_id=events.identity.run_id,
+        session_id=sid,
+        parent_run_id=parent_run_id,
+        trigger=trigger,
+        original_goal=text,
+        provider_model_id=(
+            str(provider.model_id)
+            if provider is not None and getattr(provider, "model_id", None)
+            else None
+        ),
+    )
     if control is not None:
         await control.attach(events)
 
-    async def _emit(event: dict[str, Any]) -> None:
-        await events.send(event)
+    async def _emit(event: dict[str, Any]) -> dict[str, Any]:
+        return await events.send(event)
 
     def _stamp(message: dict[str, Any]) -> dict[str, Any]:
         """Identity for restore merges; stripped before the model sees it."""
@@ -466,10 +483,66 @@ async def run_turn(
         return message
 
     async def _terminal(event: dict[str, Any]) -> None:
+        state = str(event.get("state") or "failed")
+        result_status = {
+            "complete": "ok",
+            "partial": "partial",
+            "stopped": "stopped",
+            "failed": "error",
+        }.get(state, "error")
+        final_text = str(event.get("text") or "")
+        terminal_result = {
+            "status": result_status,
+            "message_id": events.identity.message_id,
+            "text_length": len(final_text),
+        }
+        if state == "failed":
+            terminal_result["error"] = safe_error_summary(
+                str(event.get("message") or "Run failed.")
+            )
+            terminal_result["class"] = "run_error"
         if control is None:
-            await _emit(event)
+            persisted = await _emit(event)
         else:
-            await control.send_terminal(event)
+            persisted = await control.send_terminal(event)
+        if persisted is None:
+            return
+        store.checkpoint_agent_run(
+            events.identity.run_id,
+            kind="terminal",
+            payload={
+                "status": result_status,
+                "state": state,
+                "text_length": len(final_text),
+            },
+            state=state,
+            terminal_result=terminal_result,
+        )
+
+    def _checkpoint_tool(
+        call: ToolCall, *, ok: bool, result: dict[str, Any]
+    ) -> None:
+        sources, artifacts = _tool_provenance(call, result)
+        loaded_skills: list[str] = []
+        if call.name == "load_skill" and ok:
+            skill_name = str(result.get("name") or call.arguments.get("name") or "")
+            if skill_name:
+                loaded_skills.append(skill_name)
+        store.checkpoint_agent_run(
+            events.identity.run_id,
+            kind="tool_completed",
+            payload={
+                "id": call.id,
+                "name": call.name,
+                "ok": ok,
+                "source_count": len(sources),
+                "artifact_count": len(artifacts),
+            },
+            skills_loaded=loaded_skills,
+            source_refs=sources,
+            artifact_refs=artifacts,
+            usage_delta={"tool_calls": 1},
+        )
 
     async def _approval_receipt(
         item: dict[str, Any], *, resolution: str
@@ -487,43 +560,52 @@ async def run_turn(
         if existing is not None:
             if emit is not None:
                 await emit(existing)
-            return
-        await _emit(
-            {
-                "type": "approval_resolved",
-                "id": str(item["id"]),
-                "name": str(item["name"]),
-                "resolution": resolution,
-                "decision": item.get("decision"),
-                "actor": item.get("actor"),
-                "requested_at": str(
-                    item.get("requested_at") or item.get("created_at") or _now_iso()
-                ),
-                "resolved_at": str(item.get("resolved_at") or _now_iso()),
-                "scope": str(item.get("scope") or "once"),
-                "execution_status": str(
-                    item.get("execution_status") or "pending"
-                ),
-                "execution_error": item.get("execution_error"),
-            }
+        else:
+            await _emit(
+                {
+                    "type": "approval_resolved",
+                    "id": str(item["id"]),
+                    "name": str(item["name"]),
+                    "resolution": resolution,
+                    "decision": item.get("decision"),
+                    "actor": item.get("actor"),
+                    "requested_at": str(
+                        item.get("requested_at")
+                        or item.get("created_at")
+                        or _now_iso()
+                    ),
+                    "resolved_at": str(item.get("resolved_at") or _now_iso()),
+                    "scope": str(item.get("scope") or "once"),
+                    "execution_status": str(
+                        item.get("execution_status") or "pending"
+                    ),
+                    "execution_error": item.get("execution_error"),
+                }
+            )
+        store.checkpoint_agent_run(
+            events.identity.run_id,
+            kind="approval_resolved",
+            payload={"id": str(item["id"]), "resolution": resolution},
+            state="running",
         )
 
     async def _stopped(
         history: list[dict[str, Any]], text_so_far: str
     ) -> dict[str, Any]:
         _persist_closed(store, sid, history)
-        if control is not None:
-            await control.finish_stopped(text_so_far)
-        else:
-            await _emit(
-                {
-                    "type": "turn_end",
-                    "state": "stopped",
-                    "text": text_so_far,
-                    "message": "Run stopped.",
-                }
-            )
-        return {"status": "stopped", "text": text_so_far}
+        await _terminal(
+            {
+                "type": "turn_stopped" if control is not None else "turn_end",
+                "state": "stopped",
+                "text": text_so_far,
+                "message": "Run cancelled." if control is not None else "Run stopped.",
+            }
+        )
+        return {
+            "status": "stopped",
+            "text": text_so_far,
+            "run_id": events.identity.run_id,
+        }
 
     await _emit({"type": "turn_start", "state": "running"})
     if provider is None:
@@ -534,7 +616,7 @@ async def run_turn(
                 "message": "No model key. Set DEEPSEEK_API_KEY (deepseek-v4-pro) or MOONSHOT_API_KEY (kimi-k3) in ~/.config/club/.env.",
             }
         )
-        return {"status": "error", "text": ""}
+        return {"status": "error", "text": "", "run_id": events.identity.run_id}
 
     last_text = ""
     had_tool_failure = False
@@ -561,6 +643,11 @@ async def run_turn(
             user_msg = {"role": "user", "content": text}
             history.append(user_msg)
             store.append(sid, user_msg)
+        store.checkpoint_agent_run(
+            events.identity.run_id,
+            kind="user_input",
+            payload={"text_length": len(text)},
+        )
         for _ in range(MAX_STEPS):
             chunks: list[str] = []
             calls: list[ToolCall] = []
@@ -589,10 +676,25 @@ async def run_turn(
                     )
                     history.append(assistant_msg)
                     store.append(sid, assistant_msg)
+                store.checkpoint_agent_run(
+                    events.identity.run_id,
+                    kind="model_completed",
+                    payload={"text_length": len(last_text), "tool_call_count": 0},
+                    usage_delta={"model_calls": 1},
+                )
                 break
             tool_msg = _stamp(_assistant_tool_message(last_text, calls))
             history.append(tool_msg)
             store.append(sid, tool_msg)
+            store.checkpoint_agent_run(
+                events.identity.run_id,
+                kind="model_completed",
+                payload={
+                    "text_length": len(last_text),
+                    "tool_call_count": len(calls),
+                },
+                usage_delta={"model_calls": 1},
+            )
             for call in calls:
                 approval_claimant: str | None = None
                 gate = decide(call.name)
@@ -611,6 +713,7 @@ async def run_turn(
                     history.append(denied)
                     store.append(sid, denied)
                     _record_person_file(sid, call, False, result, execute_kwargs)
+                    _checkpoint_tool(call, ok=False, result=result)
                     continue
                 if gate.needs_user:
                     resource = approval_resource(
@@ -639,8 +742,18 @@ async def run_turn(
                             **({"resource": resource} if resource else {}),
                         }
                     )
+                    store.checkpoint_agent_run(
+                        events.identity.run_id,
+                        kind="waiting_approval",
+                        payload={"id": call.id, "name": call.name},
+                        state="waiting_approval",
+                    )
                     if wait_permission is None:
-                        return {"status": "waiting", "text": last_text}
+                        return {
+                            "status": "waiting",
+                            "text": last_text,
+                            "run_id": events.identity.run_id,
+                        }
                     choice = await wait_permission(call.id)
                     if choice == "cancel":
                         cancelled = inbox.cancel(call.id)
@@ -683,6 +796,7 @@ async def run_turn(
                         _record_person_file(
                             sid, call, False, result, execute_kwargs
                         )
+                        _checkpoint_tool(call, ok=False, result=result)
                         continue
                     if choice == "deny":
                         receipt = claim.item
@@ -700,6 +814,7 @@ async def run_turn(
                         history.append(denied)
                         store.append(sid, denied)
                         _record_person_file(sid, call, False, result, execute_kwargs)
+                        _checkpoint_tool(call, ok=False, result=result)
                         if receipt is not None:
                             await _approval_receipt(
                                 receipt, resolution="denied"
@@ -726,6 +841,7 @@ async def run_turn(
                         history.append(tool_result)
                         store.append(sid, tool_result)
                         _record_person_file(sid, call, ok, result, execute_kwargs)
+                        _checkpoint_tool(call, ok=ok, result=result)
                         if receipt is not None and receipt.get(
                             "execution_status"
                         ) not in ("executing", "pending"):
@@ -776,6 +892,7 @@ async def run_turn(
                 history.append(tool_result)
                 store.append(sid, tool_result)
                 _record_person_file(sid, call, ok, result, execute_kwargs)
+                _checkpoint_tool(call, ok=ok, result=result)
                 if approval_claimant is not None:
                     receipt = inbox.complete_execution(
                         call.id,
@@ -801,14 +918,29 @@ async def run_turn(
                     "message": f"Stopped after {MAX_STEPS} tool steps.",
                 }
             )
-            return {"status": "stopped", "text": last_text}
+            return {
+                "status": "stopped",
+                "text": last_text,
+                "run_id": events.identity.run_id,
+            }
     except Exception as exc:
         _persist_closed(store, sid, history)
-        await _terminal({"type": "error", "state": "failed", "message": str(exc)})
-        return {"status": "error", "text": last_text}
+        await _terminal(
+            {
+                "type": "error",
+                "state": "failed",
+                "message": safe_error_summary(str(exc)),
+            }
+        )
+        return {
+            "status": "error",
+            "text": last_text,
+            "run_id": events.identity.run_id,
+        }
     final_state = "partial" if had_tool_failure else "complete"
     await _terminal({"type": "turn_end", "text": last_text, "state": final_state})
     return {
         "status": "partial" if had_tool_failure else "ok",
         "text": last_text,
+        "run_id": events.identity.run_id,
     }

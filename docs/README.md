@@ -17,6 +17,7 @@ Sourcecado's dated documents record several product shapes. They are intentional
 
 - `superpowers/plans/2026-08-24-*` and `superpowers/plans/2026-08-25-*` — local runtime, sourcing spring, and desktop UI plans
 - `superpowers/plans/2026-08-26-product-validation-sprint-roadmap.md` — golden-workflow validation process and current execution status
+- `superpowers/plans/2026-08-26-priority-0-durable-agent-run-implementation.md` — dependency-ordered implementation plan for the approved Durable Agent Run
 - `qa/2026-08-26-golden-workflow-baseline.md` — real outreach and pitch-package run evidence that drove the Agent OS roadmap
 - `qa/` — current end-to-end and visual QA evidence
 - `desktop/docs/adr/` — ADRs scoped to the active local runtime

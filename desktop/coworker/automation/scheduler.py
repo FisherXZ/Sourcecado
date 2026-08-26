@@ -194,6 +194,9 @@ class Scheduler:
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 finished_at=datetime.now(UTC).isoformat(),
                 waiting_approval_count=waiting_approval_count,
+                agent_run_id=(
+                    str(result["run_id"]) if result.get("run_id") else None
+                ),
             )
             if advance:
                 self.store.set_job_next_run(job_id, next_monday_0900(now))
