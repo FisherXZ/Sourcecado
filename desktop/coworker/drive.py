@@ -25,7 +25,7 @@ EXPORT = {
 }
 _CREDENTIAL_PREFIX = (
     r"(?P<prefix>[\"']?(?:[A-Za-z][A-Za-z0-9]*[_-])*"
-    r"(?:api[\s_-]*key|access[\s_-]*token|auth[\s_-]*token|secret|password|"
+    r"(?:api[\s_-]*key|access[\s_-]*token|auth[\s_-]*token|token|secret|password|"
     r"private[\s_-]*key)[\"']?\s*[:=]\s*)"
 )
 _QUOTED_CREDENTIAL_ASSIGNMENT_RE = re.compile(
@@ -37,8 +37,8 @@ _UNQUOTED_CREDENTIAL_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _PRIVATE_KEY_BLOCK_RE = re.compile(
-    r"-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH) )?PRIVATE KEY-----.*?"
-    r"-----END (?:(?:RSA|EC|DSA|OPENSSH) )?PRIVATE KEY-----",
+    r"-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----.*?"
+    r"-----END (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----",
     re.IGNORECASE | re.DOTALL,
 )
 _LEGAL_NAME_RE = re.compile(
@@ -105,16 +105,25 @@ class DriveApi:
                 "fields": "files(id,name,mimeType,modifiedTime,size,webViewLink)",
             },
         ) or {}
-        files = [
-            {
-                "id": row.get("id"),
-                "name": row.get("name"),
-                "mimeType": row.get("mimeType"),
-                "modifiedTime": row.get("modifiedTime"),
-            }
-            for row in data.get("files") or []
-        ]
-        return {"files": files}
+        files = []
+        redaction_count = 0
+        for row in data.get("files") or []:
+            raw_name = row.get("name")
+            safe_name, name_redaction_count = _redact_credentials(str(raw_name or ""))
+            redaction_count += name_redaction_count
+            files.append(
+                {
+                    "id": row.get("id"),
+                    "name": safe_name if raw_name is not None else None,
+                    "mimeType": row.get("mimeType"),
+                    "modifiedTime": row.get("modifiedTime"),
+                }
+            )
+        return {
+            "files": files,
+            "sensitive_content_redacted": redaction_count > 0,
+            "redaction_count": redaction_count,
+        }
 
     def read(self, file_id: str, max_chars: int = 20000) -> dict[str, Any]:
         self._require()
@@ -128,17 +137,20 @@ class DriveApi:
         text = content if isinstance(content, str) else str(content or "")
         truncated = len(text) > max_chars
         safe_text, redaction_count = _redact_credentials(text)
-        name = str(meta.get("name") or "")
+        raw_name = meta.get("name")
+        name = str(raw_name or "")
+        safe_name, name_redaction_count = _redact_credentials(name)
+        redaction_count += name_redaction_count
         result = {
             "id": str(meta.get("id") or file_id),
-            "name": meta.get("name"),
+            "name": safe_name if raw_name is not None else None,
             "mimeType": mime,
             "content": safe_text[:max_chars],
             "truncated": truncated,
             "sensitive_content_redacted": redaction_count > 0,
             "redaction_count": redaction_count,
         }
-        source_safety = _legal_source_safety(name, safe_text)
+        source_safety = _legal_source_safety(safe_name, safe_text)
         if source_safety is not None:
             result["source_safety"] = source_safety
         return result

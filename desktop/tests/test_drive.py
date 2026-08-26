@@ -50,6 +50,32 @@ def test_drive_search_fake_http(tmp_path):
     assert "/upload" not in str(http.calls)
 
 
+def test_drive_search_redacts_credentials_in_filenames(tmp_path):
+    raw_secret = "apollo_search_filename_secret_1234567890"
+    secrets = SecretStore(tmp_path / "secrets.json")
+    save_google(secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
+    http = FakeHttp(
+        {
+            FILES_URL: {
+                "files": [
+                    {
+                        "id": "f1",
+                        "name": f"APOLLO_API_KEY={raw_secret}",
+                        "mimeType": "text/plain",
+                    }
+                ]
+            }
+        }
+    )
+
+    out = DriveApi(secrets, http=http, client_id="cid", client_secret="sec").search("Apollo")
+
+    assert raw_secret not in json.dumps(out)
+    assert out["files"][0]["name"] == "APOLLO_API_KEY=[REDACTED]"
+    assert out["sensitive_content_redacted"] is True
+    assert out["redaction_count"] == 1
+
+
 def test_drive_read_exports_google_doc(tmp_path):
     secrets = SecretStore(tmp_path / "secrets.json")
     save_google(secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
@@ -68,6 +94,8 @@ def test_drive_read_exports_google_doc(tmp_path):
     "source",
     [
         "APOLLO_API_KEY=apollo_live_1234567890",
+        "TOKEN=generic_token_value_1234567890",
+        "GITHUB_TOKEN=github_token_value_1234567890",
         "access token: ya29.example_access_token_123456",
         "secret = internal_secret_value_123456",
         "password: example_password_value_123456",
@@ -105,6 +133,32 @@ def test_drive_read_redacts_private_key_blocks(tmp_path):
         "-----BEGIN PRIVATE KEY-----\n"
         "private-key-material-that-must-never-leave-the-boundary\n"
         "-----END PRIVATE KEY-----"
+    )
+    http = FakeHttp(
+        {
+            f"{FILES_URL}/f1": {
+                "id": "f1",
+                "name": "Setup",
+                "mimeType": "application/vnd.google-apps.document",
+            },
+            f"{FILES_URL}/f1/export": private_key,
+        }
+    )
+
+    out = DriveApi(secrets, http=http, client_id="cid", client_secret="sec").read("f1")
+
+    assert private_key not in out["content"]
+    assert out["content"] == "[REDACTED PRIVATE KEY]"
+    assert out["redaction_count"] == 1
+
+
+def test_drive_read_redacts_encrypted_private_key_blocks(tmp_path):
+    secrets = SecretStore(tmp_path / "secrets.json")
+    save_google(secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
+    private_key = (
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\n"
+        "encrypted-private-key-material-that-must-never-leave-the-boundary\n"
+        "-----END ENCRYPTED PRIVATE KEY-----"
     )
     http = FakeHttp(
         {
@@ -229,6 +283,47 @@ def test_ws_drive_read_redacts_before_provider_events_and_persistence(tmp_path):
     finished = next(event for event in events if event["type"] == "tool_finished")
     assert finished["result"]["content"] == "APOLLO_API_KEY=[REDACTED]"
     assert finished["result"]["sensitive_content_redacted"] is True
+
+
+def test_ws_drive_read_redacts_filename_before_provider_events_and_persistence(tmp_path):
+    raw_secret = "apollo_filename_secret_1234567890"
+    http = FakeHttp(
+        {
+            f"{FILES_URL}/f1": {
+                "id": "f1",
+                "name": f"APOLLO_API_KEY={raw_secret}",
+                "mimeType": "application/vnd.google-apps.document",
+            },
+            f"{FILES_URL}/f1/export": "ordinary body",
+        }
+    )
+    fake = FakeProvider(
+        steps=[
+            {"tool_calls": [ToolCall(id="c1", name="drive_read", arguments={"file_id": "f1"})]},
+            {"deltas": ("The credential was redacted.",)},
+        ]
+    )
+    app = create_app(token=TOKEN, provider=fake, state=tmp_path, http=http)
+    save_google(app.state.secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
+    app.state.drive = DriveApi(app.state.secrets, http=http, client_id="cid", client_secret="sec")
+    sid = app.state.store.open_session_id()
+
+    with TestClient(app).websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "text": "check the source", "session_id": sid})
+        events = []
+        while True:
+            event = ws.receive_json()
+            events.append(event)
+            if event["type"] in ("turn_end", "error"):
+                break
+
+    assert raw_secret not in json.dumps(events)
+    assert raw_secret not in json.dumps(fake.calls)
+    assert raw_secret not in json.dumps(app.state.store.load_events(sid))
+    finished = next(event for event in events if event["type"] == "tool_finished")
+    assert finished["result"]["name"] == "APOLLO_API_KEY=[REDACTED]"
+    assert finished["result"]["sensitive_content_redacted"] is True
+    assert finished["result"]["redaction_count"] == 1
 
 
 def test_drive_connect_url_requests_readonly(tmp_path, monkeypatch):
