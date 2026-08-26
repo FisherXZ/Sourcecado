@@ -3,6 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/App";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 const api = vi.hoisted(() => ({
   createScheduleJob: vi.fn(),
   createSession: vi.fn(),
@@ -259,6 +269,47 @@ describe("App shell routing", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/settings");
+  });
+
+  it("does not persist a cached destination before fresh session state resolves", async () => {
+    window.location.hash = "";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [],
+      open_id: null,
+      last_destination: "#/scheduled",
+    }));
+    const listing = deferred<{
+      sessions: never[];
+      open_id: null;
+      last_destination: string;
+    }>();
+    api.getSessions.mockReturnValue(listing.promise);
+
+    render(<App />);
+
+    await waitFor(() => expect(window.location.hash).toBe("#/scheduled"));
+    expect(api.setLastDestination).not.toHaveBeenCalled();
+
+    listing.resolve({ sessions: [], open_id: null, last_destination: "#/skills" });
+    await waitFor(() => expect(window.location.hash).toBe("#/skills"));
+  });
+
+  it("keeps a stale destination read-only after refresh failure but persists later navigation", async () => {
+    window.location.hash = "";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [],
+      open_id: null,
+      last_destination: "#/scheduled",
+    }));
+    api.getSessions.mockRejectedValue(new Error("sidecar offline"));
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Scheduled" })).toBeInTheDocument();
+    expect(api.setLastDestination).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("link", { name: "Skills" }));
+    await waitFor(() => expect(api.setLastDestination).toHaveBeenCalledWith("#/skills"));
   });
 
   it("escapes the boot skeleton when sessions exist but no restore target is known", async () => {

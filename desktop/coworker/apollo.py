@@ -32,7 +32,13 @@ def _decode_response(res: Any) -> Any:
     text = getattr(res, "text", "") or ""
     if "json" in ctype.lower() or text[:1] in "{[":
         return res.json()
-    return text
+    textual = ctype.lower().startswith("text/") or any(
+        marker in ctype.lower() for marker in ("csv", "xml", "yaml")
+    )
+    if textual:
+        return text
+    content = getattr(res, "content", None)
+    return content if isinstance(content, bytes) else text
 
 
 class LiveHttp:

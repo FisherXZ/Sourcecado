@@ -230,6 +230,7 @@ DRIVE_LIST_FOLDER_SCHEMA: dict[str, Any] = {
             "properties": {
                 "folder_id": {"type": "string"},
                 "max_results": {"type": "integer"},
+                "page_token": {"type": "string"},
             },
             "required": ["folder_id"],
             "additionalProperties": False,
@@ -241,7 +242,7 @@ DRIVE_READ_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "drive_read",
-        "description": "Read one Google Drive file by id. Readonly. For a folder id, use drive_list_folder instead.",
+        "description": "Read one Google Drive file by id. Readonly. Folder ids are listed, not downloaded; prefer drive_list_folder for traversal.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -503,17 +504,19 @@ def execute(
             if name == "drive_list_folder":
                 folder_id = str(args.get("folder_id") or "").strip()
                 if not folder_id:
-                    return False, {"error": "folder_id is required"}
+                    return False, {"status": "failed", "error": "folder_id is required"}
                 return True, drive.list_folder(
                     folder_id,
                     int(args.get("max_results") or 100),
+                    str(args.get("page_token") or "") or None,
                 )
             fid = str(args.get("file_id") or "").strip()
             if not fid:
                 return False, {"error": "file_id is required"}
-            return True, drive.read(fid, int(args.get("max_chars") or 20000))
+            result = drive.read(fid, int(args.get("max_chars") or 20000))
+            return True, result
         except Exception as exc:
-            return False, {"error": str(exc)}
+            return False, {"status": "failed", "error": str(exc)}
     if name in {"calendar_list", "calendar_create", "calendar_update"}:
         if calendar is None:
             return False, {"error": "Calendar is not connected."}

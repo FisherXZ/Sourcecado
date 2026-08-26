@@ -1012,7 +1012,7 @@ def create_app(
                     connector_email=email if refresh else None,
                     required_scopes=["Read Drive files"],
                     missing_scopes=drive_missing if refresh else ["Read Drive files"],
-                    supported_actions=["Search files", "Read files"],
+                    supported_actions=["Search files", "List folders", "Read files"],
                     available_actions=(
                         ["connect"]
                         if not refresh

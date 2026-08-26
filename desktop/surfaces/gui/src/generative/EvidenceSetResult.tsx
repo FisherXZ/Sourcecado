@@ -15,6 +15,7 @@ type EvidenceItem = {
   readonly externalUrl: string | null;
   readonly stale: boolean;
   readonly truncated: boolean;
+  readonly extractionStatus: string | null;
   readonly callIds: readonly string[];
 };
 
@@ -70,10 +71,7 @@ function providerForTool(tool: ToolCallMessagePart): "Google Drive" | "Granola" 
 
 function malformedEvidenceTool(tool: ToolCallMessagePart): boolean {
   if (tool.result === undefined || failedProvider(tool)) return false;
-  if (
-    tool.toolName === "drive_search" ||
-    tool.toolName === "drive_list_folder"
-  ) {
+  if (tool.toolName === "drive_search" || tool.toolName === "drive_list_folder") {
     const result = record(tool.result);
     return !result || !Array.isArray(result.files);
   }
@@ -99,11 +97,7 @@ function malformedEvidenceTool(tool: ToolCallMessagePart): boolean {
 
 function driveItems(tool: ToolCallMessagePart): EvidenceItem[] {
   const result = record(tool.result);
-  if (
-    tool.toolName === "drive_search" ||
-    tool.toolName === "drive_list_folder"
-  ) {
-    const folderListing = tool.toolName === "drive_list_folder";
+  if (tool.toolName === "drive_search" || tool.toolName === "drive_list_folder") {
     const files = Array.isArray(result?.files) ? result.files : [];
     return files.flatMap((value, index) => {
       const file = record(value);
@@ -116,13 +110,15 @@ function driveItems(tool: ToolCallMessagePart): EvidenceItem[] {
         provider: "Google Drive" as const,
         title: text(file.name) ?? "Untitled Drive file",
         excerpt: text(file.excerpt) ?? text(file.snippet),
-        context: [folderListing ? "Folder child" : "Search match", mime]
-          .filter(Boolean)
-          .join(" · "),
+        context: [
+          tool.toolName === "drive_list_folder" ? "Folder child" : "Search match",
+          mime,
+        ].filter(Boolean).join(" · "),
         externalUrl:
           text(file.webViewLink) ?? text(file.url) ?? text(file.external_url),
         stale: file.stale === true,
         truncated: file.truncated === true,
+        extractionStatus: null,
         callIds: [tool.toolCallId],
       }];
     });
@@ -130,17 +126,26 @@ function driveItems(tool: ToolCallMessagePart): EvidenceItem[] {
   if (tool.toolName === "drive_read" && result) {
     const sourceId = text(result.id) ?? text(record(tool.args)?.file_id) ?? tool.toolCallId;
     const mime = text(result.mimeType);
+    const extractionStatus = text(result.status);
+    const action = extractionStatus === "metadata_only"
+      ? "Metadata only"
+      : extractionStatus === "unsupported"
+        ? "Unsupported format"
+        : extractionStatus === "failed"
+          ? "Read failed"
+          : "Read document";
     return [{
       key: `drive:${sourceId}`,
       sourceId,
       provider: "Google Drive",
       title: text(result.name) ?? "Drive document",
       excerpt: text(result.content),
-      context: ["Read document", mime].filter(Boolean).join(" · "),
+      context: [action, mime].filter(Boolean).join(" · "),
       externalUrl:
         text(result.webViewLink) ?? text(result.url) ?? text(result.external_url),
       stale: result.stale === true,
       truncated: result.truncated === true,
+      extractionStatus,
       callIds: [tool.toolCallId],
     }];
   }
@@ -178,6 +183,7 @@ function granolaItems(tool: ToolCallMessagePart): EvidenceItem[] {
           text(item.url) ?? text(item.htmlLink) ?? text(item.external_url),
         stale: item.stale === true,
         truncated: item.truncated === true,
+        extractionStatus: null,
         callIds: [tool.toolCallId],
       }];
     });
@@ -194,6 +200,7 @@ function granolaItems(tool: ToolCallMessagePart): EvidenceItem[] {
         externalUrl: null,
         stale: false,
         truncated: false,
+        extractionStatus: null,
         callIds: [tool.toolCallId],
       }]
     : [];
@@ -224,6 +231,7 @@ function evidenceItems(tools: readonly ToolCallMessagePart[]): EvidenceItem[] {
               externalUrl: item.externalUrl ?? current.externalUrl,
               stale: current.stale || item.stale,
               truncated: current.truncated || item.truncated,
+              extractionStatus: item.extractionStatus ?? current.extractionStatus,
               callIds: [...current.callIds, ...item.callIds],
             }
           : item,
@@ -349,6 +357,7 @@ export function EvidenceSetResult({
                       sourceId: item.sourceId,
                       callIds: item.callIds,
                       context: item.context,
+                      extractionStatus: item.extractionStatus,
                     },
                   },
                   event.currentTarget,
@@ -361,6 +370,15 @@ export function EvidenceSetResult({
             <p>{item.context}</p>
             {item.stale ? <span className="sourcecado-evidence-badge">Cached stale</span> : null}
             {item.truncated ? <span className="sourcecado-evidence-badge">Truncated</span> : null}
+            {item.extractionStatus === "metadata_only" ? (
+              <span className="sourcecado-evidence-badge">Metadata only</span>
+            ) : null}
+            {item.extractionStatus === "unsupported" ? (
+              <span className="sourcecado-evidence-badge">Unsupported format</span>
+            ) : null}
+            {item.extractionStatus === "failed" ? (
+              <span className="sourcecado-evidence-badge">Read failed</span>
+            ) : null}
             {item.excerpt ? <EvidenceExcerpt excerpt={item.excerpt} /> : null}
           </li>
         ))}

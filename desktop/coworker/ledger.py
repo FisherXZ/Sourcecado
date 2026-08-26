@@ -144,25 +144,36 @@ def event_from_tool(
             },
             tool=name,
         )
-    if name in {"drive_search", "drive_list_folder"}:
+    if name == "drive_search":
         files = [
             {"id": row.get("id"), "name": row.get("name")}
             for row in (result.get("files") or [])
             if isinstance(row, dict)
         ]
         query = str(arguments.get("query") or "")
-        folder_id = str(arguments.get("folder_id") or "")
-        summary = (
-            f"Listed Drive folder {folder_id!r} ({len(files)})"
-            if name == "drive_list_folder"
-            else f"Searched Drive for {query!r} ({len(files)})"
+        return _event(
+            source="drive",
+            kind="file",
+            summary=f"Searched Drive for {query!r} ({len(files)})",
+            payload={"query": query, "files": files},
+            tool=name,
+        )
+    if name == "drive_list_folder":
+        files = [
+            {"id": row.get("id"), "name": row.get("name")}
+            for row in (result.get("files") or [])
+            if isinstance(row, dict)
+        ]
+        folder_id = str(
+            result.get("id") or result.get("folder_id") or arguments.get("folder_id") or ""
         )
         return _event(
             source="drive",
             kind="file",
-            summary=summary,
+            summary=f"Listed Drive folder {result.get('name') or folder_id}".strip(),
             payload={
-                **({"folder_id": folder_id} if folder_id else {"query": query}),
+                "folder_id": folder_id,
+                "status": result.get("status"),
                 "files": files,
             },
             tool=name,
@@ -172,7 +183,14 @@ def event_from_tool(
             source="drive",
             kind="file",
             summary=f"Read Drive file {result.get('name') or result.get('id') or ''}".strip(),
-            payload={"id": result.get("id"), "name": result.get("name")},
+            payload={
+                "id": result.get("id"),
+                "name": result.get("name"),
+                "mimeType": result.get("mimeType"),
+                "status": result.get("status"),
+                "truncated": bool(result.get("truncated", False)),
+                "reason": result.get("reason"),
+            },
             tool=name,
         )
     if name == "calendar_list":
