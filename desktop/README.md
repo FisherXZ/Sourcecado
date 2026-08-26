@@ -1,59 +1,68 @@
-# Club
+# Sourcecado desktop
 
-Local sidecar and window for Fisher. One operator, one Google login, one weekly job.
+This is Sourcecado's active application: a local Python sidecar plus a React/Vite interface packaged as a Tauri macOS app.
 
-This folder is the new app. The Next.js tree at the repo root is the hosted Sourcecado stack.
+The root [README](../README.md) is the canonical setup guide. This document covers the stack inside `desktop/`.
 
-Keys live in `~/.config/club/.env` (never in the repo). Default model is DeepSeek V4 Pro; Kimi K3 if there is no DeepSeek key.
+## Architecture
 
+```text
+Tauri or browser window
+        │
+        │ authenticated local HTTP (/v1)
+        ▼
+FastAPI sidecar (coworker/)
+        │
+        ├── model provider and tool loop
+        ├── Apollo, Gmail, Drive, Calendar, Granola, and web connectors
+        ├── permissions and approval gates
+        └── local conversations, person files, schedules, and run ledger
 ```
-DEEPSEEK_API_KEY=...
-MOONSHOT_API_KEY=...
-GOOGLE_OAUTH_CLIENT_ID=...
-GOOGLE_OAUTH_CLIENT_SECRET=...
-APOLLO_API_KEY=...
-```
 
-Gmail drafts never send, even when the Google grant includes send. Apollo search returns first name, obfuscated last name, title, and org. No email field. Enrich still asks.
+The Vite development server proxies `/v1` to the sidecar so browser development stays same-origin. Do not hard-code the sidecar port in UI code. The native shell starts and stops the sidecar, injects the API token, and hides to the menu bar on window close.
 
-## Run
+## Credentials and state
 
-Two terminals, from `desktop/`.
+Copy the root `.env.example` to `~/.config/club/.env`. Existing process environment variables win over values from that file.
 
-Sidecar (the brain):
+The current model preference is DeepSeek V4 Pro with Kimi K3 as fallback. Google OAuth enables Gmail, Drive, and Calendar. Apollo enrichment and Gmail sending remain explicit, approval-gated actions.
+
+The default local state directory is `~/.config/club/`. Set `CLUB_STATE_DIR` for isolated development or tests. Never commit credentials, API tokens, OAuth grants, or local databases.
+
+## Run from this directory
+
+Sidecar:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m coworker.run
 ```
 
-Window (the remote control). Start this **after** the sidecar so Vite can read `~/.config/club/sidecar-8765.token`:
+GUI, after the sidecar is running:
 
 ```bash
 cd surfaces/gui
-npm install
+npm ci
 npm run dev
 ```
 
-Open http://127.0.0.1:5180. You should see **brain reached**.
+Open [http://127.0.0.1:5180](http://127.0.0.1:5180).
 
-The Vite dev server proxies `/v1` to the sidecar so the browser stays same-origin. Do not point the page at `:8765` yourself.
-
-## Tests
-
-```bash
-.venv/bin/pytest -q
-```
-
-## Native Mac window
-
-Needs rustup (`curl https://sh.rustup.rs | sh`) and the venv above.
+Native window:
 
 ```bash
 cd surfaces/gui
-npm install
 npm run tauri:dev
 ```
 
-That starts Vite, spawns the sidecar, injects the token, and opens a Club window. Close hides to the menu bar. **Quit** kills the sidecar.
+## Verify
+
+```bash
+.venv/bin/pytest -q
+cd surfaces/gui
+npm test
+npm run build
+```
+
+The root `Makefile` wraps these commands for normal use.

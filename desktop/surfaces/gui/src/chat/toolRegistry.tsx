@@ -44,6 +44,11 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     category: "source",
     slot: "evidence",
   },
+  drive_list_folder: {
+    label: "Listed Drive folder",
+    category: "source",
+    slot: "evidence",
+  },
   drive_read: {
     label: "Read Drive evidence",
     category: "source",

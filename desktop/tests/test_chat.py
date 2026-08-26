@@ -44,6 +44,30 @@ def test_tool_failure_classifies_actionable_failure_classes(
     assert failure["idempotent"] is True
 
 
+def test_drive_folder_failure_does_not_offer_connection_repair():
+    failure = _tool_failure(
+        ToolCall(id="call-folder", name="drive_read", arguments={"file_id": "folder-1"}),
+        {
+            "error": (
+                "file_id is a folder; drive_read requires a file. "
+                "Use drive_list_folder."
+            )
+        },
+        TurnIdentity(
+            session_id="thread-alpha",
+            run_id="run-folder",
+            message_id="message-folder",
+            part_id="part-folder",
+        ),
+    )
+
+    assert failure["class"] == "validation"
+    assert failure["summary"] == (
+        "Google Drive needs corrected request details before retrying."
+    )
+    assert failure["repair_route"] is None
+
+
 def app(tmp_path, provider: FakeProvider | None = None):
     return create_app(token=TOKEN, provider=provider or FakeProvider(), state=tmp_path)
 

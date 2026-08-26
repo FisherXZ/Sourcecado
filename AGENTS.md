@@ -1,40 +1,39 @@
-# Sourcecado Agent Context
+# Sourcecado agent context
 
-## High-Level Product Direction
+## Product direction
 
-Sourcecado is becoming a hosted team sourcing operating system for Codeology.
-The memory layer is pillar one: it preserves contacts, sourcing history,
-source citations, knowledge gaps, outcomes, and human feedback. Pillar two is
-an autonomous sourcing agent that tells Sourcing Directors what to do next and
-produces review-ready work.
+Sourcecado is a local-first desktop assistant for a Codeology sourcing director. The current spring proves the complete job for one operator on one machine: name a target, find people, prepare tailored outreach, deliberately enrich when needed, approve and send, keep conversations moving, and leave a person file another officer can pick up.
 
-The two-month direction is a weekly sourcing loop: configure a routine, pull or
-enrich contacts through Apollo, research with Gmail/Drive/Notion/web context,
-resolve identities, record sourcing signals, rank who to work, create Gmail
-drafts, record usage in the run ledger, capture human feedback, and feed that
-back into memory.
+Chat is home. The board is the assistant's operating picture. The person file is the durable domain object.
 
-Sourcecado owns its own domain runtime and should borrow patterns from
-OpenClaw and Hermes for tools, routines, ledgers, and memory loops. Do not make
-OpenClaw, Hermes, or MCP the core dependency for the near-term build.
+The active runtime is `desktop/`. The previous hosted Next.js/Postgres application is preserved in `archive/hosted-web/` and must not be treated as the current implementation.
 
-## Roadmap Guardrails
+## Current guardrails
 
-- Build a hosted team app, not just a local CLI.
-- Prioritize agent/tool orchestration and memory architecture over app polish.
-- Use real Apollo API, Gmail drafts, web search, Google Drive, and Notion where
-  practical.
-- Keep Apify in the connector boundary, but defer LinkedIn/Apify v2.
-- Create Gmail drafts only; actual sending and approve-to-send are deferred.
-- Store run steps, tool calls, artifacts, source refs, feedback, and rationale
-  summaries.
-- Treat sourcing signals and identity resolution as v1 primitives.
-- Track Apollo credits, web calls, Apify runs, Gmail quota-sensitive actions,
-  and model usage in the run ledger.
-- Keep the first UI to routine setup, run result, and run contact. Gmail draft
-  review can be a popup; memory can live under settings.
-- Defer formal routine/agent versioning, test contact suites, and eval prep to
-  v2.
+- Build the local Sourcecado desktop product: Python/FastAPI sidecar plus React/Vite/Tauri UI.
+- Optimize for one sourcing director now while keeping person files intelligible to a later officer.
+- A sequence is a person being worked through Open, In conversation, and Done. A company is context, not a deal.
+- Apollo search may return candidates without an email. Enrichment is manual and credit-aware.
+- Sending is allowed only after explicit review and approval in Sourcecado. Never add auto-send.
+- Keep Gmail, Drive, Calendar, Granola, Apollo, and web work attached to the relevant person and run ledger.
+- Store secrets and runtime state outside the repository. Never log tokens, API keys, or raw authorization headers.
+- Preserve tool calls, artifacts, source references, permission decisions, rationale summaries, and failures in the local ledger.
+- Do not reintroduce the hosted app, Postgres, Next.js, or team tenancy without a new product decision.
+- Do not make OpenClaw, Hermes, or MCP the core product dependency. Borrow useful patterns behind Sourcecado-owned boundaries.
 
-For the current full design, read
-`docs/superpowers/specs/2026-06-08-sourcecado-autonomous-sourcing-os-design.md`.
+## Repository map
+
+- `desktop/coworker/` — sidecar, connectors, agent loop, policy, and persistence
+- `desktop/surfaces/gui/` — active React/Vite/Tauri UI
+- `desktop/tests/` and `desktop/surfaces/gui/tests/` — active verification suites
+- `docs/` — current and historical product/engineering records
+- `archive/hosted-web/` — read-only historical implementation
+
+## Documentation precedence
+
+1. `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md` — current product source of truth
+2. `README.md`, this file, `CONTEXT.md`, and `DESIGN.md` — current operating guidance
+3. Current dated implementation plans and ADRs listed in `docs/README.md`
+4. Older dated specs and plans — historical context only
+
+If documents conflict, follow the highest item in this list and update the stale living document in the same change.

@@ -6,10 +6,10 @@
 > Codeology, not a Bloomberg terminal.
 
 ## Product Context
-- **What this is:** A hosted team sourcing operating system. It preserves contacts, sourcing history, source citations, knowledge gaps, outcomes, and human feedback — and surfaces an autonomous agent that tells Sourcing Directors who to work next and produces review-ready outreach.
-- **Who it's for:** Sourcing Directors at Codeology (operators, not visitors). Long, dense work sessions.
+- **What this is:** A local desktop assistant that helps a sourcing director find people, prepare and approve outreach, keep conversations moving, and maintain durable person files.
+- **Who it's for:** One Codeology Sourcing Director in the current spring (an operator, not a visitor), with records designed to be useful to the next officer. Long, dense work sessions.
 - **Space/industry:** Sourcing/recruiting data tools. Peers: Gem, hireEZ, Clay, Apollo. Visual peers: Linear, Attio, Retool, Notion.
-- **Project type:** Data-dense internal work app.
+- **Project type:** Data-dense local desktop work app with chat as home.
 
 ## Aesthetic Direction
 - **Direction:** Industrial/Utilitarian × Organic — "Warm Operator."
@@ -60,9 +60,9 @@
 
 ## Layout
 - **Approach:** Hybrid, grid-disciplined app shell.
-- **Shell:** Three panes — left nav (~232–240px, workspace switcher top, primary objects, settings + user pinned bottom) / center data surface / right inspector panel that slides in on row-click (never a full-page navigation away).
-- **Hero object:** The spreadsheet-grade table. Sticky header, per-column sort, filter chips above, full-text search, multi-select checkboxes, bulk-action bar on selection, frozen identity column (avatar + name), tinted status pills, tabular numerals. Cmd-K command palette; J/K row nav.
-- **Grid:** App shell is fixed three-column; content within panes uses a 4px rhythm. Marketing/prose max content width ~1180px.
+- **Shell:** Persistent global rail / center work surface / contextual inspector when evidence or a person brief needs detail. The inspector may collapse on narrow windows; it must never trap the operator away from the thread.
+- **Hero object:** The conversation is home. Dense board and person-file views are destinations in the rail; structured tool results appear inline when the assistant is doing sourcing work.
+- **Grid:** Desktop-first shell with responsive collapse behavior. Content within panes uses a 4px rhythm and maintains usable composer and approval controls at narrow widths.
 - **Border radius:** 8px cards/inputs/panels · 6px buttons · 4px tiny inline tags · full (9999px) pills/avatars/toggles. Friendly-precise band — avoid ≥12px (toy) and ≤4px (clinical).
 - **Elevation:** Borders over shadows for dense surfaces (1px `#E7E3DA` hairlines). Reserve soft shadows for floating elements only — command palette, Gmail-draft popup, inspector.
 
@@ -82,3 +82,5 @@
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-06-18 | Initial design system created ("Warm Operator") | Created by /design-consultation. Direction chosen: data-dense operator tool with warm/avocado character. Research-backed (Attio/Linear density + Clay warmth split). Approved after live HTML preview. |
+| 2026-08-25 | Chat became the home surface | The sourcing-director job begins with a target and a conversation; the board reports work and the person file preserves it. |
+| 2026-08-26 | Local desktop became the active product | The React/Vite/Tauri shell and Python sidecar replaced the hosted web app as the implementation target. |

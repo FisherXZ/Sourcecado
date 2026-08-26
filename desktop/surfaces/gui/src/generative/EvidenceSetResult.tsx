@@ -70,7 +70,10 @@ function providerForTool(tool: ToolCallMessagePart): "Google Drive" | "Granola" 
 
 function malformedEvidenceTool(tool: ToolCallMessagePart): boolean {
   if (tool.result === undefined || failedProvider(tool)) return false;
-  if (tool.toolName === "drive_search") {
+  if (
+    tool.toolName === "drive_search" ||
+    tool.toolName === "drive_list_folder"
+  ) {
     const result = record(tool.result);
     return !result || !Array.isArray(result.files);
   }
@@ -96,7 +99,11 @@ function malformedEvidenceTool(tool: ToolCallMessagePart): boolean {
 
 function driveItems(tool: ToolCallMessagePart): EvidenceItem[] {
   const result = record(tool.result);
-  if (tool.toolName === "drive_search") {
+  if (
+    tool.toolName === "drive_search" ||
+    tool.toolName === "drive_list_folder"
+  ) {
+    const folderListing = tool.toolName === "drive_list_folder";
     const files = Array.isArray(result?.files) ? result.files : [];
     return files.flatMap((value, index) => {
       const file = record(value);
@@ -109,7 +116,9 @@ function driveItems(tool: ToolCallMessagePart): EvidenceItem[] {
         provider: "Google Drive" as const,
         title: text(file.name) ?? "Untitled Drive file",
         excerpt: text(file.excerpt) ?? text(file.snippet),
-        context: ["Search match", mime].filter(Boolean).join(" · "),
+        context: [folderListing ? "Folder child" : "Search match", mime]
+          .filter(Boolean)
+          .join(" · "),
         externalUrl:
           text(file.webViewLink) ?? text(file.url) ?? text(file.external_url),
         stale: file.stale === true,

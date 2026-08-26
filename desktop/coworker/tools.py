@@ -207,7 +207,7 @@ DRIVE_SEARCH_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "drive_search",
-        "description": "Search Google Drive files. Readonly.",
+        "description": "Search Google Drive file names and text. Readonly. This is fuzzy text search, not Drive query syntax; use drive_list_folder to open a folder.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -220,11 +220,28 @@ DRIVE_SEARCH_SCHEMA: dict[str, Any] = {
     },
 }
 
+DRIVE_LIST_FOLDER_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "drive_list_folder",
+        "description": "List the direct children of a Google Drive folder by folder id. Readonly. Call again for child folders to traverse a tree.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "folder_id": {"type": "string"},
+                "max_results": {"type": "integer"},
+            },
+            "required": ["folder_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 DRIVE_READ_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "drive_read",
-        "description": "Read a Google Drive file. Readonly.",
+        "description": "Read one Google Drive file by id. Readonly. For a folder id, use drive_list_folder instead.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -385,6 +402,7 @@ OPENAI_TOOLS = [
     GMAIL_DRAFT_SCHEMA,
     GMAIL_SEND_SCHEMA,
     DRIVE_SEARCH_SCHEMA,
+    DRIVE_LIST_FOLDER_SCHEMA,
     DRIVE_READ_SCHEMA,
     CALENDAR_LIST_SCHEMA,
     CALENDAR_CREATE_SCHEMA,
@@ -476,12 +494,20 @@ def execute(
             return False, {"error": str(exc)}
         except Exception as exc:
             return False, {"error": str(exc)}
-    if name in {"drive_search", "drive_read"}:
+    if name in {"drive_search", "drive_list_folder", "drive_read"}:
         if drive is None:
             return False, {"error": "Drive is not connected."}
         try:
             if name == "drive_search":
                 return True, drive.search(str(args.get("query") or ""), int(args.get("max_results") or 10))
+            if name == "drive_list_folder":
+                folder_id = str(args.get("folder_id") or "").strip()
+                if not folder_id:
+                    return False, {"error": "folder_id is required"}
+                return True, drive.list_folder(
+                    folder_id,
+                    int(args.get("max_results") or 100),
+                )
             fid = str(args.get("file_id") or "").strip()
             if not fid:
                 return False, {"error": "file_id is required"}

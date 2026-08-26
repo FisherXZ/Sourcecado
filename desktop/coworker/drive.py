@@ -18,6 +18,8 @@ from coworker.gmail import GmailError
 from coworker.secrets import SecretStore
 
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+FILE_FIELDS = "id,name,mimeType,modifiedTime,parents,webViewLink"
 EXPORT = {
     "application/vnd.google-apps.document": "text/plain",
     "application/vnd.google-apps.spreadsheet": "text/csv",
@@ -86,6 +88,23 @@ def _legal_source_safety(name: str, text: str) -> dict[str, Any] | None:
     }
 
 
+def _file_row(row: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    parents = row.get("parents")
+    raw_name = row.get("name")
+    safe_name, redaction_count = _redact_credentials(str(raw_name or ""))
+    return (
+        {
+            "id": row.get("id"),
+            "name": safe_name if raw_name is not None else None,
+            "mimeType": row.get("mimeType"),
+            "modifiedTime": row.get("modifiedTime"),
+            "parents": list(parents) if isinstance(parents, list) else [],
+            "webViewLink": row.get("webViewLink"),
+        },
+        redaction_count,
+    )
+
+
 class DriveApi:
     def __init__(self, secrets: SecretStore, *, http: Any, client_id: str, client_secret: str) -> None:
         self.secrets = secrets
@@ -102,33 +121,72 @@ class DriveApi:
             params={
                 "q": f"(name contains '{q}' or fullText contains '{q}') and trashed=false",
                 "pageSize": max(1, min(int(max_results), 10)),
-                "fields": "files(id,name,mimeType,modifiedTime,size,webViewLink)",
+                "fields": f"files({FILE_FIELDS})",
             },
         ) or {}
-        files = []
+        files: list[dict[str, Any]] = []
         redaction_count = 0
         for row in data.get("files") or []:
-            raw_name = row.get("name")
-            safe_name, name_redaction_count = _redact_credentials(str(raw_name or ""))
-            redaction_count += name_redaction_count
-            files.append(
-                {
-                    "id": row.get("id"),
-                    "name": safe_name if raw_name is not None else None,
-                    "mimeType": row.get("mimeType"),
-                    "modifiedTime": row.get("modifiedTime"),
-                }
-            )
+            if not isinstance(row, dict):
+                continue
+            safe_row, row_redaction_count = _file_row(row)
+            files.append(safe_row)
+            redaction_count += row_redaction_count
         return {
             "files": files,
             "sensitive_content_redacted": redaction_count > 0,
             "redaction_count": redaction_count,
         }
 
+    def list_folder(self, folder_id: str, max_results: int = 100) -> dict[str, Any]:
+        self._require()
+        fid = folder_id.strip()
+        if not fid:
+            raise GmailError("folder_id is required")
+        escaped = fid.replace("'", "\\'")
+        limit = max(1, min(int(max_results), 1000))
+        files: list[dict[str, Any]] = []
+        redaction_count = 0
+        page_token: str | None = None
+        while len(files) < limit:
+            params: dict[str, Any] = {
+                "q": f"'{escaped}' in parents and trashed=false",
+                "pageSize": min(limit - len(files), 100),
+                "fields": f"nextPageToken,files({FILE_FIELDS})",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            data = self._request("get", FILES_URL, params=params) or {}
+            for row in data.get("files") or []:
+                if not isinstance(row, dict):
+                    continue
+                safe_row, row_redaction_count = _file_row(row)
+                files.append(safe_row)
+                redaction_count += row_redaction_count
+            next_token = str(data.get("nextPageToken") or "")
+            if not next_token or next_token == page_token:
+                break
+            page_token = next_token
+        return {
+            "folder_id": fid,
+            "files": files[:limit],
+            "sensitive_content_redacted": redaction_count > 0,
+            "redaction_count": redaction_count,
+        }
+
     def read(self, file_id: str, max_chars: int = 20000) -> dict[str, Any]:
         self._require()
-        meta = self._request("get", f"{FILES_URL}/{file_id}") or {}
+        meta = self._request(
+            "get",
+            f"{FILES_URL}/{file_id}",
+            params={"fields": FILE_FIELDS},
+        ) or {}
         mime = str(meta.get("mimeType") or "")
+        if mime == FOLDER_MIME:
+            raise GmailError(
+                "file_id is a folder; drive_read requires a file. "
+                "Use drive_list_folder."
+            )
         export = EXPORT.get(mime)
         if export:
             content = self._request("get", f"{FILES_URL}/{file_id}/export", params={"mimeType": export})
@@ -147,6 +205,7 @@ class DriveApi:
             "mimeType": mime,
             "content": safe_text[:max_chars],
             "truncated": truncated,
+            "webViewLink": meta.get("webViewLink"),
             "sensitive_content_redacted": redaction_count > 0,
             "redaction_count": redaction_count,
         }

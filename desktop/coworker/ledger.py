@@ -144,18 +144,27 @@ def event_from_tool(
             },
             tool=name,
         )
-    if name == "drive_search":
+    if name in {"drive_search", "drive_list_folder"}:
         files = [
             {"id": row.get("id"), "name": row.get("name")}
             for row in (result.get("files") or [])
             if isinstance(row, dict)
         ]
         query = str(arguments.get("query") or "")
+        folder_id = str(arguments.get("folder_id") or "")
+        summary = (
+            f"Listed Drive folder {folder_id!r} ({len(files)})"
+            if name == "drive_list_folder"
+            else f"Searched Drive for {query!r} ({len(files)})"
+        )
         return _event(
             source="drive",
             kind="file",
-            summary=f"Searched Drive for {query!r} ({len(files)})",
-            payload={"query": query, "files": files},
+            summary=summary,
+            payload={
+                **({"folder_id": folder_id} if folder_id else {"query": query}),
+                "files": files,
+            },
             tool=name,
         )
     if name == "drive_read":
