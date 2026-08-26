@@ -16,17 +16,20 @@ AUTO = frozenset(
         "memory_update",
         "memory_forget",
         "apollo_search_people",
+        "people_keep",
         "load_skill",
         "gmail_search",
         "gmail_read",
         "drive_search",
         "drive_read",
         "calendar_list",
+        "web_search",
     }
 )
 ASK = frozenset(
     {
         "gmail_draft",
+        "gmail_send",
         "apollo_enrich_contact",
         "calendar_create",
         "calendar_update",

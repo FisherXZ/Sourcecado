@@ -41,6 +41,8 @@ from coworker.gmail import gmail_from_secrets
 from coworker.inbox import Inbox
 from coworker.mcp import FakeMcp, LiveMcp, write_default_mcp_json
 from coworker.mcp_oauth import McpOAuth
+from coworker.brief import build_brief
+from coworker.people import PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
 from coworker.permissions import decide
@@ -66,20 +68,29 @@ MAX_STEPS = 8
 KERNEL = (
     "Tools: now (America/Los_Angeles clock, auto), remember / memory_update / "
     "memory_forget (auto), load_skill (auto), gmail_search / gmail_read (auto), "
-    "gmail_draft (ask; creates a draft and never sends), drive_search / drive_read (auto, readonly), "
+    "gmail_draft (ask), gmail_send (ask; sends a reviewed draft after Allow), "
+    "drive_search / drive_read (auto, readonly), "
     "calendar_list (auto; upcoming from now unless a time range is given), "
     "calendar_create / calendar_update (ask, no delete), "
-    "apollo_search_people (no emails), apollo_enrich_contact "
-    "(ask). MCP tools are named mcp__server__tool. Do not invent the time, tool "
+    "apollo_search_people (no emails), people_keep (auto; file curated search "
+    "rows after the director chooses, do not invent the target), "
+    "apollo_enrich_contact "
+    "(ask), web_search (auto). MCP tools are named mcp__server__tool. Do not invent the time, tool "
     "results, emails, or memories. Do not claim you sent or drafted unless the "
-    "matching tool ran and was allowed."
+    "matching tool ran and was allowed. Do not send without Allow."
 )
+
+
+_PERSON_FILE_EVENT_CAP = 12
 
 
 def system_prompt(
     store: ConversationStore,
     persona: Persona | None = None,
     skills: SkillLoader | None = None,
+    *,
+    people: PersonStore | None = None,
+    session_id: str | None = None,
 ) -> str:
     identity = persona.body if persona is not None else KERNEL
     parts = [identity, KERNEL]
@@ -109,6 +120,21 @@ def system_prompt(
         catalog = catalog_text(skills)
         if catalog:
             parts.append(catalog)
+    if people is not None and session_id:
+        person_id = people.person_for_session(session_id)
+        person = people.get(person_id) if person_id else None
+        if person is not None:
+            events = people.timeline(person_id)
+            brief = build_brief(person, events)
+            recent = events[-_PERSON_FILE_EVENT_CAP:]
+            learned_lines = [str(event.get("summary") or "") for event in recent if event.get("summary")]
+            parts.append(
+                "Person file:\n"
+                f"who: {brief['who']}\n"
+                f"why: {brief['why']}\n"
+                f"learned:\n" + ("\n".join(f"- {line}" for line in learned_lines) or "-") + "\n"
+                f"missing: {', '.join(brief['missing'])}"
+            )
     return "\n\n".join(parts)
 
 
@@ -117,6 +143,22 @@ def state_dir() -> Path:
     if override:
         return Path(override).expanduser()
     return Path.home() / ".config" / "club"
+
+
+_SECRET_EVENT_KEYS = frozenset(
+    {"access_token", "refresh_token", "authorization", "api_key", "token"}
+)
+
+
+def _public_event(event: dict[str, Any]) -> dict[str, Any]:
+    payload = event.get("payload") or {}
+    if isinstance(payload, dict):
+        payload = {
+            key: value
+            for key, value in payload.items()
+            if key.lower() not in _SECRET_EVENT_KEYS
+        }
+    return {**event, "payload": payload}
 
 
 def _origin_allowed(origin: str | None) -> bool:
@@ -183,6 +225,7 @@ def create_app(
     app.state.provider = provider_from_env() if provider is _UNSET else provider
     root = state if state is not None else state_dir()
     app.state.store = ConversationStore(root)
+    app.state.people = PersonStore(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
     store = app.state.store
     if store.open_session_id() is None:
@@ -206,6 +249,7 @@ def create_app(
     app.state.drive = drive_from_secrets(app.state.secrets, http=http)
     app.state.calendar = calendar_from_secrets(app.state.secrets, http=http)
     app.state.apollo_key = apollo_key if apollo_key is not None else os.environ.get("APOLLO_API_KEY")
+    app.state.tavily_key = os.environ.get("TAVILY_API_KEY")
     app.state.public_url = public_url or "http://127.0.0.1:8765"
     app.state.oauth_state = ""
     app.state.skills = SkillLoader([BUILTIN_SKILLS, Path(root) / "skills"])
@@ -246,8 +290,10 @@ def create_app(
                     "calendar": app.state.calendar,
                     "http": app.state.http,
                     "apollo_key": app.state.apollo_key,
+                    "tavily_key": app.state.tavily_key,
                     "skills": app.state.skills,
                     "mcp": app.state.mcp,
+                    "people": app.state.people,
                 },
                 emit=None,
                 wait_permission=None,
@@ -366,8 +412,10 @@ def create_app(
             calendar=app.state.calendar,
             http=app.state.http,
             apollo_key=app.state.apollo_key,
+            tavily_key=app.state.tavily_key,
             skills=app.state.skills,
             mcp=app.state.mcp,
+            people=app.state.people,
         )
         app.state.tool_results[item_id] = (ok, result)
         return {"ok": ok, "item": resolved, "result": result}
@@ -593,6 +641,35 @@ def create_app(
             )
         return HTMLResponse("<p>Gmail connected. You can close this tab and go back to Sourcecado.</p>")
 
+    @app.get("/v1/board")
+    def board_get():
+        return app.state.people.list_board()
+
+    @app.post("/v1/people/{person_id}/sequence")
+    async def people_sequence(person_id: str, request: Request):
+        payload = await request.json()
+        state = str(payload.get("state") or "")
+        actor = str(payload.get("actor") or "director")
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            person = app.state.people.set_sequence(person_id, state, actor=actor)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"person": person}
+
+    @app.get("/v1/people/{person_id}")
+    def people_get(person_id: str):
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        timeline = [_public_event(event) for event in app.state.people.timeline(person_id)]
+        return {
+            "person": person,
+            "brief": build_brief(person, timeline),
+            "timeline": timeline,
+        }
+
     @app.get("/v1/sessions")
     def sessions_list():
         store = app.state.store
@@ -679,8 +756,10 @@ def create_app(
                         "calendar": app.state.calendar,
                         "http": app.state.http,
                         "apollo_key": app.state.apollo_key,
+                        "tavily_key": app.state.tavily_key,
                         "skills": app.state.skills,
                         "mcp": app.state.mcp,
+                        "people": app.state.people,
                         "_tool_results": app.state.tool_results,
                     },
                     emit=ws.send_json,
