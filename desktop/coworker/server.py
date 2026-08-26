@@ -92,6 +92,9 @@ KERNEL = (
     "calendar_create / calendar_update (ask, no delete), "
     "apollo_search_people (no emails), people_keep (auto; file curated search "
     "rows after the director chooses, do not invent the target), "
+    "board_get / board_query (auto; person files on Open / In conversation / Done), "
+    "board_upsert / board_mutate (auto; artifacts, gaps, source refs, sequence, outcomes), "
+    "board_delete (ask; deletes a person file), "
     "apollo_enrich_contact "
     "(ask), web_search (auto). MCP tools are named mcp__server__tool. Do not invent the time, tool "
     "results, emails, or memories. Do not claim you sent or drafted unless the "
@@ -430,6 +433,8 @@ def create_app(
                 mcp=app.state.mcp,
                 people=app.state.people,
                 session_id=str(item.get("session_id") or ""),
+                actor=str(item.get("actor") or "assistant"),
+                run_id=str(item.get("run_id") or "") or None,
             )
         except Exception as exc:
             ok, result = False, {"error": str(exc)}
@@ -638,6 +643,8 @@ def create_app(
                     mcp=app.state.mcp,
                     people=app.state.people,
                     session_id=str(item.get("session_id") or ""),
+                    actor=str(item.get("actor") or "assistant"),
+                    run_id=str(item.get("run_id") or "") or None,
                 )
                 result = dict(result)
             except Exception as exc:
@@ -806,7 +813,7 @@ def create_app(
             if claim.decision_recorded:
                 _persist_approval_receipt(receipt)
         elif claim.claimed and claim.owned:
-            receipt = await _execute_claimed_approval(item, claimant=claimant)
+            receipt = await _execute_claimed_approval(claim.item, claimant=claimant)
         else:
             receipt = await app.state.inbox.wait_for_execution(item_id)
         if receipt is None:
@@ -1240,7 +1247,7 @@ def create_app(
 
     @app.get("/v1/people/{person_id}")
     def people_get(person_id: str):
-        person = app.state.people.get(person_id)
+        person = app.state.people.get(person_id, expand_sources=True)
         if person is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         timeline = [_public_event(event) for event in app.state.people.timeline(person_id)]
@@ -1248,7 +1255,25 @@ def create_app(
             "person": person,
             "brief": build_brief(person, timeline),
             "timeline": timeline,
+            "versions": app.state.people.versions(person_id),
         }
+
+    @app.post("/v1/people/{person_id}/revert")
+    async def people_revert(person_id: str, request: Request):
+        payload = await request.json()
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            person = app.state.people.revert(
+                person_id,
+                to_version=int(payload.get("to_version") or 0),
+                expected_version=int(payload.get("expected_version") or 0),
+                actor="director",
+                rationale_summary=str(payload.get("rationale_summary") or ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return {"person": person}
 
     @app.get("/v1/sessions")
     def sessions_list():

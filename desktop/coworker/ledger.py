@@ -15,6 +15,11 @@ _NOT_FILED = frozenset(
         "memory_forget",
         "load_skill",
         "apollo_search_people",
+        "board_get",
+        "board_query",
+        "board_upsert",
+        "board_mutate",
+        "board_delete",
     }
 )
 _MCP_WRITE = re.compile(r"write|create|delete|update", re.I)

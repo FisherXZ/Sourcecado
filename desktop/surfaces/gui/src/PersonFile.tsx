@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { getPerson, setPersonSequence, type PersonFile } from "./api";
+import { getPerson, revertPerson, setPersonSequence, type PersonFile } from "./api";
 
 const STATES = [
   { id: "open", label: "Open" },
@@ -31,6 +31,12 @@ export function PersonFileView({ personId }: { personId: string }) {
       active = false;
     };
   }, [attempt, personId]);
+
+  useEffect(() => {
+    const refresh = () => setAttempt((value) => value + 1);
+    window.addEventListener("sourcecado:board-changed", refresh);
+    return () => window.removeEventListener("sourcecado:board-changed", refresh);
+  }, []);
 
   async function move(state: string) {
     if (moving) return;
@@ -126,6 +132,43 @@ export function PersonFileView({ personId }: { personId: string }) {
           </ul>
         )}
       </section>
+
+      {file.versions && file.versions.length > 0 ? (
+        <section className="person-section" aria-labelledby="person-history-heading">
+          <h2 id="person-history-heading">Version history</h2>
+          <p>
+            {typeof file.person.version === "number"
+              ? `Current version ${file.person.version}`
+              : "Prior versions"}
+          </p>
+          <ol>
+            {file.versions.map((entry) => {
+              const current = file.person.version;
+              const canRevert =
+                typeof current === "number" && entry.version < current;
+              return (
+                <li key={entry.version}>
+                  <span>Version {entry.version}</span>
+                  {canRevert ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void revertPerson(personId, {
+                          toVersion: entry.version,
+                          expectedVersion: current,
+                          rationaleSummary: `Restore version ${entry.version} from person history.`,
+                        }).then(() => setAttempt((value) => value + 1))
+                      }
+                    >
+                      Revert to version {entry.version}
+                    </button>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      ) : null}
 
       <section className="person-section" aria-labelledby="person-timeline-heading">
         <h2 id="person-timeline-heading">Timeline</h2>
