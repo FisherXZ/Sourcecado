@@ -33,6 +33,35 @@ function renderEvidence(tools: readonly ToolCallMessagePart[]) {
 }
 
 describe("Evidence set result", () => {
+  it("renders Drive folder children as evidence", () => {
+    renderEvidence([
+      tool(
+        "call-drive-folder",
+        "drive_list_folder",
+        { folder_id: "fall-folder" },
+        {
+          folder_id: "fall-folder",
+          files: [
+            {
+              id: "masterdoc",
+              name: "Codeology Fall '26 Sourcing Masterdoc",
+              mimeType: "application/vnd.google-apps.document",
+            },
+          ],
+        },
+      ),
+    ]);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Listed Drive folder · Completed" }),
+    );
+
+    expect(
+      screen.getByText("Codeology Fall '26 Sourcing Masterdoc"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Folder child/)).toBeInTheDocument();
+  });
+
   it("uses evidence-shaped rows while a source is loading", () => {
     renderEvidence([
       tool("call-drive-loading", "drive_search", { query: "Q3 sourcing" }, undefined),

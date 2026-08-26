@@ -18,6 +18,7 @@ from coworker.permissions import decide
 from coworker.provider import FakeProvider, ToolCall
 from coworker.secrets import SecretStore
 from coworker.server import TOKEN_HEADER, create_app
+from coworker.tools import execute
 
 TOKEN = "test-token-drive"
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
@@ -25,6 +26,8 @@ FILES_URL = "https://www.googleapis.com/drive/v3/files"
 
 def test_drive_tools_are_auto():
     assert decide("drive_search").needs_user is False
+    assert decide("drive_list_folder").allowed is True
+    assert decide("drive_list_folder").needs_user is False
     assert decide("drive_read").needs_user is False
 
 
@@ -74,6 +77,122 @@ def test_drive_search_redacts_credentials_in_filenames(tmp_path):
     assert out["files"][0]["name"] == "APOLLO_API_KEY=[REDACTED]"
     assert out["sensitive_content_redacted"] is True
     assert out["redaction_count"] == 1
+
+
+def test_drive_list_folder_uses_parent_query(tmp_path):
+    secrets = SecretStore(tmp_path / "secrets.json")
+    save_google(secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
+    http = FakeHttp(
+        {
+            FILES_URL: {
+                "files": [
+                    {
+                        "id": "child-1",
+                        "name": "Fall sourcing masterdoc",
+                        "mimeType": "application/vnd.google-apps.document",
+                        "parents": ["fall-folder"],
+                    }
+                ]
+            }
+        }
+    )
+    drive = DriveApi(secrets, http=http, client_id="cid", client_secret="sec")
+
+    ok, out = execute(
+        "drive_list_folder",
+        {"folder_id": "fall-folder", "max_results": 100},
+        drive=drive,
+    )
+
+    assert ok is True
+    assert out["folder_id"] == "fall-folder"
+    assert out["files"] == [
+        {
+            "id": "child-1",
+            "name": "Fall sourcing masterdoc",
+            "mimeType": "application/vnd.google-apps.document",
+            "modifiedTime": None,
+            "parents": ["fall-folder"],
+            "webViewLink": None,
+        }
+    ]
+    assert out["sensitive_content_redacted"] is False
+    assert out["redaction_count"] == 0
+    assert http.calls[0]["params"]["q"] == "'fall-folder' in parents and trashed=false"
+
+
+def test_drive_list_folder_follows_page_tokens(tmp_path):
+    class PagingHttp(FakeHttp):
+        def get(self, url, *, headers=None, params=None):
+            request = {
+                "method": "GET",
+                "url": url,
+                "headers": dict(headers or {}),
+                "json": {},
+                "data": {},
+                "params": dict(params or {}),
+            }
+            self.calls.append(request)
+            if request["params"].get("pageToken") == "page-2":
+                return {
+                    "files": [
+                        {
+                            "id": "child-2",
+                            "name": "External",
+                            "mimeType": "application/vnd.google-apps.folder",
+                            "parents": ["fall-folder"],
+                        }
+                    ]
+                }
+            return {
+                "files": [
+                    {
+                        "id": "child-1",
+                        "name": "Internal",
+                        "mimeType": "application/vnd.google-apps.folder",
+                        "parents": ["fall-folder"],
+                    }
+                ],
+                "nextPageToken": "page-2",
+            }
+
+    secrets = SecretStore(tmp_path / "secrets.json")
+    save_google(secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
+    http = PagingHttp()
+    drive = DriveApi(secrets, http=http, client_id="cid", client_secret="sec")
+
+    ok, out = execute(
+        "drive_list_folder",
+        {"folder_id": "fall-folder", "max_results": 2},
+        drive=drive,
+    )
+
+    assert ok is True
+    assert [row["id"] for row in out["files"]] == ["child-1", "child-2"]
+    assert http.calls[1]["params"]["pageToken"] == "page-2"
+
+
+def test_drive_read_rejects_folder_before_media_download(tmp_path):
+    secrets = SecretStore(tmp_path / "secrets.json")
+    save_google(secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
+    http = FakeHttp(
+        {
+            f"{FILES_URL}/folder-1": {
+                "id": "folder-1",
+                "name": "Fall 2026",
+                "mimeType": "application/vnd.google-apps.folder",
+            }
+        }
+    )
+    drive = DriveApi(secrets, http=http, client_id="cid", client_secret="sec")
+
+    ok, out = execute("drive_read", {"file_id": "folder-1"}, drive=drive)
+
+    assert ok is False
+    assert out["error"] == (
+        "file_id is a folder; drive_read requires a file. Use drive_list_folder."
+    )
+    assert len(http.calls) == 1
 
 
 def test_drive_read_exports_google_doc(tmp_path):

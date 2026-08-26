@@ -25,7 +25,6 @@ class Persona:
 
 
 BUILTIN_DIR = Path(__file__).resolve().parent / "personas"
-REPO_PERSONAS = Path(__file__).resolve().parents[2] / "personas"
 
 
 def parse_persona(text: str, *, path: Path | None = None) -> Persona:
@@ -62,10 +61,6 @@ def _parse_list(raw: str) -> list[str]:
 
 
 def persona_path(persona_id: str) -> Path:
-    if persona_id == "sourcing":
-        path = REPO_PERSONAS / "sourcing.md"
-        if path.is_file():
-            return path
     path = BUILTIN_DIR / f"{persona_id}.md"
     if path.is_file():
         return path
