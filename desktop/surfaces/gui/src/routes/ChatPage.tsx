@@ -178,6 +178,15 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
         if (event.session_id === activeThreadRef.current) refresh();
         return;
       }
+      if (
+        event.type === "tool_finished" &&
+        event.result !== null &&
+        typeof event.result === "object" &&
+        !Array.isArray(event.result) &&
+        (event.result as Record<string, unknown>).board_changed === true
+      ) {
+        window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
+      }
       const applied = storeRef.current.applyChatEvent(event);
       if (applied.type === "connection_change") {
         connectionStatusRef.current = applied.status;

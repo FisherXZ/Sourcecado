@@ -68,6 +68,12 @@ export function BoardView() {
     };
   }, [attempt]);
 
+  useEffect(() => {
+    const refresh = () => setAttempt((value) => value + 1);
+    window.addEventListener("sourcecado:board-changed", refresh);
+    return () => window.removeEventListener("sourcecado:board-changed", refresh);
+  }, []);
+
   const empty =
     board !== null &&
     board.open.length === 0 &&

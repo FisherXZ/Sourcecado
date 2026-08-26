@@ -254,6 +254,7 @@ export type PersonFile = {
     summary: string;
     payload: Record<string, unknown>;
   }>;
+  versions?: Array<{ version: number; created_at: string }>;
 };
 
 export async function getBoard(): Promise<Board> {
@@ -281,6 +282,24 @@ export async function setPersonSequence(
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || `sequence ${res.status}`);
   return body;
+}
+
+export async function revertPerson(
+  id: string,
+  body: { toVersion: number; expectedVersion: number; rationaleSummary: string },
+): Promise<{ person: BoardPerson }> {
+  const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}/revert`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      to_version: body.toVersion,
+      expected_version: body.expectedVersion,
+      rationale_summary: body.rationaleSummary,
+    }),
+  });
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload.error || `revert ${res.status}`);
+  return payload;
 }
 
 export async function pinSession(

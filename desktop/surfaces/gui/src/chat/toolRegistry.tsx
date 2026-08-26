@@ -94,6 +94,11 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     category: "action",
     slot: "calendar",
   },
+  board_get: { label: "Read person file", category: "source" },
+  board_query: { label: "Queried Board", category: "source" },
+  board_upsert: { label: "Updated person file", category: "action" },
+  board_mutate: { label: "Updated person file", category: "action" },
+  board_delete: { label: "Deleted person file", category: "action" },
   now: { label: "Checked current time", category: "source" },
 };
 

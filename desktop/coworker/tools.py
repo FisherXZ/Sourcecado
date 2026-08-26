@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from coworker.apollo import MISSING_KEY, enrich_contact, search_people
 from coworker.web import MISSING_KEY as TAVILY_MISSING, search_web
 from coworker.gmail import GmailError, MissingGmail
+from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
 
@@ -413,6 +414,7 @@ OPENAI_TOOLS = [
     APOLLO_ENRICH_SCHEMA,
     LOAD_SKILL_SCHEMA,
     WEB_SEARCH_SCHEMA,
+    *BOARD_TOOL_SCHEMAS,
 ]
 
 
@@ -447,8 +449,23 @@ def execute(
     people: PersonStore | None = None,
     session_id: str | None = None,
     tavily_key: str | None = None,
+    actor: str = "assistant",
+    run_id: str | None = None,
+    allowed_source_ids: set[str] | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
+    if name in BOARD_TOOL_NAMES:
+        if people is None:
+            return False, {"status": "failed", "error": "people store missing"}
+        return execute_board_tool(
+            name,
+            args,
+            people=people,
+            actor=actor,
+            session_id=session_id,
+            run_id=run_id,
+            allowed_source_ids=allowed_source_ids,
+        )
     if name == "now":
         return True, now()
     if name == "load_skill":

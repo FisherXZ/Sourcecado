@@ -31,6 +31,11 @@ _TOOL_SOURCES: dict[str, tuple[str | None, str]] = {
     "drive_search": ("drive", "Google Drive"),
     "drive_list_folder": ("drive", "Google Drive"),
     "drive_read": ("drive", "Google Drive"),
+    "board_get": (None, "Board"),
+    "board_query": (None, "Board"),
+    "board_upsert": (None, "Board"),
+    "board_mutate": (None, "Board"),
+    "board_delete": (None, "Board"),
     "calendar_list": ("calendar", "Google Calendar"),
     "calendar_create": ("calendar", "Google Calendar"),
     "calendar_update": ("calendar", "Google Calendar"),
@@ -747,6 +752,7 @@ async def run_turn(
                 try:
                     kw = {k: v for k, v in execute_kwargs.items() if not k.startswith("_")}
                     kw["session_id"] = sid
+                    kw["run_id"] = events.identity.run_id
                     ok, result = await asyncio.to_thread(
                         execute, call.name, call.arguments, **kw
                     )

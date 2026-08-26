@@ -188,6 +188,19 @@
   line-height: 1.55;
 }
 
+.person-section ol {
+  margin: 0;
+  padding: 0 16px 12px 32px;
+}
+
+.person-section ol li {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .person-section ul {
   display: grid;
   gap: 8px;
