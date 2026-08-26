@@ -228,14 +228,14 @@ def test_atomic_write_failure_preserves_original_and_removes_temporary_file(
 ):
     root, grant, files = workspace(tmp_path)
     created = files.write(grant["id"], "stable.txt", "original")
-    real_replace = type(root).replace
+    real_replace = os.replace
 
-    def fail_temp_replace(path, target):
-        if path.name.startswith(".sourcecado-write-"):
+    def fail_temp_replace(source, target, *args, **kwargs):
+        if str(source).startswith(".sourcecado-write-"):
             raise OSError("simulated rename failure")
-        return real_replace(path, target)
+        return real_replace(source, target, *args, **kwargs)
 
-    monkeypatch.setattr(type(root), "replace", fail_temp_replace)
+    monkeypatch.setattr(os, "replace", fail_temp_replace)
 
     with pytest.raises(OSError, match="simulated"):
         files.write(
@@ -264,3 +264,37 @@ def test_atomic_updates_and_copies_preserve_executable_mode(tmp_path):
     assert (root / "script.sh").stat().st_mode & 0o777 == 0o755
     assert (root / "copy.sh").stat().st_mode & 0o777 == 0o755
     assert copied["after_hash"] == files.stat(grant["id"], "copy.sh")["sha256"]
+
+
+def test_atomic_write_fails_if_parent_binding_is_swapped_after_validation(
+    tmp_path, monkeypatch
+):
+    root, grant, files = workspace(tmp_path)
+    parent = root / "nested"
+    parent.mkdir()
+    target = parent / "target.txt"
+    target.write_text("original")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_hash = files.stat(grant["id"], "nested/target.txt")["sha256"]
+    real_assert = files._assert_parent_binding
+    swapped = False
+
+    def swap_parent(grant_record, parent_parts, parent_fd):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            parent.rename(root / "nested-original")
+            parent.symlink_to(outside, target_is_directory=True)
+        return real_assert(grant_record, parent_parts, parent_fd)
+
+    monkeypatch.setattr(files, "_assert_parent_binding", swap_parent)
+
+    with pytest.raises(StaleWorkspaceWrite, match="binding|changed"):
+        files.write(
+            grant["id"],
+            "nested/target.txt",
+            "replacement",
+            expected_before_hash=original_hash,
+        )
+    assert not (outside / "target.txt").exists()

@@ -83,15 +83,20 @@ class ConversationStore:
         )
         self.base = Path(base_dir).expanduser()
         self.base.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.base, 0o700)
         self.conv_dir = self.base / "conversations"
         self.conv_dir.mkdir(exist_ok=True)
+        os.chmod(self.conv_dir, 0o700)
         self.event_dir = self.base / "events"
         self.event_dir.mkdir(exist_ok=True)
+        os.chmod(self.event_dir, 0o700)
         self.memory_dir = self.base / "memory"
         self.memory_dir.mkdir(exist_ok=True)
+        os.chmod(self.memory_dir, 0o700)
         self.db_path = self.base / "club.db"
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        os.chmod(self.db_path, 0o600)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(
             """
@@ -214,9 +219,7 @@ class ConversationStore:
         }
         for column, definition in run_migrations.items():
             try:
-                self._conn.execute(
-                    f"ALTER TABLE runs ADD COLUMN {column} {definition}"
-                )
+                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {column} {definition}")
             except sqlite3.OperationalError:
                 pass
         self._conn.execute(
@@ -418,13 +421,19 @@ class ConversationStore:
 
     def append_event(self, sid: str, event: dict[str, Any]) -> None:
         with self._lock:
-            with open(self._event_file(sid), "a", encoding="utf-8") as fh:
+            path = self._event_file(sid)
+            descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            os.chmod(path, 0o600)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(event, ensure_ascii=False) + "\n")
                 fh.flush()
 
     def append(self, sid: str, message: dict[str, Any]) -> None:
         with self._lock:
-            with open(self._file(sid), "a", encoding="utf-8") as fh:
+            path = self._file(sid)
+            descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            os.chmod(path, 0o600)
+            with os.fdopen(descriptor, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(message, ensure_ascii=False) + "\n")
                 fh.flush()
             self._reindex(sid, self.load(sid))
@@ -434,11 +443,13 @@ class ConversationStore:
         with self._lock:
             path = self._file(sid)
             tmp = path.with_suffix(".jsonl.tmp")
-            with open(tmp, "w", encoding="utf-8") as fh:
+            descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as fh:
                 for message in messages:
                     fh.write(json.dumps(message, ensure_ascii=False) + "\n")
                 fh.flush()
             tmp.replace(path)
+            os.chmod(path, 0o600)
             self._reindex(sid, messages)
 
     def _reindex(self, sid: str, messages: list[dict[str, Any]]) -> None:
@@ -487,9 +498,14 @@ class ConversationStore:
                 (sid,),
             )
             self._conn.commit()
-            self._file(sid).touch()
+            self._file(sid).touch(mode=0o600)
+            os.chmod(self._file(sid), 0o600)
         row = self.index(sid)
-        return row if row is not None else {"session_id": sid, "title": None, "n_msgs": 0, "updated_at": None}
+        return (
+            row
+            if row is not None
+            else {"session_id": sid, "title": None, "n_msgs": 0, "updated_at": None}
+        )
 
     def rename_session(self, sid: str, title: str) -> dict[str, Any] | None:
         cleaned = title.strip()
@@ -586,7 +602,14 @@ class ConversationStore:
                     (cron, prompt, next_run_at, name, template_id, cadence)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (cron, prompt, next_run_at, name or prompt, template_id, cadence or cron),
+                (
+                    cron,
+                    prompt,
+                    next_run_at,
+                    name or prompt,
+                    template_id,
+                    cadence or cron,
+                ),
             )
             self._conn.commit()
             row = self._conn.execute(
@@ -686,9 +709,7 @@ class ConversationStore:
                 FROM jobs ORDER BY id
                 """
             ).fetchall()
-            runs = self._conn.execute(
-                "SELECT * FROM runs ORDER BY id"
-            ).fetchall()
+            runs = self._conn.execute("SELECT * FROM runs ORDER BY id").fetchall()
         return {
             "jobs": [dict(row) for row in jobs],
             "runs": [_run_row(row) for row in runs],
@@ -765,7 +786,9 @@ class ConversationStore:
                 ),
             )
             self._conn.commit()
-            row = self._conn.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM inbox WHERE id = ?", (item_id,)
+            ).fetchone()
         return _inbox_row(row)
 
     def reap_overdue_inbox(self, now: str | None = None) -> list[dict[str, Any]]:
@@ -822,9 +845,7 @@ class ConversationStore:
                 (
                     stamp,
                     _EXPIRED_PENDING_ERROR,
-                    json.dumps(
-                        {"status": "expired", "error": _EXPIRED_PENDING_ERROR}
-                    ),
+                    json.dumps({"status": "expired", "error": _EXPIRED_PENDING_ERROR}),
                     stamp,
                 ),
             )
@@ -850,7 +871,9 @@ class ConversationStore:
     def get_inbox(self, item_id: str) -> dict[str, Any] | None:
         self.reap_overdue_inbox()
         with self._lock:
-            row = self._conn.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM inbox WHERE id = ?", (item_id,)
+            ).fetchone()
         return None if row is None else _inbox_row(row)
 
     def resolve_inbox(
@@ -862,7 +885,9 @@ class ConversationStore:
         scope: str = "once",
     ) -> dict[str, Any] | None:
         with self._lock:
-            row = self._conn.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM inbox WHERE id = ?", (item_id,)
+            ).fetchone()
             if row is None or row["state"] != "pending":
                 return None
             self._conn.execute(
@@ -884,7 +909,9 @@ class ConversationStore:
                 ),
             )
             self._conn.commit()
-            row = self._conn.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM inbox WHERE id = ?", (item_id,)
+            ).fetchone()
         return _inbox_row(row)
 
     def decide_and_claim_inbox_execution(
@@ -1437,6 +1464,7 @@ class ConversationStore:
         self.memory_dir.mkdir(exist_ok=True)
         path = self.memory_dir / f"{item['id']}.md"
         path.write_text(f"# {item['id']}\n\n{item['content']}\n", encoding="utf-8")
+        os.chmod(path, 0o600)
 
     def _write_memory_index(self) -> None:
         self.memory_dir.mkdir(exist_ok=True)
@@ -1454,7 +1482,9 @@ class ConversationStore:
                 kept.append(line)
                 size += extra
             text = "\n".join(kept) + "\n"
-        (self.memory_dir / "MEMORY.md").write_text(text, encoding="utf-8")
+        path = self.memory_dir / "MEMORY.md"
+        path.write_text(text, encoding="utf-8")
+        os.chmod(path, 0o600)
 
 
 def _inbox_row(row: sqlite3.Row) -> dict[str, Any]:

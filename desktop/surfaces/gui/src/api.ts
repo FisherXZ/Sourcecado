@@ -595,6 +595,9 @@ export type HostCommandApproval = {
   id: string;
   fingerprint: string;
   command_summary: string;
+  command_display?: string;
+  executable?: { path: string; sha256: string } | null;
+  scripts?: Array<{ path: string; sha256: string }>;
   cwd: string;
   created_at: string;
   revoked_at: string | null;

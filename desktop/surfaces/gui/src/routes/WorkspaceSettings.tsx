@@ -294,6 +294,11 @@ export function WorkspaceSettings({
             {workspace.host_approvals.map((approval) => (
               <li key={approval.id}>
                 <span>{approval.command_summary}</span>
+                {approval.command_display ? <code>{approval.command_display}</code> : null}
+                {approval.executable?.path ? <span>{approval.executable.path}</span> : null}
+                {approval.scripts?.map((script) => (
+                  <span key={script.path}>{script.path}</span>
+                ))}
                 <span>{approval.cwd}</span>
                 <span>Fingerprint {approval.fingerprint.slice(0, 16)}</span>
                 <time dateTime={approval.created_at}>{approval.created_at}</time>

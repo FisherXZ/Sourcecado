@@ -1,6 +1,9 @@
+import os
 import time
 import shlex
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +21,7 @@ def shell_runtime(tmp_path, *, allow_shell=True):
     root = tmp_path / "workspace"
     root.mkdir()
     (root / ".env").write_text("TOKEN=secret")
+    (root / "public.txt").symlink_to(root / ".env")
     grants = WorkspaceGrantStore(state)
     grant = grants.add(
         root,
@@ -96,6 +100,33 @@ def test_docker_create_command_mounts_only_grants_with_hardening_and_full_networ
     assert str(state) not in rendered
     assert "/var/run/docker.sock" not in rendered
     assert "sourcecado-sandbox:test" in command
+
+
+def test_docker_rejects_an_identity_changed_secondary_mount(tmp_path):
+    state = tmp_path / "state"
+    primary_root = tmp_path / "primary"
+    secondary_root = tmp_path / "secondary"
+    outside_root = tmp_path / "outside"
+    primary_root.mkdir()
+    secondary_root.mkdir()
+    outside_root.mkdir()
+    grants = WorkspaceGrantStore(state)
+    primary = grants.add(
+        primary_root, label="Primary", access="read_write", allow_shell=True
+    )
+    secondary = grants.add(secondary_root, label="Secondary", access="read_only")
+    secondary_root.rmdir()
+    secondary_root.symlink_to(outside_root, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="identity"):
+        DockerSandbox(docker_binary="docker").build_create_command(
+            container_name="sourcecado-test",
+            primary=primary,
+            grants=[primary, secondary],
+            uid=501,
+            gid=20,
+            protected_roots=[state],
+        )
 
 
 def test_docker_exec_passes_the_exact_command_without_outer_shell_expansion():
@@ -215,6 +246,13 @@ def test_docker_read_only_auto_classification_rejects_environment_injection(tmp_
         environment={},
     )
     assert protected.needs_approval is True
+    aliased = runtime.decide(
+        grant_id=grant["id"],
+        command="cat public.txt",
+        cwd=".",
+        environment={},
+    )
+    assert aliased.needs_approval is True
 
 
 def test_shell_output_is_bounded_and_persistent_metadata_contains_no_output(tmp_path):
@@ -241,7 +279,6 @@ def test_host_allow_always_replays_only_while_complete_fingerprint_matches(tmp_p
         runtime,
         grant["id"],
         "bash inspect.sh",
-        environment={"MODE": "one"},
         approval_scope="always",
         actor="operator",
     )
@@ -251,7 +288,7 @@ def test_host_allow_always_replays_only_while_complete_fingerprint_matches(tmp_p
             grant_id=grant["id"],
             command="bash inspect.sh",
             cwd=".",
-            environment={"MODE": "one"},
+            environment={},
         ).allowed
         is True
     )
@@ -310,6 +347,68 @@ def test_host_execution_requires_and_rechecks_the_fingerprint_that_was_approved(
         )
 
 
+def test_host_fingerprint_resolves_the_executable_from_the_environment_used_by_popen(
+    tmp_path,
+):
+    _state, _root, grant, runtime = shell_runtime(tmp_path)
+
+    decision = runtime.decide(
+        grant_id=grant["id"], command="python3 --version", cwd=".", environment={}
+    )
+
+    expected = shutil.which("python3", path=runtime._host_environment({})["PATH"])
+    assert decision.fingerprint["executable"]["path"] == str(Path(expected).resolve())
+
+
+def test_allow_always_rejects_opaque_wrapper_commands(tmp_path):
+    _state, root, grant, runtime = shell_runtime(tmp_path)
+    (root / "runner").write_text("printf first")
+    decision = runtime.decide(
+        grant_id=grant["id"],
+        command="env MODE=x bash runner",
+        cwd=".",
+        environment={},
+    )
+
+    assert decision.fingerprint["permanent_eligible"] is False
+    (root / "runner").write_text("printf changed")
+    changed = runtime.decide(
+        grant_id=grant["id"],
+        command="env MODE=x bash runner",
+        cwd=".",
+        environment={},
+    )
+    assert changed.fingerprint["digest"] != decision.fingerprint["digest"]
+    with pytest.raises(WorkspaceApprovalRequired, match="permanent"):
+        runtime.exec(
+            grant_id=grant["id"],
+            command="env MODE=x bash runner",
+            cwd=".",
+            environment={},
+            approved=True,
+            approval_scope="always",
+            approval_fingerprint=changed.fingerprint["digest"],
+        )
+
+
+def test_shell_approval_resource_shows_safe_exact_command_and_environment_keys(
+    tmp_path,
+):
+    _state, _root, grant, runtime = shell_runtime(tmp_path)
+
+    resource = runtime.approval_resource(
+        grant_id=grant["id"],
+        command="python3 --version",
+        cwd=".",
+        environment={"MODE": "private-value"},
+    )
+
+    assert resource["command_display"] == "python3 --version"
+    assert resource["environment_keys"] == ["MODE"]
+    assert "private-value" not in str(resource)
+    assert resource["permanent_eligible"] is False
+
+
 def test_background_shell_has_incremental_bounded_output_stdin_and_cancellation(
     tmp_path,
 ):
@@ -357,6 +456,29 @@ def test_shell_task_store_reconciles_unknown_running_tasks_to_interrupted(tmp_pa
     assert reconciled["status"] == "interrupted"
     assert reconciled["exit_code"] is None
     assert "restart" in reconciled["error"]
+
+
+def test_restart_reconciliation_terminates_a_surviving_host_process(tmp_path):
+    state, _root, grant, runtime = shell_runtime(tmp_path)
+    task = approved_shell(runtime, grant["id"], "sleep 10", background=True)
+    process_id = ShellTaskStore(state).get(task["task_id"])["process_id"]
+
+    ShellRuntime(
+        state_root=state,
+        grants=runtime.grants,
+        files=runtime.files,
+        docker=DockerSandbox(docker_binary=None),
+    )
+
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        try:
+            os.kill(process_id, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    with pytest.raises(ProcessLookupError):
+        os.kill(process_id, 0)
 
 
 def test_revoking_workspace_stops_its_background_shell_tasks(tmp_path):

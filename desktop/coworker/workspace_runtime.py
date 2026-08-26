@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import tempfile
 import threading
@@ -251,6 +252,7 @@ class DirectoryRequestStore:
     def __init__(self, state_root: str | Path) -> None:
         self.state_root = Path(state_root).expanduser()
         self.state_root.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.state_root, 0o700)
         self.path = self.state_root / "directory_requests.json"
         self._lock = threading.RLock()
 
@@ -314,6 +316,15 @@ class DirectoryRequestStore:
                 if item.get("resolved_at") is None
             ]
 
+    def require_pending(self, request_id: str) -> dict[str, Any]:
+        request = next(
+            (item for item in self.pending() if item.get("id") == request_id),
+            None,
+        )
+        if request is None:
+            raise KeyError(request_id)
+        return request
+
     def resolve(self, request_id: str, grant_id: str) -> None:
         with self._lock:
             data = self._load()
@@ -330,6 +341,10 @@ class DirectoryRequestStore:
 
 
 class WorkspaceRuntime:
+    @staticmethod
+    def owns_tool(name: str) -> bool:
+        return name in WORKSPACE_TOOL_NAMES
+
     def __init__(
         self, state_root: str | Path, *, docker: DockerSandbox | None = None
     ) -> None:
@@ -339,27 +354,154 @@ class WorkspaceRuntime:
         self.files = WorkspaceFilesystem(self.grants, state_root=self.state_root)
         self.audit = WorkspaceAuditStore(self.state_root)
         self.directory_requests = DirectoryRequestStore(self.state_root)
+        self._parked_arguments: dict[str, dict[str, Any]] = {}
+        self._parked_lock = threading.RLock()
         self.shell = ShellRuntime(
             state_root=self.state_root,
             grants=self.grants,
             files=self.files,
             docker=docker,
+            on_task_finished=self._record_shell_terminal,
         )
-        for task in self.shell.tasks.reconciled:
-            self.audit.record(
-                receipt_type="interrupted",
-                tool="shell_exec",
-                risk_class=RiskClass.CONSEQUENTIAL_COMMAND.value,
-                decision="unknown",
-                execution_target=str(task.get("execution_target") or "unknown"),
-                grant_id=str(task.get("grant_id") or "") or None,
-                command_fingerprint=str(task.get("command_fingerprint") or "") or None,
-                task_id=str(task.get("task_id") or "") or None,
-                started_at=str(task.get("started_at") or "") or None,
-                finished_at=str(task.get("finished_at") or "") or None,
-                status="interrupted",
-                summary="Shell outcome unknown after Sourcecado restart",
+
+    def _record_shell_terminal(self, task: dict[str, Any]) -> None:
+        status = str(task.get("status") or "interrupted")
+        self.audit.record(
+            receipt_type="interrupted" if status == "interrupted" else "shell_terminal",
+            tool="shell_exec",
+            risk_class=RiskClass.CONSEQUENTIAL_COMMAND.value,
+            decision="unknown",
+            execution_target=str(task.get("execution_target") or "unknown"),
+            grant_id=str(task.get("grant_id") or "") or None,
+            command_fingerprint=str(task.get("command_fingerprint") or "") or None,
+            task_id=str(task.get("task_id") or "") or None,
+            started_at=str(task.get("started_at") or "") or None,
+            finished_at=str(task.get("finished_at") or "") or None,
+            duration_ms=(
+                int(task["duration_ms"])
+                if isinstance(task.get("duration_ms"), int)
+                else None
+            ),
+            exit_code=(
+                int(task["exit_code"])
+                if isinstance(task.get("exit_code"), int)
+                else None
+            ),
+            truncated=bool(task.get("truncated")),
+            status=status,
+            summary=f"Shell task {status}",
+        )
+
+    def sanitize_arguments(
+        self, name: str, arguments: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        safe = copy.deepcopy(dict(arguments or {}))
+        if name == "shell_exec":
+            try:
+                resource = self.shell.approval_resource(
+                    grant_id=str(safe.get("grant_id") or ""),
+                    command=str(safe.get("command") or ""),
+                    cwd=str(safe.get("cwd") or "."),
+                    environment=(
+                        safe.get("environment")
+                        if isinstance(safe.get("environment"), dict)
+                        else {}
+                    ),
+                )
+                safe["command"] = "[COMMAND REDACTED]"
+                safe["command_summary"] = resource["command_summary"]
+                safe["environment"] = {
+                    key: "[REDACTED]" for key in resource["environment_keys"]
+                }
+            except Exception:
+                safe["command"] = "[COMMAND REDACTED]"
+                safe["environment"] = {}
+        elif name == "shell_write_stdin" and "text" in safe:
+            safe["text"] = "[INPUT REDACTED]"
+        elif name == "fs_write" and "content" in safe:
+            safe["content"] = "[CONTENT REDACTED]"
+        elif name == "fs_patch" and "replacements" in safe:
+            safe["replacements"] = "[PATCH CONTENT REDACTED]"
+        return safe
+
+    @staticmethod
+    def sanitize_resource(resource: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(resource, dict) or resource.get("kind") != "shell_command":
+            return copy.deepcopy(resource)
+        safe = copy.deepcopy(resource)
+        safe["command_display"] = "Command unavailable after restart; request it again"
+        safe["permanent_eligible"] = False
+        return safe
+
+    def park_arguments(
+        self, item_id: str, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self._parked_lock:
+            self._parked_arguments[item_id] = copy.deepcopy(arguments)
+        return self.sanitize_arguments(name, arguments)
+
+    def restore_parked_arguments(
+        self, item_id: str, persisted: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self._parked_lock:
+            arguments = self._parked_arguments.get(item_id)
+        if arguments is None:
+            raise WorkspacePathError(
+                "approval inputs are unavailable after restart; request it again"
             )
+        return copy.deepcopy(arguments)
+
+    def discard_parked_arguments(self, item_id: str) -> None:
+        with self._parked_lock:
+            self._parked_arguments.pop(item_id, None)
+
+    def sanitize_result(self, name: str, result: dict[str, Any]) -> dict[str, Any]:
+        safe = copy.deepcopy(result)
+        if name.startswith("shell_"):
+            safe.pop("output", None)
+        if name == "fs_read":
+            safe.pop("content", None)
+        return safe
+
+    def sanitize_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        safe = copy.deepcopy(message)
+        if safe.get("role") == "assistant":
+            for call in safe.get("tool_calls") or []:
+                function = call.get("function") if isinstance(call, dict) else None
+                if not isinstance(function, dict):
+                    continue
+                name = str(function.get("name") or "")
+                if name not in WORKSPACE_TOOL_NAMES:
+                    continue
+                try:
+                    arguments = json.loads(str(function.get("arguments") or "{}"))
+                except json.JSONDecodeError:
+                    arguments = {}
+                function["arguments"] = json.dumps(
+                    self.sanitize_arguments(name, arguments)
+                )
+        elif safe.get("role") == "tool":
+            name = str(safe.get("name") or "")
+            if name in WORKSPACE_TOOL_NAMES:
+                try:
+                    result = json.loads(str(safe.get("content") or "{}"))
+                except json.JSONDecodeError:
+                    result = {}
+                safe["content"] = json.dumps(self.sanitize_result(name, result))
+        return safe
+
+    def sanitize_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        safe = copy.deepcopy(event)
+        name = str(safe.get("name") or "")
+        if name not in WORKSPACE_TOOL_NAMES:
+            return safe
+        if isinstance(safe.get("arguments"), dict):
+            safe["arguments"] = self.sanitize_arguments(name, safe["arguments"])
+        if isinstance(safe.get("result"), dict):
+            safe["result"] = self.sanitize_result(name, safe["result"])
+        if isinstance(safe.get("resource"), dict):
+            safe["resource"] = self.sanitize_resource(safe["resource"])
+        return safe
 
     def add_grant(
         self,
@@ -370,11 +512,24 @@ class WorkspaceRuntime:
         allow_shell: bool = False,
         request_id: str | None = None,
     ) -> dict[str, Any]:
+        request = None
+        if request_id:
+            request = self.directory_requests.require_pending(request_id)
+            if (
+                str(request.get("label")) != str(label)
+                or str(request.get("access")) != str(access)
+                or bool(request.get("allow_shell")) != bool(allow_shell)
+            ):
+                raise ValueError("directory request authority does not match")
         grant = self.grants.add(
             path, label=label, access=access, allow_shell=allow_shell
         )
         if request_id:
-            self.directory_requests.resolve(request_id, grant["id"])
+            try:
+                self.directory_requests.resolve(request_id, grant["id"])
+            except Exception:
+                self.grants.revoke(grant["id"])
+                raise
         return grant
 
     def update_grant(self, grant_id: str, **changes: Any) -> dict[str, Any]:
@@ -876,16 +1031,29 @@ class WorkspaceRuntime:
             if isinstance(item.get("arguments"), dict)
             else {}
         )
-        try:
-            outcome = self._decide(name, arguments)
-        except Exception:
+        resource = (
+            item.get("resource") if isinstance(item.get("resource"), dict) else {}
+        )
+        if name == "shell_exec" and resource.get("kind") == "shell_command":
             outcome = RuntimeDecision(
                 False,
-                False,
-                "workspace decision unavailable",
-                RiskClass.BOUNDARY_EXPANSION,
-                "none",
+                True,
+                "shell approval",
+                RiskClass.CONSEQUENTIAL_COMMAND,
+                str(resource.get("execution_target") or "unknown"),
+                str(resource.get("fingerprint") or "") or None,
             )
+        else:
+            try:
+                outcome = self._decide(name, arguments)
+            except Exception:
+                outcome = RuntimeDecision(
+                    False,
+                    False,
+                    "workspace decision unavailable",
+                    RiskClass.BOUNDARY_EXPANSION,
+                    "none",
+                )
         decision = str(item.get("decision") or "none")
         return self.audit.record(
             receipt_type="denied" if decision == "deny" else "permission_allowed",

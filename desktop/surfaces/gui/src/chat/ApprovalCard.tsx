@@ -62,9 +62,12 @@ type GmailSendResource = {
 type ShellCommandResource = {
   readonly executionTarget: "docker" | "host" | "unknown";
   readonly commandSummary: string;
+  readonly commandDisplay: string;
+  readonly environmentKeys: readonly string[];
   readonly cwd: string | null;
   readonly fingerprint: string | null;
   readonly unsandboxed: boolean;
+  readonly permanentEligible: boolean;
 };
 
 function gmailSendResourceOf(
@@ -103,17 +106,24 @@ function shellCommandResourceOf(
     record.kind !== "shell_command" ||
     !["docker", "host", "unknown"].includes(String(record.execution_target)) ||
     typeof record.command_summary !== "string" ||
-    typeof record.unsandboxed !== "boolean"
+    typeof record.command_display !== "string" ||
+    !Array.isArray(record.environment_keys) ||
+    !record.environment_keys.every((key) => typeof key === "string") ||
+    typeof record.unsandboxed !== "boolean" ||
+    typeof record.permanent_eligible !== "boolean"
   ) {
     return null;
   }
   return {
     executionTarget: record.execution_target as "docker" | "host" | "unknown",
     commandSummary: record.command_summary,
+    commandDisplay: record.command_display,
+    environmentKeys: record.environment_keys as string[],
     cwd: typeof record.cwd === "string" ? record.cwd : null,
     fingerprint:
       typeof record.fingerprint === "string" ? record.fingerprint : null,
     unsandboxed: record.unsandboxed,
+    permanentEligible: record.permanent_eligible === true,
   };
 }
 
@@ -389,13 +399,18 @@ export function ApprovalCard({
           <dl>
             <div>
               <dt>Command</dt>
-              <dd>{shellCommand?.commandSummary ?? "Command details unavailable"}</dd>
+              <dd><code>{shellCommand?.commandDisplay ?? "Command details unavailable"}</code></dd>
             </div>
             <div>
               <dt>Working folder</dt>
               <dd>{shellCommand?.cwd ?? "Could not be resolved"}</dd>
             </div>
           </dl>
+          {shellCommand?.environmentKeys.length ? (
+            <p>Environment keys: {shellCommand.environmentKeys.join(", ")}</p>
+          ) : (
+            <p>No additional environment values.</p>
+          )}
           {shellCommand?.unsandboxed ? (
             <p>This runs directly under your macOS account and can access everything that account can access.</p>
           ) : (
@@ -452,7 +467,9 @@ export function ApprovalCard({
         <button type="button" disabled={submitting} onClick={() => void decide(true)}>
           Allow once
         </button>
-        {shellCommand?.unsandboxed && shellCommand.fingerprint ? (
+        {shellCommand?.unsandboxed &&
+        shellCommand.fingerprint &&
+        shellCommand.permanentEligible ? (
           <button
             type="button"
             disabled={submitting}

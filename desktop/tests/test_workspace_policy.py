@@ -15,7 +15,6 @@ from coworker.workspace_policy import (
     [
         "pwd",
         "ls -la src",
-        "head -n 20 README.md",
     ],
 )
 def test_shell_classifier_auto_allows_only_vetted_read_only_commands(command):
@@ -43,6 +42,7 @@ def test_shell_classifier_auto_allows_only_vetted_read_only_commands(command):
         "git diff --stat",
         "rg -n candidate .",
         "find . -maxdepth 2 -type f",
+        "head -n 20 README.md",
     ],
 )
 def test_shell_classifier_requires_approval_for_opaque_write_script_or_network_commands(
@@ -115,8 +115,9 @@ def test_permanent_host_approval_persists_exact_fingerprint_without_raw_command_
 ):
     cwd = tmp_path / "workspace"
     cwd.mkdir()
+    (cwd / "inspect.sh").write_text("printf super-secret-value")
     fingerprint = command_fingerprint(
-        "printf super-secret-value",
+        "bash inspect.sh",
         cwd=cwd,
         environment={"TOKEN": "never-store-this"},
         execution_target="host",

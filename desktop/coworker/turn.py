@@ -234,9 +234,7 @@ def _tool_provenance(
                 "title": str(raw.get("title") or "Generated artifact"),
                 "preview": str(raw["preview"]) if raw.get("preview") else None,
                 "external_url": (
-                    str(raw["external_url"])
-                    if raw.get("external_url")
-                    else None
+                    str(raw["external_url"]) if raw.get("external_url") else None
                 ),
                 "stale": bool(raw.get("stale", False)),
                 "truncated": bool(raw.get("truncated", False)),
@@ -406,7 +404,11 @@ def close_open_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                 call_id = str(call.get("id") or "")
                 if not call_id:
                     continue
-                fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+                fn = (
+                    call.get("function")
+                    if isinstance(call.get("function"), dict)
+                    else {}
+                )
                 name = str(fn.get("name") or call.get("name") or "tool")
                 pending.append((call_id, name))
         elif role == "tool":
@@ -424,7 +426,10 @@ def _assistant_tool_message(text: str, calls: list[ToolCall]) -> dict[str, Any]:
             {
                 "id": call.id,
                 "type": "function",
-                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+                "function": {
+                    "name": call.name,
+                    "arguments": json.dumps(call.arguments),
+                },
             }
             for call in calls
         ],
@@ -453,12 +458,20 @@ def _record_person_file(
     record_tool_on_person(people, sid, call.name, call.arguments, result, ok=ok)
 
 
-def _persist_closed(store: ConversationStore, sid: str, history: list[dict[str, Any]]) -> None:
+def _persist_closed(
+    store: ConversationStore,
+    sid: str,
+    history: list[dict[str, Any]],
+    workspace_runtime: Any = None,
+) -> None:
     closed = close_open_tool_calls(history)
     if closed == history:
         return
     history[:] = closed
-    store.replace_all(sid, [m for m in closed if m.get("role") != "system"])
+    messages = [m for m in closed if m.get("role") != "system"]
+    if workspace_runtime is not None:
+        messages = [workspace_runtime.sanitize_message(message) for message in messages]
+    store.replace_all(sid, messages)
 
 
 async def run_turn(
@@ -478,10 +491,14 @@ async def run_turn(
     identity: TurnIdentity | None = None,
     control: RunControl | None = None,
 ) -> dict[str, Any]:
+    workspace_runtime = execute_kwargs.get("workspace_runtime")
     events = TurnEventStream(
         identity=identity or new_turn_identity(sid),
         store=store,
         emit=emit,
+        persist_transform=(
+            workspace_runtime.sanitize_event if workspace_runtime is not None else None
+        ),
     )
     if control is not None:
         await control.attach(events)
@@ -494,15 +511,21 @@ async def run_turn(
         message["message_id"] = events.identity.message_id
         return message
 
+    def _persist_message(message: dict[str, Any]) -> None:
+        store.append(
+            sid,
+            workspace_runtime.sanitize_message(message)
+            if workspace_runtime is not None
+            else message,
+        )
+
     async def _terminal(event: dict[str, Any]) -> None:
         if control is None:
             await _emit(event)
         else:
             await control.send_terminal(event)
 
-    async def _approval_receipt(
-        item: dict[str, Any], *, resolution: str
-    ) -> None:
+    async def _approval_receipt(item: dict[str, Any], *, resolution: str) -> None:
         existing = next(
             (
                 event
@@ -533,17 +556,17 @@ async def run_turn(
                 ),
                 "resolved_at": str(item.get("resolved_at") or _now_iso()),
                 "scope": str(item.get("scope") or "once"),
-                "execution_status": str(
-                    item.get("execution_status") or "pending"
-                ),
+                "execution_status": str(item.get("execution_status") or "pending"),
                 "execution_error": item.get("execution_error"),
             }
         )
+        if workspace_runtime is not None:
+            workspace_runtime.discard_parked_arguments(str(item.get("id") or ""))
 
     async def _stopped(
         history: list[dict[str, Any]], text_so_far: str
     ) -> dict[str, Any]:
-        _persist_closed(store, sid, history)
+        _persist_closed(store, sid, history, workspace_runtime)
         if control is not None:
             await control.finish_stopped(text_so_far)
         else:
@@ -589,14 +612,18 @@ async def run_turn(
         # run_turn appends the user message for every caller. Skip only when
         # the transcript already ends with this exact text — a rerun of a turn
         # that died right after persisting its user message.
-        if not (loaded and loaded[-1].get("role") == "user" and loaded[-1].get("content") == text):
+        if not (
+            loaded
+            and loaded[-1].get("role") == "user"
+            and loaded[-1].get("content") == text
+        ):
             user_msg = {"role": "user", "content": text}
             history.append(user_msg)
-            store.append(sid, user_msg)
+            _persist_message(user_msg)
         for _ in range(MAX_STEPS):
             chunks: list[str] = []
             calls: list[ToolCall] = []
-            _persist_closed(store, sid, history)
+            _persist_closed(store, sid, history, workspace_runtime)
             model_messages = [
                 {k: v for k, v in message.items() if k != "message_id"}
                 for message in history
@@ -616,15 +643,13 @@ async def run_turn(
             last_text = "".join(chunks)
             if not calls:
                 if last_text:
-                    assistant_msg = _stamp(
-                        {"role": "assistant", "content": last_text}
-                    )
+                    assistant_msg = _stamp({"role": "assistant", "content": last_text})
                     history.append(assistant_msg)
-                    store.append(sid, assistant_msg)
+                    _persist_message(assistant_msg)
                 break
             tool_msg = _stamp(_assistant_tool_message(last_text, calls))
             history.append(tool_msg)
-            store.append(sid, tool_msg)
+            _persist_message(tool_msg)
             for call in calls:
                 approval_claimant: str | None = None
                 approval_scope = "once"
@@ -650,7 +675,7 @@ async def run_turn(
                     )
                     denied = _stamp(_tool_result_message(call, result))
                     history.append(denied)
-                    store.append(sid, denied)
+                    _persist_message(denied)
                     _record_person_file(sid, call, False, result, execute_kwargs)
                     continue
                 if gate.needs_user:
@@ -660,16 +685,27 @@ async def run_turn(
                         execute_kwargs.get("gmail"),
                         execute_kwargs.get("workspace_runtime"),
                     )
+                    persisted_arguments = call.arguments
+                    if workspace_runtime is not None and workspace_runtime.owns_tool(
+                        call.name
+                    ):
+                        persisted_arguments = workspace_runtime.park_arguments(
+                            call.id, call.name, call.arguments
+                        )
                     parked = inbox.park(
                         call.name,
-                        call.arguments,
+                        persisted_arguments,
                         item_id=call.id,
                         reason=gate.reason,
                         session_id=sid,
                         run_id=events.identity.run_id,
                         message_id=events.identity.message_id,
                         part_id=events.identity.part_id,
-                        resource=resource,
+                        resource=(
+                            workspace_runtime.sanitize_resource(resource)
+                            if workspace_runtime is not None
+                            else resource
+                        ),
                     )
                     await _emit(
                         {
@@ -689,18 +725,14 @@ async def run_turn(
                     if choice == "cancel":
                         cancelled = inbox.cancel(call.id)
                         if cancelled is not None:
-                            await _approval_receipt(
-                                cancelled, resolution="cancelled"
-                            )
+                            await _approval_receipt(cancelled, resolution="cancelled")
                         else:
                             expired = inbox.get(call.id)
                             if (
                                 expired is not None
                                 and expired.get("state") == "expired"
                             ):
-                                await _approval_receipt(
-                                    expired, resolution="expired"
-                                )
+                                await _approval_receipt(expired, resolution="expired")
                         return await _stopped(history, last_text)
                     approval_claimant = f"turn:{events.identity.run_id}"
                     claim = inbox.decide_and_claim(
@@ -723,10 +755,8 @@ async def run_turn(
                         )
                         failed = _stamp(_tool_result_message(call, result))
                         history.append(failed)
-                        store.append(sid, failed)
-                        _record_person_file(
-                            sid, call, False, result, execute_kwargs
-                        )
+                        _persist_message(failed)
+                        _record_person_file(sid, call, False, result, execute_kwargs)
                         continue
                     approval_scope = str(claim.item.get("scope") or "once")
                     approval_resource_payload = claim.item.get("resource")
@@ -748,19 +778,18 @@ async def run_turn(
                         )
                         denied = _stamp(_tool_result_message(call, result))
                         history.append(denied)
-                        store.append(sid, denied)
+                        _persist_message(denied)
                         _record_person_file(sid, call, False, result, execute_kwargs)
                         if receipt is not None:
-                            await _approval_receipt(
-                                receipt, resolution="denied"
-                            )
+                            await _approval_receipt(receipt, resolution="denied")
                         continue
                     if not claim.owned:
                         receipt = await inbox.wait_for_execution(call.id)
                         if receipt is None:
-                            ok, result = False, {
-                                "error": "approval execution unavailable"
-                            }
+                            ok, result = (
+                                False,
+                                {"error": "approval execution unavailable"},
+                            )
                         else:
                             ok, result = inbox.execution_outcome(receipt)
                         had_tool_failure = had_tool_failure or not ok
@@ -774,14 +803,12 @@ async def run_turn(
                         )
                         tool_result = _stamp(_tool_result_message(call, result))
                         history.append(tool_result)
-                        store.append(sid, tool_result)
+                        _persist_message(tool_result)
                         _record_person_file(sid, call, ok, result, execute_kwargs)
                         if receipt is not None and receipt.get(
                             "execution_status"
                         ) not in ("executing", "pending"):
-                            await _approval_receipt(
-                                receipt, resolution="allowed"
-                            )
+                            await _approval_receipt(receipt, resolution="allowed")
                         continue
                 if control is not None:
                     control.current_action = call.name
@@ -795,7 +822,9 @@ async def run_turn(
                     }
                 )
                 try:
-                    kw = {k: v for k, v in execute_kwargs.items() if not k.startswith("_")}
+                    kw = {
+                        k: v for k, v in execute_kwargs.items() if not k.startswith("_")
+                    }
                     kw["session_id"] = sid
                     kw["run_id"] = events.identity.run_id
                     kw["approval_granted"] = approval_claimant is not None
@@ -808,7 +837,10 @@ async def run_turn(
                     )
                 except Exception as exc:
                     ok, result = False, {"error": str(exc)}
-                if call.name in {"remember", "memory_update", "memory_forget"} and system_prompt_fn:
+                if (
+                    call.name in {"remember", "memory_update", "memory_forget"}
+                    and system_prompt_fn
+                ):
                     history[0] = {
                         "role": "system",
                         "content": system_prompt_fn(
@@ -830,7 +862,7 @@ async def run_turn(
                 )
                 tool_result = _stamp(_tool_result_message(call, result))
                 history.append(tool_result)
-                store.append(sid, tool_result)
+                _persist_message(tool_result)
                 _record_person_file(sid, call, ok, result, execute_kwargs)
                 if approval_claimant is not None:
                     receipt = inbox.complete_execution(
@@ -840,9 +872,7 @@ async def run_turn(
                         result=result,
                     )
                     if receipt is not None:
-                        await _approval_receipt(
-                            receipt, resolution="allowed"
-                        )
+                        await _approval_receipt(receipt, resolution="allowed")
                 if control is not None:
                     await asyncio.sleep(0)
                     if control.cancel_requested.is_set():
@@ -859,7 +889,7 @@ async def run_turn(
             )
             return {"status": "stopped", "text": last_text}
     except Exception as exc:
-        _persist_closed(store, sid, history)
+        _persist_closed(store, sid, history, workspace_runtime)
         await _terminal({"type": "error", "state": "failed", "message": str(exc)})
         return {"status": "error", "text": last_text}
     final_state = "partial" if had_tool_failure else "complete"

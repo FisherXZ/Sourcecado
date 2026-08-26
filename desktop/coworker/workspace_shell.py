@@ -99,8 +99,13 @@ class ShellTaskStore:
                 "execution_target",
                 "command_summary",
                 "command_fingerprint",
+                "process_id",
+                "process_group_id",
+                "process_marker",
+                "container_name",
                 "started_at",
                 "finished_at",
+                "duration_ms",
                 "exit_code",
                 "truncated",
                 "error",
@@ -231,6 +236,17 @@ class DockerSandbox:
     ) -> list[str]:
         if not self.docker_binary:
             raise RuntimeError("Docker CLI is unavailable")
+        validated_grants = [self._validated_grant(grant) for grant in grants]
+        primary = next(
+            (
+                grant
+                for grant in validated_grants
+                if grant.get("id") == primary.get("id")
+            ),
+            None,
+        )
+        if primary is None:
+            raise RuntimeError("primary Docker grant is unavailable")
         protected = [
             Path(path).resolve(strict=True) for path in (protected_roots or [])
         ]
@@ -286,7 +302,7 @@ class DockerSandbox:
             "--volume",
             f"{primary['path']}:/workspace:rw",
         ]
-        for grant in sorted(grants, key=lambda item: str(item.get("id"))):
+        for grant in sorted(validated_grants, key=lambda item: str(item.get("id"))):
             if grant.get("id") == primary.get("id") or overlaps_protected(grant):
                 continue
             mode = "rw" if grant.get("access") == "read_write" else "ro"
@@ -298,6 +314,25 @@ class DockerSandbox:
             )
         command.extend([self.image, "sleep", "infinity"])
         return command
+
+    @staticmethod
+    def _validated_grant(grant: dict[str, Any]) -> dict[str, Any]:
+        stored = Path(str(grant.get("path") or ""))
+        if not stored.is_absolute() or stored.is_symlink():
+            raise RuntimeError("Docker grant filesystem identity changed")
+        try:
+            canonical = stored.resolve(strict=True)
+            info = canonical.stat()
+        except OSError as exc:
+            raise RuntimeError("Docker grant filesystem identity changed") from exc
+        identity = grant.get("filesystem_identity") or {}
+        if (
+            not canonical.is_dir()
+            or info.st_dev != identity.get("device")
+            or info.st_ino != identity.get("inode")
+        ):
+            raise RuntimeError("Docker grant filesystem identity changed")
+        return {**grant, "path": str(canonical)}
 
     def ensure_container(
         self,
@@ -374,7 +409,9 @@ class DockerSandbox:
         pid_path = f"/tmp/{task_id}.pid"
         wrapper = (
             f"echo $$ > {pid_path}; "
-            f"exec /bin/bash --noprofile --norc -c {shlex.quote(command)}"
+            "trap 'trap - TERM; kill -TERM 0' TERM; "
+            f"/bin/bash --noprofile --norc -c {shlex.quote(command)}; "
+            "status=$?; exit $status"
         )
         invocation.extend([container, "/bin/sh", "-c", wrapper])
         return invocation
@@ -388,10 +425,28 @@ class DockerSandbox:
                     container,
                     "/bin/sh",
                     "-c",
-                    f"test ! -f /tmp/{task_id}.pid || kill -TERM $(cat /tmp/{task_id}.pid)",
+                    (
+                        f"if test -f /tmp/{task_id}.pid; then "
+                        f"pid=$(cat /tmp/{task_id}.pid); "
+                        "kill -TERM -- -$pid 2>/dev/null || kill -TERM $pid 2>/dev/null || true; "
+                        "i=0; while kill -0 $pid 2>/dev/null && test $i -lt 10; do sleep 0.1; i=$((i+1)); done; "
+                        "kill -KILL -- -$pid 2>/dev/null || kill -KILL $pid 2>/dev/null || true; "
+                        "fi"
+                    ),
                 ],
                 capture_output=True,
                 timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def remove_container(self, name: str) -> None:
+        try:
+            subprocess.run(
+                [str(self.docker_binary), "rm", "-f", name],
+                capture_output=True,
+                timeout=10,
                 check=False,
             )
         except (OSError, subprocess.SubprocessError):
@@ -402,15 +457,7 @@ class DockerSandbox:
             names = list(self._containers.values())
             self._containers.clear()
         for name in names:
-            try:
-                subprocess.run(
-                    [str(self.docker_binary), "rm", "-f", name],
-                    capture_output=True,
-                    timeout=10,
-                    check=False,
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
+            self.remove_container(name)
 
 
 def shutil_which(binary: str) -> str | None:
@@ -429,11 +476,14 @@ class _LiveTask:
         process: subprocess.Popen[bytes],
         task_store: ShellTaskStore,
         container: str | None,
+        on_finished: Any = None,
     ) -> None:
         self.metadata = metadata
         self.process = process
         self.task_store = task_store
         self.container = container
+        self.on_finished = on_finished
+        self._started_monotonic = time.monotonic()
         self._output = ""
         self._base_offset = 0
         self._lock = threading.RLock()
@@ -464,7 +514,12 @@ class _LiveTask:
                 self.metadata["status"] = "succeeded" if return_code == 0 else "failed"
             self.metadata["exit_code"] = return_code
             self.metadata["finished_at"] = _now()
+            self.metadata["duration_ms"] = int(
+                (time.monotonic() - self._started_monotonic) * 1000
+            )
             self.task_store.put(self.metadata)
+            if self.on_finished is not None:
+                self.on_finished(dict(self.metadata))
 
     def poll(self, offset: int) -> dict[str, Any]:
         with self._lock:
@@ -496,15 +551,82 @@ class ShellRuntime:
         grants: WorkspaceGrantStore,
         files: WorkspaceFilesystem,
         docker: DockerSandbox | None = None,
+        on_task_finished: Any = None,
     ) -> None:
         self.state_root = Path(state_root).expanduser().resolve(strict=True)
         self.grants = grants
         self.files = files
         self.docker = docker or DockerSandbox()
         self.approvals = HostApprovalStore(self.state_root)
-        self.tasks = ShellTaskStore(self.state_root, reconcile=True)
+        self.tasks = ShellTaskStore(self.state_root)
+        self.on_task_finished = on_task_finished
         self._live: dict[str, _LiveTask] = {}
         self._lock = threading.RLock()
+        self._reconcile_existing_tasks()
+
+    def _reconcile_existing_tasks(self) -> None:
+        reconciled: list[dict[str, Any]] = []
+        for task in self.tasks.list():
+            if task.get("status") != "running":
+                continue
+            target = task.get("execution_target")
+            if target == "host":
+                self._terminate_persisted_host_task(task)
+            elif target == "docker":
+                container = str(task.get("container_name") or "")
+                if container:
+                    self.docker.kill_task(container, str(task.get("task_id") or ""))
+                    self.docker.remove_container(container)
+            item = {
+                **task,
+                "status": "interrupted",
+                "finished_at": _now(),
+                "exit_code": None,
+                "error": "Outcome unknown after Sourcecado restart.",
+            }
+            self.tasks.put(item)
+            reconciled.append(item)
+            if self.on_task_finished is not None:
+                self.on_task_finished(dict(item))
+        self.tasks.reconciled = reconciled
+
+    @staticmethod
+    def _terminate_persisted_host_task(task: dict[str, Any]) -> None:
+        try:
+            process_id = int(task.get("process_id") or 0)
+            process_group_id = int(task.get("process_group_id") or 0)
+        except (TypeError, ValueError):
+            return
+        marker = str(task.get("process_marker") or "")
+        if process_id <= 0 or process_group_id <= 0 or not marker:
+            return
+        try:
+            probe = subprocess.run(
+                ["/bin/ps", "-p", str(process_id), "-o", "command="],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return
+        if probe.returncode != 0 or marker not in probe.stdout:
+            return
+        try:
+            os.killpg(process_group_id, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(process_id, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.02)
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
     def _environment(self, environment: dict[str, Any] | None) -> dict[str, str]:
         result: dict[str, str] = {}
@@ -559,12 +681,21 @@ class ShellRuntime:
                 risk = RiskClass.CONSEQUENTIAL_COMMAND
         if safe_environment and risk == RiskClass.VETTED_READ_ONLY_COMMAND:
             risk = RiskClass.CONSEQUENTIAL_COMMAND
+        effective_environment = (
+            self._host_environment(safe_environment)
+            if target == "host"
+            else self._container_environment(safe_environment)
+        )
         fingerprint = command_fingerprint(
             command,
             cwd=host_cwd,
-            environment=safe_environment,
+            environment=effective_environment,
             execution_target=target,
+            resolve_executable=target == "host",
+            shell_executable="/bin/bash" if target == "host" else None,
         )
+        if safe_environment:
+            fingerprint["permanent_eligible"] = False
         if target == "docker" and risk == RiskClass.VETTED_READ_ONLY_COMMAND:
             return ShellDecision(
                 True,
@@ -608,9 +739,12 @@ class ShellRuntime:
             "kind": "shell_command",
             "execution_target": decision.execution_target,
             "command_summary": decision.fingerprint["command_summary"],
+            "command_display": decision.fingerprint["command_display"],
+            "environment_keys": sorted(self._environment(environment)),
             "cwd": decision.fingerprint["cwd"],
             "fingerprint": decision.fingerprint["digest"],
             "unsandboxed": decision.execution_target == "host",
+            "permanent_eligible": bool(decision.fingerprint.get("permanent_eligible")),
         }
 
     @staticmethod
@@ -623,6 +757,15 @@ class ShellRuntime:
             "TMPDIR": tempfile.gettempdir(),
         }
         return {**baseline, **explicit}
+
+    @staticmethod
+    def _container_environment(explicit: dict[str, str]) -> dict[str, str]:
+        return {
+            "HOME": "/tmp/sourcecado-home",
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            **explicit,
+        }
 
     def exec(
         self,
@@ -662,13 +805,21 @@ class ShellRuntime:
             and approval_scope == "always"
             and decision.execution_target == "host"
         ):
+            if not decision.fingerprint.get("permanent_eligible"):
+                raise WorkspaceApprovalRequired(
+                    "This command is not eligible for permanent approval; use allow once."
+                )
             self.approvals.allow_always(decision.fingerprint, actor=actor)
         task_id = f"shell_{uuid.uuid4().hex}"
+        process_marker = f"sourcecado-task-{task_id}"
         container = None
         if decision.execution_target == "docker":
+            mount_grants = [
+                self.grants.require(item["id"]) for item in self.grants.list_active()
+            ]
             container = self.docker.ensure_container(
                 grant,
-                self.grants.list_active(),
+                mount_grants,
                 protected_roots=[self.state_root],
             )
             invocation = self.docker.exec_command(
@@ -682,7 +833,27 @@ class ShellRuntime:
             process_cwd = None
             new_session = False
         else:
-            invocation = ["/bin/bash", "--noprofile", "--norc", "-c", command]
+            supervised_command = (
+                "_sourcecado_parent=$PPID\n"
+                "_sourcecado_group=$(/bin/ps -p $$ -o pgid= | tr -d ' ')\n"
+                "(while kill -0 $_sourcecado_parent 2>/dev/null; do sleep 0.2; done; "
+                "kill -TERM -- -$_sourcecado_group 2>/dev/null; sleep 0.5; "
+                "kill -KILL -- -$_sourcecado_group 2>/dev/null) &\n"
+                "_sourcecado_watchdog=$!\n"
+                f"{command}\n"
+                "_sourcecado_status=$?\n"
+                "kill $_sourcecado_watchdog 2>/dev/null || true\n"
+                "wait $_sourcecado_watchdog 2>/dev/null || true\n"
+                "exit $_sourcecado_status"
+            )
+            invocation = [
+                "/bin/bash",
+                "--noprofile",
+                "--norc",
+                "-c",
+                supervised_command,
+                process_marker,
+            ]
             process_environment = self._host_environment(safe_environment)
             process_cwd = host_cwd
             new_session = True
@@ -702,6 +873,14 @@ class ShellRuntime:
             "execution_target": decision.execution_target,
             "command_summary": decision.fingerprint["command_summary"],
             "command_fingerprint": decision.fingerprint["digest"],
+            "process_id": process.pid,
+            "process_group_id": (
+                process.pid if decision.execution_target == "host" else None
+            ),
+            "process_marker": (
+                process_marker if decision.execution_target == "host" else None
+            ),
+            "container_name": container,
             "started_at": _now(),
             "exit_code": None,
             "truncated": False,
@@ -712,6 +891,7 @@ class ShellRuntime:
             process=process,
             task_store=self.tasks,
             container=container,
+            on_finished=self.on_task_finished,
         )
         with self._lock:
             self._live[task_id] = live

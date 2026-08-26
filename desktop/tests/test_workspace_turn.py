@@ -79,7 +79,7 @@ def test_shell_host_fallback_approval_resource_is_safe_and_explicit(tmp_path):
         "shell_exec",
         {
             "grant_id": grant["id"],
-            "command": "printf secret-command-argument",
+            "command": "python3 --version",
             "cwd": ".",
             "environment": {"TOKEN": "secret-environment-value"},
         },
@@ -91,7 +91,8 @@ def test_shell_host_fallback_approval_resource_is_safe_and_explicit(tmp_path):
     assert resource["execution_target"] == "host"
     assert resource["unsandboxed"] is True
     assert resource["cwd"] == str(root)
-    assert "secret-command-argument" not in str(resource)
+    assert resource["command_display"] == "python3 --version"
+    assert resource["environment_keys"] == ["TOKEN"]
     assert "secret-environment-value" not in str(resource)
 
 
@@ -147,11 +148,11 @@ def test_permanent_exact_host_approval_can_satisfy_an_afk_turn(tmp_path):
     state, _root, grant, runtime = runtime_with_file(tmp_path)
     decision = runtime.decide_tool(
         "shell_exec",
-        {"grant_id": grant["id"], "command": "printf standing", "cwd": "."},
+        {"grant_id": grant["id"], "command": "pwd", "cwd": "."},
     )
     runtime.execute_tool(
         "shell_exec",
-        {"grant_id": grant["id"], "command": "printf standing", "cwd": "."},
+        {"grant_id": grant["id"], "command": "pwd", "cwd": "."},
         approval_granted=True,
         approval_scope="always",
         approval_fingerprint=decision.command_fingerprint,
@@ -168,7 +169,7 @@ def test_permanent_exact_host_approval_can_satisfy_an_afk_turn(tmp_path):
                         name="shell_exec",
                         arguments={
                             "grant_id": grant["id"],
-                            "command": "printf standing",
+                            "command": "pwd",
                             "cwd": ".",
                         },
                     )

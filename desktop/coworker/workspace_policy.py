@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -26,23 +27,21 @@ class RiskClass(StrEnum):
 
 
 _SHELL_OPERATORS = frozenset({";", "|", "&", ">", "<", "`", "$", "\n", "\r"})
-_READ_ONLY_COMMANDS = frozenset(
-    {
-        "pwd",
-        "ls",
-        "cat",
-        "head",
-        "tail",
-        "wc",
-        "stat",
-        "file",
-        "du",
-    }
-)
-_SCRIPT_SUFFIXES = frozenset({".sh", ".bash", ".py", ".js", ".mjs", ".rb", ".pl"})
+_READ_ONLY_COMMANDS = frozenset({"pwd", "ls"})
 _SCRIPT_INTERPRETERS = frozenset(
     {"bash", "sh", "zsh", "python", "python3", "node", "ruby", "perl"}
 )
+_PERMANENT_WRAPPERS = frozenset(
+    {"env", "command", "xargs", "sudo", "nice", "time", "nohup"}
+)
+_INLINE_CODE_FLAGS = frozenset({"-c", "--command", "-e", "--eval"})
+_SECRET_OPTION = re.compile(
+    r"(?i)^--?(?:api[-_]?key|token|password|secret|authorization)(?:=|$)"
+)
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)^(?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY))=(.*)$"
+)
+_SHELL_BUILTINS = frozenset({"pwd", "printf", "echo", "true", "false"})
 
 
 def classify_shell(command: str) -> RiskClass:
@@ -58,14 +57,12 @@ def classify_shell(command: str) -> RiskClass:
     if "/" in tokens[0] or "\\" in tokens[0]:
         return RiskClass.CONSEQUENTIAL_COMMAND
     binary = Path(tokens[0]).name
-    arguments = tokens[1:]
     if binary == "git":
         return RiskClass.CONSEQUENTIAL_COMMAND
     if binary not in _READ_ONLY_COMMANDS:
         return RiskClass.CONSEQUENTIAL_COMMAND
-    if binary == "file" and any(
-        argument in {"-C", "--compile"} or argument.startswith("--compile=")
-        for argument in arguments
+    if binary == "ls" and any(
+        argument in {"-R", "--recursive"} for argument in tokens[1:]
     ):
         return RiskClass.CONSEQUENTIAL_COMMAND
     return RiskClass.VETTED_READ_ONLY_COMMAND
@@ -86,12 +83,44 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _display_command(command: str) -> tuple[str, bool]:
+    try:
+        tokens = shlex.split(str(command), posix=True)
+    except ValueError:
+        return "Command cannot be displayed safely", True
+    redacted = False
+    display: list[str] = []
+    redact_next = False
+    for token in tokens:
+        if redact_next:
+            display.append("[REDACTED]")
+            redact_next = False
+            redacted = True
+            continue
+        if _SECRET_OPTION.match(token):
+            if "=" in token:
+                display.append(token.split("=", 1)[0] + "=[REDACTED]")
+                redacted = True
+            else:
+                display.append(token)
+                redact_next = True
+            continue
+        if _SECRET_ASSIGNMENT.match(token):
+            display.append(token.split("=", 1)[0] + "=[REDACTED]")
+            redacted = True
+            continue
+        display.append(token)
+    return shlex.join(display), redacted
+
+
 def command_fingerprint(
     command: str,
     *,
     cwd: str | Path,
     environment: dict[str, str] | None,
     execution_target: str,
+    resolve_executable: bool = True,
+    shell_executable: str | Path | None = None,
 ) -> dict[str, Any]:
     resolved_cwd = Path(cwd).expanduser().resolve(strict=True)
     safe_environment = {
@@ -107,7 +136,11 @@ def command_fingerprint(
         f"{binary} · {argument_count} argument{'s' if argument_count != 1 else ''}"
     )
     path_value = safe_environment.get("PATH") or os.defpath
-    executable_path = shutil.which(tokens[0], path=path_value) if tokens else None
+    executable_path = (
+        shutil.which(tokens[0], path=path_value)
+        if tokens and resolve_executable
+        else None
+    )
     executable = None
     if executable_path:
         resolved_executable = Path(executable_path).resolve(strict=True)
@@ -116,16 +149,8 @@ def command_fingerprint(
             "sha256": _hash_file(resolved_executable),
         }
     scripts: list[dict[str, str]] = []
-    interpreter_script = None
-    if binary in _SCRIPT_INTERPRETERS:
-        interpreter_script = next(
-            (token for token in tokens[1:] if not token.startswith("-")), None
-        )
     for token in tokens[1:]:
-        if token.startswith("-") or (
-            Path(token).suffix.lower() not in _SCRIPT_SUFFIXES
-            and token != interpreter_script
-        ):
+        if token.startswith("-"):
             continue
         candidate = Path(token).expanduser()
         if not candidate.is_absolute():
@@ -137,6 +162,48 @@ def command_fingerprint(
         if candidate.is_file():
             scripts.append({"path": str(candidate), "sha256": _hash_file(candidate)})
     scripts.sort(key=lambda item: item["path"])
+    shell_executor = None
+    if shell_executable is not None:
+        resolved_shell = Path(shell_executable).resolve(strict=True)
+        shell_executor = {
+            "path": str(resolved_shell),
+            "sha256": _hash_file(resolved_shell),
+        }
+    command_display, command_was_redacted = _display_command(command)
+    has_shell_syntax = any(
+        marker in str(command) for marker in (*_SHELL_OPERATORS, "*", "?", "[", "]")
+    )
+    wrapper = binary in _PERMANENT_WRAPPERS
+    inline_code = binary in _SCRIPT_INTERPRETERS and any(
+        token in _INLINE_CODE_FLAGS for token in tokens[1:]
+    )
+    missing_script = (
+        binary in _SCRIPT_INTERPRETERS
+        and not scripts
+        and not all(token.startswith("-") for token in tokens[1:])
+    )
+    resolvable_binary = executable is not None or binary in _SHELL_BUILTINS
+    arguments_safe = True
+    for token in tokens[1:]:
+        if token.startswith("-"):
+            continue
+        candidate = Path(token).expanduser()
+        if not candidate.is_absolute():
+            candidate = resolved_cwd / candidate
+        if not candidate.exists():
+            arguments_safe = False
+            break
+    permanent_eligible = bool(
+        tokens
+        and resolve_executable
+        and resolvable_binary
+        and not wrapper
+        and not inline_code
+        and not missing_script
+        and not has_shell_syntax
+        and not command_was_redacted
+        and arguments_safe
+    )
     environment_fingerprint = _digest(safe_environment)
     components = {
         "command": str(command),
@@ -144,16 +211,20 @@ def command_fingerprint(
         "environment_fingerprint": environment_fingerprint,
         "execution_target": str(execution_target),
         "executable": executable,
+        "shell_executable": shell_executor,
         "scripts": scripts,
     }
     return {
         "digest": _digest(components),
         "command_summary": command_summary,
+        "command_display": command_display,
         "cwd": str(resolved_cwd),
         "environment_fingerprint": environment_fingerprint,
         "execution_target": str(execution_target),
         "executable": executable,
+        "shell_executable": shell_executor,
         "scripts": scripts,
+        "permanent_eligible": permanent_eligible,
     }
 
 
@@ -207,6 +278,8 @@ class HostApprovalStore:
             return [dict(item) for item in self._load()["approvals"]]
 
     def allows(self, fingerprint: dict[str, Any]) -> bool:
+        if not fingerprint.get("permanent_eligible"):
+            return False
         digest = str(fingerprint.get("digest") or "")
         return any(
             item.get("fingerprint") == digest and item.get("revoked_at") is None
@@ -216,6 +289,8 @@ class HostApprovalStore:
     def allow_always(
         self, fingerprint: dict[str, Any], *, actor: str
     ) -> dict[str, Any]:
+        if not fingerprint.get("permanent_eligible"):
+            raise ValueError("command is not eligible for permanent approval")
         stamp = _now()
         approval = {
             "id": f"host_approval_{uuid.uuid4().hex}",
@@ -225,7 +300,9 @@ class HostApprovalStore:
             "environment_fingerprint": str(fingerprint["environment_fingerprint"]),
             "execution_target": "host",
             "executable": fingerprint.get("executable"),
+            "shell_executable": fingerprint.get("shell_executable"),
             "scripts": list(fingerprint.get("scripts") or []),
+            "permanent_eligible": bool(fingerprint.get("permanent_eligible")),
             "actor": str(actor or "operator"),
             "created_at": stamp,
             "revoked_at": None,

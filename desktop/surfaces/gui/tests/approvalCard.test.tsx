@@ -40,14 +40,14 @@ function approvalPart(
 }
 
 describe("ApprovalCard", () => {
-  it("shows an unsandboxed shell warning and offers exact permanent approval without leaking command data", () => {
+  it("shows the exact safe command and offers permanent approval only for that fingerprint", () => {
     const onDecision = vi.fn();
     const part = {
       ...approvalPart(),
       toolName: "shell_exec",
       args: {
         grant_id: "grant-1",
-        command: "bash secret-script.sh --token hidden",
+        command: "bash scripts/inspect.sh",
         cwd: ".",
         environment: { TOKEN: "secret-environment" },
       },
@@ -67,10 +67,13 @@ describe("ApprovalCard", () => {
           resource: {
             kind: "shell_command",
             execution_target: "host",
-            command_summary: "bash · 3 arguments",
+            command_summary: "bash · 1 argument",
+            command_display: "bash scripts/inspect.sh",
+            environment_keys: [],
             cwd: "/Users/operator/Workspace",
             fingerprint: "abcdef1234567890",
             unsandboxed: true,
+            permanent_eligible: true,
           },
         },
       },
@@ -84,15 +87,49 @@ describe("ApprovalCard", () => {
       screen.getByRole("heading", { name: "Run workspace command" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Not sandboxed")).toBeInTheDocument();
-    expect(screen.getByText("bash · 3 arguments")).toBeInTheDocument();
+    expect(screen.getByText("bash scripts/inspect.sh")).toBeInTheDocument();
+    expect(screen.getByText("No additional environment values.")).toBeInTheDocument();
     expect(screen.getByText("/Users/operator/Workspace")).toBeInTheDocument();
-    expect(container).not.toHaveTextContent("secret-script.sh");
     expect(container).not.toHaveTextContent("secret-environment");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Always allow this exact command" }),
     );
     expect(onDecision).toHaveBeenCalledWith(true, "always");
+  });
+
+  it("redacts inline shell secrets and withholds permanent approval", () => {
+    const part = {
+      ...approvalPart(),
+      toolName: "shell_exec",
+      args: { command: "curl --token actual-secret https://example.com" },
+      providerMetadata: {
+        sourcecado: {
+          approvalState: "pending",
+          resource: {
+            kind: "shell_command",
+            execution_target: "host",
+            command_summary: "curl · 3 arguments",
+            command_display: "curl --token '[REDACTED]' https://example.com",
+            environment_keys: [],
+            cwd: "/Users/operator/Workspace",
+            fingerprint: "fingerprint",
+            unsandboxed: true,
+            permanent_eligible: false,
+          },
+        },
+      },
+    } as ToolCallMessagePartProps;
+
+    const { container } = render(
+      <ApprovalCard part={part} onDecision={vi.fn()} />,
+    );
+
+    expect(container).toHaveTextContent("[REDACTED]");
+    expect(container).not.toHaveTextContent("actual-secret");
+    expect(
+      screen.queryByRole("button", { name: "Always allow this exact command" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows Calendar create fields, timezone, and account before approval", () => {

@@ -140,7 +140,7 @@ def test_websocket_allow_always_persists_exact_host_shell_authority(tmp_path):
                         name="shell_exec",
                         arguments={
                             "grant_id": grant["id"],
-                            "command": "printf approved-host",
+                            "command": "pwd",
                             "cwd": ".",
                         },
                     )
@@ -165,7 +165,7 @@ def test_websocket_allow_always_persists_exact_host_shell_authority(tmp_path):
             events.append(event)
             if event["type"] == "permission_required":
                 assert event["resource"]["unsandboxed"] is True
-                assert "approved-host" not in str(event["resource"])
+                assert event["resource"]["command_display"] == "pwd"
                 ws.send_json(
                     {
                         "type": "permission",
@@ -179,12 +179,70 @@ def test_websocket_allow_always_persists_exact_host_shell_authority(tmp_path):
 
     assert events[-1]["type"] == "turn_end"
     finished = next(event for event in events if event["type"] == "tool_finished")
-    assert finished["result"]["output"] == "approved-host"
+    assert finished["result"]["output"].strip() == str(root)
     assert runtime.shell.approvals.list_all()[0]["revoked_at"] is None
     assert (
         runtime.decide_tool(
             "shell_exec",
-            {"grant_id": grant["id"], "command": "printf approved-host", "cwd": "."},
+            {"grant_id": grant["id"], "command": "pwd", "cwd": "."},
         ).allowed
         is True
     )
+
+
+def test_shell_approval_persistence_redacts_raw_command_environment_and_locks_state_modes(
+    tmp_path,
+):
+    state = tmp_path / "state"
+    root = tmp_path / "workspace"
+    root.mkdir()
+    runtime = WorkspaceRuntime(state, docker=DockerSandbox(docker_binary=None))
+    grant = runtime.add_grant(
+        root, label="Workspace", access="read_write", allow_shell=True
+    )
+    command_secret = "command-secret-938475"
+    environment_secret = "environment-secret-294857"
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="shell-secret-call",
+                        name="shell_exec",
+                        arguments={
+                            "grant_id": grant["id"],
+                            "command": f"printf {command_secret}",
+                            "cwd": ".",
+                            "environment": {"TOKEN": environment_secret},
+                        },
+                    )
+                ]
+            }
+        ]
+    )
+    app = create_app(
+        token=TOKEN,
+        state=state,
+        provider=provider,
+        workspace_runtime=runtime,
+    )
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "text": "run", "session_id": "main"})
+        while ws.receive_json()["type"] != "permission_required":
+            pass
+
+    persisted = b"\n".join(
+        path.read_bytes()
+        for path in state.rglob("*")
+        if path.is_file() and path.name != "secrets.json"
+    )
+    assert command_secret.encode() not in persisted
+    assert environment_secret.encode() not in persisted
+    assert state.stat().st_mode & 0o777 == 0o700
+    for path in state.rglob("*"):
+        if path.is_dir():
+            assert path.stat().st_mode & 0o077 == 0
+        elif path.is_file():
+            assert path.stat().st_mode & 0o077 == 0

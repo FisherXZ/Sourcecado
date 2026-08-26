@@ -92,7 +92,15 @@ def validate_event(event: object) -> str | None:
             if not isinstance(event.get(field), str) or not event[field]:
                 return f"{event_type}.{field} must be a non-empty string"
     if event_type == "approval_resolved":
-        for field in ("id", "name", "resolution", "requested_at", "resolved_at", "scope", "execution_status"):
+        for field in (
+            "id",
+            "name",
+            "resolution",
+            "requested_at",
+            "resolved_at",
+            "scope",
+            "execution_status",
+        ):
             if not isinstance(event.get(field), str) or not event[field]:
                 return f"approval_resolved.{field} must be a non-empty string"
         if event.get("resolution") not in {
@@ -114,13 +122,13 @@ def validate_event(event: object) -> str | None:
         event.get("arguments"), dict
     ):
         return f"{event_type}.arguments must be an object"
-    if event_type == "permission_required" and not isinstance(
-        event.get("reason"), str
-    ):
+    if event_type == "permission_required" and not isinstance(event.get("reason"), str):
         return "permission_required.reason must be a string"
-    if event_type == "permission_required" and event.get(
-        "resource"
-    ) is not None and not isinstance(event.get("resource"), dict):
+    if (
+        event_type == "permission_required"
+        and event.get("resource") is not None
+        and not isinstance(event.get("resource"), dict)
+    ):
         return "permission_required.resource must be an object"
     if event_type == "tool_finished":
         if not isinstance(event.get("ok"), bool):
@@ -168,10 +176,12 @@ class TurnEventStream:
         identity: TurnIdentity,
         store: Any,
         emit: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        persist_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         self.identity = identity
         self._store = store
         self._emit = emit
+        self._persist_transform = persist_transform
 
     async def send(self, event: dict[str, Any]) -> dict[str, Any]:
         payload = dict(event)
@@ -182,7 +192,12 @@ class TurnEventStream:
             event_id=f"event_{uuid.uuid4().hex}",
             **payload,
         )
-        self._store.append_event(self.identity.session_id, envelope)
+        persisted = (
+            self._persist_transform(envelope)
+            if self._persist_transform is not None
+            else envelope
+        )
+        self._store.append_event(self.identity.session_id, persisted)
         if self._emit is not None:
             await self._emit(envelope)
         return envelope

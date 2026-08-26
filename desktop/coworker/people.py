@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -56,9 +57,11 @@ class PersonStore:
     def __init__(self, base_dir: str | Path) -> None:
         self.base = Path(base_dir).expanduser()
         self.base.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.base, 0o700)
         self.db_path = self.base / "people.db"
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        os.chmod(self.db_path, 0o600)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(
             """
@@ -170,7 +173,9 @@ class PersonStore:
         if not rationale_summary.strip():
             raise ValueError("actor and rationale_summary are required")
 
-    def _load_person_row(self, person_id: str, *, include_deleted: bool = False) -> sqlite3.Row:
+    def _load_person_row(
+        self, person_id: str, *, include_deleted: bool = False
+    ) -> sqlite3.Row:
         row = self._conn.execute(
             "SELECT * FROM people WHERE person_id = ?",
             (person_id,),
@@ -268,7 +273,9 @@ class PersonStore:
         for event in self.timeline(person_id):
             if event.get("kind") == "error":
                 continue
-            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            payload = (
+                event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            )
             if event.get("kind") == "send":
                 return True
             if payload.get("sent") is True:
@@ -462,8 +469,12 @@ class PersonStore:
                 (person_id,),
             ).fetchone()[0]
         person["attachments"] = attachments
-        person["sources"] = [item for item in attachments if item["type"] == "source_ref"]
-        person["artifacts"] = [item for item in attachments if item["type"] == "artifact"]
+        person["sources"] = [
+            item for item in attachments if item["type"] == "source_ref"
+        ]
+        person["artifacts"] = [
+            item for item in attachments if item["type"] == "artifact"
+        ]
         person["knowledge_gaps"] = [
             item for item in attachments if item["type"] == "knowledge_gap"
         ]
@@ -536,7 +547,9 @@ class PersonStore:
         return person
 
     def list_board(self) -> dict[str, list[dict[str, Any]]]:
-        board: dict[str, list[dict[str, Any]]] = {state: [] for state in SEQUENCE_STATES}
+        board: dict[str, list[dict[str, Any]]] = {
+            state: [] for state in SEQUENCE_STATES
+        }
         with self._lock:
             rows = self._conn.execute(
                 """
@@ -819,7 +832,9 @@ class PersonStore:
             ).fetchone()
             if existing is not None:
                 current = self._attachment_dict(existing)
-                if current["fields"] != fields or current["restricted"] != bool(restricted):
+                if current["fields"] != fields or current["restricted"] != bool(
+                    restricted
+                ):
                     raise ValueError(
                         "idempotency conflict: key already belongs to different record facts"
                     )

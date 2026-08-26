@@ -46,6 +46,7 @@ class WorkspaceGrantStore:
     def __init__(self, state_root: str | Path) -> None:
         self.state_root = Path(state_root).expanduser()
         self.state_root.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.state_root, 0o700)
         self.path = self.state_root / "workspace_grants.json"
         self._lock = threading.RLock()
 

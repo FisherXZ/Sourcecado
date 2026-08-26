@@ -44,8 +44,10 @@ def load_mcp_config(path: Path) -> dict[str, Any]:
 
 def write_default_mcp_json(path: Path) -> None:
     if path.is_file():
+        path.chmod(0o600)
         return
     path.write_text(json.dumps(default_mcp_config(), indent=2) + "\n", encoding="utf-8")
+    path.chmod(0o600)
 
 
 class FakeMcp:

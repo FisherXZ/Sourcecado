@@ -1,3 +1,7 @@
+import time
+
+import pytest
+
 from coworker.workspace_policy import RiskClass
 from coworker.workspace_runtime import (
     WORKSPACE_TOOL_NAMES,
@@ -152,6 +156,23 @@ def test_workspace_runtime_directory_request_creates_no_authority_until_operator
     assert runtime.directory_requests.pending()[0]["id"] == result["request_id"]
 
 
+def test_invalid_directory_request_cannot_leave_a_live_grant(tmp_path):
+    state = tmp_path / "state"
+    root = tmp_path / "workspace"
+    root.mkdir()
+    runtime = WorkspaceRuntime(state, docker=DockerSandbox(docker_binary=None))
+
+    with pytest.raises(KeyError):
+        runtime.add_grant(
+            root,
+            label="Workspace",
+            access="read_write",
+            request_id="missing-request",
+        )
+
+    assert runtime.grants.list_active() == []
+
+
 def test_workspace_runtime_records_sanitized_execution_receipts(tmp_path):
     _state, _root, grant, runtime = runtime_with_grant(tmp_path)
     args = {
@@ -195,6 +216,37 @@ def test_workspace_runtime_records_restart_reconciliation_as_interrupted(tmp_pat
     assert receipt["receipt_type"] == "interrupted"
     assert receipt["task_id"] == "task-restart"
     assert receipt["status"] == "interrupted"
+
+
+def test_background_shell_completion_appends_a_terminal_audit_receipt(tmp_path):
+    _state, _root, grant, runtime = runtime_with_grant(tmp_path)
+    arguments = {
+        "grant_id": grant["id"],
+        "command": "printf done",
+        "cwd": ".",
+        "background": True,
+    }
+    decision = runtime.decide_tool("shell_exec", arguments)
+    ok, started = runtime.execute_tool(
+        "shell_exec",
+        arguments,
+        approval_granted=True,
+        approval_fingerprint=decision.command_fingerprint,
+    )
+    assert ok is True
+    deadline = time.time() + 2
+    while runtime.shell.poll(started["task_id"], offset=0)["status"] == "running":
+        assert time.time() < deadline
+        time.sleep(0.02)
+
+    terminal = next(
+        receipt
+        for receipt in runtime.audit.list(limit=20)
+        if receipt.get("task_id") == started["task_id"]
+        and receipt["status"] == "succeeded"
+    )
+    assert terminal["exit_code"] == 0
+    assert terminal["finished_at"]
 
 
 def test_stale_shell_approval_receipt_preserves_the_host_execution_target(tmp_path):

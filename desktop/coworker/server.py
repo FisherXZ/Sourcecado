@@ -372,6 +372,9 @@ def create_app(
             None,
         )
         if existing is not None:
+            app.state.workspace_runtime.discard_parked_arguments(
+                str(item.get("id") or "")
+            )
             return existing
         app.state.workspace_runtime.record_permission_decision(item)
         event = build_event(
@@ -401,7 +404,18 @@ def create_app(
             execution_error=item.get("execution_error"),
         )
         store.append_event(sid, event)
+        app.state.workspace_runtime.discard_parked_arguments(
+            str(item.get("id") or "")
+        )
         return event
+
+    def _claimed_arguments(item: dict[str, Any]) -> dict[str, Any]:
+        arguments = dict(item.get("arguments") or {})
+        if app.state.workspace_runtime.owns_tool(str(item.get("name") or "")):
+            return app.state.workspace_runtime.restore_parked_arguments(
+                str(item.get("id") or ""), arguments
+            )
+        return arguments
 
     async def _publish_live_events(events: list[dict[str, Any]]) -> None:
         for event in events:
@@ -427,7 +441,7 @@ def create_app(
             ok, result = await asyncio.to_thread(
                 execute,
                 item["name"],
-                item["arguments"],
+                _claimed_arguments(item),
                 store=app.state.store,
                 gmail=app.state.gmail,
                 drive=app.state.drive,
@@ -646,7 +660,7 @@ def create_app(
                 ok, result = await asyncio.to_thread(
                     turn_runtime.execute,
                     item["name"],
-                    item["arguments"],
+                    _claimed_arguments(item),
                     store=store,
                     gmail=app.state.gmail,
                     drive=app.state.drive,
