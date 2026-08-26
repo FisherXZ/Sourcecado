@@ -685,10 +685,11 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                 next_continuation = merge_continuation(
                     json_object(row["continuation"]), continuation
                 )
-                waiting = values["state"] in {
-                    "waiting_approval",
-                    "waiting_question",
-                }
+                relinquish = (
+                    values["state"] in TERMINAL_AGENT_RUN_STATES
+                    or values["state"]
+                    in {"waiting_approval", "waiting_question"}
+                )
                 cursor = self._conn.execute(
                     """
                     UPDATE agent_runs SET
@@ -710,8 +711,8 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                         values["usage"],
                         values["terminal_result"],
                         _json(next_continuation),
-                        None if waiting else lease.owner_id,
-                        None if waiting else lease.expires_at,
+                        None if relinquish else lease.owner_id,
+                        None if relinquish else lease.expires_at,
                         stamp,
                         values["finished_at"],
                         lease.run_id,
@@ -752,7 +753,7 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                 raise
         if checkpoint_row is None:
             raise RuntimeError("Agent Run checkpoint insert did not persist")
-        next_lease = None if waiting else _lease_from_row(run_row)
+        next_lease = None if relinquish else _lease_from_row(run_row)
         return next_lease, _checkpoint_row(checkpoint_row)
 
     def release_lease(

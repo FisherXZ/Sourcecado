@@ -604,6 +604,71 @@ def test_release_clears_lease_and_fences_all_later_writes(tmp_path):
             call()
 
 
+@pytest.mark.parametrize("state", ("complete", "partial", "stopped", "failed"))
+def test_terminal_checkpoint_atomically_releases_and_fences_lease(
+    tmp_path, state
+):
+    store = ConversationStore(tmp_path)
+    _start(store)
+    lease = store.agent_runs.acquire_lease(
+        "run-lease", "owner-a", 0, 30, now=NOW
+    )
+    assert lease is not None
+    continuation = _continuation(state)
+    continuation.pop("pending_tool")
+
+    next_lease, checkpoint = store.agent_runs.checkpoint_leased(
+        lease,
+        "terminal",
+        continuation,
+        payload={"status": state, "text_length": 4},
+        state=state,
+        terminal_result={"status": state, "text_length": 4},
+        now=NOW,
+    )
+
+    assert next_lease is None
+    assert checkpoint["kind"] == "terminal"
+    assert checkpoint["sequence"] == 2
+    run = store.get_agent_run("run-lease")
+    assert run["current_state"] == state
+    assert run["continuation"] == continuation
+    assert run["terminal_result"] == {"status": state, "text_length": 4}
+    assert run["finished_at"] == NOW.isoformat()
+    assert run["version"] == lease.version + 1
+    with sqlite3.connect(tmp_path / "club.db") as db:
+        owner, expires = db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            ("run-lease",),
+        ).fetchone()
+    assert owner is None
+    assert expires is None
+    assert (
+        store.agent_runs.acquire_lease(
+            "run-lease", "owner-b", run["version"], 30, now=NOW
+        )
+        is None
+    )
+    fenced = (
+        lambda: store.agent_runs.renew_lease(lease, 30, now=NOW),
+        lambda: store.agent_runs.update_continuation(
+            lease, continuation, now=NOW
+        ),
+        lambda: store.agent_runs.checkpoint_leased(
+            lease,
+            "terminal",
+            continuation,
+            state=state,
+            terminal_result={"status": state, "text_length": 4},
+            now=NOW,
+        ),
+        lambda: store.agent_runs.release_lease(lease, now=NOW),
+    )
+    for call in fenced:
+        with pytest.raises((agent_runs.AgentRunLeaseLost, ValueError)):
+            call()
+
+
 def test_terminal_run_cannot_be_acquired(tmp_path):
     store = ConversationStore(tmp_path)
     _start(store)
@@ -798,7 +863,6 @@ def test_reconcile_expired_leases_classifies_work_without_duplicate_checkpoints(
         "run-model",
         "run-safe-tool",
         "run-unsafe-tool",
-        "run-terminal",
     }
 
     model = first.get_agent_run("run-model")
