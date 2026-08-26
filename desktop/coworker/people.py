@@ -25,6 +25,10 @@ SOURCES = (
 )
 
 
+def _clean(value: str | None) -> str | None:
+    return (value or "").strip() or None
+
+
 def _new_person_id() -> str:
     return "per_" + uuid.uuid4().hex
 
@@ -98,8 +102,12 @@ class PersonStore:
         company: str | None,
         target: str | None = None,
     ) -> dict[str, Any]:
-        apollo = (apollo_id or "").strip() or None
-        cleaned_target = (target or "").strip() or None
+        apollo = _clean(apollo_id)
+        first_name = _clean(first_name)
+        last_name_obfuscated = _clean(last_name_obfuscated)
+        title = _clean(title)
+        company = _clean(company)
+        cleaned_target = _clean(target)
         with self._lock:
             existing = None
             if apollo is not None:
