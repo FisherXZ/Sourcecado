@@ -38,6 +38,8 @@ export function AppShell() {
   const railFocusTimerRef = useRef<number | null>(null);
   const railWasOpenedRef = useRef(false);
   const searchReturnFocusRef = useRef<HTMLElement | null>(null);
+  const deferDestinationPersistenceRef = useRef(isRootHash(window.location.hash));
+  const cachedRestoreHashRef = useRef<string | null>(null);
   function openSearch() {
     searchReturnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -81,7 +83,10 @@ export function AppShell() {
     }
   }, [railOpen]);
   useEffect(() => {
+    if (deferDestinationPersistenceRef.current) return;
     if (isRootHash(window.location.hash)) return;
+    if (cachedRestoreHashRef.current === window.location.hash) return;
+    cachedRestoreHashRef.current = null;
     if (route.kind === "chat" && route.sessionId?.startsWith("sched-")) return;
     setLastDestination(window.location.hash).catch(() => {});
   }, [route]);
@@ -168,8 +173,10 @@ export function AppShell() {
       const restored = cachedListing.last_destination ||
         (cachedListing.open_id ? `#/chat/${encodeURIComponent(cachedListing.open_id)}` : "");
       if (restored) {
+        cachedRestoreHashRef.current = restored;
         window.location.hash = restored;
       } else if (cachedListing.sessions.length > 0) {
+        cachedRestoreHashRef.current = "#/chat";
         window.location.hash = "#/chat";
       }
     }
@@ -180,19 +187,26 @@ export function AppShell() {
         setOpenSessionId(listing.open_id);
         setStale(false);
         writeShellCache(listing);
-        if (!isRootHash(window.location.hash)) return;
-        const restored = listing.last_destination ||
-          (listing.open_id ? `#/chat/${encodeURIComponent(listing.open_id)}` : "");
-        if (restored) {
-          window.location.hash = restored;
-        } else if (listing.sessions.length > 0) {
-          // Sessions exist but neither open_id nor last_destination named one:
-          // escape the root "Restoring workspace" skeleton instead of hanging on it.
-          window.location.hash = "#/chat";
+        const currentHash = window.location.hash;
+        const cacheStillOwnsHash = cachedRestoreHashRef.current === currentHash;
+        if (isRootHash(currentHash) || cacheStillOwnsHash) {
+          const restored = listing.last_destination ||
+            (listing.open_id ? `#/chat/${encodeURIComponent(listing.open_id)}` : "");
+          if (restored) {
+            window.location.hash = restored;
+          } else if (listing.sessions.length > 0) {
+            // Sessions exist but neither open_id nor last_destination named one:
+            // escape the root "Restoring workspace" skeleton instead of hanging on it.
+            window.location.hash = "#/chat";
+          }
         }
+        cachedRestoreHashRef.current = null;
+        deferDestinationPersistenceRef.current = false;
       })
       .catch((error: unknown) => {
-        if (active) setBootError(error instanceof Error ? error.message : String(error));
+        if (!active) return;
+        deferDestinationPersistenceRef.current = false;
+        setBootError(error instanceof Error ? error.message : String(error));
       });
     return () => {
       active = false;

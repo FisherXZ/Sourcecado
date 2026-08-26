@@ -29,6 +29,7 @@ _TOOL_SOURCES: dict[str, tuple[str | None, str]] = {
     "gmail_read": ("gmail", "Gmail"),
     "gmail_draft": ("gmail", "Gmail"),
     "drive_search": ("drive", "Google Drive"),
+    "drive_list_folder": ("drive", "Google Drive"),
     "drive_read": ("drive", "Google Drive"),
     "calendar_list": ("calendar", "Google Calendar"),
     "calendar_create": ("calendar", "Google Calendar"),

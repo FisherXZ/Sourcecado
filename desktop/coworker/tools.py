@@ -237,6 +237,24 @@ DRIVE_READ_SCHEMA: dict[str, Any] = {
     },
 }
 
+DRIVE_LIST_FOLDER_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "drive_list_folder",
+        "description": "List one Google Drive folder by its exact id. Readonly and parent-scoped.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "folder_id": {"type": "string"},
+                "max_results": {"type": "integer"},
+                "page_token": {"type": "string"},
+            },
+            "required": ["folder_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 CALENDAR_LIST_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -385,6 +403,7 @@ OPENAI_TOOLS = [
     GMAIL_DRAFT_SCHEMA,
     GMAIL_SEND_SCHEMA,
     DRIVE_SEARCH_SCHEMA,
+    DRIVE_LIST_FOLDER_SCHEMA,
     DRIVE_READ_SCHEMA,
     CALENDAR_LIST_SCHEMA,
     CALENDAR_CREATE_SCHEMA,
@@ -476,18 +495,28 @@ def execute(
             return False, {"error": str(exc)}
         except Exception as exc:
             return False, {"error": str(exc)}
-    if name in {"drive_search", "drive_read"}:
+    if name in {"drive_search", "drive_list_folder", "drive_read"}:
         if drive is None:
             return False, {"error": "Drive is not connected."}
         try:
             if name == "drive_search":
                 return True, drive.search(str(args.get("query") or ""), int(args.get("max_results") or 10))
+            if name == "drive_list_folder":
+                folder_id = str(args.get("folder_id") or "").strip()
+                if not folder_id:
+                    return False, {"status": "failed", "error": "folder_id is required"}
+                return True, drive.list_folder(
+                    folder_id,
+                    int(args.get("max_results") or 100),
+                    str(args.get("page_token") or "") or None,
+                )
             fid = str(args.get("file_id") or "").strip()
             if not fid:
                 return False, {"error": "file_id is required"}
-            return True, drive.read(fid, int(args.get("max_chars") or 20000))
+            result = drive.read(fid, int(args.get("max_chars") or 20000))
+            return result.get("status") != "failed", result
         except Exception as exc:
-            return False, {"error": str(exc)}
+            return False, {"status": "failed", "error": str(exc)}
     if name in {"calendar_list", "calendar_create", "calendar_update"}:
         if calendar is None:
             return False, {"error": "Calendar is not connected."}

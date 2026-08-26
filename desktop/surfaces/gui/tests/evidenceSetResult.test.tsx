@@ -190,6 +190,72 @@ describe("Evidence set result", () => {
     expect(within(inspector).queryByRole("link")).not.toBeInTheDocument();
   });
 
+  it("renders Drive extraction classifications instead of pretending every source was read", () => {
+    renderEvidence([
+      tool(
+        "call-drive-form",
+        "drive_read",
+        { file_id: "form-1" },
+        {
+          id: "form-1",
+          name: "Interest form",
+          mimeType: "application/vnd.google-apps.form",
+          status: "metadata_only",
+          linkedSheetId: "sheet-1",
+        },
+      ),
+      tool(
+        "call-drive-image",
+        "drive_read",
+        { file_id: "image-1" },
+        {
+          id: "image-1",
+          name: "Headshot",
+          mimeType: "image/jpeg",
+          status: "unsupported",
+          reason: "unsupported_mime_type",
+        },
+      ),
+    ]);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Checked 2 sources · Completed" }),
+    );
+
+    expect(screen.getByText("Metadata only")).toBeInTheDocument();
+    expect(screen.getByText("Unsupported format")).toBeInTheDocument();
+    expect(screen.getByText("Interest form")).toBeInTheDocument();
+    expect(screen.getByText("Headshot")).toBeInTheDocument();
+  });
+
+  it("renders exact Drive folder listings as scoped evidence", () => {
+    renderEvidence([
+      tool(
+        "call-drive-folder",
+        "drive_list_folder",
+        { folder_id: "folder-1" },
+        {
+          id: "folder-1",
+          name: "Fall 2026",
+          status: "metadata_only",
+          files: [
+            {
+              id: "child-1",
+              name: "Target list",
+              mimeType: "application/vnd.google-apps.document",
+            },
+          ],
+        },
+      ),
+    ]);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Listed Drive folder · Completed" }),
+    );
+
+    expect(screen.getByText("Target list")).toBeInTheDocument();
+    expect(screen.getByText(/Folder item/)).toBeInTheDocument();
+  });
+
   it("bounds large evidence sets behind a keyboard-operable show-more control", () => {
     renderEvidence([
       tool(

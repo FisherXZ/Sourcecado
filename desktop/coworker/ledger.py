@@ -158,12 +158,37 @@ def event_from_tool(
             payload={"query": query, "files": files},
             tool=name,
         )
+    if name == "drive_list_folder":
+        files = [
+            {"id": row.get("id"), "name": row.get("name")}
+            for row in (result.get("files") or [])
+            if isinstance(row, dict)
+        ]
+        folder_id = str(result.get("id") or arguments.get("folder_id") or "")
+        return _event(
+            source="drive",
+            kind="file",
+            summary=f"Listed Drive folder {result.get('name') or folder_id}".strip(),
+            payload={
+                "folder_id": folder_id,
+                "status": result.get("status"),
+                "files": files,
+            },
+            tool=name,
+        )
     if name == "drive_read":
         return _event(
             source="drive",
             kind="file",
             summary=f"Read Drive file {result.get('name') or result.get('id') or ''}".strip(),
-            payload={"id": result.get("id"), "name": result.get("name")},
+            payload={
+                "id": result.get("id"),
+                "name": result.get("name"),
+                "mimeType": result.get("mimeType"),
+                "status": result.get("status"),
+                "truncated": bool(result.get("truncated", False)),
+                "reason": result.get("reason"),
+            },
             tool=name,
         )
     if name == "calendar_list":
