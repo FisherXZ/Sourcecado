@@ -44,6 +44,11 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     category: "source",
     slot: "evidence",
   },
+  drive_list_folder: {
+    label: "Listed Drive folder",
+    category: "source",
+    slot: "evidence",
+  },
   drive_read: {
     label: "Read Drive evidence",
     category: "source",
@@ -89,6 +94,11 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     category: "action",
     slot: "calendar",
   },
+  board_get: { label: "Read Board record", category: "source" },
+  board_query: { label: "Queried Board", category: "source" },
+  board_upsert: { label: "Created Board record", category: "action" },
+  board_mutate: { label: "Updated Board record", category: "action" },
+  board_delete: { label: "Deleted Board record", category: "action" },
   now: { label: "Checked current time", category: "source" },
 };
 

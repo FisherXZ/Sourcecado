@@ -238,6 +238,33 @@ export type Board = {
   done: BoardPerson[];
 };
 
+export type SourcingRecord = {
+  id: string;
+  type: string;
+  fields: Record<string, unknown>;
+  source_refs: string[];
+  version: number;
+  restricted: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SourcingReceipt = {
+  id: string;
+  operation: string;
+  before?: { version?: number } | null;
+  after?: { version?: number } | null;
+  actor?: string;
+  rationale_summary?: string;
+  created_at: string;
+};
+
+export type SourcingRecordDetail = {
+  record: SourcingRecord;
+  links: Array<Record<string, unknown>>;
+  receipts: SourcingReceipt[];
+};
+
 export type PersonFile = {
   person: BoardPerson & Record<string, unknown>;
   brief: {
@@ -259,6 +286,38 @@ export type PersonFile = {
 export async function getBoard(): Promise<Board> {
   const res = await get("/v1/board");
   if (!res.ok) throw new Error(`board ${res.status}`);
+  return res.json();
+}
+
+export async function getBoardRecords(): Promise<{ records: SourcingRecord[]; count: number }> {
+  const res = await get("/v1/board/records");
+  if (!res.ok) throw new Error(`board records ${res.status}`);
+  return res.json();
+}
+
+export async function getBoardRecord(id: string): Promise<SourcingRecordDetail> {
+  const res = await get(`/v1/board/records/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`board record ${res.status}`);
+  return res.json();
+}
+
+export async function revertBoardRecord(
+  id: string,
+  input: { toVersion: number; expectedVersion: number; rationaleSummary: string },
+): Promise<{ record: SourcingRecord }> {
+  const res = await fetch(
+    `${httpBase()}/v1/board/records/${encodeURIComponent(id)}/revert`,
+    {
+      method: "POST",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to_version: input.toVersion,
+        expected_version: input.expectedVersion,
+        rationale_summary: input.rationaleSummary,
+      }),
+    },
+  );
+  if (!res.ok) throw new Error(`board revert ${res.status}`);
   return res.json();
 }
 

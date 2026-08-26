@@ -147,15 +147,47 @@ def test_drive_search_and_read_file_as_file():
             "name": "Dinner notes",
             "mimeType": "application/pdf",
             "content": "secret file body",
-            "truncated": False,
+            "status": "truncated",
+            "truncated": True,
         },
         ok=True,
     )
     assert read is not None
     assert read["source"] == "drive"
     assert read["kind"] == "file"
-    assert read["payload"] == {"id": "d1", "name": "Dinner notes"}
+    assert read["payload"] == {
+        "id": "d1",
+        "name": "Dinner notes",
+        "mimeType": "application/pdf",
+        "status": "truncated",
+        "truncated": True,
+        "reason": None,
+    }
     assert "content" not in read["payload"]
+
+
+def test_drive_folder_listing_files_scoped_children_without_bodies():
+    event = event_from_tool(
+        "drive_list_folder",
+        {"folder_id": "folder-1"},
+        {
+            "id": "folder-1",
+            "name": "Fall 2026",
+            "status": "metadata_only",
+            "files": [
+                {"id": "child-1", "name": "Targets", "content": "must not be filed"}
+            ],
+        },
+        ok=True,
+    )
+
+    assert event is not None
+    assert event["source"] == "drive"
+    assert event["payload"] == {
+        "folder_id": "folder-1",
+        "status": "metadata_only",
+        "files": [{"id": "child-1", "name": "Targets"}],
+    }
 
 
 def test_calendar_list_create_update_file_as_event():

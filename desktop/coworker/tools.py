@@ -15,6 +15,8 @@ from coworker.apollo import MISSING_KEY, enrich_contact, search_people
 from coworker.web import MISSING_KEY as TAVILY_MISSING, search_web
 from coworker.gmail import GmailError, MissingGmail
 from coworker.people import PersonStore
+from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
+from coworker.sourcing_index import SourcingIndex
 from coworker.store import ConversationStore
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -237,6 +239,24 @@ DRIVE_READ_SCHEMA: dict[str, Any] = {
     },
 }
 
+DRIVE_LIST_FOLDER_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "drive_list_folder",
+        "description": "List one Google Drive folder by its exact id. Readonly and parent-scoped.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "folder_id": {"type": "string"},
+                "max_results": {"type": "integer"},
+                "page_token": {"type": "string"},
+            },
+            "required": ["folder_id"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 CALENDAR_LIST_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -385,6 +405,7 @@ OPENAI_TOOLS = [
     GMAIL_DRAFT_SCHEMA,
     GMAIL_SEND_SCHEMA,
     DRIVE_SEARCH_SCHEMA,
+    DRIVE_LIST_FOLDER_SCHEMA,
     DRIVE_READ_SCHEMA,
     CALENDAR_LIST_SCHEMA,
     CALENDAR_CREATE_SCHEMA,
@@ -394,6 +415,7 @@ OPENAI_TOOLS = [
     APOLLO_ENRICH_SCHEMA,
     LOAD_SKILL_SCHEMA,
     WEB_SEARCH_SCHEMA,
+    *BOARD_TOOL_SCHEMAS,
 ]
 
 
@@ -428,8 +450,24 @@ def execute(
     people: PersonStore | None = None,
     session_id: str | None = None,
     tavily_key: str | None = None,
+    sourcing_index: SourcingIndex | None = None,
+    actor: str = "assistant",
+    run_id: str | None = None,
+    allowed_source_ids: set[str] | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
+    if name in BOARD_TOOL_NAMES:
+        if sourcing_index is None:
+            return False, {"status": "failed", "error": "sourcing index missing"}
+        return execute_board_tool(
+            name,
+            args,
+            index=sourcing_index,
+            actor=actor,
+            session_id=session_id,
+            run_id=run_id,
+            allowed_source_ids=allowed_source_ids,
+        )
     if name == "now":
         return True, now()
     if name == "load_skill":
@@ -476,18 +514,28 @@ def execute(
             return False, {"error": str(exc)}
         except Exception as exc:
             return False, {"error": str(exc)}
-    if name in {"drive_search", "drive_read"}:
+    if name in {"drive_search", "drive_list_folder", "drive_read"}:
         if drive is None:
             return False, {"error": "Drive is not connected."}
         try:
             if name == "drive_search":
                 return True, drive.search(str(args.get("query") or ""), int(args.get("max_results") or 10))
+            if name == "drive_list_folder":
+                folder_id = str(args.get("folder_id") or "").strip()
+                if not folder_id:
+                    return False, {"status": "failed", "error": "folder_id is required"}
+                return True, drive.list_folder(
+                    folder_id,
+                    int(args.get("max_results") or 100),
+                    str(args.get("page_token") or "") or None,
+                )
             fid = str(args.get("file_id") or "").strip()
             if not fid:
                 return False, {"error": "file_id is required"}
-            return True, drive.read(fid, int(args.get("max_chars") or 20000))
+            result = drive.read(fid, int(args.get("max_chars") or 20000))
+            return result.get("status") != "failed", result
         except Exception as exc:
-            return False, {"error": str(exc)}
+            return False, {"status": "failed", "error": str(exc)}
     if name in {"calendar_list", "calendar_create", "calendar_update"}:
         if calendar is None:
             return False, {"error": "Calendar is not connected."}

@@ -29,6 +29,7 @@ _TOOL_SOURCES: dict[str, tuple[str | None, str]] = {
     "gmail_read": ("gmail", "Gmail"),
     "gmail_draft": ("gmail", "Gmail"),
     "drive_search": ("drive", "Google Drive"),
+    "drive_list_folder": ("drive", "Google Drive"),
     "drive_read": ("drive", "Google Drive"),
     "calendar_list": ("calendar", "Google Calendar"),
     "calendar_create": ("calendar", "Google Calendar"),
@@ -739,6 +740,7 @@ async def run_turn(
                 try:
                     kw = {k: v for k, v in execute_kwargs.items() if not k.startswith("_")}
                     kw["session_id"] = sid
+                    kw["run_id"] = events.identity.run_id
                     ok, result = await asyncio.to_thread(
                         execute, call.name, call.arguments, **kw
                     )

@@ -3,10 +3,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/App";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 const api = vi.hoisted(() => ({
   createScheduleJob: vi.fn(),
   createSession: vi.fn(),
   getBoard: vi.fn(),
+  getBoardRecord: vi.fn(),
+  getBoardRecords: vi.fn(),
   getConnectors: vi.fn(),
   getGmail: vi.fn(),
   getHealth: vi.fn(),
@@ -22,6 +34,7 @@ const api = vi.hoisted(() => ({
   openChat: vi.fn(),
   pinSession: vi.fn(),
   renameSession: vi.fn(),
+  revertBoardRecord: vi.fn(),
   setLastDestination: vi.fn(),
   setPersonSequence: vi.fn(),
 }));
@@ -35,6 +48,8 @@ vi.mock("../src/api", () => ({
   createSession: api.createSession,
   disconnectGmail: vi.fn(),
   getBoard: api.getBoard,
+  getBoardRecord: api.getBoardRecord,
+  getBoardRecords: api.getBoardRecords,
   getConnectors: api.getConnectors,
   getGmail: api.getGmail,
   getHealth: api.getHealth,
@@ -50,6 +65,7 @@ vi.mock("../src/api", () => ({
   openChat: api.openChat,
   pinSession: api.pinSession,
   renameSession: api.renameSession,
+  revertBoardRecord: api.revertBoardRecord,
   resolveInbox: vi.fn(),
   runScheduleJob: vi.fn(),
   setPersona: vi.fn(),
@@ -64,6 +80,8 @@ describe("App shell routing", () => {
     window.location.hash = "#/skills";
     api.getConnectors.mockResolvedValue({ connectors: [] });
     api.getBoard.mockResolvedValue({ open: [], in_conversation: [], done: [] });
+    api.getBoardRecords.mockResolvedValue({ records: [], count: 0 });
+    api.getBoardRecord.mockResolvedValue({ record: {}, links: [], receipts: [] });
     api.getGmail.mockResolvedValue({ connected: false, email: null });
     api.getHealth.mockResolvedValue({ status: "ok", piece: "test", slice: 1, model: "test" });
     api.getInbox.mockResolvedValue({ items: [] });
@@ -87,6 +105,7 @@ describe("App shell routing", () => {
     api.openChat.mockReturnValue({ send: vi.fn(), approve: vi.fn(), close: vi.fn() });
     api.pinSession.mockResolvedValue({ id: "alpha", title: "Alpha", pinned: true });
     api.renameSession.mockResolvedValue({ id: "alpha", title: "Renamed Alpha" });
+    api.revertBoardRecord.mockResolvedValue({ record: {} });
     api.setLastDestination.mockResolvedValue({ destination: "#/skills" });
     api.setPersonSequence.mockResolvedValue({
       person: { person_id: "person-1", sequence_state: "open" },
@@ -259,6 +278,47 @@ describe("App shell routing", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/settings");
+  });
+
+  it("does not persist a cached destination before fresh session state resolves", async () => {
+    window.location.hash = "";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [],
+      open_id: null,
+      last_destination: "#/scheduled",
+    }));
+    const listing = deferred<{
+      sessions: never[];
+      open_id: null;
+      last_destination: string;
+    }>();
+    api.getSessions.mockReturnValue(listing.promise);
+
+    render(<App />);
+
+    await waitFor(() => expect(window.location.hash).toBe("#/scheduled"));
+    expect(api.setLastDestination).not.toHaveBeenCalled();
+
+    listing.resolve({ sessions: [], open_id: null, last_destination: "#/skills" });
+    await waitFor(() => expect(window.location.hash).toBe("#/skills"));
+  });
+
+  it("keeps a stale destination read-only after refresh failure but persists later navigation", async () => {
+    window.location.hash = "";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [],
+      open_id: null,
+      last_destination: "#/scheduled",
+    }));
+    api.getSessions.mockRejectedValue(new Error("sidecar offline"));
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: "Scheduled" })).toBeInTheDocument();
+    expect(api.setLastDestination).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("link", { name: "Skills" }));
+    await waitFor(() => expect(api.setLastDestination).toHaveBeenCalledWith("#/skills"));
   });
 
   it("escapes the boot skeleton when sessions exist but no restore target is known", async () => {

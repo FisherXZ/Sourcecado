@@ -16,13 +16,26 @@ from coworker.connectors.google_oauth import (
 )
 from coworker.gmail import GmailError
 from coworker.secrets import SecretStore
+from coworker.drive_extract import DriveExtractionError, EXTRACTABLE_MIMES, extract_drive_text
 
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
+FORMS_URL = "https://forms.googleapis.com/v1/forms"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+FORM_MIME = "application/vnd.google-apps.form"
 EXPORT = {
     "application/vnd.google-apps.document": "text/plain",
     "application/vnd.google-apps.spreadsheet": "text/csv",
     "application/vnd.google-apps.presentation": "text/plain",
 }
+TEXT_MIMES = frozenset(
+    {
+        "application/csv",
+        "application/json",
+        "application/xml",
+        "application/yaml",
+        "text/csv",
+    }
+)
 _CREDENTIAL_PREFIX = (
     r"(?P<prefix>[\"']?(?:[A-Za-z][A-Za-z0-9]*[_-])*"
     r"(?:api[\s_-]*key|access[\s_-]*token|auth[\s_-]*token|token|secret|password|"
@@ -86,6 +99,18 @@ def _legal_source_safety(name: str, text: str) -> dict[str, Any] | None:
     }
 
 
+def _source_reference(
+    file_id: str, name: str | None, url: Any, *, truncated: bool = False
+) -> dict[str, Any]:
+    return {
+        "id": file_id,
+        "title": name or "Drive file",
+        "url": url,
+        "provider": "Google Drive",
+        "truncated": truncated,
+    }
+
+
 class DriveApi:
     def __init__(self, secrets: SecretStore, *, http: Any, client_id: str, client_secret: str) -> None:
         self.secrets = secrets
@@ -102,7 +127,7 @@ class DriveApi:
             params={
                 "q": f"(name contains '{q}' or fullText contains '{q}') and trashed=false",
                 "pageSize": max(1, min(int(max_results), 10)),
-                "fields": "files(id,name,mimeType,modifiedTime,size,webViewLink)",
+                "fields": "files(id,name,mimeType,modifiedTime,size,parents,webViewLink)",
             },
         ) or {}
         files = []
@@ -117,24 +142,150 @@ class DriveApi:
                     "name": safe_name if raw_name is not None else None,
                     "mimeType": row.get("mimeType"),
                     "modifiedTime": row.get("modifiedTime"),
+                    "parents": list(row.get("parents") or []),
+                    "webViewLink": row.get("webViewLink"),
+                    "status": "metadata_only",
                 }
             )
         return {
             "files": files,
+            "sources": [
+                {
+                    "id": str(row.get("id") or ""),
+                    "title": str(row.get("name") or "Drive file"),
+                    "url": row.get("webViewLink"),
+                    "provider": "Google Drive",
+                    "truncated": False,
+                }
+                for row in files
+                if row.get("id")
+            ],
             "sensitive_content_redacted": redaction_count > 0,
             "redaction_count": redaction_count,
         }
 
     def read(self, file_id: str, max_chars: int = 20000) -> dict[str, Any]:
         self._require()
-        meta = self._request("get", f"{FILES_URL}/{file_id}") or {}
+        meta = self._request(
+            "get",
+            f"{FILES_URL}/{file_id}",
+            params={"fields": "id,name,mimeType,modifiedTime,size,parents,webViewLink"},
+        ) or {}
         mime = str(meta.get("mimeType") or "")
+        if mime == FOLDER_MIME:
+            return self.list_folder(file_id, folder_meta=meta)
+        if mime == FORM_MIME:
+            form_reason = None
+            try:
+                form = self._request("get", f"{FORMS_URL}/{file_id}") or {}
+            except GmailError:
+                form = {}
+                form_reason = "form_metadata_unavailable"
+            raw_name = meta.get("name")
+            safe_name, redaction_count = _redact_credentials(str(raw_name or ""))
+            result = {
+                "id": str(meta.get("id") or file_id),
+                "name": safe_name if raw_name is not None else None,
+                "mimeType": mime,
+                "modifiedTime": meta.get("modifiedTime"),
+                "parents": list(meta.get("parents") or []),
+                "webViewLink": meta.get("webViewLink"),
+                "status": "metadata_only",
+                "linkedSheetId": form.get("linkedSheetId"),
+                "responderUri": form.get("responderUri"),
+                "sources": [
+                    _source_reference(
+                        str(meta.get("id") or file_id), safe_name, meta.get("webViewLink")
+                    )
+                ],
+                "truncated": False,
+                "sensitive_content_redacted": redaction_count > 0,
+                "redaction_count": redaction_count,
+            }
+            if form_reason:
+                result["reason"] = form_reason
+            return result
         export = EXPORT.get(mime)
+        if (
+            export is None
+            and mime not in EXTRACTABLE_MIMES
+            and not (mime.startswith("text/") or mime in TEXT_MIMES)
+        ):
+            raw_name = meta.get("name")
+            safe_name, redaction_count = _redact_credentials(str(raw_name or ""))
+            return {
+                "id": str(meta.get("id") or file_id),
+                "name": safe_name if raw_name is not None else None,
+                "mimeType": mime,
+                "modifiedTime": meta.get("modifiedTime"),
+                "parents": list(meta.get("parents") or []),
+                "webViewLink": meta.get("webViewLink"),
+                "status": "unsupported",
+                "reason": "unsupported_mime_type",
+                "sources": [
+                    _source_reference(
+                        str(meta.get("id") or file_id), safe_name, meta.get("webViewLink")
+                    )
+                ],
+                "truncated": False,
+                "sensitive_content_redacted": redaction_count > 0,
+                "redaction_count": redaction_count,
+            }
         if export:
             content = self._request("get", f"{FILES_URL}/{file_id}/export", params={"mimeType": export})
         else:
             content = self._request("get", f"{FILES_URL}/{file_id}", params={"alt": "media"})
-        text = content if isinstance(content, str) else str(content or "")
+        if mime in EXTRACTABLE_MIMES:
+            try:
+                text = extract_drive_text(
+                    mime,
+                    content if isinstance(content, bytes) else bytes(content or b""),
+                )
+            except (DriveExtractionError, TypeError, ValueError) as exc:
+                reason = exc.reason if isinstance(exc, DriveExtractionError) else "invalid_binary_payload"
+                raw_name = meta.get("name")
+                safe_name, redaction_count = _redact_credentials(str(raw_name or ""))
+                return {
+                    "id": str(meta.get("id") or file_id),
+                    "name": safe_name if raw_name is not None else None,
+                    "mimeType": mime,
+                    "modifiedTime": meta.get("modifiedTime"),
+                    "parents": list(meta.get("parents") or []),
+                    "webViewLink": meta.get("webViewLink"),
+                    "status": "failed",
+                    "reason": reason,
+                    "sources": [
+                        _source_reference(
+                            str(meta.get("id") or file_id), safe_name, meta.get("webViewLink")
+                        )
+                    ],
+                    "truncated": False,
+                    "sensitive_content_redacted": redaction_count > 0,
+                    "redaction_count": redaction_count,
+                }
+            if not text.strip():
+                raw_name = meta.get("name")
+                safe_name, redaction_count = _redact_credentials(str(raw_name or ""))
+                return {
+                    "id": str(meta.get("id") or file_id),
+                    "name": safe_name if raw_name is not None else None,
+                    "mimeType": mime,
+                    "modifiedTime": meta.get("modifiedTime"),
+                    "parents": list(meta.get("parents") or []),
+                    "webViewLink": meta.get("webViewLink"),
+                    "status": "metadata_only",
+                    "reason": "no_extractable_text",
+                    "sources": [
+                        _source_reference(
+                            str(meta.get("id") or file_id), safe_name, meta.get("webViewLink")
+                        )
+                    ],
+                    "truncated": False,
+                    "sensitive_content_redacted": redaction_count > 0,
+                    "redaction_count": redaction_count,
+                }
+        else:
+            text = content if isinstance(content, str) else str(content or "")
         truncated = len(text) > max_chars
         safe_text, redaction_count = _redact_credentials(text)
         raw_name = meta.get("name")
@@ -145,8 +296,20 @@ class DriveApi:
             "id": str(meta.get("id") or file_id),
             "name": safe_name if raw_name is not None else None,
             "mimeType": mime,
+            "modifiedTime": meta.get("modifiedTime"),
+            "parents": list(meta.get("parents") or []),
+            "webViewLink": meta.get("webViewLink"),
             "content": safe_text[:max_chars],
             "truncated": truncated,
+            "status": "truncated" if truncated else "read",
+            "sources": [
+                _source_reference(
+                    str(meta.get("id") or file_id),
+                    safe_name,
+                    meta.get("webViewLink"),
+                    truncated=truncated,
+                )
+            ],
             "sensitive_content_redacted": redaction_count > 0,
             "redaction_count": redaction_count,
         }
@@ -154,6 +317,75 @@ class DriveApi:
         if source_safety is not None:
             result["source_safety"] = source_safety
         return result
+
+    def list_folder(
+        self,
+        folder_id: str,
+        max_results: int = 100,
+        page_token: str | None = None,
+        *,
+        folder_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self._require()
+        params: dict[str, Any] = {
+            "q": f"'{folder_id}' in parents and trashed=false",
+            "pageSize": max(1, min(int(max_results), 100)),
+            "fields": (
+                "nextPageToken,files("
+                "id,name,mimeType,modifiedTime,size,parents,webViewLink)"
+            ),
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        data = self._request("get", FILES_URL, params=params) or {}
+        redaction_count = 0
+        files: list[dict[str, Any]] = []
+        for row in data.get("files") or []:
+            safe_name, count = _redact_credentials(str(row.get("name") or ""))
+            redaction_count += count
+            files.append(
+                {
+                    "id": row.get("id"),
+                    "name": safe_name if row.get("name") is not None else None,
+                    "mimeType": row.get("mimeType"),
+                    "modifiedTime": row.get("modifiedTime"),
+                    "parents": list(row.get("parents") or []),
+                    "webViewLink": row.get("webViewLink"),
+                }
+            )
+        meta = folder_meta or {}
+        safe_folder_name, folder_count = _redact_credentials(str(meta.get("name") or ""))
+        redaction_count += folder_count
+        return {
+            "id": str(meta.get("id") or folder_id),
+            "name": safe_folder_name if meta.get("name") is not None else None,
+            "mimeType": FOLDER_MIME,
+            "modifiedTime": meta.get("modifiedTime"),
+            "parents": list(meta.get("parents") or []),
+            "webViewLink": meta.get("webViewLink"),
+            "status": "metadata_only",
+            "files": files,
+            "sources": [
+                _source_reference(
+                    str(meta.get("id") or folder_id),
+                    safe_folder_name,
+                    meta.get("webViewLink"),
+                ),
+                *[
+                    _source_reference(
+                        str(file.get("id") or ""),
+                        str(file.get("name") or "") or None,
+                        file.get("webViewLink"),
+                    )
+                    for file in files
+                    if file.get("id")
+                ],
+            ],
+            "nextPageToken": data.get("nextPageToken"),
+            "truncated": False,
+            "sensitive_content_redacted": redaction_count > 0,
+            "redaction_count": redaction_count,
+        }
 
     def _require(self) -> None:
         if not has_scope(load_google(self.secrets), DRIVE_SCOPE):

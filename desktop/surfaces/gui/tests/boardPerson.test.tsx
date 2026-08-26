@@ -6,13 +6,19 @@ import { PersonFileView } from "../src/PersonFile";
 
 const api = vi.hoisted(() => ({
   getBoard: vi.fn(),
+  getBoardRecord: vi.fn(),
+  getBoardRecords: vi.fn(),
   getPerson: vi.fn(),
+  revertBoardRecord: vi.fn(),
   setPersonSequence: vi.fn(),
 }));
 
 vi.mock("../src/api", () => ({
   getBoard: api.getBoard,
+  getBoardRecord: api.getBoardRecord,
+  getBoardRecords: api.getBoardRecords,
   getPerson: api.getPerson,
+  revertBoardRecord: api.revertBoardRecord,
   setPersonSequence: api.setPersonSequence,
 }));
 
@@ -54,6 +60,41 @@ describe("Board and person-file routes", () => {
     api.setPersonSequence.mockResolvedValue({
       person: { person_id: "person one", sequence_state: "in_conversation" },
     });
+    api.getBoardRecords.mockResolvedValue({
+      records: [
+        {
+          id: "contact_ada",
+          type: "contact",
+          fields: { name: "Ada Lovelace", title: "Founder" },
+          source_refs: ["source_web"],
+          version: 2,
+          restricted: false,
+          created_at: "2026-08-26T10:00:00Z",
+          updated_at: "2026-08-26T11:00:00Z",
+        },
+      ],
+      count: 1,
+    });
+    api.getBoardRecord.mockResolvedValue({
+      record: {
+        id: "contact_ada",
+        type: "contact",
+        fields: { name: "Ada Lovelace", title: "Founder" },
+        source_refs: ["source_web"],
+        version: 2,
+        restricted: false,
+        created_at: "2026-08-26T10:00:00Z",
+        updated_at: "2026-08-26T11:00:00Z",
+      },
+      links: [],
+      receipts: [
+        { id: "r1", operation: "create", after: { version: 1 }, created_at: "1" },
+        { id: "r2", operation: "patch", after: { version: 2 }, created_at: "2" },
+      ],
+    });
+    api.revertBoardRecord.mockResolvedValue({
+      record: { id: "contact_ada", version: 3, fields: { name: "Ada Lovelace" } },
+    });
   });
 
   it("renders labeled Board buckets and safe person links", async () => {
@@ -83,5 +124,32 @@ describe("Board and person-file routes", () => {
     );
     expect(screen.getByText("Found in a sourcing search.")).toBeInTheDocument();
     expect(container.querySelector(".tool-card")).not.toBeInTheDocument();
+  });
+
+  it("shows sourcing-index records with inspectable and revertible version history", async () => {
+    render(<BoardView />);
+
+    expect(await screen.findByRole("heading", { name: "Sourcing index" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Ada Lovelace" }));
+
+    expect(await screen.findByRole("heading", { name: "Version history" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Revert to version 1" }));
+    await waitFor(() =>
+      expect(api.revertBoardRecord).toHaveBeenCalledWith("contact_ada", {
+        toVersion: 1,
+        expectedVersion: 2,
+        rationaleSummary: "Restore version 1 from Board history.",
+      }),
+    );
+  });
+
+  it("refreshes both Board stores after an agent Board write", async () => {
+    render(<BoardView />);
+    await screen.findByText("Ada Lovelace");
+
+    window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
+
+    await waitFor(() => expect(api.getBoard).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.getBoardRecords).toHaveBeenCalledTimes(2));
   });
 });

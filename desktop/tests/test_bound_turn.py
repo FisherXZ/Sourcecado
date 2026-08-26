@@ -530,5 +530,8 @@ def test_kernel_says_send_requires_allow():
     from coworker.server import KERNEL
 
     assert "gmail_send" in KERNEL
+    assert "board_query" in KERNEL
+    assert "board_upsert" in KERNEL
+    assert "board_delete" in KERNEL
     assert "Allow" in KERNEL
     assert "never sends" not in KERNEL

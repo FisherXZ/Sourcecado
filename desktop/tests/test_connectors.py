@@ -94,6 +94,7 @@ def test_connectors_normalize_safe_health_scope_and_recovery_metadata(tmp_path):
     assert drive["status"] == "connected"
     assert drive["missing_scopes"] == []
     assert drive["email"] == "fisher@example.com"
+    assert drive["supported_actions"] == ["Search files", "List folders", "Read files"]
 
     calendar = by_id["calendar"]
     assert calendar["status"] == "missing_scopes"

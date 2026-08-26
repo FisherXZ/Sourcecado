@@ -78,6 +78,23 @@ describe("ActivityGroup", () => {
   });
 
   it.each([
+    ["board_get", "Read Board record"],
+    ["board_query", "Queried Board"],
+    ["board_upsert", "Created Board record"],
+    ["board_mutate", "Updated Board record"],
+    ["board_delete", "Deleted Board record"],
+  ])("labels %s receipts with a reviewable Board action", (toolName, label) => {
+    render(
+      <ActivityGroup
+        tools={[tool({ toolName, result: { board_changed: true } })]}
+        messageState="complete"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: `${label} · Completed` })).toBeInTheDocument();
+  });
+
+  it.each([
     ["Running", [tool({ toolName: "private_internal_tool", result: undefined })], "running"],
     ["Failed", [tool({ toolName: "private_internal_tool", result: undefined, isError: true })], "complete"],
     [

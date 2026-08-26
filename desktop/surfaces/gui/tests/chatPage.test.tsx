@@ -110,6 +110,38 @@ describe("ChatPage Warm Operator thread", () => {
     });
   });
 
+  it("notifies the Board when a live agent tool changes indexed records", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Board write",
+      messages: [],
+      events: [],
+    });
+    const changed = vi.fn();
+    window.addEventListener("sourcecado:board-changed", changed);
+    render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        session_id: "thread-alpha",
+        run_id: "run-board",
+        message_id: "assistant-board",
+        part_id: "assistant-board-part",
+        type: "tool_finished",
+        event_id: "board-live-1",
+        id: "board-call-1",
+        name: "board_upsert",
+        ok: true,
+        result: { board_changed: true, record: { id: "contact_ada" } },
+      });
+    });
+
+    expect(changed).toHaveBeenCalledTimes(1);
+    window.removeEventListener("sourcecado:board-changed", changed);
+  });
+
   it("renders restored assistant GFM as semantic content", async () => {
     api.getSession.mockResolvedValue({
       id: "thread-alpha",

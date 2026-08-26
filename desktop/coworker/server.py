@@ -61,6 +61,7 @@ from coworker.permissions import decide
 from coworker.provider import ToolCall, provider_from_env
 from coworker.secrets import SecretStore
 from coworker.store import ConversationStore, valid_session_id
+from coworker.sourcing_index import SourcingIndex
 from coworker.tools import OPENAI_TOOLS, execute
 from coworker.turn import (
     close_open_tool_calls,
@@ -87,9 +88,11 @@ KERNEL = (
     "Tools: now (America/Los_Angeles clock, auto), remember / memory_update / "
     "memory_forget (auto), load_skill (auto), gmail_search / gmail_read (auto), "
     "gmail_draft (ask), gmail_send (ask; sends a reviewed draft after Allow), "
-    "drive_search / drive_read (auto, readonly), "
+    "drive_search / drive_list_folder / drive_read (auto, readonly), "
     "calendar_list (auto; upcoming from now unless a time range is given), "
     "calendar_create / calendar_update (ask, no delete), "
+    "board_get / board_query (auto), board_upsert / board_mutate (auto, audited), "
+    "board_delete (ask; destructive), "
     "apollo_search_people (no emails), people_keep (auto; file curated search "
     "rows after the director chooses, do not invent the target), "
     "apollo_enrich_contact "
@@ -258,6 +261,7 @@ def create_app(
     root = state if state is not None else state_dir()
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
+    app.state.sourcing_index = SourcingIndex(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
     store = app.state.store
     if store.open_session_id() is None:
@@ -332,6 +336,7 @@ def create_app(
                     "skills": app.state.skills,
                     "mcp": app.state.mcp,
                     "people": app.state.people,
+                    "sourcing_index": app.state.sourcing_index,
                 },
                 emit=None,
                 wait_permission=None,
@@ -429,7 +434,10 @@ def create_app(
                 skills=app.state.skills,
                 mcp=app.state.mcp,
                 people=app.state.people,
+                sourcing_index=app.state.sourcing_index,
+                actor=str(item.get("actor") or "assistant"),
                 session_id=str(item.get("session_id") or ""),
+                run_id=str(item.get("run_id") or "") or None,
             )
         except Exception as exc:
             ok, result = False, {"error": str(exc)}
@@ -637,7 +645,10 @@ def create_app(
                     skills=app.state.skills,
                     mcp=app.state.mcp,
                     people=app.state.people,
+                    sourcing_index=app.state.sourcing_index,
+                    actor=str(item.get("actor") or "assistant"),
                     session_id=str(item.get("session_id") or ""),
+                    run_id=str(item.get("run_id") or "") or None,
                 )
                 result = dict(result)
             except Exception as exc:
@@ -806,7 +817,7 @@ def create_app(
             if claim.decision_recorded:
                 _persist_approval_receipt(receipt)
         elif claim.claimed and claim.owned:
-            receipt = await _execute_claimed_approval(item, claimant=claimant)
+            receipt = await _execute_claimed_approval(claim.item, claimant=claimant)
         else:
             receipt = await app.state.inbox.wait_for_execution(item_id)
         if receipt is None:
@@ -1012,7 +1023,7 @@ def create_app(
                     connector_email=email if refresh else None,
                     required_scopes=["Read Drive files"],
                     missing_scopes=drive_missing if refresh else ["Read Drive files"],
-                    supported_actions=["Search files", "Read files"],
+                    supported_actions=["Search files", "List folders", "Read files"],
                     available_actions=(
                         ["connect"]
                         if not refresh
@@ -1224,6 +1235,61 @@ def create_app(
     @app.get("/v1/board")
     def board_get():
         return app.state.people.list_board()
+
+    @app.get("/v1/board/records")
+    def board_records_list(
+        record_type: str | None = None,
+        stage: str | None = None,
+        owner: str | None = None,
+        due_date: str | None = None,
+        name: str | None = None,
+        expand_sources: bool = False,
+    ):
+        filters = {
+            key: value
+            for key, value in {
+                "stage": stage,
+                "owner": owner,
+                "due_date": due_date,
+                "name": name,
+            }.items()
+            if value is not None
+        }
+        try:
+            records = app.state.sourcing_index.query(
+                record_type=record_type,
+                filters=filters,
+                expand_sources=expand_sources,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"records": records, "count": len(records)}
+
+    @app.get("/v1/board/records/{record_id}")
+    def board_record_get(record_id: str):
+        record = app.state.sourcing_index.get(record_id, expand_sources=True)
+        if record is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {
+            "record": record,
+            "links": app.state.sourcing_index.links(record_id),
+            "receipts": app.state.sourcing_index.receipts(record_id),
+        }
+
+    @app.post("/v1/board/records/{record_id}/revert")
+    async def board_record_revert(record_id: str, request: Request):
+        payload = await request.json()
+        try:
+            record = app.state.sourcing_index.revert(
+                record_id,
+                to_version=int(payload.get("to_version") or 0),
+                expected_version=int(payload.get("expected_version") or 0),
+                actor="director",
+                rationale_summary=str(payload.get("rationale_summary") or ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return {"record": record}
 
     @app.post("/v1/people/{person_id}/sequence")
     async def people_sequence(person_id: str, request: Request):
@@ -1513,7 +1579,9 @@ def create_app(
                     skills=app.state.skills,
                     mcp=app.state.mcp,
                     people=app.state.people,
+                    sourcing_index=app.state.sourcing_index,
                     session_id=session_id,
+                    run_id=run_id,
                 )
             except Exception as exc:
                 # The claim is held: this command must still record an outcome.
@@ -1647,6 +1715,7 @@ def create_app(
                         "skills": app.state.skills,
                         "mcp": app.state.mcp,
                         "people": app.state.people,
+                        "sourcing_index": app.state.sourcing_index,
                     },
                     emit=_broadcast,
                     wait_permission=_wait,

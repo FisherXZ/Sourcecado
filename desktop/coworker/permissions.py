@@ -21,9 +21,14 @@ AUTO = frozenset(
         "gmail_search",
         "gmail_read",
         "drive_search",
+        "drive_list_folder",
         "drive_read",
         "calendar_list",
         "web_search",
+        "board_get",
+        "board_query",
+        "board_upsert",
+        "board_mutate",
     }
 )
 ASK = frozenset(
@@ -33,6 +38,7 @@ ASK = frozenset(
         "apollo_enrich_contact",
         "calendar_create",
         "calendar_update",
+        "board_delete",
     }
 )
 # Read-only members of AUTO that can re-run without a second external effect.
@@ -45,9 +51,12 @@ RETRY_SAFE = frozenset(
         "gmail_search",
         "gmail_read",
         "drive_search",
+        "drive_list_folder",
         "drive_read",
         "calendar_list",
         "apollo_search_people",
+        "board_get",
+        "board_query",
     }
 )
 _MCP_WRITE = re.compile(r"write|create|delete|update", re.I)
