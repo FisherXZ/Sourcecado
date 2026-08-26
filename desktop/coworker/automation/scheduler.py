@@ -6,6 +6,7 @@ Run now fires one job without consuming the weekly slot.
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
@@ -84,6 +85,7 @@ class Scheduler:
         self.inbox = inbox
         self.job_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None
         self._running: set[int] = set()
+        self._running_lock = threading.Lock()
         self.errors: list[str] = []
 
     def tick(
@@ -123,9 +125,12 @@ class Scheduler:
         now: str,
     ) -> dict[str, Any] | None:
         job_id = int(job["id"])
-        if job_id in self._running:
-            return None
-        self._running.add(job_id)
+        # The tick thread and "Run now" requests race here; take the slot
+        # atomically so one job never runs twice concurrently.
+        with self._running_lock:
+            if job_id in self._running:
+                return None
+            self._running.add(job_id)
         session_id = f"sched-{job_id}"
         event_offset = len(self.store.load_events(session_id))
         started_at = datetime.now(UTC).isoformat()
@@ -185,4 +190,5 @@ class Scheduler:
                 self.store.set_job_next_run(job_id, next_monday_0900(now))
             return recorded
         finally:
-            self._running.discard(job_id)
+            with self._running_lock:
+                self._running.discard(job_id)

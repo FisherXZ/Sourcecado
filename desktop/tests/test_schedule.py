@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -452,3 +455,100 @@ def test_scheduler_ask_tool_parks_inbox_no_draft(tmp_path):
     Scheduler(store, inbox).tick(now="2020-01-01T09:00:00", runner=runner)
     assert inbox.pending()[0]["name"] == "gmail_draft"
     assert gmail.drafts == []
+
+
+def test_run_now_race_starts_exactly_one_concurrent_run(tmp_path):
+    store = ConversationStore(tmp_path)
+    scheduler = Scheduler(store, Inbox(store))
+    job = store.add_job("0 9 * * 1", "weekly", next_run_at=None)
+    barrier = threading.Barrier(2)
+
+    class RacingSet(set):
+        """Holds both threads inside the check-then-act window."""
+
+        def __contains__(self, item):
+            hit = set.__contains__(self, item)
+            try:
+                barrier.wait(timeout=0.2)
+            except threading.BrokenBarrierError:
+                pass
+            return hit
+
+    scheduler._running = RacingSet()
+    runs = []
+
+    def runner(job_row):
+        runs.append(int(job_row["id"]))
+        time.sleep(0.05)
+        return {"status": "ok", "result": "tick"}
+
+    outcomes = []
+
+    def fire():
+        try:
+            outcomes.append(scheduler.run_job(int(job["id"]), runner=runner))
+        except RuntimeError:
+            outcomes.append("already_running")
+
+    threads = [threading.Thread(target=fire) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len(runs) == 1
+    assert outcomes.count("already_running") == 1
+    statuses = [run["status"] for run in store.list_schedule()["runs"]]
+    assert statuses == ["success"]
+
+
+def test_ws_chat_cannot_write_a_scheduled_session(tmp_path):
+    from coworker.provider import FakeProvider
+
+    fake = FakeProvider(deltas=("must not run",))
+    app = create_app(token="test-token-schedule", provider=fake, state=tmp_path)
+    app.state.store.create_session("sched-7")
+    client = TestClient(app)
+
+    with client.websocket_connect(
+        "/ws/chat", subprotocols=["club", "test-token-schedule"]
+    ) as ws:
+        ws.send_json(
+            {"type": "chat", "text": "steer the routine", "session_id": "sched-7"}
+        )
+        chat_reply = ws.receive_json()
+        ws.send_json(
+            {
+                "type": "queue_add",
+                "session_id": "sched-7",
+                "command_id": "sched-queue-add",
+                "item_id": "sched-item",
+                "text": "queued steer",
+            }
+        )
+        queue_reply = ws.receive_json()
+
+    assert chat_reply["type"] == "error"
+    assert queue_reply["type"] == "error"
+    assert app.state.store.load("sched-7") == []
+    assert app.state.store.list_queue("sched-7") == []
+    assert fake.calls == []
+
+
+def test_store_reopen_heals_orphaned_running_run_to_interrupted(tmp_path):
+    store = ConversationStore(tmp_path)
+    job = store.add_job("0 9 * * 1", "weekly", next_run_at=None)
+    running = store.start_run(
+        int(job["id"]),
+        session_id=f"sched-{job['id']}",
+        started_at="2026-08-26T09:00:00+00:00",
+    )
+    assert running["status"] == "running"
+    assert running["finished_at"] is None
+
+    healed = ConversationStore(tmp_path).list_schedule()["runs"][0]
+
+    assert healed["status"] == "interrupted"
+    assert healed["finished_at"]
+    assert "restarted" in healed["summary"].lower()
+    assert "success" not in healed["summary"].lower()

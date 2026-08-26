@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const styles = readFileSync("src/styles.css", "utf8");
+import { styles } from "./cssBundle";
 
 function atRuleBlocks(marker: string): string[] {
   const blocks: string[] = [];

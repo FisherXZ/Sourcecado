@@ -1,61 +1,80 @@
-import type { ThreadMessageLike } from "@assistant-ui/react";
-
 import type { Conversation } from "../api";
 import {
-  convertLegacyTranscript,
-  convertStructuredMessage,
   structureLegacyTranscript,
   type SourcecadoStructuredMessage,
 } from "./messageAdapter";
-import { SourcecadoChatStore } from "./store";
-
-function textOf(message: ThreadMessageLike): string {
-  if (typeof message.content === "string") return message.content;
-  return message.content
-    .filter((part) => part.type === "text")
-    .map((part) => (part.type === "text" ? part.text : ""))
-    .join("");
-}
-
-export function restoreConversationMessages(
-  conversation: Conversation,
-): ThreadMessageLike[] {
-  if (conversation.events.length === 0) {
-    return convertLegacyTranscript(conversation.id, conversation.messages);
-  }
-  const legacy = convertLegacyTranscript(conversation.id, conversation.messages);
-  const store = new SourcecadoChatStore(
-    [{ id: conversation.id, messages: [] }],
-    conversation.id,
-  );
-  store.replayChatEvents(conversation.events);
-  const projected = store
-    .messagesFor(conversation.id)
-    .map(convertStructuredMessage);
-  const merged = [...legacy];
-  let cursor = 0;
-  for (const message of projected) {
-    const match = merged.findIndex(
-      (candidate, index) =>
-        index >= cursor &&
-        candidate.role === "assistant" &&
-        textOf(candidate) === textOf(message),
-    );
-    if (match < 0) {
-      merged.push(message);
-      continue;
-    }
-    merged[match] = message;
-    cursor = match + 1;
-  }
-  return merged;
-}
+import { SourcecadoChatStore, tagRestoredThread } from "./store";
 
 function structuredText(message: SourcecadoStructuredMessage): string {
   return message.parts
     .filter((part) => part.type === "text")
     .map((part) => (part.type === "text" ? part.text : ""))
     .join("");
+}
+
+/**
+ * Maps structured legacy ids (`<thread>:legacy:<index>`) to the sidecar
+ * message identity persisted on the raw record, when one exists.
+ */
+function legacyIdentities(conversation: Conversation): Map<string, string> {
+  const identities = new Map<string, string>();
+  conversation.messages.forEach((record, index) => {
+    if (typeof record.message_id === "string" && record.message_id.length > 0) {
+      identities.set(`${conversation.id}:legacy:${index}`, record.message_id);
+    }
+  });
+  return identities;
+}
+
+function spliceByIdentity(
+  restored: SourcecadoStructuredMessage[],
+  cursor: number,
+  identities: ReadonlyMap<string, string>,
+  message: SourcecadoStructuredMessage,
+): number | null {
+  const start = restored.findIndex(
+    (candidate, index) =>
+      index >= cursor && identities.get(candidate.id) === message.id,
+  );
+  if (start < 0) return null;
+  let end = start;
+  while (
+    end + 1 < restored.length &&
+    identities.get(restored[end + 1]!.id) === message.id
+  ) {
+    end += 1;
+  }
+  restored.splice(start, end - start + 1, message);
+  return start + 1;
+}
+
+/**
+ * Fallback for legacy records with no persisted identity: replace the
+ * contiguous assistant block whose concatenated text matches the projection.
+ * A run that used tools persists one legacy record per step, while its event
+ * projection is a single message, so the whole block must collapse into it.
+ */
+function spliceByText(
+  restored: SourcecadoStructuredMessage[],
+  cursor: number,
+  message: SourcecadoStructuredMessage,
+): number | null {
+  const target = structuredText(message);
+  if (target.trim().length === 0) return null;
+  for (let start = cursor; start < restored.length; start += 1) {
+    if (restored[start]!.role !== "assistant") continue;
+    let joined = "";
+    for (let end = start; end < restored.length; end += 1) {
+      if (restored[end]!.role !== "assistant") break;
+      joined += structuredText(restored[end]!);
+      if (joined === target || joined.trim() === target.trim()) {
+        restored.splice(start, end - start + 1, message);
+        return start + 1;
+      }
+      if (!target.startsWith(joined)) break;
+    }
+  }
+  return null;
 }
 
 export function restoreConversation(
@@ -66,8 +85,13 @@ export function restoreConversation(
     conversation.messages,
   );
   const events = conversation.events ?? [];
-  if (events.length === 0) return legacy;
+  const snapshotEventIds = new Set<string>();
+  for (const event of events) {
+    if ("version" in event) snapshotEventIds.add(event.event_id);
+  }
+  if (events.length === 0) return tagRestoredThread(legacy, snapshotEventIds);
 
+  const identities = legacyIdentities(conversation);
   const eventStore = new SourcecadoChatStore(
     [{ id: conversation.id, messages: [] }],
     conversation.id,
@@ -76,18 +100,14 @@ export function restoreConversation(
   const restored = [...legacy];
   let cursor = 0;
   for (const message of eventStore.messagesFor(conversation.id)) {
-    const match = restored.findIndex(
-      (candidate, index) =>
-        index >= cursor &&
-        candidate.role === "assistant" &&
-        structuredText(candidate) === structuredText(message),
-    );
-    if (match < 0) {
+    const next =
+      spliceByIdentity(restored, cursor, identities, message) ??
+      spliceByText(restored, cursor, message);
+    if (next === null) {
       restored.push(message);
       continue;
     }
-    restored[match] = message;
-    cursor = match + 1;
+    cursor = next;
   }
-  return restored;
+  return tagRestoredThread(restored, snapshotEventIds);
 }

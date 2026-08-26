@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const styles = readFileSync("src/styles.css", "utf8");
+import { styles } from "./cssBundle";
 
 describe("Skills and Settings route styles", () => {
   it("keeps persona and recovery actions at least 44px tall on narrow layouts", () => {

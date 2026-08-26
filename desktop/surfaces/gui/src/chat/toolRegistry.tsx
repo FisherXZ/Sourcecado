@@ -69,6 +69,11 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     category: "action",
     slot: "gmail",
   },
+  gmail_send: {
+    label: "Send Gmail draft",
+    category: "action",
+    slot: "gmail",
+  },
   calendar_list: {
     label: "Checked calendar",
     category: "source",

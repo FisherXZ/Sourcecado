@@ -97,7 +97,7 @@ export function SettingsPage() {
       )}
       {state.status === "loaded" && (
         <div className="settings-grid">
-          <section className="settings-card" aria-labelledby="operator-heading">
+          <section className="settings-section" aria-labelledby="operator-heading">
             <h2 id="operator-heading">Operator</h2>
             <dl className="settings-facts">
               <div>
@@ -142,7 +142,7 @@ export function SettingsPage() {
             )}
           </section>
 
-          <section className="settings-card" aria-labelledby="model-heading">
+          <section className="settings-section" aria-labelledby="model-heading">
             <h2 id="model-heading">Model</h2>
             {state.settings.model && (
               <p className="settings-status">
@@ -158,7 +158,7 @@ export function SettingsPage() {
             )}
           </section>
 
-          <section className="settings-card settings-connectors" aria-labelledby="connectors-heading">
+          <section className="settings-section settings-connectors" aria-labelledby="connectors-heading">
             <h2 id="connectors-heading">Connections</h2>
             <ul aria-label="Connector status">
               {state.connectors.map((connector) => (

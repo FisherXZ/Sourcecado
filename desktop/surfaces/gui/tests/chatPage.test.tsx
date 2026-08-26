@@ -338,6 +338,79 @@ describe("ChatPage Warm Operator thread", () => {
     );
   });
 
+  it("keeps the draft and skips the false Run started announcement while sending offline", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+
+    act(() => {
+      onChatEvent?.({
+        type: "connection_change",
+        status: "offline",
+        attempt: 1,
+        reason: "The sidecar connection closed (code 1006). Reconnecting.",
+      });
+    });
+
+    const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(composer, { target: { value: "Find five candidates" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(chatSend).toHaveBeenCalledWith("Find five candidates", "thread-alpha"),
+    );
+    expect(screen.getByRole("status")).not.toHaveTextContent("Run started");
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Waiting for connection. Your message will send when Sourcecado reconnects.",
+    );
+    expect(
+      window.localStorage.getItem("sourcecado.chat.draft.v1:thread-alpha"),
+    ).toBe("Find five candidates");
+  });
+
+  it("resumes normal Run started behavior once the connection is back", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+
+    act(() => {
+      onChatEvent?.({
+        type: "connection_change",
+        status: "reconnecting",
+        attempt: 1,
+        reason: "The sidecar connection closed (code 1006). Reconnecting.",
+      });
+      onChatEvent?.({
+        type: "connection_change",
+        status: "connected",
+        attempt: 0,
+        reason: "Connected to the sidecar.",
+      });
+    });
+
+    const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(composer, { target: { value: "Find five candidates" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() =>
+      expect(chatSend).toHaveBeenCalledWith("Find five candidates", "thread-alpha"),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Run started");
+    expect(
+      window.localStorage.getItem("sourcecado.chat.draft.v1:thread-alpha"),
+    ).toBeNull();
+  });
+
   it("sends when idle and keeps queued submission available while running", async () => {
     api.getSession.mockResolvedValue({
       id: "thread-alpha",
@@ -1114,18 +1187,81 @@ describe("ChatPage Warm Operator thread", () => {
       ],
     });
 
-    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    render(<ChatPage sessionId="thread-alpha" />);
 
     const receipt = await screen.findByRole("button", {
       name: "Prepared Gmail draft · Allowed",
     });
     expect(receipt).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("button", { name: "Allow once" })).not.toBeInTheDocument();
-    expect(container).not.toHaveTextContent("PRIVATE_BODY");
+    // The decision audit (actor, scope, execution outcome) stays behind the
+    // collapsed receipt, but the created draft itself is the answer to the
+    // turn and must be reviewable without an extra disclosure (D7).
+    expect(screen.queryByText("Allowed by Fisher")).not.toBeInTheDocument();
+    expect(screen.getByText("PRIVATE_BODY")).toBeInTheDocument();
     fireEvent.click(receipt);
     expect(screen.getByText("Allowed by Fisher")).toBeInTheDocument();
     expect(screen.getByText("Scope: once")).toBeInTheDocument();
     expect(screen.getByText("Execution succeeded")).toBeInTheDocument();
+  });
+
+  it("announces when Sourcecado needs an approval to continue", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        type: "turn_start",
+        session_id: "thread-alpha",
+        run_id: "run-approval-announce",
+        event_id: "announce-1",
+        message_id: "assistant-announce",
+        part_id: "assistant-announce-part",
+        state: "running",
+      });
+      onChatEvent?.({
+        version: 2,
+        type: "permission_required",
+        session_id: "thread-alpha",
+        run_id: "run-approval-announce",
+        event_id: "announce-2",
+        message_id: "assistant-announce",
+        part_id: "assistant-announce-part",
+        id: "approval-announce",
+        name: "gmail_draft",
+        arguments: { to: "alyssa@example.com", subject: "Hello", body: "Body" },
+        reason: "Creating a Gmail draft changes an external account.",
+      });
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Sourcecado needs your approval to continue.",
+    );
+  });
+
+  it("shows the active persona in the conversation header and reflects a persisted change on the next mount", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    const { unmount } = render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+    expect(await screen.findByText("Sourcing Operator")).toBeInTheDocument();
+    unmount();
+
+    api.getPersona.mockResolvedValue({ id: "buddy", name: "Club", tools: [] });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+    expect(await screen.findByText("Club")).toBeInTheDocument();
   });
 
   it("shows a progressive pending approval and waits for durable resolution", async () => {

@@ -514,3 +514,320 @@ def test_ws_allow_claim_makes_overlapping_http_wait_for_terminal_result(
     assert receipt["execution_status"] == "succeeded"
     assert receipt["execution_result"] == response.json()["result"]
     assert finished["result"] == response.json()["result"]
+
+
+def test_wait_for_execution_deadline_returns_the_stuck_item_instead_of_hanging(
+    tmp_path,
+):
+    inbox = Inbox(ConversationStore(tmp_path))
+    inbox.park(
+        "gmail_draft",
+        {"to": "a@b.c", "subject": "s", "body": "b"},
+        item_id="call-stuck",
+    )
+    claim = inbox.decide_and_claim(
+        "call-stuck",
+        "allow",
+        actor="Fisher",
+        scope="once",
+        claimant="http:dead-claimant",
+    )
+    assert claim is not None and claim.owned is True
+
+    waited = asyncio.run(
+        asyncio.wait_for(
+            inbox.wait_for_execution("call-stuck", timeout=0.05), timeout=1
+        )
+    )
+
+    assert waited is not None
+    assert waited["execution_status"] == "executing"
+
+
+def test_ttl_reaper_expires_stale_pending_approval_distinguishably_from_denial(
+    tmp_path,
+):
+    store = ConversationStore(tmp_path, approval_ttl_seconds=0.05)
+    inbox = Inbox(store)
+    inbox.park(
+        "gmail_draft",
+        {"to": "a@b.c", "subject": "s", "body": "b"},
+        item_id="call-stale",
+    )
+    time.sleep(0.1)
+
+    assert inbox.pending() == []
+    expired = inbox.get("call-stale")
+    assert expired is not None
+    assert expired["state"] == "expired"
+    assert expired["execution_status"] == "expired"
+    # DU-08: expiry must never read as a denial.
+    assert expired["decision"] is None
+    assert expired["execution_status"] != "not_run"
+    assert "denied" not in str(expired["execution_result"]).lower()
+    assert inbox.resolve("call-stale", "allow") is None
+    assert (
+        inbox.decide_and_claim(
+            "call-stale",
+            "allow",
+            actor="Fisher",
+            scope="once",
+            claimant="http:late",
+        )
+        is None
+    )
+
+
+def test_ttl_reaper_interrupts_stale_executing_claim_and_unwedges_waiters(
+    tmp_path,
+):
+    store = ConversationStore(tmp_path, approval_ttl_seconds=0.05)
+    inbox = Inbox(store)
+    inbox.park(
+        "gmail_draft",
+        {"to": "a@b.c", "subject": "s", "body": "b"},
+        item_id="call-dead-claimant",
+    )
+    claim = inbox.decide_and_claim(
+        "call-dead-claimant",
+        "allow",
+        actor="Fisher",
+        scope="once",
+        claimant="http:dead-claimant",
+    )
+    assert claim is not None and claim.owned is True
+
+    waited = asyncio.run(
+        asyncio.wait_for(
+            inbox.wait_for_execution("call-dead-claimant", timeout=5), timeout=1
+        )
+    )
+
+    # A stale claim is an unknown outcome (interrupted), never "expired":
+    # expired means a PENDING approval timed out; this one was authorized.
+    assert waited is not None
+    assert waited["execution_status"] == "interrupted"
+    assert waited["decision"] == "allow"
+    assert waited["state"] == "resolved"
+    assert waited["execution_claimant"] is None
+    assert "unknown" in str(waited["execution_error"]).lower()
+    late = inbox.complete_execution(
+        "call-dead-claimant",
+        claimant="http:dead-claimant",
+        ok=True,
+        result={"draft_id": "must-not-overwrite"},
+    )
+    assert late is not None
+    assert late["execution_status"] == "interrupted"
+
+
+def test_expired_approval_drops_from_http_inbox_and_cannot_authorize_execution(
+    tmp_path, monkeypatch
+):
+    executions = []
+
+    def must_not_execute(name, arguments, **kwargs):
+        executions.append(name)
+        return True, {"draft_id": "unsafe"}
+
+    monkeypatch.setenv("CLUB_APPROVAL_TTL_SECONDS", "0.05")
+    monkeypatch.setattr("coworker.server.execute", must_not_execute)
+    app = create_app(token=TOKEN, state=tmp_path)
+    app.state.store.create_session("thread-http-expired")
+    app.state.inbox.park(
+        "gmail_draft",
+        {"to": "a@b.c", "subject": "s", "body": "b"},
+        item_id="call-http-expired",
+        session_id="thread-http-expired",
+        run_id="run-http-expired",
+        message_id="message-http-expired",
+        part_id="part-http-expired",
+    )
+    client = TestClient(app)
+    time.sleep(0.1)
+
+    listing = client.get("/v1/inbox", headers={TOKEN_HEADER: TOKEN})
+    resolve = client.post(
+        "/v1/inbox/call-http-expired",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"decision": "allow", "actor": "Fisher", "scope": "once"},
+    )
+
+    assert listing.status_code == 200
+    assert listing.json()["items"] == []
+    assert resolve.status_code == 409
+    assert executions == []
+    receipts = [
+        event
+        for event in app.state.store.load_events("thread-http-expired")
+        if event["type"] == "approval_resolved"
+        and event["id"] == "call-http-expired"
+    ]
+    assert len(receipts) == 1
+    assert receipts[0]["resolution"] == "expired"
+    assert receipts[0]["decision"] is None
+    replayed = client.get("/v1/inbox", headers={TOKEN_HEADER: TOKEN})
+    assert replayed.status_code == 200
+    receipts_after_replay = [
+        event
+        for event in app.state.store.load_events("thread-http-expired")
+        if event["type"] == "approval_resolved"
+        and event["id"] == "call-http-expired"
+    ]
+    assert len(receipts_after_replay) == 1
+
+
+def test_ws_approval_that_expires_while_waiting_stops_without_denial(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CLUB_APPROVAL_TTL_SECONDS", "0.1")
+    fake = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-expiring",
+                        name="gmail_draft",
+                        arguments={
+                            "to": "alyssa@berkeley.edu",
+                            "subject": "hi",
+                            "body": "hello",
+                        },
+                    )
+                ]
+            },
+            {"deltas": ("drafted",)},
+        ]
+    )
+    app = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "text": "draft Alyssa"})
+        events = []
+        while True:
+            event = ws.receive_json()
+            events.append(event)
+            if event["type"] in ("turn_stopped", "turn_end", "error"):
+                break
+
+    types = [event["type"] for event in events]
+    assert "permission_required" in types
+    assert events[-1]["type"] == "turn_stopped"
+    item = app.state.inbox.get("call-expiring")
+    assert item is not None
+    assert item["state"] == "expired"
+    assert item["decision"] is None
+    sid = str(item["session_id"])
+    transcript = str(app.state.store.load(sid)).lower()
+    assert "denied" not in transcript
+    receipts = [
+        event
+        for event in events
+        if event["type"] == "approval_resolved" and event["id"] == "call-expiring"
+    ]
+    assert len(receipts) == 1
+    assert receipts[0]["resolution"] == "expired"
+    assert receipts[0]["decision"] is None
+
+
+def test_http_resolve_returns_202_outcome_pending_for_a_live_slow_execution(
+    tmp_path, monkeypatch
+):
+    executions = []
+
+    def must_not_execute(name, arguments, **kwargs):
+        executions.append(name)
+        return True, {"draft_id": "unsafe"}
+
+    monkeypatch.setenv("CLUB_APPROVAL_WAIT_TIMEOUT", "0.05")
+    monkeypatch.setattr("coworker.server.execute", must_not_execute)
+    app = create_app(token=TOKEN, state=tmp_path)
+    app.state.store.create_session("thread-still-live")
+    app.state.inbox.park(
+        "gmail_draft",
+        {"to": "a@b.c", "subject": "s", "body": "b"},
+        item_id="call-still-live",
+        session_id="thread-still-live",
+        run_id="run-still-live",
+        message_id="message-still-live",
+        part_id="part-still-live",
+    )
+    claim = app.state.inbox.decide_and_claim(
+        "call-still-live",
+        "allow",
+        actor="Fisher",
+        scope="once",
+        claimant="turn:live-but-slow",
+    )
+    assert claim is not None and claim.owned is True
+
+    res = TestClient(app).post(
+        "/v1/inbox/call-still-live",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"decision": "allow", "actor": "Fisher", "scope": "once"},
+    )
+
+    assert res.status_code == 202
+    assert res.json()["pending"] is True
+    assert res.json()["ok"] is False
+    assert res.json()["item"]["execution_status"] == "executing"
+    assert executions == []
+    # No durable receipt for a non-terminal outcome.
+    receipts = [
+        event
+        for event in app.state.store.load_events("thread-still-live")
+        if event["type"] == "approval_resolved"
+    ]
+    assert receipts == []
+
+
+def test_gmail_send_approval_carries_recipient_subject_and_account(tmp_path):
+    gmail = FakeGmail()
+    gmail.account_email = "director@club.test"
+    gmail.create_draft(
+        to="ada@analytic.example", subject="Dinner", body="secret body"
+    )
+    fake = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-send",
+                        name="gmail_send",
+                        arguments={"draft_id": "draft_1"},
+                    )
+                ]
+            },
+            {"deltas": ("ok",)},
+        ]
+    )
+    app = create_app(token=TOKEN, provider=fake, state=tmp_path, gmail=gmail)
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "text": "send it"})
+        permission = None
+        while permission is None:
+            event = ws.receive_json()
+            if event["type"] == "permission_required":
+                permission = event
+        listing = client.get("/v1/inbox", headers={TOKEN_HEADER: TOKEN}).json()
+        ws.send_json({"type": "permission", "id": "call-send", "decision": "deny"})
+        while True:
+            event = ws.receive_json()
+            if event["type"] in ("turn_end", "turn_stopped", "error"):
+                break
+
+    resource = permission["resource"]
+    assert resource == {
+        "kind": "gmail_draft",
+        "draft_id": "draft_1",
+        "to": "ada@analytic.example",
+        "subject": "Dinner",
+        "account": "director@club.test",
+    }
+    assert "secret body" not in str(permission)
+    assert listing["items"][0]["resource"] == resource
+    assert "secret body" not in str(listing)
+    assert gmail.sends == []

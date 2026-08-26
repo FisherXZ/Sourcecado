@@ -127,6 +127,114 @@ describe("parseChatEvent", () => {
   });
 });
 
+describe("parseChatEvent additive fields", () => {
+  it("passes unknown additive envelope fields through unchanged", () => {
+    const withAdditive = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      event_id: "event-1",
+      message_id: "message-1",
+      part_id: "part-1",
+      type: "assistant_delta",
+      delta: "Hello",
+      future_hint: { anything: true },
+    };
+
+    expect(parseChatEvent(withAdditive)).toEqual(withAdditive);
+  });
+});
+
+describe("permission_required resource contract", () => {
+  const base = {
+    version: 2,
+    session_id: "thread-alpha",
+    run_id: "run-1",
+    event_id: "event-1",
+    message_id: "message-1",
+    part_id: "call-1",
+    type: "permission_required",
+    id: "call-1",
+    name: "gmail_send",
+    arguments: {},
+    reason: "Sending requires permission.",
+  } as const;
+
+  it("keeps a fully resolved gmail_draft resource", () => {
+    const event = {
+      ...base,
+      resource: {
+        kind: "gmail_draft",
+        draft_id: "draft-1",
+        to: "a@example.com",
+        subject: "Hello",
+        account: "me@example.com",
+      },
+    };
+
+    expect(parseChatEvent(event)).toEqual(event);
+  });
+
+  it("normalizes degraded or missing resource fields to null individually", () => {
+    const parsed = parseChatEvent({
+      ...base,
+      resource: { kind: "gmail_draft", draft_id: "draft-1", subject: null },
+    });
+
+    expect(parsed).toMatchObject({
+      resource: {
+        kind: "gmail_draft",
+        draft_id: "draft-1",
+        to: null,
+        subject: null,
+        account: null,
+      },
+    });
+  });
+
+  it("never passes unknown resource keys through (DU-12)", () => {
+    const parsed = parseChatEvent({
+      ...base,
+      resource: {
+        kind: "gmail_draft",
+        draft_id: "draft-1",
+        to: "a@example.com",
+        subject: "Hello",
+        account: "me@example.com",
+        body: "SECRET BODY",
+        token: "SECRET TOKEN",
+      },
+    }) as { resource?: Record<string, unknown> };
+
+    expect(parsed.resource).toEqual({
+      kind: "gmail_draft",
+      draft_id: "draft-1",
+      to: "a@example.com",
+      subject: "Hello",
+      account: "me@example.com",
+    });
+  });
+
+  it("drops a malformed resource but keeps the approval event valid", () => {
+    const cases = [
+      { ...base, resource: "not-an-object" },
+      { ...base, resource: { kind: "unknown_kind", draft_id: "draft-1" } },
+      { ...base, resource: { kind: "gmail_draft" } },
+    ];
+
+    for (const event of cases) {
+      const parsed = parseChatEvent(event);
+      expect(parsed).toMatchObject({ type: "permission_required", id: "call-1" });
+      expect("notice" in parsed).toBe(false);
+      expect((parsed as { resource?: unknown }).resource).toBeUndefined();
+    }
+  });
+
+  it("leaves an approval without a resource untouched", () => {
+    expect(parseChatEvent(base)).toEqual(base);
+  });
+});
+
 describe("openChat protocol boundary", () => {
   it("parses unknown-version WebSocket payloads before notifying consumers", () => {
     let socket: FakeWebSocket | undefined;

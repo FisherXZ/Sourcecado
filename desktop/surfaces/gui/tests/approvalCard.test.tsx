@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -200,6 +200,187 @@ describe("ApprovalCard", () => {
     await waitFor(() => expect(receipt).not.toHaveTextContent("Denied"));
   });
 
+  it("shows a truthful sending title and scope for a pending gmail_send approval", () => {
+    const part = {
+      ...approvalPart(),
+      toolName: "gmail_send",
+      args: { draft_id: "draft-123" },
+      approval: {
+        id: "approval-gmail-send",
+        reason: "Sending this draft changes Gmail.",
+      },
+    } as ToolCallMessagePartProps;
+
+    render(<ApprovalCard part={part} onDecision={vi.fn()} />);
+
+    expect(
+      screen.getByRole("heading", { name: "Send Gmail draft" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("draft-123")).toBeInTheDocument();
+    expect(
+      screen.getByText("Sending this draft changes Gmail."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Not sent")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review full request and policy" }),
+    );
+    expect(
+      screen.getByText("Scope: allow once. Sourcecado will send this email now."),
+    ).toBeInTheDocument();
+  });
+
+  it("names the recipient, subject, and account when the sidecar resolved the gmail_send resource", () => {
+    const part = {
+      ...approvalPart(),
+      toolName: "gmail_send",
+      args: { draft_id: "draft-123" },
+      providerMetadata: {
+        sourcecado: {
+          resource: {
+            kind: "gmail_draft",
+            draft_id: "draft-123",
+            to: "alyssa@example.com",
+            subject: "Sourcing update",
+            account: "fisher@example.com",
+          },
+        },
+      },
+    } as ToolCallMessagePartProps;
+
+    render(<ApprovalCard part={part} onDecision={vi.fn()} />);
+
+    expect(screen.getByText("Gmail · fisher@example.com")).toBeInTheDocument();
+    expect(screen.getByText("alyssa@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Sourcing update")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Sourcecado can’t show the recipient or subject for this approval.",
+        { exact: false },
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says plainly when a resolved field is unknown instead of hiding or blanking it", () => {
+    const part = {
+      ...approvalPart(),
+      toolName: "gmail_send",
+      args: { draft_id: "draft-123" },
+      providerMetadata: {
+        sourcecado: {
+          resource: {
+            kind: "gmail_draft",
+            draft_id: "draft-123",
+            to: null,
+            subject: "Sourcing update",
+            account: null,
+          },
+        },
+      },
+    } as ToolCallMessagePartProps;
+
+    render(<ApprovalCard part={part} onDecision={vi.fn()} />);
+
+    expect(
+      screen.getByText("Recipient could not be determined"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Sourcing update")).toBeInTheDocument();
+    expect(
+      screen.getByText("Gmail · Account could not be determined"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("null", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("never renders body, tokens, or headers even if the resource payload carried them", () => {
+    const part = {
+      ...approvalPart(),
+      toolName: "gmail_send",
+      args: { draft_id: "draft-123" },
+      providerMetadata: {
+        sourcecado: {
+          resource: {
+            kind: "gmail_draft",
+            draft_id: "draft-123",
+            to: "alyssa@example.com",
+            subject: "Sourcing update",
+            account: "fisher@example.com",
+            body: "PRIVATE_BODY_LEAK",
+            headers: { "X-Auth-Token": "PRIVATE_TOKEN_LEAK" },
+          },
+        },
+      },
+    } as ToolCallMessagePartProps;
+
+    const { container } = render(
+      <ApprovalCard part={part} onDecision={vi.fn()} />,
+    );
+
+    expect(container).not.toHaveTextContent("PRIVATE_BODY_LEAK");
+    expect(container).not.toHaveTextContent("PRIVATE_TOKEN_LEAK");
+  });
+
+  it("falls back to the honest caveat when no resource was resolved at all", () => {
+    const part = {
+      ...approvalPart(),
+      toolName: "gmail_send",
+      args: { draft_id: "draft-123" },
+    } as ToolCallMessagePartProps;
+
+    render(<ApprovalCard part={part} onDecision={vi.fn()} />);
+
+    expect(screen.getByText("Gmail · Connected Google account")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Sourcecado can’t show the recipient or subject for this approval. Review the drafted email before choosing Allow once.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("never renders a sent state when a gmail_send approval is denied or cancelled", () => {
+    render(<ApprovalCard part={approvalPart("denied")} onDecision={vi.fn()} />);
+
+    const part = {
+      ...approvalPart("denied"),
+      toolName: "gmail_send",
+      args: { draft_id: "draft-denied" },
+    } as ToolCallMessagePartProps;
+
+    const { unmount } = render(<ApprovalCard part={part} onDecision={vi.fn()} />);
+    const receipt = screen.getByRole("button", {
+      name: "Send Gmail draft · Denied",
+    });
+    expect(receipt).toBeInTheDocument();
+    fireEvent.click(receipt);
+    expect(screen.queryByText(/sent/i)).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it("gives calendar approvals an accurate scope statement instead of an email non-sequitur", () => {
+    const part = {
+      ...approvalPart(),
+      toolName: "calendar_create",
+      args: {
+        summary: "Candidate interview",
+        start: "2026-08-25T10:00:00",
+        end: "2026-08-25T10:30:00",
+      },
+    } as ToolCallMessagePartProps;
+
+    render(<ApprovalCard part={part} onDecision={vi.fn()} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review full request and policy" }),
+    );
+    expect(
+      screen.getByText(
+        "Scope: allow once. This changes Google Calendar and will not send email.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Scope: allow once. Sourcecado will not send email."),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders a restarted execution as outcome unknown instead of allowed", () => {
     const part = approvalPart("allowed");
     part.providerMetadata = {
@@ -221,5 +402,68 @@ describe("ApprovalCard", () => {
     expect(
       screen.getByText(/verify the external resource before retrying/i),
     ).toBeInTheDocument();
+  });
+
+  it("moves out of Submitting decision… into an explicit unknown-outcome state when no receipt ever arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const onDecision = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalCard part={approvalPart()} onDecision={onDecision} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      expect(screen.getByText("Submitting decision…")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(
+        screen.queryByText("Submitting decision…"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText(/Outcome is unknown/i)).toBeInTheDocument();
+      // Must not imply denial, failure, or resolution.
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText(/denied/i)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: /Allowed|Denied/ }),
+      ).not.toBeInTheDocument();
+      // Already submitted: do not re-offer the decision.
+      expect(screen.getByRole("button", { name: "Allow once" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+      expect(
+        document.querySelector(".sourcecado-approval-card"),
+      ).not.toHaveAttribute("aria-busy", "true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not flip to unknown-outcome once a real resolution arrives before the deadline", () => {
+    vi.useFakeTimers();
+    try {
+      const onDecision = vi.fn().mockResolvedValue(undefined);
+      const { rerender } = render(
+        <ApprovalCard part={approvalPart()} onDecision={onDecision} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      rerender(
+        <ApprovalCard part={approvalPart("allowed")} onDecision={onDecision} />,
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(screen.queryByText(/Outcome is unknown/i)).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Prepared Gmail draft · Allowed" }),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

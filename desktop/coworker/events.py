@@ -118,6 +118,10 @@ def validate_event(event: object) -> str | None:
         event.get("reason"), str
     ):
         return "permission_required.reason must be a string"
+    if event_type == "permission_required" and event.get(
+        "resource"
+    ) is not None and not isinstance(event.get("resource"), dict):
+        return "permission_required.resource must be an object"
     if event_type == "tool_finished":
         if not isinstance(event.get("ok"), bool):
             return "tool_finished.ok must be a boolean"

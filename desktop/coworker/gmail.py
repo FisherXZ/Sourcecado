@@ -68,12 +68,27 @@ class GmailClient(Protocol):
 
     def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]: ...
     def send(self, *, draft_id: str) -> dict[str, Any]: ...
+    def get_draft(self, *, draft_id: str) -> dict[str, Any]: ...
 
 
 class FakeGmail:
     def __init__(self) -> None:
         self.drafts: list[dict[str, Any]] = []
         self.sends: list[dict[str, Any]] = []
+        self.account_email: str | None = None
+
+    def account(self) -> str | None:
+        return self.account_email
+
+    def get_draft(self, *, draft_id: str) -> dict[str, Any]:
+        for item in self.drafts:
+            if item["id"] == draft_id:
+                return {
+                    "id": item["id"],
+                    "to": item["to"],
+                    "subject": item["subject"],
+                }
+        raise GmailError(f"Draft {draft_id} was not found.")
 
     def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]:
         item = {
@@ -126,6 +141,14 @@ class MissingGmail:
         raise GmailError(
             "Gmail is not connected. Click Connect Gmail in the window first."
         )
+
+    def get_draft(self, *, draft_id: str) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
+    def account(self) -> str | None:
+        return None
 
 
 def _raw_message(*, to: str, subject: str, body: str) -> str:
@@ -249,6 +272,31 @@ class GmailApi:
         item = {"id": message_id, "draft_id": draft_id, "sent": True}
         self.sends.append(item)
         return item
+
+    def get_draft(self, *, draft_id: str) -> dict[str, Any]:
+        for item in self.drafts:
+            if str(item.get("id")) == draft_id:
+                return dict(item)
+        try:
+            data = self._request(
+                "get",
+                f"{DRAFTS_URL}/{draft_id}",
+                params={"format": "metadata"},
+            ) or {}
+        except GmailError:
+            raise
+        except Exception as exc:
+            raise _from_http_error(exc) from exc
+        payload = ((data.get("message") or {}).get("payload")) or {}
+        headers = _header_map(payload)
+        return {
+            "id": draft_id,
+            "to": headers.get("to", ""),
+            "subject": headers.get("subject", ""),
+        }
+
+    def account(self) -> str | None:
+        return load_google(self.secrets).get("email")
 
     def search(self, query: str, max_results: int = 10) -> dict[str, Any]:
         listing = self._request(

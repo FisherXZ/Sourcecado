@@ -33,6 +33,20 @@ export type ToolFailure = {
   readonly state: "failed";
 };
 
+/**
+ * Sidecar approval enrichment (gmail_send only today). Optional; fields
+ * degrade to null individually when resolution fails upstream. Carries no
+ * body, tokens, or headers by design (DU-12) — the parser strips anything
+ * beyond these keys.
+ */
+export type ApprovalResource = {
+  readonly kind: "gmail_draft";
+  readonly draft_id: string;
+  readonly to: string | null;
+  readonly subject: string | null;
+  readonly account: string | null;
+};
+
 export type ProvenanceSource = {
   readonly id: string;
   readonly title: string;
@@ -75,6 +89,7 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly reason: string;
         readonly requested_at?: string;
         readonly scope?: string;
+        readonly resource?: ApprovalResource;
       }
     | {
         readonly type: "approval_resolved";
@@ -181,7 +196,23 @@ export type QueueSnapshotEvent = {
   readonly items: readonly SourcecadoQueueItem[];
 };
 
-export type SourcecadoSocketEvent = ChatEvent | QueueSnapshotEvent;
+export type ConnectionStatus = "connected" | "reconnecting" | "offline";
+
+/**
+ * Client-generated transport status. The sidecar never sends this; `openChat`
+ * synthesizes it so consumers can render connection state.
+ */
+export type ConnectionChangeEvent = {
+  readonly type: "connection_change";
+  readonly status: ConnectionStatus;
+  readonly attempt: number;
+  readonly reason: string;
+};
+
+export type SourcecadoSocketEvent =
+  | ChatEvent
+  | QueueSnapshotEvent
+  | ConnectionChangeEvent;
 
 export type QueueCommand =
   | {
@@ -270,6 +301,25 @@ function isQueueSnapshot(value: unknown): value is QueueSnapshotEvent {
   );
 }
 
+/**
+ * Rebuilds an approval resource from exactly the contract keys, so nothing
+ * else the sidecar might ever attach (a body, a token) can reach the UI.
+ * Returns undefined when the value is not a usable resource.
+ */
+function approvalResource(value: unknown): ApprovalResource | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.kind !== "gmail_draft" || typeof value.draft_id !== "string") {
+    return undefined;
+  }
+  return {
+    kind: "gmail_draft",
+    draft_id: value.draft_id,
+    to: typeof value.to === "string" ? value.to : null,
+    subject: typeof value.subject === "string" ? value.subject : null,
+    account: typeof value.account === "string" ? value.account : null,
+  };
+}
+
 function hasEnvelope(value: Record<string, unknown>): boolean {
   return (
     value.version === 2 &&
@@ -340,7 +390,16 @@ export function parseChatEvent(value: unknown): ChatEvent {
         typeof value.name === "string" &&
         ["retry", "repair", "continue"].includes(String(value.action)) &&
         typeof value.status === "string");
-    if (valid) return value as ProtocolChatEvent;
+    if (valid) {
+      if (value.type === "permission_required" && "resource" in value) {
+        const resource = approvalResource(value.resource);
+        const sanitized: Record<string, unknown> = { ...value };
+        delete sanitized.resource;
+        if (resource) sanitized.resource = resource;
+        return sanitized as ProtocolChatEvent;
+      }
+      return value as ProtocolChatEvent;
+    }
   }
   const sessionId =
     isRecord(value) && typeof value.session_id === "string"

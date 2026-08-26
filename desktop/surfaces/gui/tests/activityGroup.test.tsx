@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ToolCallMessagePart } from "@assistant-ui/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
 
@@ -17,6 +17,55 @@ const tool = (
 });
 
 describe("ActivityGroup", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("shows a live ticking elapsed time while a tool is running, then stops on completion", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+
+    const { rerender } = render(
+      <ActivityGroup
+        tools={[tool({ result: undefined, timing: { startedAt } })]}
+        messageState="running"
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /0s · Running$/ }),
+    ).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+    expect(
+      screen.getByRole("button", { name: /3s · Running$/ }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <ActivityGroup
+        tools={[tool({ timing: { startedAt, completedAt: startedAt + 3000 } })]}
+        messageState="complete"
+      />,
+    );
+    const receipt = screen.getByRole("button", { name: /Completed$/ });
+    expect(receipt).toHaveTextContent("3s");
+    const textAfterCompletion = receipt.textContent;
+
+    act(() => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(receipt.textContent).toBe(textAfterCompletion);
+  });
+
+
   it("uses the specific human action for a single known tool", () => {
     render(<ActivityGroup tools={[tool()]} messageState="complete" />);
 
@@ -65,6 +114,101 @@ describe("ActivityGroup", () => {
       screen.getByRole("button", { name: new RegExp(`${state}$`) }),
     ).toHaveTextContent(state);
     expect(container).not.toHaveTextContent("private_internal_tool");
+  });
+
+  it("shows the domain answer result without requiring the activity trace to be expanded", () => {
+    render(
+      <ActivityGroup
+        tools={[
+          tool({
+            toolName: "apollo_search_people",
+            result: {
+              people: [
+                {
+                  apolloId: "person-tim",
+                  firstName: "Tim",
+                  lastNameObfuscated: "Zh***g",
+                  title: "CEO",
+                  organizationName: "Apollo.io",
+                  hasEmail: true,
+                },
+              ],
+            },
+          }),
+        ]}
+        messageState="complete"
+      />,
+    );
+
+    const disclosure = screen.getByRole("button", {
+      name: "Searched Apollo · Completed",
+    });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Tim Zh***g")).toBeInTheDocument();
+  });
+
+  it("does not duplicate the domain result when the activity trace is also expanded", () => {
+    render(
+      <ActivityGroup
+        tools={[
+          tool({
+            toolName: "apollo_search_people",
+            result: {
+              people: [
+                {
+                  apolloId: "person-tim",
+                  firstName: "Tim",
+                  lastNameObfuscated: "Zh***g",
+                  title: "CEO",
+                  organizationName: "Apollo.io",
+                  hasEmail: true,
+                },
+              ],
+            },
+          }),
+        ]}
+        messageState="complete"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+    );
+    expect(screen.getAllByText("Tim Zh***g")).toHaveLength(1);
+  });
+
+  it("auto-collapses the activity trace to a quiet receipt once a running turn completes", () => {
+    const { rerender } = render(
+      <ActivityGroup tools={[tool({ result: undefined })]} messageState="running" />,
+    );
+    expect(screen.getByRole("button", { name: /Running$/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    rerender(<ActivityGroup tools={[tool()]} messageState="complete" />);
+    expect(screen.getByRole("button", { name: /Completed$/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("keeps an explicitly reopened activity trace open through completion", () => {
+    const { rerender } = render(
+      <ActivityGroup tools={[tool({ result: undefined })]} messageState="running" />,
+    );
+    const disclosure = screen.getByRole("button", { name: /Running$/ });
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+
+    rerender(<ActivityGroup tools={[tool()]} messageState="complete" />);
+    expect(screen.getByRole("button", { name: /Completed$/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
   it("does not offer another write retry when recovery outcome is unknown", () => {

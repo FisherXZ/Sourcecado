@@ -53,6 +53,37 @@ function auditOf(part: ToolCallMessagePartProps): ApprovalAudit {
   };
 }
 
+type GmailSendResource = {
+  readonly to: string | null;
+  readonly subject: string | null;
+  readonly account: string | null;
+};
+
+function gmailSendResourceOf(
+  part: ToolCallMessagePartProps,
+): GmailSendResource | null {
+  const raw = part.providerMetadata?.sourcecado as
+    | Record<string, unknown>
+    | undefined;
+  const resource = raw?.resource;
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
+    return null;
+  }
+  const record = resource as Record<string, unknown>;
+  if (record.kind !== "gmail_draft") return null;
+  const field = (key: string): string | null =>
+    typeof record[key] === "string" ? (record[key] as string) : null;
+  return {
+    to: field("to"),
+    subject: field("subject"),
+    account: field("account"),
+  };
+}
+
+function knownOrUnknown(value: string | null, unknown: string): string {
+  return value && value.trim() ? value.trim() : unknown;
+}
+
 function decisionFields(
   toolName: string,
   args: Readonly<Record<string, unknown>>,
@@ -77,7 +108,25 @@ function decisionFields(
       ["Company", value("company") ?? value("domain")],
     ].filter((row): row is [string, string] => row[1] !== null);
   }
+  if (toolName === "gmail_send") {
+    return [["Draft", value("draft_id")]].filter(
+      (row): row is [string, string] => row[1] !== null,
+    );
+  }
   return [];
+}
+
+function scopeStatement(toolName: string): string {
+  if (toolName === "gmail_send") {
+    return "Scope: allow once. Sourcecado will send this email now.";
+  }
+  if (toolName === "gmail_draft" || toolName === "gmail_create_draft") {
+    return "Scope: allow once. Sourcecado will not send email.";
+  }
+  if (toolName === "calendar_create" || toolName === "calendar_update") {
+    return "Scope: allow once. This changes Google Calendar and will not send email.";
+  }
+  return "Scope: allow once.";
 }
 
 function resolvedLabel(state: ApprovalState): string {
@@ -106,6 +155,7 @@ export function ApprovalCard({
 }) {
   const audit = auditOf(part);
   const [submitting, setSubmitting] = useState(false);
+  const [submitOutcomeUnknown, setSubmitOutcomeUnknown] = useState(false);
   const [submitFailed, setSubmitFailed] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
@@ -118,6 +168,8 @@ export function ApprovalCard({
   const fields = decisionFields(part.toolName, args);
   const gmailDraft =
     part.toolName === "gmail_draft" || part.toolName === "gmail_create_draft";
+  const gmailSend = part.toolName === "gmail_send";
+  const gmailSendResource = gmailSend ? gmailSendResourceOf(part) : null;
   const calendarWrite =
     part.toolName === "calendar_create" || part.toolName === "calendar_update";
   const gmailBody =
@@ -140,9 +192,27 @@ export function ApprovalCard({
     previousState.current = audit.approvalState;
   }, [audit.approvalState]);
 
+  // The sidecar itself gives up waiting for execution after ~60s
+  // (desktop/coworker/inbox.py _DEFAULT_WAIT_TIMEOUT_SECONDS) and writes no
+  // receipt for a non-terminal outcome. Mirror that deadline here: if no
+  // approval_resolved has arrived by then, stop implying the decision is
+  // still "in progress" — it may never resolve — without claiming it was
+  // denied, failed, or allowed.
+  useEffect(() => {
+    if (!submitting) {
+      setSubmitOutcomeUnknown(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setSubmitOutcomeUnknown(true);
+    }, 60_000);
+    return () => window.clearTimeout(timer);
+  }, [submitting]);
+
   async function decide(approved: boolean) {
     setSubmitting(true);
     setSubmitFailed(false);
+    setSubmitOutcomeUnknown(false);
     try {
       await onDecision(approved);
     } catch {
@@ -189,7 +259,10 @@ export function ApprovalCard({
   }
 
   return (
-    <section className="sourcecado-approval-card" aria-busy={submitting || undefined}>
+    <section
+      className="sourcecado-approval-card"
+      aria-busy={(submitting && !submitOutcomeUnknown) || undefined}
+    >
       <h2 ref={headingRef} tabIndex={-1}>
         {presentation.label}
       </h2>
@@ -216,6 +289,47 @@ export function ApprovalCard({
           {gmailBody ? <GmailDraftBody body={gmailBody} /> : null}
         </div>
       ) : null}
+      {gmailSend ? (
+        <div className="sourcecado-gmail-approval-preview">
+          <p>
+            Gmail ·{" "}
+            {gmailSendResource
+              ? knownOrUnknown(
+                  gmailSendResource.account,
+                  "Account could not be determined",
+                )
+              : "Connected Google account"}
+          </p>
+          <strong>Not yet sent</strong>
+          {gmailSendResource ? (
+            <dl>
+              <div>
+                <dt>To</dt>
+                <dd>
+                  {knownOrUnknown(
+                    gmailSendResource.to,
+                    "Recipient could not be determined",
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Subject</dt>
+                <dd>
+                  {knownOrUnknown(
+                    gmailSendResource.subject,
+                    "Subject could not be determined",
+                  )}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <p>
+              Sourcecado can’t show the recipient or subject for this approval.
+              Review the drafted email before choosing Allow once.
+            </p>
+          )}
+        </div>
+      ) : null}
       {part.toolName === "apollo_enrich_contact" ? (
         <p className="sourcecado-approval-credit-note">
           Apollo enrichment uses credits. No credit is spent until you choose Allow once.
@@ -233,13 +347,20 @@ export function ApprovalCard({
       {showDetails ? (
         <div id={detailsId} className="sourcecado-approval-details">
           <pre>{JSON.stringify(args, null, 2)}</pre>
-          <p>Scope: allow once. Sourcecado will not send email.</p>
+          <p>{scopeStatement(part.toolName)}</p>
         </div>
       ) : null}
       {submitFailed ? (
         <p role="alert">The decision couldn’t be saved. Try again.</p>
       ) : null}
-      {submitting ? <p>Submitting decision…</p> : null}
+      {submitOutcomeUnknown ? (
+        <p>
+          Outcome is unknown. Sourcecado didn’t confirm this decision before
+          its wait ended. Verify the external resource before retrying.
+        </p>
+      ) : submitting ? (
+        <p>Submitting decision…</p>
+      ) : null}
       <div className="sourcecado-approval-actions">
         <button type="button" disabled={submitting} onClick={() => void decide(false)}>
           Deny

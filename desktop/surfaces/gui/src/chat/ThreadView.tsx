@@ -11,6 +11,7 @@ import { Inspector } from "./Inspector";
 
 type ThreadViewProps = {
   readonly title: string | null;
+  readonly personaName?: string | null;
   readonly loading: boolean;
   readonly loadError: boolean;
   readonly onRetry: () => void;
@@ -51,6 +52,7 @@ function Starter({
 
 export function ThreadView({
   title,
+  personaName,
   loading,
   loadError,
   onRetry,
@@ -74,7 +76,7 @@ export function ThreadView({
     <ComposerDraftProvider populate={populateComposer}>
     <div className="sourcecado-chat-workspace">
     <ThreadPrimitive.Root className="sourcecado-thread">
-      <ThreadHeader title={title} />
+      <ThreadHeader title={title} personaName={personaName} />
       <ThreadPrimitive.Viewport
         className="sourcecado-transcript"
         role="log"

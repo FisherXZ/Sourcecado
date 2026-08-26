@@ -1472,7 +1472,10 @@ def test_ws_persists_messages_to_disk(tmp_path):
     body = res.json()
     assert body["title"] == "hi"
     assert body["messages"][0] == {"role": "user", "content": "hi"}
-    assert body["messages"][-1] == {"role": "assistant", "content": "Hello world"}
+    last = body["messages"][-1]
+    assert last["role"] == "assistant"
+    assert last["content"] == "Hello world"
+    assert last["message_id"]  # identity stamp for restore merges
     open_id = client.app.state.store.open_session_id()
     jsonl = tmp_path / "conversations" / f"{open_id}.jsonl"
     assert jsonl.is_file()
@@ -1636,3 +1639,42 @@ def test_ws_sourcing_persona_on_duty(tmp_path):
     assert "personal coworker" not in system
     res = client.get("/v1/persona", headers={TOKEN_HEADER: TOKEN})
     assert res.json()["id"] == "sourcing"
+
+
+def test_run_records_carry_the_turn_message_id_but_the_model_never_sees_it(
+    tmp_path,
+):
+    fake = FakeProvider(
+        steps=[
+            {"tool_calls": [ToolCall(id="call-now", name="now", arguments={})]},
+            {"deltas": ("done",)},
+        ]
+    )
+    built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    client = TestClient(built)
+    sid = built.state.store.open_session_id()
+
+    with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "text": "time?", "session_id": sid})
+        events = _drain(ws)
+
+    message_id = events[0]["message_id"]
+    records = built.state.store.load(sid)
+    assistants = [r for r in records if r["role"] == "assistant"]
+    tools = [r for r in records if r["role"] == "tool"]
+    users = [r for r in records if r["role"] == "user"]
+    assert assistants and tools and users
+    # Restore merges by identity: assistant + tool records carry the turn's
+    # message_id; the user record does not (it is not in the event projection).
+    assert all(r.get("message_id") == message_id for r in assistants + tools)
+    assert all("message_id" not in r for r in users)
+
+    # A later turn replays history to the model without presentation keys.
+    with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "text": "again", "session_id": sid})
+        _drain(ws)
+    assert all(
+        "message_id" not in message
+        for call in fake.calls
+        for message in call
+    )

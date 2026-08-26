@@ -167,7 +167,11 @@ export function AppShell() {
     if (cachedListing && isRootHash(window.location.hash)) {
       const restored = cachedListing.last_destination ||
         (cachedListing.open_id ? `#/chat/${encodeURIComponent(cachedListing.open_id)}` : "");
-      if (restored) window.location.hash = restored;
+      if (restored) {
+        window.location.hash = restored;
+      } else if (cachedListing.sessions.length > 0) {
+        window.location.hash = "#/chat";
+      }
     }
     getSessions()
       .then((listing) => {
@@ -179,7 +183,13 @@ export function AppShell() {
         if (!isRootHash(window.location.hash)) return;
         const restored = listing.last_destination ||
           (listing.open_id ? `#/chat/${encodeURIComponent(listing.open_id)}` : "");
-        if (restored) window.location.hash = restored;
+        if (restored) {
+          window.location.hash = restored;
+        } else if (listing.sessions.length > 0) {
+          // Sessions exist but neither open_id nor last_destination named one:
+          // escape the root "Restoring workspace" skeleton instead of hanging on it.
+          window.location.hash = "#/chat";
+        }
       })
       .catch((error: unknown) => {
         if (active) setBootError(error instanceof Error ? error.message : String(error));

@@ -460,3 +460,58 @@ def test_queue_failure_retains_text_and_retry_returns_it_to_waiting(tmp_path):
     assert retried["status"] == "accepted"
     assert retried["items"][0]["state"] == "waiting"
     assert retried["items"][0]["error"] is None
+
+
+def test_queue_offline_items_recover_through_resume_as_reconnecting(tmp_path):
+    store = ConversationStore(tmp_path)
+    store.apply_queue_command(
+        "thread-off",
+        {"type": "queue_add", "command_id": "c1", "item_id": "i1", "text": "first"},
+    )
+    store.apply_queue_command(
+        "thread-off",
+        {"type": "queue_add", "command_id": "c2", "item_id": "i2", "text": "second"},
+    )
+
+    assert store.mark_queue_offline("thread-off") == 2
+    assert [item["state"] for item in store.list_queue("thread-off")] == [
+        "offline",
+        "offline",
+    ]
+    # offline items are parked: the drain must not claim them
+    assert store.claim_next_queue("thread-off") is None
+
+    resumed = store.apply_queue_command(
+        "thread-off", {"type": "queue_resume", "command_id": "c3"}
+    )
+    assert resumed["status"] == "accepted"
+    assert [item["state"] for item in resumed["items"]] == [
+        "reconnecting",
+        "reconnecting",
+    ]
+    claimed = store.claim_next_queue("thread-off")
+    assert claimed is not None
+    assert claimed["id"] == "i1"
+    assert claimed["state"] == "sending"
+
+    # an individual reconnecting item can still be retried back to waiting
+    retried = store.apply_queue_command(
+        "thread-off", {"type": "queue_retry", "command_id": "c4", "item_id": "i2"}
+    )
+    assert retried["status"] == "accepted"
+    states = {item["id"]: item["state"] for item in retried["items"]}
+    assert states["i2"] == "waiting"
+
+
+def test_load_skips_torn_and_foreign_jsonl_lines(tmp_path):
+    store = ConversationStore(tmp_path)
+    store.append("main", {"role": "user", "content": "hi"})
+    with open(store.conv_dir / "main.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"role": "assistant", "content": "torn mid-wr\n')
+        fh.write("[1, 2, 3]\n")
+    assert store.load("main") == [{"role": "user", "content": "hi"}]
+
+    store.append_event("main", {"type": "marker"})
+    with open(store.event_dir / "main.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"type": "torn')
+    assert store.load_events("main") == [{"type": "marker"}]

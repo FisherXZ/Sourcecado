@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync("src/styles.css", "utf8");
+import { styles as css } from "./cssBundle";
 
 describe("connection layout styles", () => {
   it("keeps every connector action at least 44px tall", () => {
@@ -13,18 +11,18 @@ describe("connection layout styles", () => {
   });
 
   it("replaces the catalog with detail at tablet and narrow widths", () => {
-    expect(css).toContain("@media (max-width: 1100px)");
+    expect(css).toContain("@media (max-width: 1179px)");
     expect(css).toMatch(
-      /@media \(max-width: 1100px\)[\s\S]*?\.connections-page\.has-detail \.connections-catalog\s*\{\s*display:\s*none;/,
+      /@media \(max-width: 1179px\)[\s\S]*?\.connections-page\.has-detail \.connections-catalog\s*\{\s*display:\s*none;/,
     );
     expect(css).toMatch(
-      /@media \(max-width: 1100px\)[\s\S]*?\.connections-page\.has-detail \.connection-detail\s*\{[\s\S]*?display:\s*block;/,
+      /@media \(max-width: 1179px\)[\s\S]*?\.connections-page\.has-detail \.connection-detail\s*\{[\s\S]*?display:\s*block;/,
     );
   });
 
   it("keeps catalog search sticky on narrow pages and disables skeleton animation for reduced motion", () => {
     expect(css).toMatch(
-      /@media \(max-width: 1100px\)[\s\S]*?\.connections-search\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?top:\s*0;/,
+      /@media \(max-width: 1179px\)[\s\S]*?\.connections-search\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?top:\s*0;/,
     );
     expect(css).toMatch(
       /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.connection-skeleton-row[\s\S]*?animation:\s*none;/,

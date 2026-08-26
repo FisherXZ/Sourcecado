@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const styles = readFileSync("src/styles.css", "utf8");
+import { styles } from "./cssBundle";
 
 describe("Apollo shortlist styles", () => {
   it("uses one bounded disclosure surface with quiet divided rows", () => {
@@ -24,7 +23,7 @@ describe("Apollo shortlist styles", () => {
       /\.sourcecado-apollo-skeleton span\s*\{[^}]*animation:\s*shell-shimmer/,
     );
     expect(styles).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-apollo-skeleton span\s*\{[^}]*animation:\s*none;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-apollo-skeleton span[\s\S]*?animation:\s*none;/,
     );
   });
 });

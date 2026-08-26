@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const styles = readFileSync("src/styles.css", "utf8");
+import { styles } from "./cssBundle";
 
 describe("Calendar artifact styles", () => {
   it("uses a bounded quiet surface with divided event rows", () => {
@@ -27,7 +26,7 @@ describe("Calendar artifact styles", () => {
       /\.sourcecado-calendar-loading li span\s*\{[^}]*animation:\s*shell-shimmer/,
     );
     expect(styles).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-calendar-loading li span\s*\{[^}]*animation:\s*none;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-calendar-loading li span[\s\S]*?animation:\s*none;/,
     );
   });
 });

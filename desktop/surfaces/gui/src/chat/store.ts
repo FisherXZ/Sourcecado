@@ -1,20 +1,40 @@
-import type {
-  AddToolResultOptions,
-  RespondToToolApprovalOptions,
-} from "@assistant-ui/react";
-
 import {
   parseChatEvent,
   type ChatEvent,
+  type ConnectionChangeEvent,
   type ProtocolChatEvent,
   type RecoverableChatNotice,
+  type TransportChatError,
 } from "./protocol";
 import type { SourcecadoStructuredMessage } from "./messageAdapter";
 import type {
+  ApprovalResource,
   ProvenanceArtifact,
   ProvenanceSource,
   ToolFailure,
 } from "./protocol";
+
+function isConnectionChange(
+  event: unknown,
+): event is ConnectionChangeEvent {
+  return (
+    typeof event === "object" &&
+    event !== null &&
+    (event as Record<string, unknown>).type === "connection_change"
+  );
+}
+
+function isTransportError(event: unknown): event is TransportChatError {
+  if (typeof event !== "object" || event === null || "version" in event) {
+    return false;
+  }
+  const candidate = event as Record<string, unknown>;
+  return (
+    candidate.type === "error" &&
+    typeof candidate.message === "string" &&
+    candidate.notice === undefined
+  );
+}
 
 function isRecoverableNotice(
   event: unknown,
@@ -40,6 +60,25 @@ export type SourcecadoThreadFixture = {
   readonly id: string;
   readonly messages: readonly SourcecadoStructuredMessage[];
 };
+
+/**
+ * Marks a message array as a conversation restore and records which event ids
+ * the restore snapshot covered. `replaceThread` uses the tag to re-apply live
+ * events that arrived while the snapshot was in flight, instead of wiping
+ * them.
+ */
+const restoredSnapshotIds = new WeakMap<
+  readonly SourcecadoStructuredMessage[],
+  ReadonlySet<string>
+>();
+
+export function tagRestoredThread(
+  messages: SourcecadoStructuredMessage[],
+  snapshotEventIds: ReadonlySet<string>,
+): SourcecadoStructuredMessage[] {
+  restoredSnapshotIds.set(messages, snapshotEventIds);
+  return messages;
+}
 
 export type SourcecadoEvent =
   | {
@@ -97,6 +136,7 @@ export type SourcecadoEvent =
       readonly reason: string;
       readonly requestedAt?: string;
       readonly scope?: string;
+      readonly resource?: ApprovalResource;
     }
   | {
       readonly type: "approval_resolved";
@@ -131,12 +171,18 @@ export type SourcecadoEvent =
       readonly state: "complete";
     };
 
+const LIVE_EVENT_BUFFER_LIMIT = 1000;
+
 export class SourcecadoChatStore {
   private readonly threads = new Map<
     string,
     readonly SourcecadoStructuredMessage[]
   >();
   private readonly seenEventIds = new Set<string>();
+  // Raw live events per thread, kept until the thread's restore snapshot
+  // lands so `replaceThread` can re-apply the tail the snapshot missed.
+  private readonly liveEvents = new Map<string, ProtocolChatEvent[]>();
+  private readonly hydratedThreads = new Set<string>();
   private noticeNumber = 0;
   private activeThreadId: string;
 
@@ -166,23 +212,92 @@ export class SourcecadoChatStore {
     threadId: string,
     messages: readonly SourcecadoStructuredMessage[],
   ): void {
+    const snapshotIds = restoredSnapshotIds.get(messages);
+    const buffered = this.liveEvents.get(threadId) ?? [];
     this.threads.set(threadId, messages);
+    if (snapshotIds) {
+      for (const id of snapshotIds) this.seenEventIds.add(id);
+      for (const event of buffered) {
+        if (snapshotIds.has(event.event_id)) {
+          // The snapshot already projected this event; it still proves the
+          // run is alive when it re-announces an interrupted turn.
+          this.reviveInterruptedRun(event);
+          continue;
+        }
+        this.applyProtocolEvent(event);
+      }
+    }
+    this.hydratedThreads.add(threadId);
+    this.liveEvents.delete(threadId);
   }
 
-  applyChatEvent(value: unknown): ChatEvent {
+  applyChatEvent(value: unknown): ChatEvent | ConnectionChangeEvent {
+    if (isConnectionChange(value)) return value;
+    if (isTransportError(value)) {
+      this.addNotice(
+        value.session_id ?? this.activeThreadId,
+        "transport",
+        value.message,
+      );
+      return value;
+    }
     const event = isRecoverableNotice(value) ? value : parseChatEvent(value);
     if (!("version" in event)) {
       if (isRecoverableNotice(event)) this.applyNotice(event);
       return event;
     }
-    if (this.seenEventIds.has(event.event_id)) return event;
+    if (this.seenEventIds.has(event.event_id)) {
+      this.reviveInterruptedRun(event);
+      return event;
+    }
     this.seenEventIds.add(event.event_id);
+    this.bufferLiveEvent(event);
     this.applyProtocolEvent(event);
     return event;
   }
 
+  private bufferLiveEvent(event: ProtocolChatEvent): void {
+    if (this.hydratedThreads.has(event.session_id)) return;
+    const buffer = this.liveEvents.get(event.session_id) ?? [];
+    buffer.push(event);
+    if (buffer.length > LIVE_EVENT_BUFFER_LIMIT) buffer.shift();
+    this.liveEvents.set(event.session_id, buffer);
+  }
+
+  // A restore snapshot marks a still-open turn "interrupted". A live event
+  // for that turn proves the run is in flight, so put it back to running.
+  private reviveInterruptedRun(event: ProtocolChatEvent): void {
+    if (event.type !== "turn_start") return;
+    const messages = this.messagesFor(event.session_id);
+    const target = messages.find((message) => message.id === event.message_id);
+    if (!target || target.state !== "interrupted") return;
+    this.threads.set(
+      event.session_id,
+      messages.map((message) =>
+        message.id === event.message_id
+          ? {
+              ...message,
+              state: "running" as const,
+              parts: message.parts.map((part) =>
+                part.type === "text" && part.state === "interrupted"
+                  ? { ...part, state: "running" as const }
+                  : part,
+              ),
+            }
+          : message,
+      ),
+    );
+  }
+
   private applyNotice(event: RecoverableChatNotice): void {
-    const threadId = event.session_id ?? this.activeThreadId;
+    this.addNotice(
+      event.session_id ?? this.activeThreadId,
+      event.notice.code,
+      event.message,
+    );
+  }
+
+  private addNotice(threadId: string, code: string, message: string): void {
     const messageId = `${threadId}:notice:${++this.noticeNumber}`;
     this.threads.set(threadId, [
       ...this.messagesFor(threadId),
@@ -194,9 +309,9 @@ export class SourcecadoChatStore {
           {
             type: "notice",
             id: `${messageId}:part`,
-            code: event.notice.code,
-            message: event.message,
-            recoverable: event.notice.recoverable,
+            code,
+            message,
+            recoverable: true,
           },
         ],
       },
@@ -281,6 +396,7 @@ export class SourcecadoChatStore {
         reason: event.reason,
         ...(event.requested_at ? { requestedAt: event.requested_at } : {}),
         ...(event.scope ? { scope: event.scope } : {}),
+        ...(event.resource ? { resource: event.resource } : {}),
       });
       return;
     }
@@ -378,46 +494,6 @@ export class SourcecadoChatStore {
     }
   }
 
-  addToolResult(threadId: string, options: AddToolResultOptions): void {
-    this.apply({
-      type: "tool_result",
-      threadId,
-      messageId: options.messageId,
-      toolCallId: options.toolCallId,
-      result: options.result,
-      isError: options.isError,
-    });
-  }
-
-  respondToApproval(
-    threadId: string,
-    options: RespondToToolApprovalOptions,
-  ): void {
-    this.threads.set(
-      threadId,
-      this.messagesFor(threadId).map((message) => ({
-        ...message,
-        parts: message.parts.map((part) =>
-          part.type === "tool" &&
-          part.approval?.id === options.approvalId
-            ? {
-                ...part,
-                approval: {
-                  ...part.approval,
-                  state: options.approved
-                    ? ("allowed" as const)
-                    : ("denied" as const),
-                  ...(options.reason !== undefined
-                    ? { reason: options.reason }
-                    : {}),
-                },
-              }
-            : part,
-        ),
-      })),
-    );
-  }
-
   apply(event: SourcecadoEvent): void {
     const messages = this.messagesFor(event.threadId);
     if (event.type === "message_started") {
@@ -441,12 +517,20 @@ export class SourcecadoChatStore {
           const current = message.parts.find(
             (part) => part.type === "text" && part.id === event.partId,
           );
+          // A live delta to an "interrupted" restore proves the run is
+          // still streaming; put the message and its part back to running.
+          const revived = message.state === "interrupted";
           return {
             ...message,
+            ...(revived ? { state: "running" as const } : {}),
             parts: current
               ? message.parts.map((part) =>
                   part.type === "text" && part.id === event.partId
-                    ? { ...part, text: part.text + event.delta }
+                    ? {
+                        ...part,
+                        text: part.text + event.delta,
+                        ...(revived ? { state: "running" as const } : {}),
+                      }
                     : part,
                 )
               : [
@@ -471,6 +555,9 @@ export class SourcecadoChatStore {
           message.id === event.messageId
             ? {
                 ...message,
+                ...(message.state === "interrupted"
+                  ? { state: "running" as const }
+                  : {}),
                 parts: message.parts.some(
                   (part) =>
                     part.type === "tool" && part.id === event.toolCallId,
@@ -620,6 +707,9 @@ export class SourcecadoChatStore {
                             ? { requestedAt: event.requestedAt }
                             : {}),
                           ...(event.scope ? { scope: event.scope } : {}),
+                          ...(event.resource
+                            ? { resource: event.resource }
+                            : {}),
                         },
                       }
                     : part,

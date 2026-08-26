@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { convertStructuredMessage } from "../src/chat/messageAdapter";
 import { SourcecadoChatStore } from "../src/chat/store";
+import { restoreConversation } from "../src/chat/restoreConversation";
 
 const adapted = (store: SourcecadoChatStore, threadId: string) =>
   store.messagesFor(threadId).map(convertStructuredMessage);
@@ -640,118 +641,269 @@ describe("SourcecadoChatStore thread routing", () => {
   });
 });
 
-describe("SourcecadoChatStore tool callbacks", () => {
-  it("inserts a result into only the addressed message and tool call", () => {
-    const tool = (id: string) => ({
-      type: "tool" as const,
-      id,
-      name: "drive_search",
-      arguments: { query: id },
-      state: "running" as const,
-    });
+describe("SourcecadoChatStore restore-while-streaming", () => {
+  const raceEnvelope = {
+    version: 2,
+    session_id: "thread-alpha",
+    run_id: "run-live",
+    message_id: "message-live-1",
+    part_id: "part-live-1",
+  } as const;
+  const liveStart = {
+    ...raceEnvelope,
+    event_id: "event-live-1",
+    type: "turn_start",
+    state: "running",
+  } as const;
+  const liveHello = {
+    ...raceEnvelope,
+    event_id: "event-live-2",
+    type: "assistant_delta",
+    delta: "Hello",
+  } as const;
+  const liveWorld = {
+    ...raceEnvelope,
+    event_id: "event-live-3",
+    type: "assistant_delta",
+    delta: " world",
+  } as const;
+
+  it("keeps live deltas that arrived while the restore snapshot was in flight", () => {
     const store = new SourcecadoChatStore(
-      [
-        {
-          id: "thread-alpha",
-          messages: [
-            {
-              id: "message-tools-1",
-              role: "assistant",
-              state: "running",
-              parts: [tool("call-keep-1"), tool("call-target")],
-            },
-            {
-              id: "message-tools-2",
-              role: "assistant",
-              state: "running",
-              parts: [tool("call-keep-2")],
-            },
-          ],
-        },
-      ],
+      [{ id: "thread-alpha", messages: [] }],
       "thread-alpha",
     );
+    store.applyChatEvent(liveStart);
+    store.applyChatEvent(liveHello);
+    store.applyChatEvent(liveWorld);
 
-    store.addToolResult("thread-alpha", {
-      messageId: "message-tools-1",
-      toolCallId: "call-target",
-      toolName: "drive_search",
-      result: { documents: 4 },
-      isError: false,
-    });
+    // The HTTP snapshot was taken before the last delta reached the client.
+    store.replaceThread(
+      "thread-alpha",
+      restoreConversation({
+        id: "thread-alpha",
+        title: null,
+        messages: [{ role: "user", content: "Say hello." }],
+        events: [liveStart, liveHello],
+      }),
+    );
 
-    const [first, second] = store.messagesFor("thread-alpha");
-    expect(first?.parts).toEqual([
-      tool("call-keep-1"),
+    const messages = store.messagesFor("thread-alpha");
+    const assistants = messages.filter((message) => message.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]?.parts).toEqual([
       {
-        ...tool("call-target"),
-        state: "complete",
-        result: { documents: 4 },
+        type: "text",
+        id: "part-live-1",
+        text: "Hello world",
+        state: "running",
       },
     ]);
-    expect(second?.parts).toEqual([tool("call-keep-2")]);
+    expect(assistants[0]?.state).toBe("running");
   });
 
-  it("resolves only the tool carrying the addressed approval id", () => {
-    const pendingTool = (toolId: string, approvalId: string) => ({
-      type: "tool" as const,
-      id: toolId,
-      name: "gmail_create_draft",
-      arguments: { to: `${toolId}@example.com` },
-      state: "running" as const,
-      approval: {
-        id: approvalId,
-        state: "pending" as const,
-        reason: "Draft creation requires permission.",
-      },
-    });
+  it("does not re-apply a snapshot event that is later replayed over the socket", () => {
     const store = new SourcecadoChatStore(
-      [
-        {
-          id: "thread-alpha",
-          messages: [
-            {
-              id: "message-approvals-1",
-              role: "assistant",
-              state: "waiting-approval",
-              parts: [
-                pendingTool("call-keep", "approval-keep"),
-                pendingTool("call-target", "approval-target"),
-              ],
-            },
-          ],
-        },
-      ],
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    store.applyChatEvent(liveStart);
+    store.applyChatEvent(liveHello);
+    store.applyChatEvent(liveWorld);
+    store.replaceThread(
+      "thread-alpha",
+      restoreConversation({
+        id: "thread-alpha",
+        title: null,
+        messages: [{ role: "user", content: "Say hello." }],
+        events: [liveStart, liveHello],
+      }),
+    );
+
+    store.applyChatEvent(liveHello);
+
+    const assistant = store
+      .messagesFor("thread-alpha")
+      .find((message) => message.role === "assistant");
+    expect(assistant?.parts[0]).toMatchObject({ text: "Hello world" });
+  });
+
+  it("revives an interrupted restore when the sidecar re-announces the run", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    store.replaceThread(
+      "thread-alpha",
+      restoreConversation({
+        id: "thread-alpha",
+        title: null,
+        messages: [{ role: "user", content: "Say hello." }],
+        events: [liveStart, liveHello],
+      }),
+    );
+    const before = store
+      .messagesFor("thread-alpha")
+      .find((message) => message.role === "assistant");
+    expect(before?.state).toBe("interrupted");
+
+    const applied = store.applyChatEvent(liveStart);
+
+    expect(applied).toEqual(liveStart);
+    const after = store
+      .messagesFor("thread-alpha")
+      .find((message) => message.role === "assistant");
+    expect(after?.state).toBe("running");
+    expect(after?.parts[0]).toMatchObject({ text: "Hello", state: "running" });
+    expect(
+      store
+        .messagesFor("thread-alpha")
+        .filter((message) => message.role === "assistant"),
+    ).toHaveLength(1);
+  });
+});
+
+describe("SourcecadoChatStore transport events", () => {
+  it("passes a connection_change through without adding a transcript message", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    const change = {
+      type: "connection_change",
+      status: "reconnecting",
+      attempt: 1,
+      reason: "The sidecar connection closed (code 1006). Reconnecting.",
+    } as const;
+
+    expect(store.applyChatEvent(change)).toEqual(change);
+    expect(store.messagesFor("thread-alpha")).toEqual([]);
+  });
+
+  it("surfaces a transport error with its own message, not a malformed-event notice", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
       "thread-alpha",
     );
 
-    store.respondToApproval("thread-alpha", {
-      approvalId: "approval-target",
-      approved: true,
-      reason: "Allowed once by the operator.",
+    store.applyChatEvent({
+      type: "error",
+      message:
+        "The sidecar connection is down and the retry buffer is full; the command was dropped.",
     });
 
-    const parts = store.messagesFor("thread-alpha")[0]?.parts;
-    expect(parts?.[0]).toEqual(pendingTool("call-keep", "approval-keep"));
-    expect(parts?.[1]).toMatchObject({
-      id: "call-target",
-      approval: {
-        id: "approval-target",
-        state: "allowed",
-        reason: "Allowed once by the operator.",
+    const [message] = store.messagesFor("thread-alpha");
+    expect(message?.parts[0]).toMatchObject({
+      type: "notice",
+      message:
+        "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+    });
+  });
+});
+
+describe("SourcecadoChatStore approval resource", () => {
+  it("carries a sanitized gmail_draft resource onto the pending approval", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      message_id: "message-1",
+      part_id: "call-1",
+    } as const;
+    store.applyChatEvent({
+      ...envelope,
+      event_id: "event-1",
+      type: "turn_start",
+      state: "running",
+    });
+    store.applyChatEvent({
+      ...envelope,
+      event_id: "event-2",
+      type: "permission_required",
+      id: "call-1",
+      name: "gmail_send",
+      arguments: { draft_id: "draft-1" },
+      reason: "Sending requires permission.",
+      resource: {
+        kind: "gmail_draft",
+        draft_id: "draft-1",
+        to: "a@example.com",
+        subject: "Hello",
+        account: "me@example.com",
       },
     });
-    const converted = adapted(store, "thread-alpha")[0]?.content;
-    expect(converted?.[0]).toMatchObject({
-      toolCallId: "call-keep",
-      approval: { id: "approval-keep" },
+
+    const [message] = store.messagesFor("thread-alpha");
+    const tool = message?.parts.find((part) => part.type === "tool");
+    expect(tool?.type === "tool" ? tool.approval?.resource : undefined).toEqual({
+      kind: "gmail_draft",
+      draft_id: "draft-1",
+      to: "a@example.com",
+      subject: "Hello",
+      account: "me@example.com",
     });
-    const untouchedApproval =
-      converted?.[0]?.type === "tool-call" ? converted[0].approval : undefined;
-    expect(untouchedApproval).not.toHaveProperty("approved");
-    expect(converted?.[1]).toMatchObject({
-      toolCallId: "call-target",
-      approval: { id: "approval-target", approved: true },
+  });
+});
+
+describe("live wire-to-part approval resource path", () => {
+  it("delivers a wire permission_required resource to the rendered tool-call part", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      message_id: "message-1",
+      part_id: "call-1",
+    } as const;
+    store.applyChatEvent({
+      ...envelope,
+      event_id: "event-1",
+      type: "turn_start",
+      state: "running",
+    });
+    // Wire-shaped payload, including keys the UI must never see.
+    store.applyChatEvent(
+      JSON.parse(
+        JSON.stringify({
+          ...envelope,
+          event_id: "event-2",
+          type: "permission_required",
+          id: "call-1",
+          name: "gmail_send",
+          arguments: { draft_id: "draft-1" },
+          reason: "Sending requires permission.",
+          resource: {
+            kind: "gmail_draft",
+            draft_id: "draft-1",
+            to: "a@example.com",
+            subject: "Quarterly intro",
+            account: "me@example.com",
+            body: "SECRET BODY",
+          },
+        }),
+      ),
+    );
+
+    const [rendered] = adapted(store, "thread-alpha");
+    const toolPart = (
+      rendered?.content as ReadonlyArray<{
+        type: string;
+        providerMetadata?: { sourcecado?: Record<string, unknown> };
+      }>
+    ).find((part) => part.type === "tool-call");
+    expect(toolPart?.providerMetadata?.sourcecado?.resource).toEqual({
+      kind: "gmail_draft",
+      draft_id: "draft-1",
+      to: "a@example.com",
+      subject: "Quarterly intro",
+      account: "me@example.com",
     });
   });
 });

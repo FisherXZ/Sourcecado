@@ -203,7 +203,9 @@ async def _await_permission(
         if control is not None and control.cancel_requested.is_set():
             return "cancel"
         item = inbox.get(call_id)
-        if item and item.get("state") == "resolved" and item.get("decision") in ("allow", "deny"):
+        if item is None or item.get("state") in ("cancelled", "expired"):
+            return "cancel"
+        if item.get("state") == "resolved" and item.get("decision") in ("allow", "deny"):
             return str(item["decision"])
         await asyncio.sleep(0.05)
 
@@ -378,6 +380,38 @@ def create_app(
                 except Exception:
                     app.state.live_event_senders.discard((owner_loop, sender))
 
+    async def _execute_claimed_approval(
+        item: dict[str, Any], *, claimant: str
+    ) -> dict[str, Any] | None:
+        """Run an allow-claimed approval server-side and persist its receipt."""
+        try:
+            ok, result = await asyncio.to_thread(
+                execute,
+                item["name"],
+                item["arguments"],
+                store=app.state.store,
+                gmail=app.state.gmail,
+                drive=app.state.drive,
+                calendar=app.state.calendar,
+                http=app.state.http,
+                apollo_key=app.state.apollo_key,
+                tavily_key=app.state.tavily_key,
+                skills=app.state.skills,
+                mcp=app.state.mcp,
+                people=app.state.people,
+                session_id=str(item.get("session_id") or ""),
+            )
+        except Exception as exc:
+            ok, result = False, {"error": str(exc)}
+        receipt = app.state.inbox.complete_execution(
+            str(item["id"]),
+            claimant=claimant,
+            ok=ok,
+            result=result,
+        )
+        _persist_approval_receipt(receipt)
+        return receipt
+
     def _replace_recovery_tool_result(
         item: dict[str, Any], result: dict[str, Any]
     ) -> None:
@@ -449,7 +483,13 @@ def create_app(
             )
             name = str(item.get("name") or "tool")
             recovery_failure = None
-            interrupted = item.get("execution_status") == "interrupted"
+            # Anything short of a real result is an unknown outcome, never a
+            # success or denial: interrupted, expired, or still executing.
+            interrupted = item.get("execution_status") not in (
+                "succeeded",
+                "failed",
+                "not_run",
+            )
             if decision == "allow" and not interrupted:
                 _replace_recovery_tool_result(item, result)
                 if not ok:
@@ -584,6 +624,10 @@ def create_app(
             receipt = await app.state.inbox.wait_for_execution(item_id)
         if receipt is None:
             return None
+        if receipt.get("execution_status") in ("executing", "pending"):
+            # Outcome pending on a live claimant; do not write a durable
+            # terminal for an execution that may still finish.
+            return None
         ok, result = app.state.inbox.execution_outcome(receipt)
         await _project_recovery_terminal(
             receipt,
@@ -676,7 +720,15 @@ def create_app(
         return {"persona": {"id": nxt.id, "name": nxt.name}}
 
     @app.get("/v1/inbox")
-    def inbox_list():
+    async def inbox_list():
+        expired = store.reap_overdue_inbox()
+        receipts = [
+            receipt
+            for receipt in (_persist_approval_receipt(item) for item in expired)
+            if receipt is not None
+        ]
+        if receipts:
+            await _publish_live_events(receipts)
         return {"items": app.state.inbox.pending()}
 
     @app.post("/v1/inbox/{item_id}")
@@ -720,37 +772,19 @@ def create_app(
             if claim.decision_recorded:
                 _persist_approval_receipt(receipt)
         elif claim.claimed and claim.owned:
-            try:
-                ok, result = await asyncio.to_thread(
-                    execute,
-                    item["name"],
-                    item["arguments"],
-                    store=app.state.store,
-                    gmail=app.state.gmail,
-                    drive=app.state.drive,
-                    calendar=app.state.calendar,
-                    http=app.state.http,
-                    apollo_key=app.state.apollo_key,
-                    tavily_key=app.state.tavily_key,
-                    skills=app.state.skills,
-                    mcp=app.state.mcp,
-                    people=app.state.people,
-                    session_id=str(item.get("session_id") or ""),
-                )
-            except Exception as exc:
-                ok, result = False, {"error": str(exc)}
-            receipt = app.state.inbox.complete_execution(
-                item_id,
-                claimant=claimant,
-                ok=ok,
-                result=result,
-            )
-            _persist_approval_receipt(receipt)
+            receipt = await _execute_claimed_approval(item, claimant=claimant)
         else:
             receipt = await app.state.inbox.wait_for_execution(item_id)
         if receipt is None:
             return JSONResponse({"error": "execution unavailable"}, status_code=409)
-        if receipt.get("execution_status") == "interrupted":
+        if receipt.get("execution_status") in ("executing", "pending"):
+            # Wait deadline hit while a live claimant still runs: recoverable,
+            # not an error and not a fabricated outcome. Retry the POST later.
+            return JSONResponse(
+                {"ok": False, "pending": True, "item": receipt},
+                status_code=202,
+            )
+        if receipt.get("execution_status") in ("interrupted", "expired"):
             approval = _persist_approval_receipt(receipt)
             if approval is not None:
                 await _publish_live_events([approval])
@@ -1275,10 +1309,19 @@ def create_app(
         coordinator: RunCoordinator = app.state.run_coordinator
         send_lock = asyncio.Lock()
         tasks: set[asyncio.Task[Any]] = set()
+        socket_live = True
 
         async def _send(event: dict[str, Any]) -> None:
-            async with send_lock:
-                await ws.send_json(event)
+            nonlocal socket_live
+            if not socket_live:
+                return
+            try:
+                async with send_lock:
+                    await ws.send_json(event)
+            except Exception:
+                # The window went away mid-run. A dead transport must never
+                # drive durable state: stop live updates, keep the run going.
+                socket_live = False
 
         sender_registration = (asyncio.get_running_loop(), _send)
         app.state.live_event_senders.add(sender_registration)
@@ -1370,6 +1413,9 @@ def create_app(
             arguments = dict(started["arguments"])
             if not failure.get("retry_safe"):
                 approval_id = f"recovery_{secrets.token_hex(8)}"
+                resource = turn_runtime.approval_resource(
+                    name, arguments, app.state.gmail
+                )
                 parked = app.state.inbox.park(
                     name,
                     arguments,
@@ -1382,6 +1428,7 @@ def create_app(
                     kind="recovery_approval",
                     recovery_command_id=command_id,
                     original_call_id=call_id,
+                    resource=resource,
                 )
                 permission = build_event(
                     identity,
@@ -1396,6 +1443,7 @@ def create_app(
                     recovery_command_id=command_id,
                     original_call_id=call_id,
                     failure=failure,
+                    **({"resource": resource} if resource else {}),
                 )
                 await _persist_and_send(permission)
                 recovery = build_event(
@@ -1592,6 +1640,22 @@ def create_app(
                             )
                         )
                     return
+                if not socket_live:
+                    # The socket driving this drain is gone. Park undelivered
+                    # items instead of consuming them with nobody watching.
+                    if store.mark_queue_offline(run_sid):
+                        await _publish_live_events(
+                            [
+                                _queue_snapshot(
+                                    run_sid,
+                                    command_id=(
+                                        f"offline:{control.identity.run_id}"
+                                    ),
+                                    status="offline",
+                                )
+                            ]
+                        )
+                    return
                 claimed = store.claim_next_queue(run_sid)
                 await _send(
                     _queue_snapshot(
@@ -1609,12 +1673,58 @@ def create_app(
 
             task = asyncio.create_task(_run())
             tasks.add(task)
-            task.add_done_callback(tasks.discard)
+
+            def _finalize(done: asyncio.Task[Any]) -> None:
+                tasks.discard(done)
+                # A cancelled or crashed task never sent a terminal; mark the
+                # control dead so nothing claims execution on its behalf.
+                control.abandon()
+
+            task.add_done_callback(_finalize)
             return control
+
+        # Reconnect contract: a new socket first hears every live run's
+        # ORIGINAL turn_start (same event_id, so clients dedupe by identity)
+        # and one authoritative queue snapshot per session holding items.
+        for live_control in coordinator.live():
+            original_start = next(
+                (
+                    event
+                    for event in store.load_events(
+                        live_control.identity.session_id
+                    )
+                    if event.get("type") == "turn_start"
+                    and event.get("run_id") == live_control.identity.run_id
+                ),
+                None,
+            )
+            if original_start is not None:
+                await _send(original_start)
+        for queue_sid in store.sessions_with_queue():
+            await _send(
+                _queue_snapshot(
+                    queue_sid,
+                    command_id=f"connection-{secrets.token_hex(8)}",
+                    status="connection",
+                )
+            )
 
         try:
             while True:
-                incoming = await ws.receive_json()
+                if not socket_live:
+                    break
+                try:
+                    incoming = await ws.receive_json()
+                except WebSocketDisconnect:
+                    raise
+                except Exception:
+                    await _send({"type": "error", "message": "malformed frame"})
+                    continue
+                if not isinstance(incoming, dict):
+                    await _send(
+                        {"type": "error", "message": "command must be an object"}
+                    )
+                    continue
                 command_type = incoming.get("type")
                 if command_type == "permission":
                     call_id = str(incoming.get("id") or "")
@@ -1635,23 +1745,68 @@ def create_app(
                                 claimant=f"recovery-ws:{secrets.token_hex(16)}",
                             )
                         elif pending_item is not None:
+                            item_run_id = str(pending_item.get("run_id") or "")
+                            item_sid = str(
+                                pending_item.get("session_id") or ""
+                            )
+                            turn_control = coordinator.get(
+                                item_sid, item_run_id
+                            )
+                            turn_alive = (
+                                turn_control is not None
+                                and not turn_control.terminal
+                            )
+                            # Claim for the turn only when that turn is live;
+                            # otherwise claim independently and execute here,
+                            # exactly as the HTTP path does (B1).
+                            claimant = (
+                                f"turn:{item_run_id or call_id}"
+                                if turn_alive
+                                else f"ws:{secrets.token_hex(16)}"
+                            )
                             claim = app.state.inbox.decide_and_claim(
                                 call_id,
                                 decision,
                                 actor=actor,
                                 scope=scope,
-                                claimant=(
-                                    f"turn:{pending_item.get('run_id') or call_id}"
-                                ),
+                                claimant=claimant,
                             )
-                            if (
-                                claim is not None
-                                and claim.item.get("execution_status")
-                                == "interrupted"
-                            ):
-                                approval = _persist_approval_receipt(claim.item)
-                                if approval is not None:
-                                    await _send(approval)
+                            if claim is not None:
+                                if (
+                                    claim.item.get("execution_status")
+                                    == "interrupted"
+                                ):
+                                    approval = _persist_approval_receipt(
+                                        claim.item
+                                    )
+                                    if approval is not None:
+                                        await _send(approval)
+                                elif not turn_alive:
+                                    if decision == "deny":
+                                        if claim.decision_recorded:
+                                            approval = (
+                                                _persist_approval_receipt(
+                                                    claim.item
+                                                )
+                                            )
+                                            if approval is not None:
+                                                await _publish_live_events(
+                                                    [approval]
+                                                )
+                                    elif claim.claimed and claim.owned:
+                                        receipt = (
+                                            await _execute_claimed_approval(
+                                                claim.item,
+                                                claimant=claimant,
+                                            )
+                                        )
+                                        approval = _persist_approval_receipt(
+                                            receipt
+                                        )
+                                        if approval is not None:
+                                            await _publish_live_events(
+                                                [approval]
+                                            )
                     continue
                 if command_type == "cancel":
                     sid = str(incoming.get("session_id") or "")
@@ -1686,8 +1841,24 @@ def create_app(
                     "queue_resume",
                 }:
                     sid = str(incoming.get("session_id") or "")
+                    if sid.startswith("sched-"):
+                        # Scheduled threads belong to the scheduler; a queued
+                        # chat run would race its transcript writes.
+                        await _send(
+                            {
+                                "type": "error",
+                                "message": "scheduled sessions are read-only",
+                            }
+                        )
+                        continue
                     if sid and valid_session_id(sid):
-                        acknowledgement = store.apply_queue_command(sid, incoming)
+                        try:
+                            acknowledgement = store.apply_queue_command(
+                                sid, incoming
+                            )
+                        except ValueError as exc:
+                            await _send({"type": "error", "message": str(exc)})
+                            continue
                         await _send(acknowledgement)
                         if (
                             command_type in {"queue_resume", "queue_retry"}
@@ -1717,6 +1888,14 @@ def create_app(
                 if sid and not valid_session_id(sid):
                     await ws.send_json({"type": "error", "message": "invalid session"})
                     continue
+                if sid.startswith("sched-"):
+                    await _send(
+                        {
+                            "type": "error",
+                            "message": "scheduled sessions are read-only",
+                        }
+                    )
+                    continue
                 if not sid:
                     sid = store.create_session()["session_id"]
                 store.set_open_session(sid)
@@ -1743,6 +1922,7 @@ def create_app(
         except WebSocketDisconnect:
             pass
         finally:
+            socket_live = False
             app.state.live_event_senders.discard(sender_registration)
 
     return app

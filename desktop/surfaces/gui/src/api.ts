@@ -3,7 +3,10 @@ import {
   parseSocketEvent,
   type ChatEvent,
   type ChatEventEnvelope,
+  type ConnectionChangeEvent,
+  type ConnectionStatus,
   type ProtocolChatEvent,
+  type QueueSnapshotEvent,
   type RecoverableChatNotice,
   type QueueCommand,
   type RecoveryCommand,
@@ -15,6 +18,8 @@ export { parseChatEvent };
 export type {
   ChatEvent,
   ChatEventEnvelope,
+  ConnectionChangeEvent,
+  ConnectionStatus,
   ProtocolChatEvent,
   RecoverableChatNotice,
   QueueCommand,
@@ -94,6 +99,7 @@ export type StoredMessage = {
   role: string;
   content?: string | null;
   name?: string;
+  message_id?: string;
   tool_call_id?: string;
   tool_calls?: Array<{
     id?: string;
@@ -287,22 +293,6 @@ export async function pinSession(
   });
   if (!res.ok) throw new Error(`pin ${res.status}`);
   return res.json();
-}
-
-export async function getConversation(): Promise<Conversation> {
-  const res = await get("/v1/conversation");
-  if (!res.ok) throw new Error(`conversation ${res.status}`);
-  const body = await res.json();
-  return {
-    id: body.id,
-    title: body.title,
-    messages: body.messages,
-    events: Array.isArray(body.events) ? body.events.map(parseChatEvent) : [],
-    ...(Array.isArray(body.queue) ? { queue: body.queue } : {}),
-    ...(typeof body.queue_paused === "boolean"
-      ? { queue_paused: body.queue_paused }
-      : {}),
-  };
 }
 
 export async function getPersona(): Promise<PersonaInfo> {
@@ -754,6 +744,10 @@ export function hasToken(): boolean {
   return apiToken().length > 0;
 }
 
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 10_000;
+const PENDING_COMMAND_LIMIT = 50;
+
 export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
   send: (text: string, sessionId: string) => void;
   cancel: (sessionId: string, runId: string) => void;
@@ -764,25 +758,113 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
 } {
   const token = apiToken();
   const protocols = token ? ["club", token] : ["club"];
-  const ws = new WebSocket(`${wsBase()}/ws/chat`, protocols);
-  ws.onmessage = (ev) => {
-    try {
-      onEvent(parseSocketEvent(JSON.parse(String(ev.data))));
-    } catch {
-      onEvent(parseChatEvent(undefined));
+  let ws: WebSocket | null = null;
+  let disposed = false;
+  let attempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const pending: unknown[] = [];
+  const queueSnapshots = new Map<string, QueueSnapshotEvent>();
+  let syntheticCommandNumber = 0;
+
+  // Re-emits the last authoritative queue snapshot per session; while the
+  // socket is down, deliverable items are shown as offline/reconnecting.
+  function emitQueueStates(state?: "offline" | "reconnecting") {
+    for (const snapshot of queueSnapshots.values()) {
+      onEvent({
+        ...snapshot,
+        command_id: `connection-${++syntheticCommandNumber}`,
+        status: "connection",
+        items: state
+          ? snapshot.items.map((item) =>
+              item.state === "waiting" || item.state === "sending"
+                ? { ...item, state }
+                : item,
+            )
+          : snapshot.items,
+      });
     }
-  };
-  ws.onerror = () => onEvent({ type: "error", message: "socket error" });
-  ws.onclose = (ev) => {
-    if (ev.code === 1008) onEvent({ type: "error", message: "sidecar rejected the socket (token)" });
-  };
+  }
+
+  function scheduleReconnect() {
+    const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
+    attempt += 1;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      emitQueueStates("reconnecting");
+      connect();
+    }, delay);
+  }
+
+  function connect() {
+    const socket = new WebSocket(`${wsBase()}/ws/chat`, protocols);
+    ws = socket;
+    socket.onopen = () => {
+      if (disposed) return;
+      attempt = 0;
+      onEvent({
+        type: "connection_change",
+        status: "connected",
+        attempt: 0,
+        reason: "Connected to the sidecar.",
+      });
+      emitQueueStates();
+      for (const payload of pending.splice(0)) {
+        socket.send(JSON.stringify(payload));
+      }
+    };
+    socket.onmessage = (ev) => {
+      try {
+        const parsed = parseSocketEvent(JSON.parse(String(ev.data)));
+        if (parsed.type === "queue_snapshot") {
+          queueSnapshots.set(parsed.session_id, parsed);
+        }
+        onEvent(parsed);
+      } catch {
+        onEvent(parseChatEvent(undefined));
+      }
+    };
+    socket.onclose = (ev) => {
+      if (disposed || socket !== ws) return;
+      if (ev.code === 1008) {
+        onEvent({ type: "error", message: "sidecar rejected the socket (token)" });
+        onEvent({
+          type: "connection_change",
+          status: "offline",
+          attempt,
+          reason: "The sidecar rejected the connection token.",
+        });
+        emitQueueStates("offline");
+        return;
+      }
+      onEvent({
+        type: "connection_change",
+        status: "reconnecting",
+        attempt: attempt + 1,
+        reason: `The sidecar connection closed (code ${ev.code}). Reconnecting.`,
+      });
+      emitQueueStates("offline");
+      scheduleReconnect();
+    };
+  }
+
   function push(payload: unknown) {
-    if (ws.readyState !== WebSocket.OPEN) {
-      onEvent({ type: "error", message: "socket not open yet" });
+    if (disposed) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
       return;
     }
-    ws.send(JSON.stringify(payload));
+    if (pending.length >= PENDING_COMMAND_LIMIT) {
+      onEvent({
+        type: "error",
+        message:
+          "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+      });
+      return;
+    }
+    pending.push(payload);
   }
+
+  connect();
   return {
     send(text: string, sessionId: string) {
       push({ type: "chat", text, session_id: sessionId });
@@ -800,7 +882,10 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
       push({ type: "permission", id, decision });
     },
     close() {
-      ws.close();
+      disposed = true;
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      ws?.close();
     },
   };
 }

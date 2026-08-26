@@ -128,6 +128,30 @@ describe("SettingsPage", () => {
     expect(api.getConnectors).toHaveBeenCalledTimes(2);
   });
 
+  it("reserves card chrome for the interactive persona choice, not static info panels", async () => {
+    api.getSettings.mockResolvedValue({
+      persona: { id: "sourcing", name: "Sourcecado Sourcing Agent" },
+      model: "configured-model-id",
+      gmail: { connected: false, email: null },
+      apollo: { configured: false },
+    });
+    api.getConnectors.mockResolvedValue({ connectors: [] });
+
+    render(<SettingsPage />);
+
+    const persona = await screen.findByRole("region", { name: "On-duty persona" });
+    expect(persona).toHaveClass("settings-card");
+    expect(screen.getByRole("region", { name: "Operator" })).not.toHaveClass(
+      "settings-card",
+    );
+    expect(screen.getByRole("region", { name: "Model" })).not.toHaveClass(
+      "settings-card",
+    );
+    expect(screen.getByRole("region", { name: "Connections" })).not.toHaveClass(
+      "settings-card",
+    );
+  });
+
   it("persists a persona switch and updates the visible selected state", async () => {
     window.location.hash = "#/settings";
     api.getSettings.mockResolvedValue({

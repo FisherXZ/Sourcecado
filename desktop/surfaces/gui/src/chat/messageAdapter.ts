@@ -1,11 +1,12 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { ToolFailure } from "./protocol";
+import type { ApprovalResource, ToolFailure } from "./protocol";
 import type { ProvenanceArtifact, ProvenanceSource } from "./protocol";
 
 export type LegacyStoredMessage = {
   readonly role: string;
   readonly content?: string | null;
   readonly name?: string;
+  readonly message_id?: string;
   readonly tool_call_id?: string;
   readonly tool_calls?: readonly {
     readonly id?: string;
@@ -65,6 +66,7 @@ export type SourcecadoToolPart = {
     readonly scope?: string;
     readonly executionStatus?: string;
     readonly executionError?: string | null;
+    readonly resource?: ApprovalResource;
   };
 };
 
@@ -113,72 +115,6 @@ function parseJson(value: string): unknown {
   } catch {
     return {};
   }
-}
-
-export function convertLegacyTranscript(
-  threadId: string,
-  records: readonly LegacyStoredMessage[],
-): ThreadMessageLike[] {
-  const toolResults = new Map<
-    string,
-    { readonly result: unknown; readonly isError: boolean }
-  >();
-  for (const record of records) {
-    if (record.role !== "tool" || !record.tool_call_id) continue;
-    const raw = typeof record.content === "string" ? record.content : "{}";
-    const result = parseJson(raw);
-    toolResults.set(record.tool_call_id, {
-      result,
-      isError:
-        typeof result === "object" &&
-        result !== null &&
-        "error" in result,
-    });
-  }
-
-  return records.flatMap((record, index): ThreadMessageLike[] => {
-    if (record.role !== "user" && record.role !== "assistant") {
-      return [];
-    }
-
-    const id = `${threadId}:legacy:${index}`;
-    const content: Exclude<ThreadMessageLike["content"], string>[number][] =
-      [];
-    if (typeof record.content === "string" && record.content.length > 0) {
-      content.push({
-        type: "text",
-        text: record.content,
-        parentId: `${id}:text:0`,
-      });
-    }
-    if (record.role === "assistant") {
-      for (const [toolIndex, toolCall] of (record.tool_calls ?? []).entries()) {
-        const toolCallId = toolCall.id ?? `${id}:tool:${toolIndex}`;
-        const argsText = toolCall.function?.arguments ?? "{}";
-        const settled = toolResults.get(toolCallId);
-        content.push({
-          type: "tool-call",
-          toolCallId,
-          toolName: toolCall.function?.name ?? "tool",
-          args: parseJson(argsText) as never,
-          argsText,
-          ...(settled ?? {}),
-        });
-      }
-    }
-    if (content.length === 0) return [];
-
-    return [
-      {
-        id,
-        role: record.role,
-        content,
-        ...(record.role === "assistant"
-          ? { status: { type: "complete" as const, reason: "stop" as const } }
-          : {}),
-      },
-    ];
-  });
 }
 
 export function structureLegacyTranscript(
@@ -370,6 +306,7 @@ export function convertStructuredMessage(
                   executionStatus:
                     part.approval?.executionStatus ?? null,
                   executionError: part.approval?.executionError ?? null,
+                  resource: part.approval?.resource ?? null,
                 },
               },
             }

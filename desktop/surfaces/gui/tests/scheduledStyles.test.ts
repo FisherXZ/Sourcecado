@@ -1,8 +1,6 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync("src/styles.css", "utf8");
+import { styles as css } from "./cssBundle";
 
 describe("Scheduled route styles", () => {
   it("keeps schedule actions and form controls at least 44px tall", () => {

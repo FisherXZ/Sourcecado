@@ -5,10 +5,12 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  getPersona,
   getSession,
   getSessions,
   hasToken,
   openChat,
+  type ConnectionStatus,
   type SourcecadoSocketEvent,
   type QueueItem,
 } from "../api";
@@ -77,15 +79,32 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
   const runningThreadsRef = useRef(new Set<string>());
   const activeRunsRef = useRef(new Map<string, string>());
   const nextLegacyIndexRef = useRef(new Map<string, number>());
+  const connectionStatusRef = useRef<ConnectionStatus>("connected");
   const [activeThreadId, setActiveThreadId] = useState(initialThreadId);
   const [title, setTitle] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(initialThreadId));
   const [loadError, setLoadError] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [announcement, setAnnouncement] = useState("");
+  const [personaName, setPersonaName] = useState<string | null>(null);
   const [, setRevision] = useState(0);
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
+
+  useEffect(() => {
+    if (!hasToken()) return;
+    let active = true;
+    getPersona()
+      .then((persona) => {
+        if (active) setPersonaName(persona.name);
+      })
+      .catch(() => {
+        // Persona is a header nicety; leave the header without it on failure.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const loadVersion = ++loadVersionRef.current;
@@ -156,7 +175,9 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
         return;
       }
       const applied = storeRef.current.applyChatEvent(event);
-      if ("version" in applied) {
+      if (applied.type === "connection_change") {
+        connectionStatusRef.current = applied.status;
+      } else if ("version" in applied) {
         const threadId = applied.session_id;
         if (applied.type === "turn_start") {
           runningThreadsRef.current.add(threadId);
@@ -167,6 +188,10 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
         } else if (applied.type === "turn_stopping") {
           if (threadId === activeThreadRef.current) {
             setAnnouncement(applied.message);
+          }
+        } else if (applied.type === "permission_required") {
+          if (threadId === activeThreadRef.current) {
+            setAnnouncement("Sourcecado needs your approval to continue.");
           }
         } else if (applied.type === "turn_stopped") {
           runningThreadsRef.current.delete(threadId);
@@ -228,9 +253,18 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
       messageId,
       state: "complete",
     });
-    runningThreadsRef.current.add(threadId);
-    writeDraft(threadId, "");
-    setAnnouncement("Run started.");
+    if (connectionStatusRef.current === "connected") {
+      // Only claim a run is active, and only drop the local draft backup,
+      // once the message has somewhere to actually go right now. Otherwise
+      // it is sitting in the transport's retry buffer, not "sent".
+      runningThreadsRef.current.add(threadId);
+      writeDraft(threadId, "");
+      setAnnouncement("Run started.");
+    } else {
+      setAnnouncement(
+        "Waiting for connection. Your message will send when Sourcecado reconnects.",
+      );
+    }
     refresh();
     chatRef.current?.send(text, threadId);
   }
@@ -359,6 +393,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
       >
         <ThreadView
           title={title}
+          personaName={personaName}
           loading={loading}
           loadError={loadError}
           onRetry={() => setLoadAttempt((attempt) => attempt + 1)}

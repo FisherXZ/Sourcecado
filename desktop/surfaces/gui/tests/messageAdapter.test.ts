@@ -1,91 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  convertLegacyTranscript,
-  convertStructuredMessage,
-} from "../src/chat/messageAdapter";
-
-describe("convertLegacyTranscript", () => {
-  it("converts legacy text records with replay-stable message and part identities", () => {
-    const records = [
-      { role: "user", content: "Find recruiting leads." },
-      { role: "assistant", content: "I found three leads." },
-    ] as const;
-
-    const live = convertLegacyTranscript("thread-alpha", records);
-    const restored = convertLegacyTranscript("thread-alpha", records);
-
-    expect(live).toEqual([
-      {
-        id: "thread-alpha:legacy:0",
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "Find recruiting leads.",
-            parentId: "thread-alpha:legacy:0:text:0",
-          },
-        ],
-      },
-      {
-        id: "thread-alpha:legacy:1",
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "I found three leads.",
-            parentId: "thread-alpha:legacy:1:text:0",
-          },
-        ],
-        status: { type: "complete", reason: "stop" },
-      },
-    ]);
-    expect(restored).toEqual(live);
-  });
-
-  it("joins legacy tool calls and results into one stable assistant tool part", () => {
-    const records = [
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          {
-            id: "call-apollo-1",
-            function: {
-              name: "apollo_search_people",
-              arguments: '{"title":"Recruiter"}',
-            },
-          },
-        ],
-      },
-      {
-        role: "tool",
-        tool_call_id: "call-apollo-1",
-        name: "apollo_search_people",
-        content: '{"people":3}',
-      },
-    ] as const;
-
-    expect(convertLegacyTranscript("thread-alpha", records)).toEqual([
-      {
-        id: "thread-alpha:legacy:0",
-        role: "assistant",
-        content: [
-          {
-            type: "tool-call",
-            toolCallId: "call-apollo-1",
-            toolName: "apollo_search_people",
-            args: { title: "Recruiter" },
-            argsText: '{"title":"Recruiter"}',
-            result: { people: 3 },
-            isError: false,
-          },
-        ],
-        status: { type: "complete", reason: "stop" },
-      },
-    ]);
-  });
-});
+import { convertStructuredMessage } from "../src/chat/messageAdapter";
 
 describe("convertStructuredMessage", () => {
   it("preserves the proposed structured text identity and completion state", () => {
@@ -212,6 +127,7 @@ describe("convertStructuredMessage", () => {
               scope: null,
               executionStatus: null,
               executionError: null,
+              resource: null,
             },
           },
         },
@@ -334,5 +250,74 @@ describe("convertStructuredMessage", () => {
     expect(converted.metadata?.custom?.sourcecadoPartIds).toEqual([
       "part-live-1",
     ]);
+  });
+});
+
+describe("convertStructuredMessage approval resource", () => {
+  const toolPart = {
+    type: "tool" as const,
+    id: "call-1",
+    name: "gmail_send",
+    arguments: { draft_id: "draft-1" },
+    state: "running" as const,
+  };
+
+  it("exposes the approval resource at providerMetadata.sourcecado.resource", () => {
+    const converted = convertStructuredMessage({
+      id: "message-1",
+      role: "assistant",
+      state: "waiting-approval",
+      parts: [
+        {
+          ...toolPart,
+          approval: {
+            id: "call-1",
+            state: "pending",
+            reason: "Sending requires permission.",
+            resource: {
+              kind: "gmail_draft",
+              draft_id: "draft-1",
+              to: "a@example.com",
+              subject: "Hello",
+              account: "me@example.com",
+            },
+          },
+        },
+      ],
+    });
+
+    const [part] = converted.content as ReadonlyArray<{
+      providerMetadata?: { sourcecado?: Record<string, unknown> };
+    }>;
+    expect(part?.providerMetadata?.sourcecado?.resource).toEqual({
+      kind: "gmail_draft",
+      draft_id: "draft-1",
+      to: "a@example.com",
+      subject: "Hello",
+      account: "me@example.com",
+    });
+  });
+
+  it("exposes null when the approval has no resource", () => {
+    const converted = convertStructuredMessage({
+      id: "message-1",
+      role: "assistant",
+      state: "waiting-approval",
+      parts: [
+        {
+          ...toolPart,
+          approval: {
+            id: "call-1",
+            state: "pending",
+            reason: "Sending requires permission.",
+          },
+        },
+      ],
+    });
+
+    const [part] = converted.content as ReadonlyArray<{
+      providerMetadata?: { sourcecado?: Record<string, unknown> };
+    }>;
+    expect(part?.providerMetadata?.sourcecado?.resource).toBeNull();
   });
 });

@@ -623,7 +623,10 @@ No cleanup begins before the visual/accessibility gate. Deleting the legacy path
 
 ## Explicitly not in scope
 
-- Gmail sending or approve-to-send.
+- New Gmail sending capability. `gmail_send` already shipped in commit 8ed9cb7
+  and is approval-gated; this pass adds no send path. It does correct that
+  tool's approval card, which previously rendered a generic card falsely
+  stating that Sourcecado would not send email.
 - New connectors or LinkedIn/Apify v2.
 - assistant-ui Cloud, Vercel AI SDK, shadcn/ui, Tailwind, or React 19.
 - Voice, attachments, message branching, edit/regenerate, or feedback reactions.

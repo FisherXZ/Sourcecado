@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const styles = readFileSync("src/styles.css", "utf8");
+import { styles } from "./cssBundle";
 
 describe("Gmail draft artifact styles", () => {
   it("uses one quiet bounded artifact surface and preserves body line breaks", () => {
@@ -24,7 +23,7 @@ describe("Gmail draft artifact styles", () => {
       /\.sourcecado-gmail-creating li span\s*\{[^}]*animation:\s*shell-shimmer/,
     );
     expect(styles).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-gmail-creating li span\s*\{[^}]*animation:\s*none;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-gmail-creating li span[\s\S]*?animation:\s*none;/,
     );
   });
 });

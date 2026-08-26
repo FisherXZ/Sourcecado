@@ -25,6 +25,13 @@ The implemented UI starts at **4/10 design completeness**. The visual tokens are
 
 **Reference:** The dedicated Plugins page in the ChatGPT desktop app, supplied by Fisher on 2026-08-25.
 
+**Citation correction (2026-08-26 review):** This reference is weaker than it
+reads. Grok Bot ships the equivalent surface as a dialog, not a page, so the
+supplied precedent does not uniformly support a dedicated route. The decision
+still holds, on stronger ground found during review: failure recovery
+deep-links to `#/connections/:connectorId`, and a dialog cannot be a
+deep-link target.
+
 **Implications:**
 
 - The conversation surface contains the thread, agent activity, composer, and only approvals or failures affecting the current run.
@@ -497,7 +504,10 @@ Reuse these contracts and patterns. Do not rebuild the sidecar, permission engin
 
 ## NOT in Scope
 
-- Gmail sending or approve-to-send.
+- New Gmail sending capability. `gmail_send` already shipped in commit 8ed9cb7
+  and is approval-gated; this pass adds no send path. It does correct that
+  tool's approval card, which previously rendered a generic card falsely
+  stating that Sourcecado would not send email.
 - New connectors or connector backend rewrites.
 - assistant-ui Cloud, hosted thread persistence, or cloud authentication.
 - Vercel AI SDK, shadcn/ui, Tailwind, or React 19 migration.

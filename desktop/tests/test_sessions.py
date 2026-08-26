@@ -130,7 +130,12 @@ def test_session_restore_returns_the_exact_persisted_v2_events(tmp_path):
     assert restored["events"] == streamed
     assert restored["messages"] == [
         {"role": "user", "content": "hello there"},
-        {"role": "assistant", "content": "Hello world"},
+        {
+            "role": "assistant",
+            "content": "Hello world",
+            # identity stamp: lets restore merge transcript and events
+            "message_id": streamed[0]["message_id"],
+        },
     ]
 
 
@@ -162,3 +167,21 @@ def test_ws_two_sessions_do_not_leak_history(tmp_path):
     assert any("alpha secret" in str(m.get("content")) for m in msgs_a)
     assert not any("alpha secret" in str(m.get("content")) for m in msgs_b)
     assert any("bravo only" in str(m.get("content")) for m in msgs_b)
+
+
+def test_session_with_torn_jsonl_lines_still_returns_200(tmp_path):
+    c = client(tmp_path)
+    sid = c.post("/v1/sessions", headers={TOKEN_HEADER: TOKEN}).json()["id"]
+    store = c.app.state.store
+    store.append(sid, {"role": "user", "content": "hi"})
+    with open(store.conv_dir / f"{sid}.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"role": "assistant", "content": "torn mid-wr\n')
+    store.append_event(sid, {"type": "marker"})
+    with open(store.event_dir / f"{sid}.jsonl", "a", encoding="utf-8") as fh:
+        fh.write('{"type": "torn')
+
+    res = c.get(f"/v1/sessions/{sid}", headers={TOKEN_HEADER: TOKEN})
+
+    assert res.status_code == 200
+    assert res.json()["messages"] == [{"role": "user", "content": "hi"}]
+    assert res.json()["events"] == [{"type": "marker"}]

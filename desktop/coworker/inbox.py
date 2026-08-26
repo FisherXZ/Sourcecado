@@ -7,11 +7,23 @@ when the live card is gone; the WS card still works in parallel.
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 from dataclasses import dataclass
 from typing import Any
 
 from coworker.store import ConversationStore
+
+_DEFAULT_WAIT_TIMEOUT_SECONDS = 60.0
+
+
+def _wait_timeout_seconds() -> float:
+    raw = os.environ.get("CLUB_APPROVAL_WAIT_TIMEOUT", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_WAIT_TIMEOUT_SECONDS
+    return value if value > 0 else _DEFAULT_WAIT_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -40,6 +52,7 @@ class Inbox:
         kind: str = "approval",
         recovery_command_id: str | None = None,
         original_call_id: str | None = None,
+        resource: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.store.park_inbox(
             item_id or secrets.token_hex(8),
@@ -53,6 +66,7 @@ class Inbox:
             kind=kind,
             recovery_command_id=recovery_command_id,
             original_call_id=original_call_id,
+            resource=resource,
         )
 
     def pending(self) -> list[dict[str, Any]]:
@@ -119,8 +133,17 @@ class Inbox:
         )
 
     async def wait_for_execution(
-        self, item_id: str, *, poll_interval: float = 0.02
+        self,
+        item_id: str,
+        *,
+        poll_interval: float = 0.02,
+        timeout: float | None = None,
     ) -> dict[str, Any] | None:
+        """Poll until terminal. On deadline, return the item as it stands."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + (
+            timeout if timeout is not None else _wait_timeout_seconds()
+        )
         while True:
             item = self.get(item_id)
             if item is None:
@@ -133,6 +156,8 @@ class Inbox:
                 "expired",
                 "interrupted",
             }:
+                return item
+            if loop.time() >= deadline:
                 return item
             await asyncio.sleep(poll_interval)
 

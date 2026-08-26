@@ -261,6 +261,22 @@ describe("App shell routing", () => {
     expect(window.location.hash).toBe("#/settings");
   });
 
+  it("escapes the boot skeleton when sessions exist but no restore target is known", async () => {
+    window.location.hash = "";
+    api.getSessions.mockResolvedValue({
+      sessions: [
+        { session_id: "alpha", title: "Alpha", n_msgs: 2, pinned: false, opened_at: "1", updated_at: "1" },
+      ],
+      open_id: null,
+      last_destination: null,
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(window.location.hash).not.toBe(""));
+    expect(screen.queryByLabelText("Restoring workspace")).not.toBeInTheDocument();
+  });
+
   it("persists a navigated destination for the next launch", async () => {
     render(<App />);
 

@@ -107,53 +107,63 @@ function QueueRow({
       )}
       <strong>{queueStateLabel(item.state)}</strong>
       <div className="sourcecado-queue-actions">
-        {previousId && mutable ? (
-          <button
-            type="button"
-            aria-label={`Move ${item.text} up`}
-            onClick={() => onMove(item.id, previousId)}
-          >
-            Up
-          </button>
-        ) : null}
-        {nextId && mutable ? (
-          <button
-            type="button"
-            aria-label={`Move ${item.text} down`}
-            onClick={() => onMove(item.id, undefined, nextId)}
-          >
-            Down
-          </button>
-        ) : null}
-        {mutable ? (
-          <button
-            type="button"
-            aria-label={`Edit ${item.text}`}
-            onClick={() => setEditing(true)}
-          >
-            Edit
-          </button>
-        ) : null}
-        {item.state === "failed" ||
-        item.state === "interrupted" ||
-        item.state === "offline" ? (
-          <button
-            type="button"
-            aria-label="Retry queued message"
-            onClick={() => onRetry(item.id)}
-          >
-            Retry
-          </button>
-        ) : null}
-        {mutable ? (
-          <button
-            type="button"
-            aria-label={`Remove ${item.text}`}
-            onClick={() => onRemove(item.id)}
-          >
-            Remove
-          </button>
-        ) : null}
+        <span className="sourcecado-queue-action-slot">
+          {previousId && mutable ? (
+            <button
+              type="button"
+              aria-label={`Move ${item.text} up`}
+              onClick={() => onMove(item.id, previousId)}
+            >
+              Up
+            </button>
+          ) : null}
+        </span>
+        <span className="sourcecado-queue-action-slot">
+          {nextId && mutable ? (
+            <button
+              type="button"
+              aria-label={`Move ${item.text} down`}
+              onClick={() => onMove(item.id, undefined, nextId)}
+            >
+              Down
+            </button>
+          ) : null}
+        </span>
+        <span className="sourcecado-queue-action-slot">
+          {mutable ? (
+            <button
+              type="button"
+              aria-label={`Edit ${item.text}`}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </button>
+          ) : null}
+        </span>
+        <span className="sourcecado-queue-action-slot">
+          {item.state === "failed" ||
+          item.state === "interrupted" ||
+          item.state === "offline" ? (
+            <button
+              type="button"
+              aria-label="Retry queued message"
+              onClick={() => onRetry(item.id)}
+            >
+              Retry
+            </button>
+          ) : null}
+        </span>
+        <span className="sourcecado-queue-action-slot">
+          {mutable ? (
+            <button
+              type="button"
+              aria-label={`Remove ${item.text}`}
+              onClick={() => onRemove(item.id)}
+            >
+              Remove
+            </button>
+          ) : null}
+        </span>
       </div>
     </li>
   );

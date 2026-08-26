@@ -8,11 +8,12 @@ Copied shape from OpenWorker `coworker/conversations.py`:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +22,47 @@ _INTERRUPTED_APPROVAL_ERROR = (
     "Outcome is unknown after Sourcecado restarted. "
     "Verify the external resource before retrying."
 )
+_EXPIRED_PENDING_ERROR = (
+    "This approval expired before a decision was made. "
+    "Ask again if the action is still wanted."
+)
+_STALE_EXECUTION_ERROR = (
+    "Outcome is unknown: this approval's execution never reported a result. "
+    "Verify the external resource before retrying."
+)
+_INTERRUPTED_RUN_SUMMARY = (
+    "Sourcecado restarted before this routine finished. "
+    "Review the thread before retrying."
+)
+_DEFAULT_APPROVAL_TTL_SECONDS = 24 * 60 * 60.0
+
+
+def _approval_ttl_seconds() -> float:
+    raw = os.environ.get("CLUB_APPROVAL_TTL_SECONDS", "")
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_APPROVAL_TTL_SECONDS
+    return value if value > 0 else _DEFAULT_APPROVAL_TTL_SECONDS
 
 
 def valid_session_id(sid: str) -> bool:
     return bool(sid) and bool(_SID_RE.fullmatch(sid)) and ".." not in sid
+
+
+def _read_jsonl(blob: str) -> list[dict[str, Any]]:
+    """Skip torn or foreign lines (crash mid-append) instead of failing the read."""
+    out: list[dict[str, Any]] = []
+    for line in blob.splitlines():
+        if not line.strip():
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            out.append(parsed)
+    return out
 
 
 def title_from(messages: list[dict[str, Any]]) -> str:
@@ -37,7 +75,17 @@ def title_from(messages: list[dict[str, Any]]) -> str:
 
 
 class ConversationStore:
-    def __init__(self, base_dir: str | Path) -> None:
+    def __init__(
+        self,
+        base_dir: str | Path,
+        *,
+        approval_ttl_seconds: float | None = None,
+    ) -> None:
+        self.approval_ttl_seconds = (
+            approval_ttl_seconds
+            if approval_ttl_seconds is not None
+            else _approval_ttl_seconds()
+        )
         self.base = Path(base_dir).expanduser()
         self.base.mkdir(parents=True, exist_ok=True)
         self.conv_dir = self.base / "conversations"
@@ -105,6 +153,7 @@ class ConversationStore:
                 part_id TEXT,
                 recovery_command_id TEXT,
                 original_call_id TEXT,
+                resource TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS chat_queue (
@@ -214,6 +263,7 @@ class ConversationStore:
             "part_id": "TEXT",
             "recovery_command_id": "TEXT",
             "original_call_id": "TEXT",
+            "resource": "TEXT",
         }
         for column, definition in inbox_migrations.items():
             try:
@@ -233,6 +283,7 @@ class ConversationStore:
         self._conn.commit()
         self._reconcile_orphaned_inbox_executions()
         self._reconcile_orphaned_queue_items()
+        self._reconcile_orphaned_runs()
 
     def _reconcile_orphaned_inbox_executions(self) -> None:
         """Close claims from the prior process without replaying external writes."""
@@ -300,6 +351,29 @@ class ConversationStore:
                 self._conn.rollback()
                 raise
 
+    def _reconcile_orphaned_runs(self) -> None:
+        """Close runs the prior process left mid-flight without inventing an outcome."""
+        now = datetime.now(UTC).isoformat()
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    """
+                    UPDATE runs SET
+                        status = 'interrupted',
+                        result = ?,
+                        summary = ?,
+                        finished_at = ?,
+                        duration_ms = COALESCE(duration_ms, 0)
+                    WHERE status = 'running'
+                    """,
+                    (_INTERRUPTED_RUN_SUMMARY, _INTERRUPTED_RUN_SUMMARY, now),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def _file(self, sid: str) -> Path:
         if not valid_session_id(sid):
             raise ValueError("invalid session id")
@@ -312,11 +386,7 @@ class ConversationStore:
         path = self._file(sid)
         if not path.exists():
             return []
-        return [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        return _read_jsonl(path.read_text(encoding="utf-8"))
 
     def _event_file(self, sid: str) -> Path:
         if not valid_session_id(sid):
@@ -330,11 +400,7 @@ class ConversationStore:
         path = self._event_file(sid)
         if not path.exists():
             return []
-        return [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        return _read_jsonl(path.read_text(encoding="utf-8"))
 
     def append_event(self, sid: str, event: dict[str, Any]) -> None:
         with self._lock:
@@ -645,21 +711,27 @@ class ConversationStore:
         kind: str = "approval",
         recovery_command_id: str | None = None,
         original_call_id: str | None = None,
+        resource: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         existing = self.get_inbox(item_id)
         if existing is not None:
             return existing
         payload = json.dumps(arguments)
-        requested_at = datetime.now(UTC).isoformat()
+        requested = datetime.now(UTC)
+        requested_at = requested.isoformat()
+        expires_at = (
+            requested + timedelta(seconds=self.approval_ttl_seconds)
+        ).isoformat()
         with self._lock:
             self._conn.execute(
                 """
                 INSERT INTO inbox
                     (id, kind, name, arguments, state, requested_at, scope,
-                     execution_status, reason, session_id, run_id, message_id,
-                     part_id, recovery_command_id, original_call_id)
+                     execution_status, expires_at, reason, session_id, run_id,
+                     message_id, part_id, recovery_command_id, original_call_id,
+                     resource)
                 VALUES (?, ?, ?, ?, 'pending', ?, 'once', 'pending',
-                        ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -667,6 +739,7 @@ class ConversationStore:
                     name,
                     payload,
                     requested_at,
+                    expires_at,
                     reason,
                     session_id,
                     run_id,
@@ -674,13 +747,84 @@ class ConversationStore:
                     part_id,
                     recovery_command_id,
                     original_call_id,
+                    json.dumps(resource) if resource is not None else None,
                 ),
             )
             self._conn.commit()
             row = self._conn.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
         return _inbox_row(row)
 
+    def reap_overdue_inbox(self, now: str | None = None) -> list[dict[str, Any]]:
+        """TTL reaper, two distinct sweeps.
+
+        A PENDING approval past its TTL becomes 'expired' (nobody decided in
+        time) — never a denial: decision stays NULL and execution_status is
+        'expired', not 'not_run'. A stale EXECUTING claim past its TTL becomes
+        'interrupted' (authorized, outcome unknown) — the same semantics the
+        restart reconciler uses, never 'expired'.
+        """
+        stamp = now or datetime.now(UTC).isoformat()
+        with self._lock:
+            overdue = self._conn.execute(
+                """
+                SELECT id FROM inbox
+                WHERE expires_at IS NOT NULL AND expires_at <= ?
+                  AND (state = 'pending' OR execution_status = 'executing')
+                """,
+                (stamp,),
+            ).fetchall()
+            if not overdue:
+                return []
+            self._conn.execute(
+                """
+                UPDATE inbox SET
+                    execution_status = 'interrupted',
+                    execution_claimant = NULL,
+                    execution_error = ?,
+                    execution_result = ?
+                WHERE expires_at IS NOT NULL AND expires_at <= ?
+                  AND execution_status = 'executing'
+                """,
+                (
+                    _STALE_EXECUTION_ERROR,
+                    json.dumps(
+                        {"status": "interrupted", "error": _STALE_EXECUTION_ERROR}
+                    ),
+                    stamp,
+                ),
+            )
+            self._conn.execute(
+                """
+                UPDATE inbox SET
+                    state = 'expired',
+                    resolved_at = ?,
+                    execution_status = 'expired',
+                    execution_claimant = NULL,
+                    execution_error = ?,
+                    execution_result = ?
+                WHERE expires_at IS NOT NULL AND expires_at <= ?
+                  AND state = 'pending'
+                """,
+                (
+                    stamp,
+                    _EXPIRED_PENDING_ERROR,
+                    json.dumps(
+                        {"status": "expired", "error": _EXPIRED_PENDING_ERROR}
+                    ),
+                    stamp,
+                ),
+            )
+            self._conn.commit()
+            rows = [
+                self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (str(row["id"]),)
+                ).fetchone()
+                for row in overdue
+            ]
+        return [_inbox_row(row) for row in rows if row is not None]
+
     def list_inbox(self, *, pending_only: bool = True) -> list[dict[str, Any]]:
+        self.reap_overdue_inbox()
         query = "SELECT * FROM inbox"
         if pending_only:
             query += " WHERE state = 'pending'"
@@ -690,6 +834,7 @@ class ConversationStore:
         return [_inbox_row(row) for row in rows]
 
     def get_inbox(self, item_id: str) -> dict[str, Any] | None:
+        self.reap_overdue_inbox()
         with self._lock:
             row = self._conn.execute("SELECT * FROM inbox WHERE id = ?", (item_id,)).fetchone()
         return None if row is None else _inbox_row(row)
@@ -934,6 +1079,27 @@ class ConversationStore:
             )
             self._conn.commit()
 
+    def sessions_with_queue(self) -> list[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT session_id FROM chat_queue ORDER BY session_id"
+            ).fetchall()
+        return [str(row["session_id"]) for row in rows]
+
+    def mark_queue_offline(self, session_id: str) -> int:
+        """Park undelivered items when the socket driving their drain is gone."""
+        now = datetime.now(UTC).isoformat()
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                UPDATE chat_queue SET state = 'offline', error = NULL, updated_at = ?
+                WHERE session_id = ? AND state IN ('waiting', 'retrying')
+                """,
+                (now, session_id),
+            )
+            self._conn.commit()
+        return cursor.rowcount
+
     def claim_next_queue(self, session_id: str) -> dict[str, Any] | None:
         with self._lock:
             if self.queue_paused(session_id):
@@ -947,7 +1113,7 @@ class ConversationStore:
             row = self._conn.execute(
                 """
                 SELECT id FROM chat_queue
-                WHERE session_id = ? AND state IN ('waiting', 'retrying')
+                WHERE session_id = ? AND state IN ('waiting', 'retrying', 'reconnecting')
                 ORDER BY position, created_at, id
                 LIMIT 1
                 """,
@@ -1115,6 +1281,16 @@ class ConversationStore:
                     """,
                     (session_id, now),
                 )
+                # Items parked by a socket loss come back as reconnecting,
+                # which the drain claims like waiting.
+                self._conn.execute(
+                    """
+                    UPDATE chat_queue
+                    SET state = 'reconnecting', error = NULL, updated_at = ?
+                    WHERE session_id = ? AND state = 'offline'
+                    """,
+                    (now, session_id),
+                )
                 status = "accepted"
             elif command_type == "queue_retry":
                 if not item_id:
@@ -1273,6 +1449,14 @@ def _inbox_row(row: sqlite3.Row) -> dict[str, Any]:
     item.setdefault("part_id", None)
     item.setdefault("recovery_command_id", None)
     item.setdefault("original_call_id", None)
+    raw_resource = item.get("resource")
+    if isinstance(raw_resource, str):
+        try:
+            item["resource"] = json.loads(raw_resource)
+        except json.JSONDecodeError:
+            item["resource"] = None
+    else:
+        item["resource"] = None
     return item
 
 

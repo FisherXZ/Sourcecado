@@ -1,5 +1,5 @@
 import type { ToolCallMessagePart } from "@assistant-ui/react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import {
   domainRendererFor,
@@ -63,16 +63,74 @@ function groupState(
   return "Completed";
 }
 
-function elapsedLabel(tools: readonly ToolCallMessagePart[]): string | null {
+function elapsedLabel(tools: readonly ToolCallMessagePart[], now: number): string | null {
   const starts = tools
     .map((tool) => tool.timing?.startedAt)
     .filter((value): value is number => value !== undefined);
+  if (starts.length === 0) return null;
   const ends = tools
     .map((tool) => tool.timing?.completedAt)
     .filter((value): value is number => value !== undefined);
-  if (starts.length === 0 || ends.length === 0) return null;
-  const seconds = Math.max(0, Math.round((Math.max(...ends) - Math.min(...starts)) / 1000));
+  const endAt = ends.length > 0 ? Math.max(...ends) : now;
+  const seconds = Math.max(0, Math.round((endAt - Math.min(...starts)) / 1000));
   return `${seconds}s`;
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
+
+function isWaitingForApproval(tool: ToolCallMessagePart): boolean {
+  return (
+    tool.approval !== undefined &&
+    tool.approval.approved !== true &&
+    tool.result === undefined
+  );
+}
+
+function domainStatusOf(tool: ToolCallMessagePart): "loading" | "success" | "error" {
+  return failureOf(tool) || tool.isError
+    ? "error"
+    : tool.result === undefined
+      ? "loading"
+      : "success";
+}
+
+function AnswerResults({ tools }: { readonly tools: readonly ToolCallMessagePart[] }) {
+  const evidenceTools = tools.filter((tool) => isEvidenceToolName(tool.toolName));
+  const domainTools = tools.filter(
+    (tool) =>
+      !isEvidenceToolName(tool.toolName) &&
+      domainRendererFor(tool.toolName) !== null &&
+      !isWaitingForApproval(tool),
+  );
+  if (domainTools.length === 0 && evidenceTools.length === 0) return null;
+  return (
+    <div className="sourcecado-answer-results">
+      {domainTools.map((tool) => {
+        const DomainRenderer = domainRendererFor(tool.toolName);
+        if (!DomainRenderer) return null;
+        return (
+          <DomainRenderer
+            key={tool.toolCallId}
+            toolCallId={tool.toolCallId}
+            toolName={tool.toolName}
+            args={tool.args}
+            result={tool.result}
+            status={domainStatusOf(tool)}
+          />
+        );
+      })}
+      {evidenceTools.length > 0 ? <EvidenceSetResult tools={evidenceTools} /> : null}
+    </div>
+  );
 }
 
 function receiptLabel(tools: readonly ToolCallMessagePart[]): string {
@@ -93,40 +151,64 @@ export function ActivityGroup({
 }) {
   const state = groupState(tools, messageState);
   const [expanded, setExpanded] = useState(state === "Running");
+  const userToggledRef = useRef(false);
+  const previousStateRef = useRef(state);
   const contentId = useId();
+  const [reducedMotion] = useState(prefersReducedMotion);
+  const [, tick] = useState(0);
+
+  useEffect(() => {
+    if (
+      previousStateRef.current === "Running" &&
+      state !== "Running" &&
+      !userToggledRef.current
+    ) {
+      setExpanded(false);
+    }
+    previousStateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    if (state !== "Running") return;
+    const id = window.setInterval(
+      () => tick((value) => value + 1),
+      reducedMotion ? 5000 : 1000,
+    );
+    return () => window.clearInterval(id);
+  }, [state, reducedMotion]);
+
   if (tools.length === 0) return null;
-  const elapsed = elapsedLabel(tools);
-  const evidenceTools = tools.filter((tool) => isEvidenceToolName(tool.toolName));
+  const elapsed = elapsedLabel(tools, Date.now());
   const summary = [receiptLabel(tools), elapsed, state].filter(Boolean).join(" · ");
   return (
-    <section className={`sourcecado-activity sourcecado-activity-${state.toLowerCase()}`}>
-      <button
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={contentId}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        {summary}
-      </button>
-      {expanded ? (
-        <>
+    <>
+      <AnswerResults tools={tools} />
+      <section className={`sourcecado-activity sourcecado-activity-${state.toLowerCase()}`}>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          onClick={() => {
+            userToggledRef.current = true;
+            setExpanded((current) => !current);
+          }}
+        >
+          {summary}
+        </button>
+        {expanded ? (
           <ol id={contentId}>
             {tools.map((tool) => (
               <ActivityRow key={tool.toolCallId} tool={tool} />
             ))}
           </ol>
-          {evidenceTools.length > 0 ? (
-            <EvidenceSetResult tools={evidenceTools} />
-          ) : null}
-        </>
-      ) : null}
-    </section>
+        ) : null}
+      </section>
+    </>
   );
 }
 
 function ActivityRow({ tool }: { readonly tool: ToolCallMessagePart }) {
   const presentation = toolPresentation(tool.toolName);
-  const DomainRenderer = domainRendererFor(tool.toolName);
   const failure = failureOf(tool);
   const recovery = recoveryOf(tool);
   const recoveryStatus = recovery?.status ? String(recovery.status) : null;
@@ -139,15 +221,6 @@ function ActivityRow({ tool }: { readonly tool: ToolCallMessagePart }) {
   const { act } = useRecoveryActions();
   const { select } = useInspector();
   const [showDetails, setShowDetails] = useState(false);
-  const domainStatus = failure || tool.isError
-    ? "error"
-    : tool.result === undefined
-      ? "loading"
-      : "success";
-  const waitingForApproval =
-    tool.approval !== undefined &&
-    tool.approval.approved !== true &&
-    tool.result === undefined;
   return (
     <li
       data-tool-call-id={tool.toolCallId}
@@ -178,15 +251,6 @@ function ActivityRow({ tool }: { readonly tool: ToolCallMessagePart }) {
         >
           Inspect
         </button>
-        {DomainRenderer && !waitingForApproval ? (
-          <DomainRenderer
-            toolCallId={tool.toolCallId}
-            toolName={tool.toolName}
-            args={tool.args}
-            result={tool.result}
-            status={domainStatus}
-          />
-        ) : null}
         {canRecover && failure ? (
           <div className="sourcecado-recovery-actions">
             <button type="button" onClick={() => act("retry", failure)}>
