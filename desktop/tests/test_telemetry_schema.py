@@ -1,4 +1,5 @@
 from dataclasses import fields
+from typing import get_type_hints
 
 import pytest
 
@@ -187,6 +188,26 @@ def test_all_supported_span_and_event_schemas_use_bounded_operational_fields():
     }
     for schema in schemas:
         assert forbidden_fields.isdisjoint(field.name for field in fields(schema))
+
+
+def test_compaction_event_allows_unknown_token_counts_without_estimation():
+    event = CompactionEvent(
+        operation="history.compact",
+        reason=CompactionReason.POLICY,
+        input_tokens=None,
+        output_tokens=None,
+    )
+
+    hints = get_type_hints(CompactionEvent)
+    assert hints["input_tokens"] == int | None
+    assert hints["output_tokens"] == int | None
+    assert record_to_dict(event) == {
+        "event_type": "compaction",
+        "operation": "history.compact",
+        "reason": "policy",
+        "input_tokens": None,
+        "output_tokens": None,
+    }
 
 
 @pytest.mark.parametrize(
