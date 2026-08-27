@@ -299,6 +299,77 @@ def tool_completed_transition(
         "call_id": safe_call_id,
         "name": safe_name,
         "ok": bool(ok),
+        "outcome": "executed",
+        "transcript_index": max(0, len(history) - 1),
+        "result_sha256": digest,
+    }
+    return merge_continuation(
+        current,
+        {
+            "cursor": {
+                **cursor,
+                "phase": "tools_ready",
+                "next_tool_index": tool + 1,
+                **prefixes(history, events),
+            },
+            "pending_tool": None,
+            "completed_tool_receipts": [receipt],
+        },
+    )
+
+
+def tool_skipped_transition(
+    snapshot: dict[str, Any],
+    run_id: str,
+    history: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    step_index: int,
+    tool_index: int,
+    call_id: str,
+    name: str,
+    result_digest: str,
+    outcome: str = "denied",
+) -> dict[str, Any]:
+    """Advance one exact unexecuted tool without reserving tool budget."""
+    current = project_continuation(snapshot)
+    cursor = _cursor(current)
+    step = _index(step_index, "step_index")
+    tool = _index(tool_index, "tool_index")
+    safe_call_id = _text(call_id, MAX_SAFE_ID, "call_id")
+    safe_name = _text(name, MAX_TOOL_NAME, "name")
+    digest = valid_sha256(result_digest)
+    if digest is None:
+        raise AgentRunTransitionError("result_digest must be a SHA-256 digest")
+    if outcome not in {"denied", "skipped"}:
+        raise AgentRunTransitionError("unexecuted tool outcome is invalid")
+    pending = current.get("pending_tool")
+    expected_attempt = tool_attempt_id(run_id, step, tool, safe_call_id)
+    compatible_pending = pending is None or (
+        isinstance(pending, dict)
+        and pending.get("attempt_id") == expected_attempt
+        and pending.get("call_id") == safe_call_id
+        and pending.get("name") == safe_name
+        and pending.get("status") == "not_started"
+        and pending.get("budget_reserved") is False
+    )
+    if (
+        cursor.get("phase") != "tools_ready"
+        or cursor.get("step_index") != step
+        or cursor.get("next_tool_index") != tool
+        or tool >= int(cursor.get("expected_tool_count", 0))
+        or current.get("pending_interaction") is not None
+        or current.get("pending_model") is not None
+        or not compatible_pending
+    ):
+        raise AgentRunTransitionError(
+            "tool_skipped must match the exact next unexecuted tool"
+        )
+    receipt = {
+        "attempt_id": expected_attempt,
+        "call_id": safe_call_id,
+        "name": safe_name,
+        "ok": False,
+        "outcome": outcome,
         "transcript_index": max(0, len(history) - 1),
         "result_sha256": digest,
     }

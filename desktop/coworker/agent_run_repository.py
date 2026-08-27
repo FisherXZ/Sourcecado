@@ -297,6 +297,84 @@ class _AgentRunRepositoryBase:
             lease=_lease_from_row(row), decision=decision
         )
 
+    def acquire_closed_waiting_lease(
+        self,
+        run_id: str,
+        owner_id: str,
+        expected_version: int,
+        interaction_id: str,
+        closed_state: str,
+        lease_seconds: int | float,
+        now: datetime | None = None,
+    ) -> AgentRunLease | None:
+        """Reacquire one exact live-closed approval only to terminalize."""
+        owner = _lease_owner(owner_id)
+        interaction = _bounded_id(interaction_id, "interaction_id")
+        if closed_state not in {"cancelled", "expired"}:
+            raise ValueError("closed approval state is invalid")
+        seconds = _lease_seconds(lease_seconds)
+        stamp = _timestamp(now)
+        expires_at = _timestamp(_as_datetime(stamp) + timedelta(seconds=seconds))
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(run_id)
+                continuation = project_continuation(
+                    json_object(row["continuation"])
+                )
+                inbox = self._conn.execute(
+                    "SELECT state, decision, run_id FROM inbox WHERE id = ?",
+                    (interaction,),
+                ).fetchone()
+                if (
+                    str(row["current_state"]) != "waiting_approval"
+                    or row["lease_owner"] is not None
+                    or row["lease_expires_at"] is not None
+                    or int(row["version"]) != int(expected_version)
+                    or continuation.get("cursor", {}).get("phase")
+                    != "waiting_approval"
+                    or continuation.get("pending_interaction")
+                    != {"kind": "approval", "id": interaction}
+                    or inbox is None
+                    or str(inbox["state"]) != closed_state
+                    or inbox["decision"] is not None
+                    or inbox["run_id"] != run_id
+                ):
+                    self._conn.commit()
+                    return None
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        current_state = 'running', lease_owner = ?,
+                        lease_expires_at = ?, version = version + 1,
+                        updated_at = ?
+                    WHERE run_id = ? AND version = ?
+                      AND current_state = 'waiting_approval'
+                      AND lease_owner IS NULL AND lease_expires_at IS NULL
+                    """,
+                    (
+                        owner,
+                        expires_at,
+                        stamp,
+                        run_id,
+                        int(expected_version),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise AgentRunVersionConflict(run_id)
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return _lease_from_row(row)
+
     def acquire_resumable_lease(
         self,
         run_id: str,

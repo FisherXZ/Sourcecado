@@ -8,6 +8,7 @@ from typing import Any, TYPE_CHECKING
 
 from coworker.agent_run_continuation import (
     MAX_SAFE_ID,
+    merge_continuation,
     project_continuation,
 )
 from coworker.agent_run_repository import (
@@ -32,6 +33,7 @@ from coworker.agent_run_state import (
     tool_attempt_id,
     tool_completed_transition,
     tool_pending_transition,
+    tool_skipped_transition,
     waiting_approval_transition,
 )
 from coworker.events import TurnIdentity
@@ -83,6 +85,7 @@ class AgentRunExecution:
         max_steps: int,
         owner_id: str | None = None,
         now: datetime | None = None,
+        parent_run_id: str | None = None,
     ) -> AgentRunExecution:
         if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
             raise ValueError("max_steps must be a positive integer")
@@ -104,6 +107,7 @@ class AgentRunExecution:
                 owner_id=owner,
                 lease_seconds=EXECUTION_LEASE_SECONDS,
                 continuation=initial,
+                parent_run_id=parent_run_id,
                 now=now,
             )
         except AgentRunStartConflict as exc:
@@ -227,6 +231,30 @@ class AgentRunExecution:
         self._lease = renewed
         self._version = renewed.version
         return renewed
+
+    def user_input(
+        self,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        text_length: int,
+    ) -> dict[str, Any]:
+        """Commit the exact durable input/event prefix before external work."""
+        self._require_lease()
+        length = _nonnegative_index(text_length, "text_length")
+        persisted = project_continuation(self._current_persisted_snapshot())
+        cursor = dict(persisted.get("cursor", {}))
+        if cursor.get("phase") != "model_ready" or cursor.get("step_index") != 0:
+            raise ValueError("user_input requires the initial model-ready phase")
+        self._snapshot = persisted
+        next_snapshot = merge_continuation(
+            persisted,
+            {"cursor": {**cursor, **prefixes(history, events)}},
+        )
+        return self._checkpoint(
+            "user_input",
+            next_snapshot,
+            payload={"text_length": length},
+        )
 
     def model_pending(
         self,
@@ -369,6 +397,10 @@ class AgentRunExecution:
         name: str,
         ok: bool,
         result_digest: str,
+        *,
+        skills_loaded: list[str] | None = None,
+        source_refs: list[dict[str, Any]] | None = None,
+        artifact_refs: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         self._require_lease()
         step = _nonnegative_index(step_index, "step_index")
@@ -395,6 +427,9 @@ class AgentRunExecution:
                 "name": name,
                 "ok": bool(ok),
             },
+            skills_loaded=skills_loaded,
+            source_refs=source_refs,
+            artifact_refs=artifact_refs,
             usage_delta={"tool_calls": 1},
         )
 
@@ -430,6 +465,46 @@ class AgentRunExecution:
             next_snapshot,
             payload={"id": interaction},
             state="waiting_approval",
+        )
+
+    def tool_skipped(
+        self,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        step_index: int,
+        tool_index: int,
+        call_id: str,
+        name: str,
+        result_digest: str,
+        *,
+        outcome: str = "denied",
+    ) -> dict[str, Any]:
+        self._require_lease()
+        step = _nonnegative_index(step_index, "step_index")
+        tool = _nonnegative_index(tool_index, "tool_index")
+        next_snapshot = tool_skipped_transition(
+            self._snapshot,
+            self.run_id,
+            history,
+            events,
+            step,
+            tool,
+            call_id,
+            name,
+            result_digest,
+            outcome,
+        )
+        return self._checkpoint(
+            "tool_completed",
+            {**next_snapshot, "pending_tool": None},
+            payload={
+                "step_index": step,
+                "tool_index": tool,
+                "call_id": call_id,
+                "name": name,
+                "ok": False,
+                "outcome": outcome,
+            },
         )
 
     @classmethod
@@ -504,6 +579,59 @@ class AgentRunExecution:
         execution._resolved_decision = acquired.decision
         return execution
 
+    @classmethod
+    def resume_closed_approval(
+        cls,
+        store: ConversationStore,
+        run_id: str,
+        interaction_id: str,
+        closed_state: str,
+        max_steps: int,
+        owner_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AgentRunExecution:
+        interaction = _safe_boundary_text(
+            interaction_id, MAX_SAFE_ID, "interaction_id"
+        )
+        run = store.get_agent_run(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        snapshot = project_continuation(run.get("continuation"))
+        stored_identity = snapshot.get("identity")
+        if (
+            snapshot.get("pending_interaction")
+            != {"kind": "approval", "id": interaction}
+            or not isinstance(stored_identity, dict)
+        ):
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {run_id} has no matching closed approval"
+            )
+        identity = TurnIdentity(
+            session_id=str(run["session_id"]),
+            run_id=run_id,
+            message_id=str(stored_identity["message_id"]),
+            part_id=str(stored_identity["part_id"]),
+        )
+        owner = owner_id or f"execution_{uuid.uuid4().hex}"
+        lease = store.agent_runs.acquire_closed_waiting_lease(
+            run_id,
+            owner,
+            int(run["version"]),
+            interaction,
+            closed_state,
+            EXECUTION_LEASE_SECONDS,
+            now=now,
+        )
+        if lease is None:
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {run_id} closed approval is unavailable"
+            )
+        execution = cls(
+            store, identity, owner, lease, snapshot, max_steps, now
+        )
+        execution._refresh_snapshot()
+        return execution
+
     def approval_resolved(
         self,
         history: list[dict[str, Any]],
@@ -545,6 +673,7 @@ class AgentRunExecution:
         message_id: str,
         text_length: int,
         error: str | None = None,
+        error_class: str | None = None,
     ) -> dict[str, Any]:
         self._require_lease()
         safe_status = _safe_boundary_text(status, 64, "status")
@@ -559,6 +688,10 @@ class AgentRunExecution:
         }
         if error is not None:
             terminal_result["error"] = safe_error_summary(error)
+        if error_class is not None:
+            terminal_result["class"] = _safe_boundary_text(
+                error_class, 128, "error_class"
+            )
         next_snapshot = terminal_transition(
             self._snapshot,
             history,

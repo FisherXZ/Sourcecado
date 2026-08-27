@@ -1392,7 +1392,9 @@ def test_user_input_checkpoint_waits_for_durable_transcript_append(
     }
 
 
-def test_terminal_checkpoint_waits_for_durable_terminal_event(tmp_path, monkeypatch):
+def test_terminal_checkpoint_precedes_failed_terminal_event_projection(
+    tmp_path, monkeypatch
+):
     store = ConversationStore(tmp_path)
     inbox = Inbox(store)
     original_append_event = store.append_event
@@ -1403,27 +1405,29 @@ def test_terminal_checkpoint_waits_for_durable_terminal_event(tmp_path, monkeypa
         return original_append_event(session_id, event)
 
     monkeypatch.setattr(store, "append_event", fail_terminal_event)
-    with pytest.raises(RuntimeError, match="terminal event append failed"):
-        asyncio.run(
-            run_turn(
-                text="Find candidates",
-                sid="thread-terminal-order",
-                store=store,
-                provider=FakeProvider(deltas=("Done",)),
-                persona=None,
-                skills=None,
-                inbox=inbox,
-                openai_tools=[],
-                execute_kwargs={},
-            )
+    result = asyncio.run(
+        run_turn(
+            text="Find candidates",
+            sid="thread-terminal-order",
+            store=store,
+            provider=FakeProvider(deltas=("Done",)),
+            persona=None,
+            skills=None,
+            inbox=inbox,
+            openai_tools=[],
+            execute_kwargs={},
         )
+    )
 
+    assert result["status"] == "error"
     run = store.list_agent_runs(session_id="thread-terminal-order")[0]
-    assert run["current_state"] == "running"
-    assert "terminal" not in {
-        item["kind"]
-        for item in store.list_agent_run_checkpoints(run["run_id"])
-    }
+    assert run["current_state"] == "complete"
+    assert store.list_agent_run_checkpoints(run["run_id"])[-1]["kind"] == "terminal"
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (run["run_id"],),
+        ).fetchone() == (None, None)
 
 
 def test_approval_checkpoint_waits_for_canonical_inbox_resolution(
@@ -1516,6 +1520,7 @@ def test_websocket_chat_persists_canonical_agent_run_matching_event_identity(tmp
     assert [item["kind"] for item in checkpoints] == [
         "run_started",
         "user_input",
+        "model_pending",
         "model_completed",
         "terminal",
     ]
@@ -1586,7 +1591,7 @@ def test_tool_run_aggregates_skill_source_and_artifact_refs_without_delta_checkp
     persistence_order = []
     original_append = application.state.store.append
     original_append_event = application.state.store.append_event
-    original_checkpoint = application.state.store.checkpoint_agent_run
+    original_checkpoint = application.state.store.agent_runs.checkpoint_leased
 
     def tracked_append(session_id, message):
         original_append(session_id, message)
@@ -1598,8 +1603,8 @@ def test_tool_run_aggregates_skill_source_and_artifact_refs_without_delta_checkp
         if event.get("type") == "tool_finished":
             persistence_order.append("event:tool_finished")
 
-    def tracked_checkpoint(run_id, *, kind, **kwargs):
-        checkpoint = original_checkpoint(run_id, kind=kind, **kwargs)
+    def tracked_checkpoint(lease, kind, continuation, **kwargs):
+        checkpoint = original_checkpoint(lease, kind, continuation, **kwargs)
         if kind in {"model_completed", "tool_completed"}:
             persistence_order.append(f"checkpoint:{kind}")
         return checkpoint
@@ -1609,7 +1614,7 @@ def test_tool_run_aggregates_skill_source_and_artifact_refs_without_delta_checkp
         application.state.store, "append_event", tracked_append_event
     )
     monkeypatch.setattr(
-        application.state.store, "checkpoint_agent_run", tracked_checkpoint
+        application.state.store.agent_runs, "checkpoint_leased", tracked_checkpoint
     )
     with TestClient(application).websocket_connect(
         "/ws/chat", subprotocols=["club", TOKEN]
@@ -1647,9 +1652,13 @@ def test_tool_run_aggregates_skill_source_and_artifact_refs_without_delta_checkp
     assert [item["kind"] for item in checkpoints] == [
         "run_started",
         "user_input",
+        "model_pending",
         "model_completed",
+        "tool_pending",
         "tool_completed",
+        "tool_pending",
         "tool_completed",
+        "model_pending",
         "model_completed",
         "terminal",
     ]

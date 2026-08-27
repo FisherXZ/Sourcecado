@@ -176,7 +176,7 @@ def project_continuation(value: Any) -> dict[str, Any]:
                     ),
                     "result_sha256": valid_sha256(receipt.get("result_sha256")),
                 }
-            if receipt.get("outcome") in {"executed", "denied"}:
+            if receipt.get("outcome") in {"executed", "denied", "skipped"}:
                 safe_receipt["outcome"] = receipt["outcome"]
             receipts.append(safe_receipt)
     if "completed_tool_receipts" in raw:

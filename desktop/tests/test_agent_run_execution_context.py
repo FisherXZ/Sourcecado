@@ -635,9 +635,10 @@ def test_completed_boundaries_update_prefixes_and_append_digest_only_receipt(
         {
             "attempt_id": f"{identity.run_id}:0:call-1:0",
             "call_id": "call-1",
-            "name": "apollo_search",
-            "ok": True,
-            "transcript_index": len(history) - 1,
+                "name": "apollo_search",
+                "ok": True,
+                "outcome": "executed",
+                "transcript_index": len(history) - 1,
             "result_sha256": result_digest,
         }
     ]
