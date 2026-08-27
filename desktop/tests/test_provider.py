@@ -10,6 +10,7 @@ from coworker.provider import (
     KIMI_MODEL,
     DeepSeekProvider,
     OpenAICompatProvider,
+    StreamKind,
     default_model_id,
     provider_from_env,
 )
@@ -148,7 +149,7 @@ def test_deepseek_stream_distinguishes_transient_reasoning_from_answer(monkeypat
     assert [
         (chunk.transient_reasoning_delta, chunk.text_delta)
         for chunk in chunks
-        if chunk.finish_reason is None
+        if chunk.kind in {StreamKind.REASONING, StreamKind.TEXT}
     ] == [
         ("private analysis", None),
         (None, "Visible answer"),
@@ -202,16 +203,19 @@ def test_deepseek_stream_emits_terminal_reason_and_content_free_usage(monkeypatc
 
     chunks = asyncio.run(consume())
 
-    assert chunks[-2].finish_reason == "stop"
-    assert vars(chunks[-1].usage) == {
+    terminal = next(chunk for chunk in chunks if chunk.kind is StreamKind.TERMINAL)
+    usage = next(chunk.usage for chunk in chunks if chunk.kind is StreamKind.USAGE)
+    assert terminal.finish_reason == "stop"
+    assert vars(usage) == {
         "input_tokens": 11,
         "output_tokens": 7,
         "total_tokens": 18,
         "cached_input_tokens": 4,
         "uncached_input_tokens": 7,
         "reasoning_tokens": 3,
+        "cache_write_input_tokens": 0,
     }
-    assert "unexpected_response_content" not in repr(chunks[-1].usage)
+    assert "unexpected_response_content" not in repr(usage)
 
 
 def test_deepseek_stream_assembles_interleaved_tool_deltas_by_call_identity(monkeypatch):
@@ -290,7 +294,10 @@ def test_deepseek_stream_assembles_interleaved_tool_deltas_by_call_identity(monk
             async for chunk in provider.astream(
                 context_id="multi-tool",
                 messages=[{"role": "user", "content": "use tools"}],
-                tools=[{"type": "function", "function": {"name": "now"}}],
+                tools=[
+                    {"type": "function", "function": {"name": "now"}},
+                    {"type": "function", "function": {"name": "search"}},
+                ],
             )
         ]
 
