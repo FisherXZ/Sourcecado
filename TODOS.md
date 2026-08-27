@@ -15,7 +15,7 @@ This file tracks product-level gaps only. Implementation checklists belong in da
 - Shared login, multi-operator tenancy, and hosted deployment.
 - Autonomous follow-up sending or background bulk enrichment.
 - LinkedIn/Apify v2.
-- Formal routine/agent versioning and evaluation suites beyond the local run ledger.
+- Large benchmark corpora and release-gating policy beyond the isolated baseline harness.
 
 ## Completed transitions
 

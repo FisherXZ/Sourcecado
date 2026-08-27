@@ -13,6 +13,7 @@ prove-and-plain-english-skills.zip
 .gstack/
 .impeccable/
 .pytest_cache/
+desktop/.eval-artifacts/
 __pycache__/
 *.pyc
 *.log
