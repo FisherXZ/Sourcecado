@@ -341,3 +341,68 @@ describe("getSession protocol boundary", () => {
     });
   });
 });
+
+describe("current-run telemetry boundary", () => {
+  it("rebuilds only the numeric and bounded-status allowlist", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          version: 1,
+          session_id: "thread-alpha",
+          current_run: {
+            run_id: "run-1",
+            status: "running",
+            input_tokens: 80,
+            output_tokens: 20,
+            total_tokens: 100,
+            cache_hit_input_tokens: 30,
+            cache_miss_input_tokens: 50,
+            reasoning_tokens: 4,
+            current_context_tokens: 80,
+            context_window_tokens: 1000,
+            context_use_ratio: 0.08,
+            elapsed_ms: 1250,
+            estimated_cost_usd: 0.0042,
+            retry_count: 1,
+            compaction_count: 2,
+            prompt: "sk-live-PLANTED",
+            response_text: "private response",
+            raw_error: "private error",
+            arguments: { secret: true },
+            result: { secret: true },
+          },
+        }),
+      }),
+    );
+    const module = await import("../src/api");
+    const getCurrentRunTelemetry = (
+      module as unknown as {
+        getCurrentRunTelemetry: (sessionId: string) => Promise<unknown>;
+      }
+    ).getCurrentRunTelemetry;
+
+    await expect(getCurrentRunTelemetry("thread-alpha")).resolves.toEqual({
+      version: 1,
+      session_id: "thread-alpha",
+      current_run: {
+        run_id: "run-1",
+        status: "running",
+        input_tokens: 80,
+        output_tokens: 20,
+        total_tokens: 100,
+        cache_hit_input_tokens: 30,
+        cache_miss_input_tokens: 50,
+        reasoning_tokens: 4,
+        current_context_tokens: 80,
+        context_window_tokens: 1000,
+        context_use_ratio: 0.08,
+        elapsed_ms: 1250,
+        estimated_cost_usd: 0.0042,
+        retry_count: 1,
+        compaction_count: 2,
+      },
+    });
+  });
+});

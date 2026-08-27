@@ -117,6 +117,30 @@ export type Conversation = {
   queue_paused?: boolean;
 };
 
+export type CurrentRunMetrics = {
+  run_id: string;
+  status: "running" | "success" | "failed" | "cancelled" | "partial";
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  cache_hit_input_tokens: number | null;
+  cache_miss_input_tokens: number | null;
+  reasoning_tokens: number | null;
+  current_context_tokens: number | null;
+  context_window_tokens: number | null;
+  context_use_ratio: number | null;
+  elapsed_ms: number | null;
+  estimated_cost_usd: number | null;
+  retry_count: number;
+  compaction_count: number;
+};
+
+export type CurrentRunTelemetry = {
+  version: 1;
+  session_id: string;
+  current_run: CurrentRunMetrics | null;
+};
+
 export type QueueItem = SourcecadoQueueItem;
 
 const httpBase = (): string =>
@@ -210,6 +234,71 @@ export async function getSession(id: string): Promise<Conversation> {
     ...(typeof body.queue_paused === "boolean"
       ? { queue_paused: body.queue_paused }
       : {}),
+  };
+}
+
+const RUN_METRIC_STATUSES = new Set([
+  "running",
+  "success",
+  "failed",
+  "cancelled",
+  "partial",
+]);
+
+function measurement(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+export async function getCurrentRunTelemetry(
+  sessionId: string,
+): Promise<CurrentRunTelemetry> {
+  const res = await get(
+    `/v1/sessions/${encodeURIComponent(sessionId)}/telemetry/current`,
+  );
+  if (!res.ok) throw new Error(`current-run telemetry ${res.status}`);
+  const raw = (await res.json()) as Record<string, unknown>;
+  const candidate =
+    typeof raw.current_run === "object" &&
+    raw.current_run !== null &&
+    !Array.isArray(raw.current_run)
+      ? (raw.current_run as Record<string, unknown>)
+      : null;
+  if (raw.version !== 1 || raw.session_id !== sessionId) {
+    throw new Error("current-run telemetry payload malformed");
+  }
+  if (candidate === null) {
+    return { version: 1, session_id: sessionId, current_run: null };
+  }
+  const status = String(candidate.status);
+  if (
+    typeof candidate.run_id !== "string" ||
+    !candidate.run_id ||
+    !RUN_METRIC_STATUSES.has(status)
+  ) {
+    throw new Error("current-run telemetry payload malformed");
+  }
+  return {
+    version: 1,
+    session_id: sessionId,
+    current_run: {
+      run_id: candidate.run_id,
+      status: status as CurrentRunMetrics["status"],
+      input_tokens: measurement(candidate.input_tokens),
+      output_tokens: measurement(candidate.output_tokens),
+      total_tokens: measurement(candidate.total_tokens),
+      cache_hit_input_tokens: measurement(candidate.cache_hit_input_tokens),
+      cache_miss_input_tokens: measurement(candidate.cache_miss_input_tokens),
+      reasoning_tokens: measurement(candidate.reasoning_tokens),
+      current_context_tokens: measurement(candidate.current_context_tokens),
+      context_window_tokens: measurement(candidate.context_window_tokens),
+      context_use_ratio: measurement(candidate.context_use_ratio),
+      elapsed_ms: measurement(candidate.elapsed_ms),
+      estimated_cost_usd: measurement(candidate.estimated_cost_usd),
+      retry_count: measurement(candidate.retry_count) ?? 0,
+      compaction_count: measurement(candidate.compaction_count) ?? 0,
+    },
   };
 }
 

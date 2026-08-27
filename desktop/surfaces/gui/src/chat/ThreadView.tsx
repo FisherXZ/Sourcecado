@@ -6,12 +6,13 @@ import { ComposerDraftProvider } from "./ComposerDraftContext";
 import { Queue } from "./Queue";
 import { ThreadHeader } from "./ThreadHeader";
 import { UserMessage } from "./UserMessage";
-import type { QueueItem } from "../api";
+import type { CurrentRunMetrics, QueueItem } from "../api";
 import { Inspector } from "./Inspector";
 
 type ThreadViewProps = {
   readonly title: string | null;
   readonly personaName?: string | null;
+  readonly runMetrics?: CurrentRunMetrics | null;
   readonly loading: boolean;
   readonly loadError: boolean;
   readonly onRetry: () => void;
@@ -53,6 +54,7 @@ function Starter({
 export function ThreadView({
   title,
   personaName,
+  runMetrics,
   loading,
   loadError,
   onRetry,
@@ -76,7 +78,11 @@ export function ThreadView({
     <ComposerDraftProvider populate={populateComposer}>
     <div className="sourcecado-chat-workspace">
     <ThreadPrimitive.Root className="sourcecado-thread">
-      <ThreadHeader title={title} personaName={personaName} />
+      <ThreadHeader
+        title={title}
+        personaName={personaName}
+        runMetrics={runMetrics}
+      />
       <ThreadPrimitive.Viewport
         className="sourcecado-transcript"
         role="log"

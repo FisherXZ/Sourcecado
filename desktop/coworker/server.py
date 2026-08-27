@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import coworker.turn as turn_runtime
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,17 @@ from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
 from coworker.provider import ToolCall, provider_from_env
 from coworker.secrets import SecretStore
 from coworker.store import ConversationStore, valid_session_id
+from coworker.telemetry import (
+    AgentTurnSpan,
+    ErrorKind,
+    InMemoryTelemetryAdapter,
+    RetryEvent,
+    RetryReason,
+    TelemetryAdapter,
+    TelemetryRecorder,
+    ToolSpan,
+    TraceContext,
+)
 from coworker.tools import OPENAI_TOOLS, execute
 from coworker.workspace import GrantUnavailable
 from coworker.workspace_files import WorkspacePathError
@@ -254,6 +266,7 @@ def create_app(
     mcp: Any = None,
     browser_opener: Callable[[str], bool] | None = None,
     workspace_runtime: WorkspaceRuntime | None = None,
+    telemetry_adapter: TelemetryAdapter | None = None,
 ) -> FastAPI:
     if not token:
         raise ValueError("sidecar token must be non-empty")
@@ -261,6 +274,12 @@ def create_app(
     app = FastAPI(title="Club sidecar", version="0.0.2")
     app.state.token = token
     app.state.provider = provider_from_env() if provider is _UNSET else provider
+    app.state.telemetry_adapter = (
+        telemetry_adapter
+        if telemetry_adapter is not None
+        else InMemoryTelemetryAdapter()
+    )
+    app.state.telemetry_recorder = TelemetryRecorder(app.state.telemetry_adapter)
     root = state if state is not None else state_dir()
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
@@ -344,6 +363,7 @@ def create_app(
                 emit=None,
                 wait_permission=None,
                 system_prompt_fn=system_prompt,
+                telemetry=app.state.telemetry_recorder,
             )
         )
 
@@ -430,6 +450,29 @@ def create_app(
         item: dict[str, Any], *, claimant: str
     ) -> dict[str, Any] | None:
         """Run an allow-claimed approval server-side and persist its receipt."""
+        approval_span = None
+        approval_tool_span = None
+        try:
+            approval_span = app.state.telemetry_recorder.start_span(
+                AgentTurnSpan(operation="agent.approval"),
+                TraceContext(
+                    session_id=str(item.get("session_id") or ""),
+                    run_id=str(item.get("run_id") or ""),
+                ),
+            )
+            try:
+                tool_schema = ToolSpan(
+                    tool_name=str(item.get("name") or "unknown"),
+                    operation="tool.execute",
+                )
+            except ValueError:
+                tool_schema = ToolSpan(
+                    tool_name="unknown",
+                    operation="tool.execute",
+                )
+            approval_tool_span = approval_span.child(tool_schema)
+        except ValueError:
+            pass
         try:
             ok, result = await asyncio.to_thread(
                 execute,
@@ -458,8 +501,21 @@ def create_app(
                 actor=str(item.get("actor") or "assistant"),
                 run_id=str(item.get("run_id") or "") or None,
             )
+        except asyncio.CancelledError:
+            if approval_tool_span is not None:
+                approval_tool_span.cancel()
+            if approval_span is not None:
+                approval_span.cancel()
+            raise
         except Exception as exc:
             ok, result = False, {"error": str(exc)}
+        if approval_tool_span is not None and approval_span is not None:
+            if ok:
+                approval_tool_span.finish()
+                approval_span.finish()
+            else:
+                approval_tool_span.partial(ErrorKind.TOOL)
+                approval_span.partial(ErrorKind.TOOL)
         receipt = app.state.inbox.complete_execution(
             str(item["id"]),
             claimant=claimant,
@@ -649,6 +705,35 @@ def create_app(
         if claim is None:
             return None
         if decision == "allow" and claim.claimed and claim.owned:
+            recovery_span = None
+            recovery_tool_span = None
+            try:
+                recovery_span = app.state.telemetry_recorder.start_span(
+                    AgentTurnSpan(operation="agent.recovery"),
+                    TraceContext(
+                        session_id=str(item.get("session_id") or ""),
+                        run_id=str(item.get("run_id") or ""),
+                    ),
+                )
+                recovery_span.record(
+                    RetryEvent(
+                        operation="tool.execute",
+                        retry_count=1,
+                        reason=RetryReason.TRANSIENT_TOOL,
+                    )
+                )
+                try:
+                    tool_schema = ToolSpan(
+                        tool_name=str(item.get("name") or "unknown"),
+                        operation="tool.execute",
+                    )
+                except ValueError:
+                    tool_schema = ToolSpan(
+                        tool_name="unknown", operation="tool.execute"
+                    )
+                recovery_tool_span = recovery_span.child(tool_schema)
+            except ValueError:
+                pass
             try:
                 ok, result = await asyncio.to_thread(
                     turn_runtime.execute,
@@ -678,8 +763,21 @@ def create_app(
                     run_id=str(item.get("run_id") or "") or None,
                 )
                 result = dict(result)
+            except asyncio.CancelledError:
+                if recovery_tool_span is not None:
+                    recovery_tool_span.cancel()
+                if recovery_span is not None:
+                    recovery_span.cancel()
+                raise
             except Exception as exc:
                 ok, result = False, {"error": str(exc)}
+            if recovery_tool_span is not None and recovery_span is not None:
+                if ok:
+                    recovery_tool_span.finish(retry_count=1)
+                    recovery_span.finish(retry_count=1)
+                else:
+                    recovery_tool_span.partial(ErrorKind.TOOL, retry_count=1)
+                    recovery_span.partial(ErrorKind.TOOL, retry_count=1)
             receipt = app.state.inbox.complete_execution(
                 item_id,
                 claimant=claimant,
@@ -1428,6 +1526,41 @@ def create_app(
             "queue_paused": store.queue_paused(sid),
         }
 
+    @app.get("/v1/sessions/{sid}/telemetry/current")
+    def session_current_telemetry(sid: str):
+        if app.state.store.index(sid) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        query = getattr(app.state.telemetry_adapter, "current_session_metrics", None)
+        metrics = (
+            query(session_id=sid, now_ns=time.monotonic_ns())
+            if callable(query)
+            else None
+        )
+        current_run = None
+        if metrics is not None:
+            current_run = {
+                "run_id": metrics.run_id,
+                "status": metrics.status,
+                "input_tokens": metrics.input_tokens,
+                "output_tokens": metrics.output_tokens,
+                "total_tokens": metrics.total_tokens,
+                "cache_hit_input_tokens": metrics.cache_hit_input_tokens,
+                "cache_miss_input_tokens": metrics.cache_miss_input_tokens,
+                "reasoning_tokens": metrics.reasoning_tokens,
+                "current_context_tokens": metrics.current_context_tokens,
+                "context_window_tokens": metrics.context_window_tokens,
+                "context_use_ratio": metrics.context_use_ratio,
+                "elapsed_ms": metrics.elapsed_ms,
+                "estimated_cost_usd": metrics.estimated_cost_usd,
+                "retry_count": metrics.retry_count,
+                "compaction_count": metrics.compaction_count,
+            }
+        return {
+            "version": 1,
+            "session_id": sid,
+            "current_run": current_run,
+        }
+
     @app.patch("/v1/sessions/{sid}")
     async def sessions_patch(sid: str, request: Request):
         payload = await request.json()
@@ -1667,6 +1800,22 @@ def create_app(
                 )
                 await _persist_and_send(recovery)
                 return
+            recovery_span = app.state.telemetry_recorder.start_span(
+                AgentTurnSpan(operation="agent.recovery"),
+                TraceContext(session_id=session_id, run_id=run_id),
+            )
+            recovery_span.record(
+                RetryEvent(
+                    operation="tool.execute",
+                    retry_count=1,
+                    reason=RetryReason.TRANSIENT_TOOL,
+                )
+            )
+            try:
+                tool_schema = ToolSpan(tool_name=name, operation="tool.execute")
+            except ValueError:
+                tool_schema = ToolSpan(tool_name="unknown", operation="tool.execute")
+            retry_tool_span = recovery_span.child(tool_schema)
             try:
                 ok, result = await asyncio.to_thread(
                     turn_runtime.execute,
@@ -1685,9 +1834,19 @@ def create_app(
                     workspace_runtime=app.state.workspace_runtime,
                     session_id=session_id,
                 )
+            except asyncio.CancelledError:
+                retry_tool_span.cancel()
+                recovery_span.cancel()
+                raise
             except Exception as exc:
                 # The claim is held: this command must still record an outcome.
                 ok, result = False, {"error": str(exc)}
+            if ok:
+                retry_tool_span.finish(retry_count=1)
+                recovery_span.finish(retry_count=1)
+            else:
+                retry_tool_span.partial(ErrorKind.TOOL, retry_count=1)
+                recovery_span.partial(ErrorKind.TOOL, retry_count=1)
             result = dict(result)
             retried_failure = (
                 _tool_failure(
@@ -1824,6 +1983,7 @@ def create_app(
                     system_prompt_fn=system_prompt,
                     identity=control.identity,
                     control=control,
+                    telemetry=app.state.telemetry_recorder,
                 )
                 status = str(result.get("status") or "error")
                 if queue_item_id is not None:

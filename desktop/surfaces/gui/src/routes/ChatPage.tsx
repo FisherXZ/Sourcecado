@@ -6,12 +6,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   getPersona,
+  getCurrentRunTelemetry,
   getSession,
   getSessions,
   hasToken,
   openChat,
   type CommandDelivery,
   type ConnectionStatus,
+  type CurrentRunMetrics,
   type SourcecadoSocketEvent,
   type QueueItem,
 } from "../api";
@@ -91,9 +93,37 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const [personaName, setPersonaName] = useState<string | null>(null);
+  const [runMetrics, setRunMetrics] = useState<CurrentRunMetrics | null>(null);
   const [, setRevision] = useState(0);
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
+  const currentRunIsActive = runningThreadsRef.current.has(activeThreadId);
+
+  useEffect(() => {
+    if (!hasToken() || !activeThreadId) {
+      setRunMetrics(null);
+      return;
+    }
+    setRunMetrics(null);
+    let active = true;
+    const refreshMetrics = () => {
+      void getCurrentRunTelemetry(activeThreadId)
+        .then((payload) => {
+          if (active) setRunMetrics(payload.current_run);
+        })
+        .catch(() => {
+          // Metrics are passive; chat remains usable when measurement is unavailable.
+        });
+    };
+    refreshMetrics();
+    const interval = currentRunIsActive
+      ? window.setInterval(refreshMetrics, 1000)
+      : undefined;
+    return () => {
+      active = false;
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [activeThreadId, currentRunIsActive]);
 
   useEffect(() => {
     if (!hasToken()) return;
@@ -428,6 +458,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
         <ThreadView
           title={title}
           personaName={personaName}
+          runMetrics={runMetrics}
           loading={loading}
           loadError={loadError}
           onRetry={() => setLoadAttempt((attempt) => attempt + 1)}

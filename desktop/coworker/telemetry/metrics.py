@@ -7,8 +7,10 @@ from dataclasses import dataclass
 
 from coworker.telemetry.schema import (
     AgentTurnSpan,
+    CompactionEvent,
     CostEvent,
     ProviderSpan,
+    RetryEvent,
     SpanEventRecord,
     SpanSettledRecord,
     SpanStartedRecord,
@@ -20,6 +22,7 @@ from coworker.telemetry.schema import (
 @dataclass(frozen=True, slots=True)
 class CurrentRunMetrics:
     run_id: str
+    status: str
     input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
@@ -31,6 +34,8 @@ class CurrentRunMetrics:
     context_use_ratio: float | None
     elapsed_ms: float | None
     estimated_cost_usd: float | None
+    retry_count: int
+    compaction_count: int
 
 
 def _sum_known(usages: list[UsageEvent], field_name: str) -> int | None:
@@ -92,9 +97,12 @@ def current_run_metrics(
         if isinstance(record.span, AgentTurnSpan)
     ]
     elapsed_ms: float | None = None
+    status = "running"
     if agent_starts:
         root = min(agent_starts, key=lambda record: record.sequence)
         settlement = settlements.get(root.span_id)
+        if settlement is not None:
+            status = settlement.terminal.status.value
         elapsed_ms = (
             settlement.terminal.latency_ms
             if settlement is not None
@@ -117,6 +125,7 @@ def current_run_metrics(
     )
     return CurrentRunMetrics(
         run_id=run_id,
+        status=status,
         input_tokens=_sum_known(selected_usages, "input_tokens"),
         output_tokens=_sum_known(selected_usages, "output_tokens"),
         total_tokens=_sum_known(selected_usages, "total_tokens"),
@@ -128,4 +137,14 @@ def current_run_metrics(
         context_use_ratio=context_use_ratio,
         elapsed_ms=elapsed_ms,
         estimated_cost_usd=estimated_cost_usd,
+        retry_count=sum(
+            isinstance(record.event, RetryEvent)
+            for record in run_records
+            if isinstance(record, SpanEventRecord)
+        ),
+        compaction_count=sum(
+            isinstance(record.event, CompactionEvent)
+            for record in run_records
+            if isinstance(record, SpanEventRecord)
+        ),
     )

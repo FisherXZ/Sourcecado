@@ -8,6 +8,7 @@ from threading import Lock, RLock
 from typing import Protocol
 
 from coworker.telemetry.schema import (
+    AgentTurnSpan,
     CostEstimate,
     ErrorKind,
     SpanEventRecord,
@@ -66,6 +67,22 @@ class InMemoryTelemetryAdapter:
         from coworker.telemetry.metrics import current_run_metrics
 
         return current_run_metrics(self.records, run_id=run_id, now_ns=now_ns)
+
+    def current_session_metrics(self, *, session_id: str, now_ns: int):
+        starts = [
+            record
+            for record in self.records
+            if isinstance(record, SpanStartedRecord)
+            and isinstance(record.span, AgentTurnSpan)
+            and record.context.session_id == session_id
+        ]
+        if not starts:
+            return None
+        latest = max(starts, key=lambda record: record.sequence)
+        return self.current_run_metrics(
+            run_id=latest.context.run_id,
+            now_ns=now_ns,
+        )
 
 
 class TelemetryRecorder:

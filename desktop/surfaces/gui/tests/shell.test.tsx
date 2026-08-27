@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   createSession: vi.fn(),
   getBoard: vi.fn(),
   getConnectors: vi.fn(),
+  getCurrentRunTelemetry: vi.fn(),
   getGmail: vi.fn(),
   getHealth: vi.fn(),
   getInbox: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("../src/api", () => ({
   disconnectGmail: vi.fn(),
   getBoard: api.getBoard,
   getConnectors: api.getConnectors,
+  getCurrentRunTelemetry: api.getCurrentRunTelemetry,
   getGmail: api.getGmail,
   getHealth: api.getHealth,
   getInbox: api.getInbox,
@@ -73,6 +75,11 @@ describe("App shell routing", () => {
     window.localStorage.clear();
     window.location.hash = "#/skills";
     api.getConnectors.mockResolvedValue({ connectors: [] });
+    api.getCurrentRunTelemetry.mockResolvedValue({
+      version: 1,
+      session_id: "thread-alpha",
+      current_run: null,
+    });
     api.getBoard.mockResolvedValue({ open: [], in_conversation: [], done: [] });
     api.getGmail.mockResolvedValue({ connected: false, email: null });
     api.getHealth.mockResolvedValue({ status: "ok", piece: "test", slice: 1, model: "test" });
