@@ -269,6 +269,241 @@ def test_tool_pending_failure_fences_execute(tmp_path, monkeypatch):
     assert store.get_agent_run(identity.run_id)["current_state"] == "failed"
 
 
+def test_safe_tool_event_persistence_failure_suspends_for_retry(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-safe-interrupted")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {"tool_calls": [ToolCall(id="call-safe", name="now", arguments={})]}
+        ]
+    )
+    executions = []
+    original_append_event = store.append_event
+
+    def execute_once(name, arguments, **kwargs):
+        executions.append(name)
+        return True, {"time": "noon"}
+
+    def fail_tool_finished(session_id, event):
+        if event.get("type") == "tool_finished":
+            raise RuntimeError("tool_finished persistence failed")
+        return original_append_event(session_id, event)
+
+    monkeypatch.setattr("coworker.turn.execute", execute_once)
+    monkeypatch.setattr(store, "append_event", fail_tool_finished)
+    result = asyncio.run(
+        run_turn(
+            text="Check the time",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+        )
+    )
+
+    assert result == {
+        "status": "interrupted",
+        "text": "",
+        "run_id": identity.run_id,
+    }
+    assert executions == ["now"]
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["cursor"]["phase"] == "tools_ready"
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 7
+    assert run["continuation"]["pending_tool"] == {
+        "attempt_id": f"{identity.run_id}:0:call-safe:0",
+        "call_id": "call-safe",
+        "name": "now",
+        "retry_class": "safe",
+        "status": "retry_ready",
+        "budget_reserved": True,
+    }
+    assert store.list_agent_run_checkpoints(identity.run_id)[-1]["kind"] == (
+        "process_interrupted"
+    )
+    durable_history = store.load(identity.session_id)
+    durable_events = store.load_events(identity.session_id)
+    cursor = run["continuation"]["cursor"]
+    assert cursor["transcript_prefix_count"] == len(durable_history)
+    assert cursor["transcript_prefix_sha256"] == transcript_prefix_sha256(
+        durable_history
+    )
+    assert cursor["event_prefix_count"] == len(durable_events) - 1
+    assert cursor["event_prefix_sha256"] == transcript_prefix_sha256(
+        durable_events[:-1]
+    )
+    assert durable_events[-1]["state"] == "interrupted"
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone() == (None, None)
+
+
+def test_interrupted_projection_failure_keeps_suspension_and_no_lease(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-interrupted-projection-failure")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {"tool_calls": [ToolCall(id="call-safe", name="now", arguments={})]}
+        ]
+    )
+    original_append_event = store.append_event
+
+    def fail_after_execution(session_id, event):
+        if event.get("type") == "tool_finished" or event.get("state") == "interrupted":
+            raise RuntimeError("interrupted projection failed")
+        return original_append_event(session_id, event)
+
+    monkeypatch.setattr(
+        "coworker.turn.execute", lambda *args, **kwargs: (True, {"time": "noon"})
+    )
+    monkeypatch.setattr(store, "append_event", fail_after_execution)
+    result = asyncio.run(
+        run_turn(
+            text="Check the time",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "error"
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["pending_tool"]["status"] == "retry_ready"
+    assert store.list_agent_run_checkpoints(identity.run_id)[-1]["kind"] == (
+        "process_interrupted"
+    )
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone() == (None, None)
+
+
+def test_consequential_tool_transcript_failure_requires_review(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-consequential-interrupted")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-draft",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            }
+        ]
+    )
+    executions = []
+    original_append = store.append
+
+    async def allow(_call_id):
+        return "allow"
+
+    def execute_once(name, arguments, **kwargs):
+        executions.append(name)
+        return True, {"draft_id": "draft-1"}
+
+    def fail_tool_transcript(session_id, message):
+        if message.get("role") == "tool":
+            raise RuntimeError("tool transcript persistence failed")
+        return original_append(session_id, message)
+
+    monkeypatch.setattr("coworker.turn.execute", execute_once)
+    monkeypatch.setattr(store, "append", fail_tool_transcript)
+    result = asyncio.run(
+        run_turn(
+            text="Draft outreach",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=allow,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "interrupted"
+    assert executions == ["gmail_draft"]
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["cursor"]["phase"] == "review_required"
+    assert run["continuation"]["pending_tool"]["status"] == "outcome_unknown"
+    assert run["continuation"]["pending_tool"]["retry_class"] == "consequential"
+    assert store.list_agent_run_checkpoints(identity.run_id)[-1]["kind"] == (
+        "tool_outcome_unknown"
+    )
+    assert store.load_events(identity.session_id)[-1]["state"] == "interrupted"
+    assert [message["role"] for message in store.load(identity.session_id)] == [
+        "user",
+        "assistant",
+        "tool",
+    ]
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone() == (None, None)
+
+
+def test_tool_completed_checkpoint_failure_suspends_without_reexecution(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-completion-interrupted")
+    provider = FakeProvider(
+        steps=[
+            {"tool_calls": [ToolCall(id="call-safe", name="now", arguments={})]}
+        ]
+    )
+    executions = []
+
+    def execute_once(name, arguments, **kwargs):
+        executions.append(name)
+        return True, {"time": "noon"}
+
+    def fail_completed(self, *args, **kwargs):
+        raise RuntimeError("tool_completed checkpoint failed")
+
+    monkeypatch.setattr("coworker.turn.execute", execute_once)
+    monkeypatch.setattr(AgentRunExecution, "tool_completed", fail_completed)
+    store, result = _run(tmp_path, provider, identity=identity)
+
+    assert result["status"] == "interrupted"
+    assert executions == ["now"]
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["pending_tool"]["status"] == "retry_ready"
+    assert store.list_agent_run_checkpoints(identity.run_id)[-1]["kind"] == (
+        "process_interrupted"
+    )
+
+
 def test_policy_denial_advances_without_execution_or_tool_budget(
     tmp_path, monkeypatch
 ):

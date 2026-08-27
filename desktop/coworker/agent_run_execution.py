@@ -25,6 +25,7 @@ from coworker.agent_runs import (
 from coworker.agent_run_state import (
     approval_resolved_transition,
     initial_continuation,
+    interrupt_inflight_tool_transition,
     model_attempt_id,
     model_completed_transition,
     model_pending_transition,
@@ -505,6 +506,43 @@ class AgentRunExecution:
                 "ok": False,
                 "outcome": outcome,
             },
+        )
+
+    def interrupt_inflight_tool(
+        self,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Suspend external work whose completion was not durably checkpointed."""
+        self._require_lease()
+        pending = self._snapshot.get("pending_tool")
+        cursor = self._snapshot.get("cursor", {})
+        next_snapshot = interrupt_inflight_tool_transition(
+            self._snapshot, history, events
+        )
+        retry_class = (
+            str(pending.get("retry_class"))
+            if isinstance(pending, dict)
+            else ""
+        )
+        retry_safe = retry_class == "safe"
+        return self._checkpoint(
+            "process_interrupted" if retry_safe else "tool_outcome_unknown",
+            next_snapshot,
+            payload={
+                "status": "interrupted",
+                "phase": next_snapshot.get("cursor", {}).get("phase"),
+                "step_index": int(cursor.get("step_index", 0)),
+                "tool_index": int(cursor.get("next_tool_index", 0)),
+                "call_id": (
+                    pending.get("call_id")
+                    if isinstance(pending, dict)
+                    else None
+                ),
+                "name": pending.get("name") if isinstance(pending, dict) else None,
+                "retry_class": retry_class,
+            },
+            state="interrupted",
         )
 
     @classmethod

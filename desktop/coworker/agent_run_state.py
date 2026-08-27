@@ -388,6 +388,44 @@ def tool_skipped_transition(
     )
 
 
+def interrupt_inflight_tool_transition(
+    snapshot: dict[str, Any],
+    history: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Suspend an exact in-flight tool according to its retry classification."""
+    current = project_continuation(snapshot)
+    cursor = _cursor(current)
+    pending = current.get("pending_tool")
+    if (
+        cursor.get("phase") != "tool_in_flight"
+        or not isinstance(pending, dict)
+        or pending.get("status") != "in_flight"
+        or pending.get("budget_reserved") is not True
+        or pending.get("retry_class") not in {"safe", "consequential"}
+        or current.get("pending_model") is not None
+        or current.get("pending_interaction") is not None
+    ):
+        raise AgentRunTransitionError(
+            "tool interruption requires the exact reserved in-flight tool"
+        )
+    retry_safe = pending["retry_class"] == "safe"
+    return merge_continuation(
+        current,
+        {
+            "cursor": {
+                **cursor,
+                "phase": "tools_ready" if retry_safe else "review_required",
+                **prefixes(history, events),
+            },
+            "pending_tool": {
+                **pending,
+                "status": "retry_ready" if retry_safe else "outcome_unknown",
+            },
+        },
+    )
+
+
 def waiting_approval_transition(
     snapshot: dict[str, Any],
     run_id: str,

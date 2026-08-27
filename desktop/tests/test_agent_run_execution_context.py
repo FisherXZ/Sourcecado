@@ -383,7 +383,7 @@ def test_start_rejects_interrupted_review_required_continuation(tmp_path):
     lease = store.agent_runs.acquire_lease(
         "run-review-required", "old-owner", started["version"], 30, now=NOW
     )
-    lease, _checkpoint = store.agent_runs.checkpoint_leased(
+    released, _checkpoint = store.agent_runs.checkpoint_leased(
         lease,
         "process_interrupted",
         {
@@ -405,7 +405,8 @@ def test_start_rejects_interrupted_review_required_continuation(tmp_path):
         state="interrupted",
         now=NOW,
     )
-    store.agent_runs.release_lease(lease, now=NOW)
+    assert released is None
+    assert _lease_columns(store, "run-review-required") == (None, None)
 
     with pytest.raises(AgentRunExecutionOwnershipError, match="review"):
         AgentRunExecution.start(

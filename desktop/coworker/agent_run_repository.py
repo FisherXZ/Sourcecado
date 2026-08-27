@@ -1137,6 +1137,7 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                 )
                 relinquish = (
                     values["state"] in TERMINAL_AGENT_RUN_STATES
+                    or values["state"] == "interrupted"
                     or values["state"]
                     in {"waiting_approval", "waiting_question"}
                 )

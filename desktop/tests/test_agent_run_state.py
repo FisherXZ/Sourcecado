@@ -7,6 +7,7 @@ from coworker.agent_run_state import (
     approval_ready_transition,
     approval_resolved_transition,
     initial_continuation,
+    interrupt_inflight_tool_transition,
     model_completed_transition,
     model_pending_transition,
     terminal_transition,
@@ -69,6 +70,49 @@ def _tool_completed(snapshot=None, tool_index=0, call_id=None):
         True,
         "a" * 64,
     )
+
+
+@pytest.mark.parametrize(
+    ("retry_safe", "phase", "status"),
+    [
+        (True, "tools_ready", "retry_ready"),
+        (False, "review_required", "outcome_unknown"),
+    ],
+)
+def test_inflight_tool_interruption_preserves_exact_reservation(
+    retry_safe, phase, status
+):
+    pending = tool_pending_transition(
+        _tools_ready(1),
+        "run-state",
+        [],
+        [],
+        0,
+        0,
+        "call-interrupted",
+        "search",
+        retry_safe,
+    )
+    history = [{"role": "tool", "content": "durable boundary"}]
+    events = [{"type": "tool_started"}]
+
+    interrupted = interrupt_inflight_tool_transition(
+        pending, history, events
+    )
+
+    assert interrupted["cursor"]["phase"] == phase
+    assert interrupted["pending_tool"] == {
+        **pending["pending_tool"],
+        "status": status,
+    }
+    assert interrupted["remaining_budgets"] == pending["remaining_budgets"]
+
+
+def test_tool_interruption_rejects_non_inflight_cursor():
+    with pytest.raises(
+        AgentRunTransitionError, match="exact reserved in-flight tool"
+    ):
+        interrupt_inflight_tool_transition(_tools_ready(1), [], [])
 
 
 def test_allowed_transition_path_tracks_exact_tool_count_and_next_step():

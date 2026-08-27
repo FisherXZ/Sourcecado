@@ -106,6 +106,67 @@ def test_agent_run_resume_schema_migration_is_idempotent(tmp_path):
     assert "agent_run_resume_v1" in markers
 
 
+@pytest.mark.parametrize(
+    ("retry_class", "kind", "phase", "status"),
+    [
+        ("safe", "process_interrupted", "tools_ready", "retry_ready"),
+        (
+            "consequential",
+            "tool_outcome_unknown",
+            "review_required",
+            "outcome_unknown",
+        ),
+    ],
+)
+def test_interrupted_checkpoint_atomically_releases_and_fences_lease(
+    tmp_path, retry_class, kind, phase, status
+):
+    store = ConversationStore(tmp_path)
+    run = _start(store, run_id=f"run-interrupted-{retry_class}")
+    lease = store.agent_runs.acquire_lease(
+        run["run_id"], "owner-before-interrupt", run["version"], 30, now=NOW
+    )
+    inflight = _continuation(
+        "tool_in_flight",
+        step_index=0,
+        pending_tool={
+            "attempt_id": f"attempt-{retry_class}",
+            "call_id": f"call-{retry_class}",
+            "name": "search",
+            "retry_class": retry_class,
+            "status": "in_flight",
+        },
+    )
+    inflight["cursor"]["expected_tool_count"] = 1
+    lease = store.agent_runs.update_continuation(lease, inflight, now=NOW)
+    suspended = {
+        **inflight,
+        "cursor": {**inflight["cursor"], "phase": phase},
+        "pending_tool": {**inflight["pending_tool"], "status": status},
+    }
+
+    next_lease, checkpoint = store.agent_runs.checkpoint_leased(
+        lease,
+        kind,
+        suspended,
+        state="interrupted",
+        now=NOW,
+    )
+
+    assert next_lease is None
+    assert checkpoint["kind"] == kind
+    persisted = store.get_agent_run(run["run_id"])
+    assert persisted["current_state"] == "interrupted"
+    assert persisted["continuation"]["cursor"]["phase"] == phase
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (run["run_id"],),
+        ).fetchone() == (None, None)
+    with pytest.raises(agent_runs.AgentRunLeaseLost):
+        store.agent_runs.renew_lease(lease, 30, now=NOW)
+
+
 def test_agent_run_resume_migration_rolls_back_schema_and_marker_on_failure(
     tmp_path,
 ):

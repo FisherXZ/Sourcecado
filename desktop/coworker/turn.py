@@ -498,6 +498,13 @@ async def run_turn(
     def _durable_events() -> list[dict[str, Any]]:
         return store.load_events(sid)
 
+    def _close_durable_transcript() -> list[dict[str, Any]]:
+        persisted = store.load(sid)
+        closed = close_open_tool_calls(persisted)
+        if closed != persisted:
+            store.replace_all(sid, closed)
+        return closed
+
     async def _terminal(event: dict[str, Any]) -> bool:
         state = str(event.get("state") or "failed")
         result_status = {
@@ -653,6 +660,43 @@ async def run_turn(
         )
         return {
             "status": "stopped" if projected else "error",
+            "text": text_so_far,
+            "run_id": events.identity.run_id,
+        }
+
+    async def _interrupt_inflight_tool(text_so_far: str) -> dict[str, Any]:
+        try:
+            durable_history = _close_durable_transcript()
+            execution.interrupt_inflight_tool(
+                durable_history, _durable_events()
+            )
+        except Exception:
+            return {
+                "status": "error",
+                "text": text_so_far,
+                "run_id": events.identity.run_id,
+            }
+        event = {
+            "type": "turn_end",
+            "state": "interrupted",
+            "text": text_so_far,
+            "message": (
+                "Run interrupted after a tool result could not be durably recorded."
+            ),
+        }
+        try:
+            if control is None:
+                await _emit(event)
+            else:
+                await control.send_terminal(event)
+        except Exception:
+            return {
+                "status": "error",
+                "text": text_so_far,
+                "run_id": events.identity.run_id,
+            }
+        return {
+            "status": "interrupted",
             "text": text_so_far,
             "run_id": events.identity.run_id,
         }
@@ -1044,6 +1088,8 @@ async def run_turn(
                 "run_id": events.identity.run_id,
             }
     except Exception as exc:
+        if execution.metadata.get("phase") == "tool_in_flight":
+            return await _interrupt_inflight_tool(last_text)
         _persist_closed(store, sid, history)
         if execution.current_lease is None:
             return {
