@@ -23,6 +23,7 @@ _PHASES = frozenset(
         "waiting_approval",
         "approval_ready",
         "waiting_question",
+        "waiting_external",
         "review_required",
         "terminal_ready",
         "complete",

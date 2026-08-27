@@ -123,6 +123,7 @@ class _AgentRunRepositoryBase:
                 if current_state in TERMINAL_AGENT_RUN_STATES or current_state in {
                     "waiting_approval",
                     "waiting_question",
+                    "waiting_external",
                 }:
                     self._conn.commit()
                     return None
@@ -145,7 +146,7 @@ class _AgentRunRepositoryBase:
                         version = version + 1, updated_at = ?
                     WHERE run_id = ? AND version = ?
                       AND current_state NOT IN (
-                          'waiting_approval', 'waiting_question',
+                          'waiting_approval', 'waiting_question', 'waiting_external',
                           'complete', 'partial', 'stopped', 'failed'
                       )
                       AND (
@@ -173,6 +174,7 @@ class _AgentRunRepositoryBase:
                     if current_state in TERMINAL_AGENT_RUN_STATES or current_state in {
                         "waiting_approval",
                         "waiting_question",
+                        "waiting_external",
                     }:
                         self._conn.commit()
                         return None
@@ -445,6 +447,98 @@ class _AgentRunRepositoryBase:
                         raise AgentRunVersionConflict(run_id)
                     self._conn.commit()
                     return None
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return _lease_from_row(row)
+
+    def acquire_external_completion_lease(
+        self,
+        run_id: str,
+        owner_id: str,
+        expected_version: int,
+        interaction_id: str,
+        lease_seconds: int | float,
+        now: datetime | None = None,
+    ) -> AgentRunLease | None:
+        """Acquire a lease only after an exact external approval is terminal."""
+        owner = _lease_owner(owner_id)
+        interaction = _bounded_id(interaction_id, "interaction_id")
+        seconds = _lease_seconds(lease_seconds)
+        stamp = _timestamp(now)
+        expires_at = _timestamp(_as_datetime(stamp) + timedelta(seconds=seconds))
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(run_id)
+                continuation = project_continuation(
+                    json_object(row["continuation"])
+                )
+                pending = continuation.get("pending_tool")
+                inbox = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (interaction,)
+                ).fetchone()
+                if (
+                    str(row["current_state"]) != "waiting_external"
+                    or row["lease_owner"] is not None
+                    or row["lease_expires_at"] is not None
+                    or int(row["version"]) != int(expected_version)
+                    or continuation.get("cursor", {}).get("phase")
+                    != "waiting_external"
+                    or continuation.get("pending_interaction")
+                    != {"kind": "approval", "id": interaction}
+                    or not isinstance(pending, dict)
+                    or pending.get("call_id") != interaction
+                    or pending.get("status") != "not_started"
+                    or pending.get("budget_reserved") is not False
+                    or inbox is None
+                    or inbox["run_id"] != run_id
+                    or str(inbox["state"]) != "resolved"
+                    or str(inbox["decision"]) != "allow"
+                    or str(inbox["execution_status"])
+                    not in {"succeeded", "failed"}
+                ):
+                    self._conn.commit()
+                    return None
+                resumed = merge_continuation(
+                    continuation,
+                    {
+                        "cursor": {
+                            **continuation["cursor"],
+                            "phase": "tools_ready",
+                        },
+                        "pending_interaction": None,
+                    },
+                )
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        current_state = 'running', lease_owner = ?,
+                        lease_expires_at = ?, continuation = ?,
+                        version = version + 1, updated_at = ?
+                    WHERE run_id = ? AND version = ?
+                      AND current_state = 'waiting_external'
+                      AND lease_owner IS NULL AND lease_expires_at IS NULL
+                    """,
+                    (
+                        owner,
+                        expires_at,
+                        _json(resumed),
+                        stamp,
+                        run_id,
+                        int(expected_version),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise AgentRunVersionConflict(run_id)
                 row = self._conn.execute(
                     "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
                 ).fetchone()
@@ -1246,7 +1340,7 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     values["state"] in TERMINAL_AGENT_RUN_STATES
                     or values["state"] == "interrupted"
                     or values["state"]
-                    in {"waiting_approval", "waiting_question"}
+                    in {"waiting_approval", "waiting_question", "waiting_external"}
                 )
                 cursor = self._conn.execute(
                     """
@@ -1586,6 +1680,100 @@ class AgentRunRepository(_AgentRunRepositoryBase):
             project_inbox_row(inbox_row),
         )
 
+    def wait_for_external_execution(
+        self,
+        lease: AgentRunLease,
+        continuation: dict[str, Any],
+        *,
+        interaction_id: str,
+        payload: dict[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> tuple[None, dict[str, Any]]:
+        """Validate an external claim and atomically suspend the Agent Run."""
+        _validate_checkpoint("waiting_external", "waiting_external")
+        stamp = _timestamp(now)
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._fenced_row(lease, stamp)
+                incoming = project_continuation(continuation)
+                pending = incoming.get("pending_tool")
+                inbox = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (interaction_id,)
+                ).fetchone()
+                if (
+                    incoming.get("cursor", {}).get("phase")
+                    != "waiting_external"
+                    or incoming.get("pending_interaction")
+                    != {"kind": "approval", "id": interaction_id}
+                    or not isinstance(pending, dict)
+                    or pending.get("call_id") != interaction_id
+                    or pending.get("status") != "not_started"
+                    or pending.get("budget_reserved") is not False
+                    or inbox is None
+                    or inbox["run_id"] != lease.run_id
+                    or str(inbox["state"]) != "resolved"
+                    or str(inbox["decision"]) != "allow"
+                    or str(inbox["execution_status"])
+                    not in {"pending", "executing"}
+                ):
+                    raise ValueError(
+                        "external approval is not pending for this Agent Run"
+                    )
+                sequence = int(row["checkpoint_sequence"]) + 1
+                merged = merge_continuation(
+                    json_object(row["continuation"]), incoming
+                )
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        current_state = 'waiting_external',
+                        checkpoint_sequence = ?, continuation = ?,
+                        lease_owner = NULL, lease_expires_at = NULL,
+                        version = version + 1, updated_at = ?
+                    WHERE run_id = ? AND version = ? AND lease_owner = ?
+                      AND lease_expires_at > ? AND current_state = 'running'
+                    """,
+                    (
+                        sequence,
+                        _json(merged),
+                        stamp,
+                        lease.run_id,
+                        lease.version,
+                        lease.owner_id,
+                        stamp,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    self._raise_fence_failure(lease, stamp)
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_run_checkpoints
+                        (run_id, sequence, kind, payload, created_at)
+                    VALUES (?, ?, 'waiting_external', ?, ?)
+                    """,
+                    (
+                        lease.run_id,
+                        sequence,
+                        _json(bounded_checkpoint_payload(payload)),
+                        stamp,
+                    ),
+                )
+                checkpoint_row = self._conn.execute(
+                    """
+                    SELECT * FROM agent_run_checkpoints
+                    WHERE run_id = ? AND sequence = ?
+                    """,
+                    (lease.run_id, sequence),
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        if checkpoint_row is None:
+            raise RuntimeError("waiting external checkpoint did not persist")
+        return None, _checkpoint_row(checkpoint_row)
+
     def interrupt_approved_tool(
         self,
         lease: AgentRunLease,
@@ -1901,7 +2089,9 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     WHERE (
                         lease_owner IS NOT NULL
                         AND (
-                            current_state IN ('waiting_approval', 'waiting_question')
+                            current_state IN (
+                                'waiting_approval', 'waiting_question', 'waiting_external'
+                            )
                             OR lease_expires_at IS NULL OR lease_expires_at <= ?
                         )
                     ) OR (
@@ -1915,7 +2105,11 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     state = str(row["current_state"])
                     run_id = str(row["run_id"])
                     version = int(row["version"])
-                    if state in {"waiting_approval", "waiting_question"}:
+                    if state in {
+                        "waiting_approval",
+                        "waiting_question",
+                        "waiting_external",
+                    }:
                         cursor = self._conn.execute(
                             """
                             UPDATE agent_runs SET

@@ -555,6 +555,58 @@ def waiting_approval_transition(
     )
 
 
+def waiting_external_execution_transition(
+    snapshot: dict[str, Any],
+    history: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    interaction_id: str,
+    step_index: int,
+    tool_index: int,
+    call_id: str,
+    name: str,
+) -> dict[str, Any]:
+    """Park a run while another claimant finishes an approved tool."""
+    current = project_continuation(snapshot)
+    cursor = _cursor(current)
+    step = _index(step_index, "step_index")
+    tool = _index(tool_index, "tool_index")
+    interaction = _text(interaction_id, MAX_SAFE_ID, "interaction_id")
+    safe_call_id = _text(call_id, MAX_SAFE_ID, "call_id")
+    safe_name = _text(name, MAX_TOOL_NAME, "name")
+    pending = current.get("pending_tool")
+    if (
+        cursor.get("phase") != "tools_ready"
+        or cursor.get("step_index") != step
+        or cursor.get("next_tool_index") != tool
+        or tool >= int(cursor.get("expected_tool_count", 0))
+        or not isinstance(pending, dict)
+        or pending.get("call_id") != safe_call_id
+        or pending.get("name") != safe_name
+        or pending.get("retry_class") != "consequential"
+        or pending.get("status") != "not_started"
+        or pending.get("budget_reserved") is not False
+        or current.get("pending_interaction") is not None
+        or current.get("pending_model") is not None
+    ):
+        raise AgentRunTransitionError(
+            "waiting_external requires the exact pending approved tool"
+        )
+    return merge_continuation(
+        current,
+        {
+            "cursor": {
+                **cursor,
+                "phase": "waiting_external",
+                **prefixes(history, events),
+            },
+            "pending_interaction": {
+                "kind": "approval",
+                "id": interaction,
+            },
+        },
+    )
+
+
 def approval_ready_transition(
     snapshot: dict[str, Any], interaction_id: str, decision: str
 ) -> dict[str, Any]:

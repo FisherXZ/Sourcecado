@@ -1008,6 +1008,26 @@ async def run_turn(
                     )
                     if not claim.owned:
                         receipt = await inbox.wait_for_execution(call.id)
+                        execution_status = (
+                            str(receipt.get("execution_status"))
+                            if receipt is not None
+                            else "unavailable"
+                        )
+                        if execution_status in {"pending", "executing"}:
+                            execution.waiting_external_execution(
+                                _durable_history(),
+                                _durable_events(),
+                                call.id,
+                                step_index,
+                                tool_index,
+                                call.id,
+                                call.name,
+                            )
+                            return {
+                                "status": "waiting",
+                                "text": last_text,
+                                "run_id": events.identity.run_id,
+                            }
                         receipt = execution.adopt_completed_approval(
                             _durable_history(),
                             _durable_events(),

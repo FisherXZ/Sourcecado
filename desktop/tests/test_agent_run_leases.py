@@ -167,6 +167,70 @@ def test_interrupted_checkpoint_atomically_releases_and_fences_lease(
         store.agent_runs.renew_lease(lease, 30, now=NOW)
 
 
+def test_waiting_external_rejects_acquire_and_reconciliation_only_clears_legacy_lease(
+    tmp_path,
+):
+    store = ConversationStore(tmp_path)
+    run = _start(store, run_id="run-waiting-external")
+    lease = store.agent_runs.acquire_lease(
+        run["run_id"], "waiting-owner", run["version"], 30, now=NOW
+    )
+    continuation = _continuation(
+        "waiting_external",
+        step_index=0,
+        pending_tool={
+            "attempt_id": "attempt-external",
+            "call_id": "call-external",
+            "name": "gmail_draft",
+            "retry_class": "consequential",
+            "status": "not_started",
+            "budget_reserved": False,
+        },
+    )
+    continuation["cursor"]["expected_tool_count"] = 1
+    continuation["pending_interaction"] = {
+        "kind": "approval",
+        "id": "call-external",
+    }
+    released, _checkpoint = store.agent_runs.checkpoint_leased(
+        lease,
+        "waiting_external",
+        continuation,
+        state="waiting_external",
+        now=NOW,
+    )
+    assert released is None
+    waiting = store.get_agent_run(run["run_id"])
+    assert (
+        store.agent_runs.acquire_lease(
+            run["run_id"], "ordinary-owner", waiting["version"], 30, now=NOW
+        )
+        is None
+    )
+    checkpoints_before = store.list_agent_run_checkpoints(run["run_id"])
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            """
+            UPDATE agent_runs SET lease_owner = ?, lease_expires_at = ?
+            WHERE run_id = ?
+            """,
+            ("legacy-owner", "2099-01-01T00:00:00+00:00", run["run_id"]),
+        )
+
+    recovered = store.agent_runs.reconcile_expired_leases(now=NOW)
+
+    assert [item["run_id"] for item in recovered] == [run["run_id"]]
+    persisted = store.get_agent_run(run["run_id"])
+    assert persisted["current_state"] == "waiting_external"
+    assert persisted["continuation"]["cursor"]["phase"] == "waiting_external"
+    assert store.list_agent_run_checkpoints(run["run_id"]) == checkpoints_before
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (run["run_id"],),
+        ).fetchone() == (None, None)
+
+
 def test_agent_run_resume_migration_rolls_back_schema_and_marker_on_failure(
     tmp_path,
 ):

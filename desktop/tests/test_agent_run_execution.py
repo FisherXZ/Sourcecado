@@ -4,8 +4,13 @@ import json
 import sqlite3
 import time
 
+import pytest
+
 from coworker.agent_run_continuation import transcript_prefix_sha256
-from coworker.agent_run_execution import AgentRunExecution
+from coworker.agent_run_execution import (
+    AgentRunExecution,
+    AgentRunExecutionOwnershipError,
+)
 from coworker.events import TurnIdentity
 from coworker.inbox import Inbox
 from coworker.provider import FakeProvider, StreamChunk, ToolCall
@@ -1014,6 +1019,129 @@ def test_externally_completed_approval_is_adopted_once(
     event_types = [event["type"] for event in store.load_events(identity.session_id)]
     assert "tool_started" not in event_types
     assert event_types.count("tool_finished") == 1
+
+
+def test_external_execution_timeout_waits_lease_free_then_resumes_once(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-waiting-external")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-waiting-external",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            }
+        ]
+    )
+    external_store = ConversationStore(tmp_path)
+    external_inbox = Inbox(external_store)
+
+    async def external_claimant(call_id):
+        claim = external_inbox.decide_and_claim(
+            call_id,
+            "allow",
+            actor="external",
+            scope="once",
+            claimant="external-owner",
+        )
+        assert claim is not None and claim.owned
+        return "allow"
+
+    monkeypatch.setenv("CLUB_APPROVAL_WAIT_TIMEOUT", "0.02")
+    result = asyncio.run(
+        run_turn(
+            text="Wait for external execution",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=external_claimant,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "waiting"
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "waiting_external"
+    assert run["continuation"]["cursor"]["phase"] == "waiting_external"
+    assert run["usage"] == {"model_calls": 1}
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 8
+    assert external_inbox.get("call-waiting-external")["execution_status"] == (
+        "executing"
+    )
+    assert [message["role"] for message in store.load(identity.session_id)] == [
+        "user",
+        "assistant",
+    ]
+    event_types = [event["type"] for event in store.load_events(identity.session_id)]
+    assert "tool_finished" not in event_types
+    assert "approval_resolved" not in event_types
+    assert "turn_end" not in event_types
+    assert store.list_agent_run_checkpoints(identity.run_id)[-1]["kind"] == (
+        "waiting_external"
+    )
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone() == (None, None)
+
+    with pytest.raises(AgentRunExecutionOwnershipError):
+        AgentRunExecution.resume_external_completion(
+            store, identity.run_id, "call-waiting-external", 8
+        )
+    assert external_inbox.complete_execution(
+        "call-waiting-external",
+        claimant="external-owner",
+        ok=True,
+        result={"draft_id": "draft-later"},
+    ) is not None
+    with pytest.raises(AgentRunExecutionOwnershipError):
+        AgentRunExecution.resume_external_completion(
+            store, identity.run_id, "wrong-call", 8
+        )
+    resumed = AgentRunExecution.resume_external_completion(
+        store,
+        identity.run_id,
+        "call-waiting-external",
+        8,
+        owner_id="resume-external-owner",
+    )
+    first = resumed.adopt_completed_approval(
+        store.load(identity.session_id),
+        store.load_events(identity.session_id),
+        0,
+        0,
+        "call-waiting-external",
+        "gmail_draft",
+    )
+    second = resumed.adopt_completed_approval(
+        store.load(identity.session_id),
+        store.load_events(identity.session_id),
+        0,
+        0,
+        "call-waiting-external",
+        "gmail_draft",
+    )
+
+    assert first == second
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "running"
+    assert run["usage"] == {"model_calls": 1, "tool_calls": 1}
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 7
+    assert run["continuation"]["completed_tool_receipts"][-1]["outcome"] == (
+        "executed_external"
+    )
 
 
 def test_approval_allow_reacquires_same_run_and_executes_once(

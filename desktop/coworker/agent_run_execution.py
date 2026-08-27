@@ -37,6 +37,7 @@ from coworker.agent_run_state import (
     tool_pending_transition,
     tool_skipped_transition,
     waiting_approval_transition,
+    waiting_external_execution_transition,
 )
 from coworker.events import TurnIdentity
 
@@ -622,6 +623,51 @@ class AgentRunExecution:
         self._refresh_snapshot()
         return parked
 
+    def waiting_external_execution(
+        self,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        interaction_id: str,
+        step_index: int,
+        tool_index: int,
+        call_id: str,
+        name: str,
+    ) -> dict[str, Any]:
+        lease = self._require_lease()
+        next_snapshot = waiting_external_execution_transition(
+            self._snapshot,
+            history,
+            events,
+            interaction_id,
+            step_index,
+            tool_index,
+            call_id,
+            name,
+        )
+        try:
+            next_lease, _checkpoint = (
+                self._store.agent_runs.wait_for_external_execution(
+                    lease,
+                    next_snapshot,
+                    interaction_id=interaction_id,
+                    payload={
+                        "id": interaction_id,
+                        "call_id": call_id,
+                        "name": name,
+                    },
+                    now=self._now,
+                )
+            )
+        except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
+            self._lease = None
+            raise self._ownership_error(
+                "waiting external boundary lost its lease"
+            ) from exc
+        self._lease = next_lease
+        self._version = lease.version + 1
+        self._refresh_snapshot()
+        return self.metadata
+
     def tool_skipped(
         self,
         history: list[dict[str, Any]],
@@ -922,6 +968,60 @@ class AgentRunExecution:
         if lease is None:
             raise AgentRunExecutionOwnershipError(
                 f"Agent Run {run_id} closed approval is unavailable"
+            )
+        execution = cls(
+            store, identity, owner, lease, snapshot, max_steps, now, duration
+        )
+        execution._refresh_snapshot()
+        return execution
+
+    @classmethod
+    def resume_external_completion(
+        cls,
+        store: ConversationStore,
+        run_id: str,
+        interaction_id: str,
+        max_steps: int,
+        owner_id: str | None = None,
+        now: datetime | None = None,
+        lease_seconds: float = EXECUTION_LEASE_SECONDS,
+    ) -> AgentRunExecution:
+        interaction = _safe_boundary_text(
+            interaction_id, MAX_SAFE_ID, "interaction_id"
+        )
+        run = store.get_agent_run(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        snapshot = project_continuation(run.get("continuation"))
+        stored_identity = snapshot.get("identity")
+        if not isinstance(stored_identity, dict):
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {run_id} has no external completion identity"
+            )
+        identity = TurnIdentity(
+            session_id=str(run["session_id"]),
+            run_id=run_id,
+            message_id=str(stored_identity["message_id"]),
+            part_id=str(stored_identity["part_id"]),
+        )
+        duration = _execution_lease_seconds(lease_seconds)
+        owner = owner_id or f"execution_{uuid.uuid4().hex}"
+        try:
+            lease = store.agent_runs.acquire_external_completion_lease(
+                run_id,
+                owner,
+                int(run["version"]),
+                interaction,
+                duration,
+                now=now,
+            )
+        except AgentRunVersionConflict as exc:
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {run_id} external completion was fenced"
+            ) from exc
+        if lease is None:
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {run_id} external completion is unavailable"
             )
         execution = cls(
             store, identity, owner, lease, snapshot, max_steps, now, duration
