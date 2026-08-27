@@ -155,6 +155,9 @@ def test_bound_gmail_search_files_on_ada_not_alonzo(tmp_path):
     assert ada is not None and alonzo is not None
     kinds = [row["kind"] for row in people.timeline(ada["person_id"])]
     assert "mail" in kinds
+    mail = next(row for row in people.timeline(ada["person_id"]) if row["kind"] == "mail")
+    assert mail["run_id"]
+    assert mail["run_id"].startswith("run_")
     assert people.timeline(alonzo["person_id"]) == []
 
 

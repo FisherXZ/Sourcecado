@@ -17,6 +17,7 @@ AGENT_RUN_STATES = frozenset(
         "running",
         "waiting_approval",
         "waiting_question",
+        "waiting_external",
         "complete",
         "partial",
         "stopped",
@@ -29,12 +30,18 @@ AGENT_RUN_CHECKPOINT_KINDS = frozenset(
     {
         "run_started",
         "user_input",
+        "model_pending",
         "model_completed",
+        "tool_pending",
+        "tool_budget_reserved",
         "tool_completed",
+        "tool_outcome_unknown",
         "waiting_approval",
+        "waiting_external",
         "approval_resolved",
         "terminal",
         "process_interrupted",
+        "projection_mismatch",
     }
 )
 

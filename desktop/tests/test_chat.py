@@ -15,6 +15,15 @@ from coworker.turn import _tool_failure
 TOKEN = "test-token-slice-6"
 
 
+def _wait_until(check, timeout=3.0, interval=0.01):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(interval)
+    return bool(check())
+
+
 @pytest.mark.parametrize(
     ("detail", "expected_class"),
     [
@@ -790,7 +799,13 @@ def test_unsafe_failed_step_retry_creates_fresh_approval_before_execution(
                 "command_id": "unsafe-retry-1",
             }
         )
-        time.sleep(0.06)
+        assert _wait_until(
+            lambda: any(
+                event.get("type") == "tool_recovery"
+                and event.get("command_id") == "unsafe-retry-1"
+                for event in built.state.store.load_events(sid)
+            )
+        )
         assert executions == ["gmail_draft"]
         persisted = built.state.store.load_events(sid)
         recovery = next(
@@ -813,7 +828,17 @@ def test_unsafe_failed_step_retry_creates_fresh_approval_before_execution(
         ws.send_json(
             {"type": "permission", "id": fresh["id"], "decision": "allow"}
         )
-        time.sleep(0.06)
+        assert _wait_until(
+            lambda: len(
+                [
+                    event
+                    for event in built.state.store.load_events(sid)
+                    if event.get("type") == "tool_recovery"
+                    and event.get("command_id") == "unsafe-retry-1"
+                ]
+            )
+            == 2
+        )
 
     assert executions == ["gmail_draft", "gmail_draft"]
     outcomes = [

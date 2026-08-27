@@ -93,6 +93,7 @@ class Scheduler:
         self.store = store
         self.inbox = inbox
         self.job_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+        self.identity_factory: Callable[[dict[str, Any], str], Any] | None = None
         self._running: set[int] = set()
         self._running_lock = threading.Lock()
         self.errors: list[str] = []
@@ -141,17 +142,30 @@ class Scheduler:
                 return None
             self._running.add(job_id)
         session_id = f"sched-{job_id}"
+        identity = (
+            self.identity_factory(job, session_id) if self.identity_factory else None
+        )
         event_offset = len(self.store.load_events(session_id))
         started_at = datetime.now(UTC).isoformat()
         started = time.perf_counter()
         running = self.store.start_run(
-            job_id, session_id=session_id, started_at=started_at
+            job_id,
+            session_id=session_id,
+            started_at=started_at,
+            agent_run_id=(str(identity.run_id) if identity is not None else None),
         )
         try:
             fn = runner or self.job_runner
             failed_before_result = False
             try:
-                result = fn(job) if fn else {"status": "ok", "result": "tick"}
+                runner_job = (
+                    {**job, "_turn_identity": identity}
+                    if identity is not None
+                    else job
+                )
+                result = (
+                    fn(runner_job) if fn else {"status": "ok", "result": "tick"}
+                )
             except Exception as exc:
                 self.errors.append(str(exc))
                 failed_before_result = True
@@ -195,7 +209,9 @@ class Scheduler:
                 finished_at=datetime.now(UTC).isoformat(),
                 waiting_approval_count=waiting_approval_count,
                 agent_run_id=(
-                    str(result["run_id"]) if result.get("run_id") else None
+                    str(running["agent_run_id"])
+                    if running.get("agent_run_id")
+                    else (str(result["run_id"]) if result.get("run_id") else None)
                 ),
             )
             if advance:

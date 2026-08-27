@@ -7,6 +7,7 @@ Copied shape from OpenWorker `coworker/conversations.py`:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -17,22 +18,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from coworker.agent_runs import (
-    AGENT_RUN_CHECKPOINT_KINDS,
-    AGENT_RUN_STATES,
-    TERMINAL_AGENT_RUN_STATES,
-    add_usage,
-    bounded_checkpoint_payload,
-    json_list,
-    json_object,
-    merge_unique_json,
-    merge_unique_strings,
-    nullable_json_object,
-    original_goal_fingerprint,
-    project_artifact_refs,
-    project_source_refs,
-    project_terminal_result,
-    sanitize_agent_run_value,
+from coworker.agent_run_approval import (
+    AGENT_RUN_TOOL_BUDGET_EXHAUSTED,
+    project_inbox_row,
+)
+from coworker.agent_run_repository import (
+    AgentRunLease,
+    AgentRunRepository,
+    ResolvedApprovalLease,
 )
 
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -53,7 +46,6 @@ _INTERRUPTED_RUN_SUMMARY = (
     "Review the thread before retrying."
 )
 _DEFAULT_APPROVAL_TTL_SECONDS = 24 * 60 * 60.0
-_AGENT_RUN_PRIVACY_MIGRATION = "agent_run_privacy_v3"
 
 
 def _approval_ttl_seconds() -> float:
@@ -145,38 +137,6 @@ class ConversationStore:
                 result TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE TABLE IF NOT EXISTS agent_runs (
-                run_id TEXT PRIMARY KEY,
-                session_id TEXT NOT NULL,
-                parent_run_id TEXT,
-                trigger TEXT NOT NULL,
-                original_goal TEXT NOT NULL,
-                original_goal_fingerprint TEXT,
-                original_goal_fingerprint_source TEXT,
-                current_state TEXT NOT NULL,
-                provider_model_id TEXT,
-                checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
-                skills_loaded TEXT NOT NULL DEFAULT '[]',
-                source_refs TEXT NOT NULL DEFAULT '[]',
-                artifact_refs TEXT NOT NULL DEFAULT '[]',
-                usage TEXT NOT NULL DEFAULT '{}',
-                terminal_result TEXT,
-                created_at TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                finished_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
-                run_id TEXT NOT NULL,
-                sequence INTEGER NOT NULL,
-                kind TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (run_id, sequence),
-                FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
-            );
-            CREATE INDEX IF NOT EXISTS agent_runs_session_created
-                ON agent_runs(session_id, created_at);
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 name TEXT PRIMARY KEY,
                 applied_at TEXT NOT NULL
@@ -246,23 +206,8 @@ class ConversationStore:
                 ON chat_queue(session_id, position);
             """
         )
-        try:
-            self._conn.execute(
-                "ALTER TABLE agent_runs ADD COLUMN original_goal_fingerprint TEXT"
-            )
-        except sqlite3.OperationalError:
-            pass
-        try:
-            self._conn.execute(
-                """
-                ALTER TABLE agent_runs
-                ADD COLUMN original_goal_fingerprint_source TEXT
-                """
-            )
-        except sqlite3.OperationalError:
-            pass
         self._conn.commit()
-        self._migrate_agent_run_privacy()
+        self.agent_runs = AgentRunRepository(self._conn, self._lock)
         try:
             self._conn.execute("ALTER TABLE jobs ADD COLUMN next_run_at TEXT")
         except sqlite3.OperationalError:
@@ -363,125 +308,7 @@ class ConversationStore:
         self._reconcile_orphaned_inbox_executions()
         self._reconcile_orphaned_queue_items()
         self._reconcile_orphaned_runs()
-        self._reconcile_orphaned_agent_runs()
         self._reconcile_orphaned_recovery_commands()
-
-    def _migrate_agent_run_privacy(self) -> None:
-        """Scrub pre-invariant Agent Run rows without changing their history."""
-        self._conn.execute("BEGIN IMMEDIATE")
-        try:
-            applied = self._conn.execute(
-                "SELECT 1 FROM schema_migrations WHERE name = ?",
-                (_AGENT_RUN_PRIVACY_MIGRATION,),
-            ).fetchone()
-            if applied is not None:
-                self._conn.commit()
-                return
-            runs = self._conn.execute(
-                """
-                SELECT run_id, original_goal, original_goal_fingerprint,
-                       original_goal_fingerprint_source,
-                       skills_loaded, source_refs, artifact_refs,
-                       terminal_result
-                FROM agent_runs
-                """
-            ).fetchall()
-
-            # Identity must be derived from the pre-scrub goal. Backfill every
-            # missing fingerprint before any original_goal value is redacted.
-            for row in runs:
-                stored_goal = str(row["original_goal"])
-                fingerprint = row["original_goal_fingerprint"]
-                if fingerprint is None:
-                    fingerprint = original_goal_fingerprint(stored_goal)
-                source = row["original_goal_fingerprint_source"]
-                if source not in {"raw", "legacy_sanitized"}:
-                    source = (
-                        "legacy_sanitized"
-                        if "[REDACTED" in stored_goal
-                        and fingerprint == original_goal_fingerprint(stored_goal)
-                        else "raw"
-                    )
-                self._conn.execute(
-                    """
-                    UPDATE agent_runs SET
-                        original_goal_fingerprint = ?,
-                        original_goal_fingerprint_source = ?
-                    WHERE run_id = ?
-                    """,
-                    (
-                        fingerprint,
-                        source,
-                        str(row["run_id"]),
-                    ),
-                )
-
-            for row in runs:
-                safe_goal = str(sanitize_agent_run_value(row["original_goal"]))
-                safe_skills = sanitize_agent_run_value(
-                    json_list(row["skills_loaded"])
-                )
-                safe_sources = project_source_refs(json_list(row["source_refs"]))
-                safe_artifacts = project_artifact_refs(
-                    json_list(row["artifact_refs"])
-                )
-                terminal = nullable_json_object(row["terminal_result"])
-                safe_terminal = (
-                    None
-                    if terminal is None
-                    else json.dumps(
-                        project_terminal_result(terminal), ensure_ascii=False
-                    )
-                )
-                self._conn.execute(
-                    """
-                    UPDATE agent_runs SET
-                        original_goal = ?, skills_loaded = ?, source_refs = ?,
-                        artifact_refs = ?, terminal_result = ?
-                    WHERE run_id = ?
-                    """,
-                    (
-                        safe_goal,
-                        json.dumps(safe_skills, ensure_ascii=False),
-                        json.dumps(safe_sources, ensure_ascii=False),
-                        json.dumps(safe_artifacts, ensure_ascii=False),
-                        safe_terminal,
-                        str(row["run_id"]),
-                    ),
-                )
-
-            checkpoints = self._conn.execute(
-                """
-                SELECT run_id, sequence, payload
-                FROM agent_run_checkpoints
-                """
-            ).fetchall()
-            for row in checkpoints:
-                safe_payload = bounded_checkpoint_payload(
-                    json_object(row["payload"])
-                )
-                self._conn.execute(
-                    """
-                    UPDATE agent_run_checkpoints SET payload = ?
-                    WHERE run_id = ? AND sequence = ?
-                    """,
-                    (
-                        json.dumps(safe_payload, ensure_ascii=False),
-                        str(row["run_id"]),
-                        int(row["sequence"]),
-                    ),
-                )
-            self._conn.execute(
-                """
-                INSERT INTO schema_migrations (name, applied_at)
-                VALUES (?, ?)
-                """,
-                (_AGENT_RUN_PRIVACY_MIGRATION, datetime.now(UTC).isoformat()),
-            )
-            self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            raise
 
     def _reconcile_orphaned_recovery_commands(self) -> None:
         """Drop in-flight recovery claims from the prior process.
@@ -584,52 +411,6 @@ class ConversationStore:
                 self._conn.rollback()
                 raise
 
-    def _reconcile_orphaned_agent_runs(self) -> None:
-        """Make process-owned work resumable without disturbing parked waits."""
-        now = datetime.now(UTC).isoformat()
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                rows = self._conn.execute(
-                    """
-                    SELECT run_id, checkpoint_sequence
-                    FROM agent_runs
-                    WHERE current_state = 'running'
-                    """
-                ).fetchall()
-                for row in rows:
-                    sequence = int(row["checkpoint_sequence"]) + 1
-                    run_id = str(row["run_id"])
-                    self._conn.execute(
-                        """
-                        UPDATE agent_runs SET
-                            current_state = 'interrupted',
-                            checkpoint_sequence = ?,
-                            updated_at = ?
-                        WHERE run_id = ? AND current_state = 'running'
-                        """,
-                        (sequence, now, run_id),
-                    )
-                    self._conn.execute(
-                        """
-                        INSERT INTO agent_run_checkpoints
-                            (run_id, sequence, kind, payload, created_at)
-                        VALUES (?, ?, 'process_interrupted', ?, ?)
-                        """,
-                        (
-                            run_id,
-                            sequence,
-                            json.dumps(
-                                {"status": "interrupted", "reason": "process_restart"}
-                            ),
-                            now,
-                        ),
-                    )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
-
     def start_agent_run(
         self,
         *,
@@ -640,103 +421,14 @@ class ConversationStore:
         provider_model_id: str | None = None,
         parent_run_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create one durable Agent Run and its single start checkpoint."""
-        if not run_id or not valid_session_id(session_id):
-            raise ValueError("invalid Agent Run identity")
-        if not trigger.strip():
-            raise ValueError("Agent Run trigger is required")
-        safe_original_goal = str(sanitize_agent_run_value(original_goal))
-        goal_fingerprint = original_goal_fingerprint(original_goal)
-        now = datetime.now(UTC).isoformat()
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                existing = self._conn.execute(
-                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
-                ).fetchone()
-                if existing is not None:
-                    if str(existing["session_id"]) != session_id:
-                        raise ValueError(
-                            "Agent Run identity belongs to another session"
-                        )
-                    immutable_metadata = {
-                        "parent_run_id": parent_run_id,
-                        "trigger": trigger,
-                        "provider_model_id": provider_model_id,
-                    }
-                    conflicts = [
-                        field
-                        for field, value in immutable_metadata.items()
-                        if existing[field] != value
-                    ]
-                    if existing["original_goal_fingerprint"] != goal_fingerprint:
-                        if (
-                            existing["original_goal_fingerprint_source"]
-                            == "legacy_sanitized"
-                        ):
-                            raise ValueError(
-                                "legacy Agent Run goal identity is irrecoverable; "
-                                "start a new run"
-                            )
-                        conflicts.append("original_goal")
-                    if conflicts:
-                        raise ValueError(
-                            "conflicting Agent Run metadata: "
-                            + ", ".join(conflicts)
-                        )
-                    self._conn.commit()
-                    return _agent_run_row(existing)
-                self._conn.execute(
-                    """
-                    INSERT INTO agent_runs (
-                        run_id, session_id, parent_run_id, trigger,
-                        original_goal, original_goal_fingerprint,
-                        original_goal_fingerprint_source, current_state,
-                        provider_model_id,
-                        checkpoint_sequence, skills_loaded, source_refs,
-                        artifact_refs, usage, terminal_result, created_at,
-                        started_at, updated_at, finished_at
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, ?, 'raw', 'running', ?, 1, '[]', '[]', '[]',
-                        '{}', NULL, ?, ?, ?, NULL
-                    )
-                    """,
-                    (
-                        run_id,
-                        session_id,
-                        parent_run_id,
-                        trigger,
-                        safe_original_goal,
-                        goal_fingerprint,
-                        provider_model_id,
-                        now,
-                        now,
-                        now,
-                    ),
-                )
-                start_payload = bounded_checkpoint_payload(
-                    {
-                        "trigger": trigger,
-                        "provider_model_id": provider_model_id,
-                        "has_parent": parent_run_id is not None,
-                    }
-                )
-                self._conn.execute(
-                    """
-                    INSERT INTO agent_run_checkpoints
-                        (run_id, sequence, kind, payload, created_at)
-                    VALUES (?, 1, 'run_started', ?, ?)
-                    """,
-                    (run_id, json.dumps(start_payload), now),
-                )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
-        created = self.get_agent_run(run_id)
-        if created is None:
-            raise RuntimeError("Agent Run insert did not persist")
-        return created
+        return self.agent_runs.start_agent_run(
+            run_id=run_id,
+            session_id=session_id,
+            trigger=trigger,
+            original_goal=original_goal,
+            provider_model_id=provider_model_id,
+            parent_run_id=parent_run_id,
+        )
 
     def checkpoint_agent_run(
         self,
@@ -751,160 +443,46 @@ class ConversationStore:
         usage_delta: dict[str, int | float] | None = None,
         terminal_result: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Atomically append semantic progress and update the run projection."""
-        if kind not in AGENT_RUN_CHECKPOINT_KINDS:
-            raise ValueError(f"invalid Agent Run checkpoint kind: {kind}")
-        if state is not None and state not in AGENT_RUN_STATES:
-            raise ValueError(f"invalid Agent Run state: {state}")
-        if kind == "terminal" and state not in TERMINAL_AGENT_RUN_STATES:
-            raise ValueError("terminal checkpoint requires a terminal state")
-        if state in TERMINAL_AGENT_RUN_STATES and kind != "terminal":
-            raise ValueError("terminal Agent Run state requires a terminal checkpoint")
-        now = datetime.now(UTC).isoformat()
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                row = self._conn.execute(
-                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
-                ).fetchone()
-                if row is None:
-                    raise KeyError(run_id)
-                current_state = str(row["current_state"])
-                if kind == "terminal" and current_state in TERMINAL_AGENT_RUN_STATES:
-                    existing_terminal = self._conn.execute(
-                        """
-                        SELECT * FROM agent_run_checkpoints
-                        WHERE run_id = ? AND kind = 'terminal'
-                        ORDER BY sequence DESC LIMIT 1
-                        """,
-                        (run_id,),
-                    ).fetchone()
-                    self._conn.commit()
-                    if existing_terminal is None:
-                        raise RuntimeError(
-                            "terminal Agent Run is missing its checkpoint"
-                        )
-                    return _agent_run_checkpoint_row(existing_terminal)
-                if current_state in TERMINAL_AGENT_RUN_STATES:
-                    raise ValueError("cannot append to a terminal Agent Run")
+        return self.agent_runs.checkpoint_agent_run(
+            run_id,
+            kind=kind,
+            payload=payload,
+            state=state,
+            skills_loaded=skills_loaded,
+            source_refs=source_refs,
+            artifact_refs=artifact_refs,
+            usage_delta=usage_delta,
+            terminal_result=terminal_result,
+        )
 
-                sequence = int(row["checkpoint_sequence"]) + 1
-                next_state = state or current_state
-                existing_skills = sanitize_agent_run_value(
-                    json_list(row["skills_loaded"])
-                )
-                incoming_skills = sanitize_agent_run_value(skills_loaded or [])
-                merged_skills = merge_unique_strings(
-                    existing_skills, incoming_skills
-                )
-                existing_sources = project_source_refs(
-                    json_list(row["source_refs"])
-                )
-                incoming_sources = project_source_refs(source_refs or [])
-                existing_artifacts = project_artifact_refs(
-                    json_list(row["artifact_refs"])
-                )
-                incoming_artifacts = project_artifact_refs(artifact_refs or [])
-                merged_sources = merge_unique_json(
-                    existing_sources, incoming_sources
-                )
-                merged_artifacts = merge_unique_json(
-                    existing_artifacts, incoming_artifacts
-                )
-                usage = add_usage(json_object(row["usage"]), usage_delta or {})
-                next_terminal_result = (
-                    json.dumps(project_terminal_result(terminal_result))
-                    if kind == "terminal" and terminal_result is not None
-                    else row["terminal_result"]
-                )
-                finished_at = (
-                    now
-                    if next_state in TERMINAL_AGENT_RUN_STATES
-                    else row["finished_at"]
-                )
-                self._conn.execute(
-                    """
-                    UPDATE agent_runs SET
-                        current_state = ?, checkpoint_sequence = ?,
-                        skills_loaded = ?, source_refs = ?, artifact_refs = ?,
-                        usage = ?, terminal_result = ?, updated_at = ?,
-                        finished_at = ?
-                    WHERE run_id = ?
-                    """,
-                    (
-                        next_state,
-                        sequence,
-                        json.dumps(merged_skills),
-                        json.dumps(merged_sources),
-                        json.dumps(merged_artifacts),
-                        json.dumps(usage),
-                        next_terminal_result,
-                        now,
-                        finished_at,
-                        run_id,
-                    ),
-                )
-                bounded = bounded_checkpoint_payload(payload)
-                self._conn.execute(
-                    """
-                    INSERT INTO agent_run_checkpoints
-                        (run_id, sequence, kind, payload, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (run_id, sequence, kind, json.dumps(bounded), now),
-                )
-                checkpoint = self._conn.execute(
-                    """
-                    SELECT * FROM agent_run_checkpoints
-                    WHERE run_id = ? AND sequence = ?
-                    """,
-                    (run_id, sequence),
-                ).fetchone()
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
-        if checkpoint is None:
-            raise RuntimeError("Agent Run checkpoint insert did not persist")
-        return _agent_run_checkpoint_row(checkpoint)
+    def acquire_resolved_waiting_lease(
+        self,
+        run_id: str,
+        owner_id: str,
+        expected_version: int,
+        interaction_id: str,
+        lease_seconds: int | float,
+        now: datetime | None = None,
+    ) -> ResolvedApprovalLease | None:
+        return self.agent_runs.acquire_resolved_waiting_lease(
+            run_id,
+            owner_id,
+            expected_version,
+            interaction_id,
+            lease_seconds,
+            now=now,
+        )
 
     def get_agent_run(self, run_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
-            ).fetchone()
-        return None if row is None else _agent_run_row(row)
+        return self.agent_runs.get_agent_run(run_id)
 
     def list_agent_runs(
         self, *, session_id: str | None = None
     ) -> list[dict[str, Any]]:
-        with self._lock:
-            if session_id is None:
-                rows = self._conn.execute(
-                    "SELECT * FROM agent_runs ORDER BY created_at, rowid"
-                ).fetchall()
-            else:
-                rows = self._conn.execute(
-                    """
-                    SELECT * FROM agent_runs
-                    WHERE session_id = ?
-                    ORDER BY created_at, rowid
-                    """,
-                    (session_id,),
-                ).fetchall()
-        return [_agent_run_row(row) for row in rows]
+        return self.agent_runs.list_agent_runs(session_id=session_id)
 
     def list_agent_run_checkpoints(self, run_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT * FROM agent_run_checkpoints
-                WHERE run_id = ?
-                ORDER BY sequence
-                """,
-                (run_id,),
-            ).fetchall()
-        return [_agent_run_checkpoint_row(row) for row in rows]
+        return self.agent_runs.list_agent_run_checkpoints(run_id)
 
     def _file(self, sid: str) -> Path:
         if not valid_session_id(sid):
@@ -940,6 +518,82 @@ class ConversationStore:
                 fh.write(json.dumps(event, ensure_ascii=False) + "\n")
                 fh.flush()
 
+    def append_event_once(self, sid: str, event: dict[str, Any]) -> bool:
+        """Cross-process-safe idempotent append for terminal repair events."""
+        path = self._event_file(sid)
+        lock_path = path.with_suffix(".jsonl.lock")
+        with open(lock_path, "a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                raw = path.read_bytes() if path.exists() else b""
+                for line in raw.splitlines():
+                    try:
+                        existing = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if (
+                        isinstance(existing, dict)
+                        and existing.get("event_id") == event.get("event_id")
+                    ):
+                        return False
+                with open(path, "ab") as event_file:
+                    if raw and not raw.endswith(b"\n"):
+                        event_file.write(b"\n")
+                    event_file.write(
+                        (json.dumps(event, ensure_ascii=False) + "\n").encode(
+                            "utf-8"
+                        )
+                    )
+                    event_file.flush()
+                    os.fsync(event_file.fileno())
+                return True
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def replace_events(self, sid: str, events: list[dict[str, Any]]) -> None:
+        """Atomically rewrite the canonical presentation-event projection."""
+        with self._lock:
+            path = self._event_file(sid)
+            tmp = path.with_suffix(".jsonl.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for event in events:
+                    fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+                fh.flush()
+            tmp.replace(path)
+
+    def rewrite_projections_in_transaction(
+        self,
+        sid: str,
+        messages: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+    ) -> None:
+        """Publish both projections inside the caller's SQLite transaction."""
+        if not self._conn.in_transaction:
+            raise RuntimeError("projection rewrite requires an active transaction")
+        with self._lock:
+            self._rewrite_transcript_projection(sid, messages)
+            self._rewrite_event_projection(sid, events)
+            self._reindex_uncommitted(sid, messages)
+
+    def _rewrite_transcript_projection(
+        self, sid: str, messages: list[dict[str, Any]]
+    ) -> None:
+        self._rewrite_jsonl(self._file(sid), messages)
+
+    def _rewrite_event_projection(
+        self, sid: str, events: list[dict[str, Any]]
+    ) -> None:
+        self._rewrite_jsonl(self._event_file(sid), events)
+
+    @staticmethod
+    def _rewrite_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
+        tmp = path.with_suffix(".jsonl.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for value in values:
+                fh.write(json.dumps(value, ensure_ascii=False) + "\n")
+            fh.flush()
+        tmp.replace(path)
+
     def append(self, sid: str, message: dict[str, Any]) -> None:
         with self._lock:
             with open(self._file(sid), "a", encoding="utf-8") as fh:
@@ -960,6 +614,12 @@ class ConversationStore:
             self._reindex(sid, messages)
 
     def _reindex(self, sid: str, messages: list[dict[str, Any]]) -> None:
+        self._reindex_uncommitted(sid, messages)
+        self._conn.commit()
+
+    def _reindex_uncommitted(
+        self, sid: str, messages: list[dict[str, Any]]
+    ) -> None:
         title = title_from(messages)
         self._conn.execute(
             """
@@ -972,7 +632,6 @@ class ConversationStore:
             """,
             (sid, title, len(messages)),
         )
-        self._conn.commit()
 
     def index(self, sid: str) -> dict[str, Any] | None:
         with self._lock:
@@ -1138,7 +797,12 @@ class ConversationStore:
         return _run_row(row)
 
     def start_run(
-        self, job_id: int, *, session_id: str, started_at: str
+        self,
+        job_id: int,
+        *,
+        session_id: str,
+        started_at: str,
+        agent_run_id: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             cursor = self._conn.execute(
@@ -1146,10 +810,10 @@ class ConversationStore:
                 INSERT INTO runs
                     (job_id, status, result, started_at, finished_at,
                      duration_ms, summary, artifacts, session_id,
-                     waiting_approval_count)
-                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0)
+                     waiting_approval_count, agent_run_id)
+                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0, ?)
                 """,
-                (job_id, started_at, session_id),
+                (job_id, started_at, session_id, agent_run_id),
             )
             self._conn.commit()
             row = self._conn.execute(
@@ -1176,7 +840,8 @@ class ConversationStore:
                 UPDATE runs SET
                     status = ?, result = ?, summary = ?, artifacts = ?,
                     duration_ms = ?, finished_at = ?,
-                    waiting_approval_count = ?, agent_run_id = ?
+                    waiting_approval_count = ?,
+                    agent_run_id = COALESCE(agent_run_id, ?)
                 WHERE id = ?
                 """,
                 (
@@ -1196,6 +861,21 @@ class ConversationStore:
                 "SELECT * FROM runs WHERE id = ?", (run_id,)
             ).fetchone()
         return _run_row(row)
+
+    def get_schedule_run_for_agent(
+        self, agent_run_id: str
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM runs
+                WHERE agent_run_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (agent_run_id,),
+            ).fetchone()
+        return _run_row(row) if row is not None else None
 
     def list_schedule(self) -> dict[str, list[dict[str, Any]]]:
         with self._lock:
@@ -1420,69 +1100,107 @@ class ConversationStore:
         if decision not in {"allow", "deny"} or not claimant:
             return None
         with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
-            if row is None:
-                return None
-            decision_recorded = False
-            if row["state"] == "pending":
-                self._conn.execute(
-                    """
-                    UPDATE inbox SET
-                        state = 'resolved',
-                        decision = ?,
-                        actor = ?,
-                        resolved_at = ?,
-                        scope = ?
-                    WHERE id = ? AND state = 'pending'
-                    """,
-                    (
-                        decision,
-                        actor,
-                        datetime.now(UTC).isoformat(),
-                        scope or "once",
-                        item_id,
-                    ),
-                )
-                decision_recorded = True
-            elif row["state"] != "resolved" or row["decision"] != decision:
-                return None
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (item_id,)
+                ).fetchone()
+                if row is None:
+                    self._conn.commit()
+                    return None
+                decision_recorded = False
+                if row["state"] == "pending":
+                    cursor = self._conn.execute(
+                        """
+                        UPDATE inbox SET
+                            state = 'resolved',
+                            decision = ?,
+                            actor = ?,
+                            resolved_at = ?,
+                            scope = ?
+                        WHERE id = ? AND state = 'pending'
+                        """,
+                        (
+                            decision,
+                            actor,
+                            datetime.now(UTC).isoformat(),
+                            scope or "once",
+                            item_id,
+                        ),
+                    )
+                    decision_recorded = cursor.rowcount == 1
+                elif row["state"] != "resolved" or row["decision"] != decision:
+                    self._conn.commit()
+                    return None
 
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
-            claimed = False
-            execution_status = str(row["execution_status"] or "pending")
-            if decision == "allow" and execution_status == "pending":
-                cursor = self._conn.execute(
-                    """
-                    UPDATE inbox SET
-                        execution_status = 'executing',
-                        execution_claimant = ?
-                    WHERE id = ?
-                      AND COALESCE(execution_status, 'pending') = 'pending'
-                    """,
-                    (claimant, item_id),
-                )
-                claimed = cursor.rowcount == 1
-            elif decision == "deny" and execution_status == "pending":
-                self._conn.execute(
-                    """
-                    UPDATE inbox SET
-                        execution_status = 'not_run',
-                        execution_error = NULL,
-                        execution_claimant = NULL,
-                        execution_result = ?
-                    WHERE id = ?
-                      AND COALESCE(execution_status, 'pending') = 'pending'
-                    """,
-                    (json.dumps({"error": "denied by user"}), item_id),
-                )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+                row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (item_id,)
+                ).fetchone()
+                if row["state"] != "resolved" or row["decision"] != decision:
+                    self._conn.commit()
+                    return None
+                claimed = False
+                execution_status = str(row["execution_status"] or "pending")
+                if decision == "allow" and execution_status == "pending":
+                    reservation = (
+                        self.agent_runs.reserve_approval_tool_budget_locked(
+                            row["run_id"], item_id
+                        )
+                        if row["recovery_command_id"] is None
+                        else None
+                    )
+                    if reservation is not None and reservation.status == "exhausted":
+                        self._conn.execute(
+                            """
+                            UPDATE inbox SET
+                                execution_status = 'not_run',
+                                execution_error = ?, execution_claimant = NULL,
+                                execution_result = ?
+                            WHERE id = ? AND state = 'resolved'
+                              AND decision = 'allow'
+                              AND COALESCE(execution_status, 'pending') = 'pending'
+                            """,
+                            (
+                                AGENT_RUN_TOOL_BUDGET_EXHAUSTED,
+                                json.dumps(
+                                    {"error": AGENT_RUN_TOOL_BUDGET_EXHAUSTED}
+                                ),
+                                item_id,
+                            ),
+                        )
+                    else:
+                        cursor = self._conn.execute(
+                            """
+                            UPDATE inbox SET
+                                execution_status = 'executing',
+                                execution_claimant = ?
+                            WHERE id = ? AND state = 'resolved'
+                              AND decision = 'allow'
+                              AND COALESCE(execution_status, 'pending') = 'pending'
+                            """,
+                            (claimant, item_id),
+                        )
+                        claimed = cursor.rowcount == 1
+                elif decision == "deny" and execution_status == "pending":
+                    self._conn.execute(
+                        """
+                        UPDATE inbox SET
+                            execution_status = 'not_run',
+                            execution_error = NULL,
+                            execution_claimant = NULL,
+                            execution_result = ?
+                        WHERE id = ? AND state = 'resolved' AND decision = 'deny'
+                          AND COALESCE(execution_status, 'pending') = 'pending'
+                        """,
+                        (json.dumps({"error": "denied by user"}), item_id),
+                    )
+                self._conn.commit()
+                row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (item_id,)
+                ).fetchone()
+            except Exception:
+                self._conn.rollback()
+                raise
         item = _inbox_row(row)
         return {
             "item": item,
@@ -1978,44 +1696,7 @@ class ConversationStore:
 
 
 def _inbox_row(row: sqlite3.Row) -> dict[str, Any]:
-    item = dict(row)
-    raw = item.get("arguments") or "{}"
-    try:
-        item["arguments"] = json.loads(raw)
-    except json.JSONDecodeError:
-        item["arguments"] = {}
-    item.setdefault("actor", None)
-    item["requested_at"] = item.get("requested_at") or item.get("created_at")
-    item.setdefault("resolved_at", None)
-    item["scope"] = item.get("scope") or "once"
-    item["execution_status"] = item.get("execution_status") or "pending"
-    item.setdefault("execution_error", None)
-    item.setdefault("execution_claimant", None)
-    raw_result = item.get("execution_result")
-    if isinstance(raw_result, str):
-        try:
-            item["execution_result"] = json.loads(raw_result)
-        except json.JSONDecodeError:
-            item["execution_result"] = None
-    else:
-        item["execution_result"] = None
-    item.setdefault("expires_at", None)
-    item.setdefault("reason", None)
-    item.setdefault("session_id", None)
-    item.setdefault("run_id", None)
-    item.setdefault("message_id", None)
-    item.setdefault("part_id", None)
-    item.setdefault("recovery_command_id", None)
-    item.setdefault("original_call_id", None)
-    raw_resource = item.get("resource")
-    if isinstance(raw_resource, str):
-        try:
-            item["resource"] = json.loads(raw_resource)
-        except json.JSONDecodeError:
-            item["resource"] = None
-    else:
-        item["resource"] = None
-    return item
+    return project_inbox_row(row)
 
 
 def _run_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -2027,26 +1708,6 @@ def _run_row(row: sqlite3.Row) -> dict[str, Any]:
         parsed = []
     item["artifacts"] = parsed if isinstance(parsed, list) else []
     item["waiting_approval_count"] = int(item.get("waiting_approval_count") or 0)
-    return item
-
-
-def _agent_run_row(row: sqlite3.Row) -> dict[str, Any]:
-    item = dict(row)
-    item.pop("original_goal_fingerprint", None)
-    item.pop("original_goal_fingerprint_source", None)
-    item["checkpoint_sequence"] = int(item.get("checkpoint_sequence") or 0)
-    item["skills_loaded"] = json_list(item.get("skills_loaded"))
-    item["source_refs"] = json_list(item.get("source_refs"))
-    item["artifact_refs"] = json_list(item.get("artifact_refs"))
-    item["usage"] = json_object(item.get("usage"))
-    item["terminal_result"] = nullable_json_object(item.get("terminal_result"))
-    return item
-
-
-def _agent_run_checkpoint_row(row: sqlite3.Row) -> dict[str, Any]:
-    item = dict(row)
-    item["sequence"] = int(item["sequence"])
-    item["payload"] = json_object(item.get("payload"))
     return item
 
 
