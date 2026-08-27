@@ -638,14 +638,31 @@ const PROVIDER_FAILURES = new Set([
   "invalid_model_identifier",
 ]);
 const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-const SECRET_MODEL_PREFIXES = ["sk-", "ghp_", "github_pat_", "ya29.", "aiza"];
+const SECRET_MODEL_PREFIXES = [
+  "sk-",
+  "ghp_",
+  "github_pat_",
+  "ya29.",
+  "aiza",
+  "xoxb-",
+  "xoxp-",
+  "xoxa-",
+  "xoxr-",
+  "xapp-",
+];
 
 function safeModel(value: unknown): string | null {
   if (typeof value !== "string" || !SAFE_MODEL.test(value)) return null;
   const lowered = value.toLowerCase();
-  return SECRET_MODEL_PREFIXES.some((prefix) => lowered.startsWith(prefix))
-    ? null
-    : value;
+  if (SECRET_MODEL_PREFIXES.some((prefix) => lowered.startsWith(prefix))) {
+    return null;
+  }
+  if (lowered.startsWith("file:/") || lowered.includes("://")) return null;
+  if (/^[A-Za-z]:\//.test(value)) return null;
+  if (value.split("/").some((segment) => ["", ".", ".."].includes(segment))) {
+    return null;
+  }
+  return value;
 }
 
 function providerVerification(value: unknown): ProviderVerification | null {
