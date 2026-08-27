@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from coworker.agent_run_repository import AgentRunRepository
+from coworker.agent_run_repository import AgentRunLease, AgentRunRepository
 
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _INTERRUPTED_APPROVAL_ERROR = (
@@ -446,6 +446,24 @@ class ConversationStore:
             terminal_result=terminal_result,
         )
 
+    def acquire_resolved_waiting_lease(
+        self,
+        run_id: str,
+        owner_id: str,
+        expected_version: int,
+        interaction_id: str,
+        lease_seconds: int | float,
+        now: datetime | None = None,
+    ) -> AgentRunLease | None:
+        return self.agent_runs.acquire_resolved_waiting_lease(
+            run_id,
+            owner_id,
+            expected_version,
+            interaction_id,
+            lease_seconds,
+            now=now,
+        )
+
     def get_agent_run(self, run_id: str) -> dict[str, Any] | None:
         return self.agent_runs.get_agent_run(run_id)
 
@@ -456,6 +474,7 @@ class ConversationStore:
 
     def list_agent_run_checkpoints(self, run_id: str) -> list[dict[str, Any]]:
         return self.agent_runs.list_agent_run_checkpoints(run_id)
+
     def _file(self, sid: str) -> Path:
         if not valid_session_id(sid):
             raise ValueError("invalid session id")

@@ -167,6 +167,96 @@ class _AgentRunRepositoryBase:
                 raise
         return _lease_from_row(row)
 
+    def acquire_resolved_waiting_lease(
+        self,
+        run_id: str,
+        owner_id: str,
+        expected_version: int,
+        interaction_id: str,
+        lease_seconds: int | float,
+        now: datetime | None = None,
+    ) -> AgentRunLease | None:
+        """Resume one exact, durably resolved approval under a new lease."""
+        owner = _lease_owner(owner_id)
+        interaction = _bounded_id(interaction_id, "interaction_id")
+        seconds = _lease_seconds(lease_seconds)
+        stamp = _timestamp(now)
+        expires_at = _timestamp(_as_datetime(stamp) + timedelta(seconds=seconds))
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(run_id)
+                if (
+                    str(row["current_state"]) != "waiting_approval"
+                    or row["lease_owner"] is not None
+                    or row["lease_expires_at"] is not None
+                ):
+                    self._conn.commit()
+                    return None
+                if int(row["version"]) != int(expected_version):
+                    raise AgentRunVersionConflict(run_id)
+                continuation = project_continuation(
+                    json_object(row["continuation"])
+                )
+                if continuation.get("pending_interaction") != {
+                    "kind": "approval",
+                    "id": interaction,
+                }:
+                    self._conn.commit()
+                    return None
+                inbox = self._conn.execute(
+                    "SELECT state, decision, run_id FROM inbox WHERE id = ?",
+                    (interaction,),
+                ).fetchone()
+                if (
+                    inbox is None
+                    or str(inbox["state"]) != "resolved"
+                    or inbox["decision"] not in {"allow", "deny"}
+                    or inbox["run_id"] != run_id
+                ):
+                    self._conn.commit()
+                    return None
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        current_state = 'running', lease_owner = ?,
+                        lease_expires_at = ?, version = version + 1,
+                        updated_at = ?
+                    WHERE run_id = ? AND version = ?
+                      AND current_state = 'waiting_approval'
+                      AND lease_owner IS NULL AND lease_expires_at IS NULL
+                    """,
+                    (
+                        owner,
+                        expires_at,
+                        stamp,
+                        run_id,
+                        int(expected_version),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    current = self._conn.execute(
+                        "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                    ).fetchone()
+                    if current is None:
+                        raise KeyError(run_id)
+                    if int(current["version"]) != int(expected_version):
+                        raise AgentRunVersionConflict(run_id)
+                    self._conn.commit()
+                    return None
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return _lease_from_row(row)
+
 
 def _lease_seconds(value: int | float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -186,6 +276,18 @@ def _lease_owner(value: str) -> str:
     if redact_sensitive_assignments(owner) != owner:
         raise ValueError("lease owner must not contain credential-shaped data")
     return owner
+
+
+def _bounded_id(value: str, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > _MAX_SAFE_ID
+        or any(ord(char) < 32 for char in value)
+        or redact_sensitive_assignments(value) != value
+    ):
+        raise ValueError(f"invalid {field}")
+    return value
 
 
 def _valid_session_id(value: str) -> bool:
