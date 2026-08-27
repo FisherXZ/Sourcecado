@@ -164,9 +164,14 @@ def system_prompt_assembly(
             brief = build_brief(person, events)
             recent = events[-_PERSON_FILE_EVENT_CAP:]
             learned_lines = [
-                str(event.get("summary") or "")
+                (
+                    f"[{event.get('source')}:{event.get('event_id')}] "
+                    f"{event.get('summary')}"
+                )
                 for event in recent
                 if event.get("summary")
+                and event.get("source")
+                and event.get("event_id")
             ]
             person_context = (
                 "Person file:\n"
