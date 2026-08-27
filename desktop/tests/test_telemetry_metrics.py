@@ -2,9 +2,13 @@ from coworker.telemetry.adapters import InMemoryTelemetryAdapter, TelemetryRecor
 from coworker.telemetry.metrics import CurrentRunMetrics
 from coworker.telemetry.schema import (
     AgentTurnSpan,
+    CompactionEvent,
+    CompactionReason,
     CostEstimate,
     CostEvent,
     ProviderSpan,
+    RetryEvent,
+    RetryReason,
     TraceContext,
     UsageEvent,
 )
@@ -63,6 +67,7 @@ def test_current_run_metrics_aggregate_provider_usage_cost_context_and_elapsed_t
 
     assert metrics == CurrentRunMetrics(
         run_id="run-1",
+        status="running",
         input_tokens=13,
         output_tokens=7,
         total_tokens=20,
@@ -74,6 +79,8 @@ def test_current_run_metrics_aggregate_provider_usage_cost_context_and_elapsed_t
         context_use_ratio=0.08,
         elapsed_ms=8.0,
         estimated_cost_usd=0.0062,
+        retry_count=0,
+        compaction_count=0,
     )
 
 
@@ -101,3 +108,51 @@ def test_current_run_metrics_preserve_missing_usage_as_unknown():
     assert metrics.context_use_ratio is None
     assert metrics.estimated_cost_usd is None
     assert metrics.elapsed_ms == 3.0
+    assert metrics.status == "success"
+
+
+def test_current_run_metrics_count_only_events_that_were_actually_recorded():
+    adapter = InMemoryTelemetryAdapter()
+    recorder = TelemetryRecorder(adapter, clock=StepClock())
+    context = TraceContext(session_id="session-1", run_id="run-1")
+    turn = recorder.start_span(AgentTurnSpan(operation="agent.turn"), context)
+    turn.record(
+        RetryEvent(
+            operation="provider.request",
+            retry_count=1,
+            reason=RetryReason.TIMEOUT,
+        )
+    )
+    turn.record(
+        CompactionEvent(
+            operation="agent.context",
+            reason=CompactionReason.CONTEXT_LIMIT,
+            input_tokens=100,
+            output_tokens=40,
+        )
+    )
+
+    metrics = adapter.current_run_metrics(run_id="run-1", now_ns=5_000_000)
+
+    assert metrics.retry_count == 1
+    assert metrics.compaction_count == 1
+
+
+def test_in_memory_adapter_returns_the_latest_run_for_a_session():
+    adapter = InMemoryTelemetryAdapter()
+    recorder = TelemetryRecorder(adapter, clock=StepClock())
+    first_context = TraceContext(session_id="session-1", run_id="run-1")
+    recorder.start_span(AgentTurnSpan(operation="agent.turn"), first_context).finish()
+    second_context = TraceContext(session_id="session-1", run_id="run-2")
+    recorder.start_span(AgentTurnSpan(operation="agent.turn"), second_context)
+
+    metrics = adapter.current_session_metrics(
+        session_id="session-1", now_ns=5_000_000
+    )
+
+    assert metrics is not None
+    assert metrics.run_id == "run-2"
+    assert metrics.status == "running"
+    assert adapter.current_session_metrics(
+        session_id="missing", now_ns=5_000_000
+    ) is None

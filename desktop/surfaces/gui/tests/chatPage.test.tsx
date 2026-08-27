@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   getInbox: vi.fn(),
   getSession: vi.fn(),
+  getCurrentRunTelemetry: vi.fn(),
   openChat: vi.fn(),
 }));
 const writeText = vi.fn();
@@ -46,6 +47,7 @@ vi.mock("../src/api", () => ({
   getSettings: api.getSettings,
   getInbox: api.getInbox,
   getSession: api.getSession,
+  getCurrentRunTelemetry: api.getCurrentRunTelemetry,
   hasToken: () => true,
   openChat: api.openChat,
   resolveInbox: vi.fn(),
@@ -97,6 +99,11 @@ describe("ChatPage Warm Operator thread", () => {
       apollo: { configured: false },
     });
     api.getInbox.mockResolvedValue({ items: [] });
+    api.getCurrentRunTelemetry.mockResolvedValue({
+      version: 1,
+      session_id: "thread-alpha",
+      current_run: null,
+    });
     api.openChat.mockImplementation((callback) => {
       onChatEvent = callback;
       return {
@@ -107,6 +114,112 @@ describe("ChatPage Warm Operator thread", () => {
       recover: chatRecover,
       close: vi.fn(),
       };
+    });
+  });
+
+  it("shows compact allowlisted measurements for the current run", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Measured run",
+      messages: [],
+      events: [],
+    });
+    api.getCurrentRunTelemetry.mockResolvedValue({
+      version: 1,
+      session_id: "thread-alpha",
+      current_run: {
+        run_id: "run-1",
+        status: "running",
+        input_tokens: 80,
+        output_tokens: 20,
+        total_tokens: 100,
+        cache_hit_input_tokens: 30,
+        cache_miss_input_tokens: 50,
+        reasoning_tokens: 4,
+        current_context_tokens: 80,
+        context_window_tokens: 1000,
+        context_use_ratio: 0.08,
+        elapsed_ms: 1250,
+        estimated_cost_usd: 0.0042,
+        retry_count: 1,
+        compaction_count: 2,
+        prompt: "sk-live-PLANTED",
+        raw_error: "private error",
+      },
+    });
+
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+
+    const metrics = await screen.findByRole("region", {
+      name: "Current run metrics",
+    });
+    expect(metrics).toHaveTextContent("100 tokens");
+    expect(metrics).toHaveTextContent("Context 8%");
+    expect(metrics).toHaveTextContent("1.3s");
+    expect(metrics).toHaveTextContent("1 retry");
+    expect(metrics).toHaveTextContent("2 compactions");
+    expect(metrics).toHaveTextContent("$0.0042 est.");
+    expect(container).not.toHaveTextContent("PLANTED");
+    expect(container).not.toHaveTextContent("private error");
+  });
+
+  it("does not carry measurements across threads while the next run loads", async () => {
+    const betaMetrics = deferred<{
+      version: 1;
+      session_id: string;
+      current_run: null;
+    }>();
+    api.getSession.mockImplementation(async (id: string) => ({
+      id,
+      title: id,
+      messages: [],
+      events: [],
+    }));
+    api.getCurrentRunTelemetry.mockImplementation((id: string) =>
+      id === "thread-alpha"
+        ? Promise.resolve({
+            version: 1,
+            session_id: id,
+            current_run: {
+              run_id: "run-alpha",
+              status: "success",
+              input_tokens: 8,
+              output_tokens: 2,
+              total_tokens: 10,
+              cache_hit_input_tokens: 0,
+              cache_miss_input_tokens: 8,
+              reasoning_tokens: 0,
+              current_context_tokens: 8,
+              context_window_tokens: null,
+              context_use_ratio: null,
+              elapsed_ms: 100,
+              estimated_cost_usd: null,
+              retry_count: 0,
+              compaction_count: 0,
+            },
+          })
+        : betaMetrics.promise,
+    );
+
+    const view = render(<ChatPage sessionId="thread-alpha" />);
+    const alphaMetrics = await screen.findByRole("region", {
+      name: "Current run metrics",
+    });
+    expect(alphaMetrics).toHaveTextContent("10 tokens");
+    expect(alphaMetrics).toHaveTextContent("0 retries");
+
+    view.rerender(<ChatPage sessionId="thread-beta" />);
+    await screen.findByRole("heading", { level: 1, name: "thread-beta" });
+    expect(
+      screen.queryByRole("region", { name: "Current run metrics" }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      betaMetrics.resolve({
+        version: 1,
+        session_id: "thread-beta",
+        current_run: null,
+      });
     });
   });
 

@@ -13,8 +13,18 @@ from coworker.events import TurnEventStream, TurnIdentity, build_event, new_turn
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
 from coworker.permissions import RETRY_SAFE, decide
-from coworker.provider import ToolCall
+from coworker.provider import ModelUsage, ToolCall
 from coworker.store import ConversationStore
+from coworker.telemetry import (
+    AgentTurnSpan,
+    ErrorKind,
+    ProviderSpan,
+    StopReason,
+    TelemetryRecorder,
+    TraceContext,
+    ToolSpan,
+    UsageEvent,
+)
 from coworker.tools import execute
 
 MAX_STEPS = 8
@@ -23,6 +33,65 @@ INTERRUPTED_TOOL = '{"error": "tool call interrupted"}'
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _telemetry_provider_name(provider: Any) -> str:
+    name = type(provider).__name__.lower()
+    name = name.removesuffix("provider") or "unknown"
+    if name != "openaicompat":
+        return name
+    base_url = str(getattr(provider, "base_url", "")).lower()
+    if "moonshot.ai" in base_url:
+        return "moonshot"
+    if "openai.com" in base_url:
+        return "openai"
+    return "openai_compatible"
+
+
+def _telemetry_provider_span(provider: Any) -> ProviderSpan:
+    try:
+        return ProviderSpan(
+            provider=_telemetry_provider_name(provider),
+            model=str(getattr(provider, "model_id", "unknown")),
+            operation="provider.request",
+        )
+    except ValueError:
+        return ProviderSpan(
+            provider="unknown",
+            model="unknown",
+            operation="provider.request",
+        )
+
+
+def _telemetry_tool_span(name: str) -> ToolSpan:
+    try:
+        return ToolSpan(tool_name=name, operation="tool.execute")
+    except ValueError:
+        return ToolSpan(tool_name="unknown", operation="tool.execute")
+
+
+def _telemetry_usage(usage: ModelUsage) -> UsageEvent:
+    return UsageEvent(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        total_tokens=usage.total_tokens,
+        cache_hit_input_tokens=usage.cached_input_tokens,
+        cache_miss_input_tokens=usage.uncached_input_tokens,
+        reasoning_tokens=usage.reasoning_tokens,
+        current_context_tokens=usage.input_tokens,
+    )
+
+
+def _telemetry_stop_reason(reason: str | None, *, used_tools: bool) -> StopReason:
+    if reason == "tool_calls" or (reason is None and used_tools):
+        return StopReason.TOOL_USE
+    if reason == "length":
+        return StopReason.MAX_TOKENS
+    if reason == "stop" or reason is None:
+        return StopReason.COMPLETED
+    if reason == "insufficient_system_resource":
+        return StopReason.ERROR
+    return StopReason.UNKNOWN
 
 
 _TOOL_SOURCES: dict[str, tuple[str | None, str]] = {
@@ -491,6 +560,7 @@ async def run_turn(
     system_prompt_fn: Callable[..., str] | None = None,
     identity: TurnIdentity | None = None,
     control: RunControl | None = None,
+    telemetry: TelemetryRecorder | None = None,
 ) -> dict[str, Any]:
     workspace_runtime = execute_kwargs.get("workspace_runtime")
     events = TurnEventStream(
@@ -503,6 +573,14 @@ async def run_turn(
     )
     if control is not None:
         await control.attach(events)
+    recorder = telemetry or TelemetryRecorder()
+    trace_context = TraceContext(
+        session_id=events.identity.session_id,
+        run_id=events.identity.run_id,
+    )
+    turn_span = recorder.start_span(
+        AgentTurnSpan(operation="agent.turn"), trace_context
+    )
 
     async def _emit(event: dict[str, Any]) -> None:
         await events.send(event)
@@ -568,6 +646,7 @@ async def run_turn(
     async def _stopped(
         history: list[dict[str, Any]], text_so_far: str
     ) -> dict[str, Any]:
+        turn_span.cancel()
         _persist_closed(store, sid, history, workspace_runtime)
         if control is not None:
             await control.finish_stopped(text_so_far)
@@ -584,6 +663,7 @@ async def run_turn(
 
     await _emit({"type": "turn_start", "state": "running"})
     if provider is None:
+        turn_span.fail(ErrorKind.PROVIDER)
         await _terminal(
             {
                 "type": "error",
@@ -625,6 +705,8 @@ async def run_turn(
         for _ in range(MAX_STEPS):
             chunks: list[str] = []
             calls: list[ToolCall] = []
+            provider_usage: UsageEvent | None = None
+            provider_finish_reason: str | None = None
             _persist_closed(store, sid, history, workspace_runtime)
             model_messages = [
                 {k: v for k, v in message.items() if k != "message_id"}
@@ -636,14 +718,39 @@ async def run_turn(
             }
             if getattr(provider, "uses_transient_context", False):
                 stream_kwargs["context_id"] = sid
-            async for chunk in provider.astream(**stream_kwargs):
-                if control is not None and control.cancel_requested.is_set():
-                    return await _stopped(history, "".join(chunks) or last_text)
-                if chunk.text_delta:
-                    chunks.append(chunk.text_delta)
-                    await _emit({"type": "assistant_delta", "delta": chunk.text_delta})
-                if chunk.tool_calls:
-                    calls = chunk.tool_calls
+            provider_span = turn_span.child(
+                _telemetry_provider_span(provider)
+            )
+            try:
+                async for chunk in provider.astream(**stream_kwargs):
+                    if control is not None and control.cancel_requested.is_set():
+                        provider_span.cancel(usage=provider_usage)
+                        return await _stopped(history, "".join(chunks) or last_text)
+                    if chunk.text_delta:
+                        chunks.append(chunk.text_delta)
+                        await _emit({"type": "assistant_delta", "delta": chunk.text_delta})
+                    if chunk.tool_calls:
+                        calls = chunk.tool_calls
+                    if chunk.usage is not None:
+                        provider_usage = _telemetry_usage(chunk.usage)
+                        provider_span.record(provider_usage)
+                    if chunk.finish_reason is not None:
+                        provider_finish_reason = chunk.finish_reason
+            except asyncio.CancelledError:
+                provider_span.cancel(usage=provider_usage)
+                turn_span.cancel()
+                raise
+            except Exception:
+                provider_span.fail(ErrorKind.PROVIDER, usage=provider_usage)
+                turn_span.fail(ErrorKind.PROVIDER)
+                raise
+            provider_span.finish(
+                stop_reason=_telemetry_stop_reason(
+                    provider_finish_reason,
+                    used_tools=bool(calls),
+                ),
+                usage=provider_usage,
+            )
             if control is not None and control.cancel_requested.is_set():
                 return await _stopped(history, "".join(chunks) or last_text)
             last_text = "".join(chunks)
@@ -834,6 +941,7 @@ async def run_turn(
                         "started_at": _now_iso(),
                     }
                 )
+                tool_span = turn_span.child(_telemetry_tool_span(call.name))
                 try:
                     kw = {
                         k: v for k, v in execute_kwargs.items() if not k.startswith("_")
@@ -848,8 +956,15 @@ async def run_turn(
                     ok, result = await asyncio.to_thread(
                         execute, call.name, call.arguments, **kw
                     )
+                except asyncio.CancelledError:
+                    tool_span.cancel()
+                    raise
                 except Exception as exc:
                     ok, result = False, {"error": str(exc)}
+                if ok:
+                    tool_span.finish()
+                else:
+                    tool_span.partial(ErrorKind.TOOL)
                 if (
                     call.name in {"remember", "memory_update", "memory_forget"}
                     and system_prompt_fn
@@ -892,6 +1007,7 @@ async def run_turn(
                         return await _stopped(history, last_text)
                     control.current_action = None
         else:
+            turn_span.cancel()
             await _terminal(
                 {
                     "type": "turn_end",
@@ -901,12 +1017,20 @@ async def run_turn(
                 }
             )
             return {"status": "stopped", "text": last_text}
+    except asyncio.CancelledError:
+        turn_span.cancel()
+        raise
     except Exception as exc:
+        turn_span.fail(ErrorKind.INTERNAL)
         _persist_closed(store, sid, history, workspace_runtime)
         await _terminal({"type": "error", "state": "failed", "message": str(exc)})
         return {"status": "error", "text": last_text}
     final_state = "partial" if had_tool_failure else "complete"
     await _terminal({"type": "turn_end", "text": last_text, "state": final_state})
+    if had_tool_failure:
+        turn_span.partial(ErrorKind.TOOL)
+    else:
+        turn_span.finish()
     return {
         "status": "partial" if had_tool_failure else "ok",
         "text": last_text,

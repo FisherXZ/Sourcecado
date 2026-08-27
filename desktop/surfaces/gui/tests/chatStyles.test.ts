@@ -51,6 +51,15 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
+  it("keeps current-run measurements compact and numerically stable", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-run-metrics\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;[^}]*font-variant-numeric:\s*tabular-nums;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-run-metrics > span\s*\{[^}]*border-right:\s*1px solid var\(--border\);/,
+    );
+  });
+
   it("distinguishes pending approval cards from collapsed audit receipts", () => {
     expect(styles).toMatch(
       /\.sourcecado-approval-card\s*\{[^}]*border:\s*1px solid var\(--warn\);/,
