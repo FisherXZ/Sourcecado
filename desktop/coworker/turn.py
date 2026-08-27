@@ -1006,6 +1006,34 @@ async def run_turn(
                     execution.approval_resolved(
                         _durable_history(), _durable_events(), call.id
                     )
+                    if claim.item.get("execution_status") == "not_run":
+                        ok, result = inbox.execution_outcome(claim.item)
+                        had_tool_failure = True
+                        await _emit(
+                            _tool_finished_event(
+                                call,
+                                ok=ok,
+                                result=result,
+                                identity=events.identity,
+                            )
+                        )
+                        not_run = _stamp(_tool_result_message(call, result))
+                        history.append(not_run)
+                        store.append(sid, not_run)
+                        _record_person_file(
+                            sid, call, False, result, execute_kwargs
+                        )
+                        _checkpoint_skipped(
+                            call,
+                            result=result,
+                            step_index=step_index,
+                            tool_index=tool_index,
+                            outcome="failed_unexecuted",
+                        )
+                        await _approval_receipt(
+                            claim.item, resolution="allowed"
+                        )
+                        continue
                     if not claim.owned:
                         execution.waiting_external_execution(
                             _durable_history(),

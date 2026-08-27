@@ -294,6 +294,96 @@ def test_atomic_approval_conflict_changes_neither_inbox_nor_run(tmp_path):
     assert _lease_columns(store, identity.run_id)[0] == execution.owner_id
 
 
+def test_budget_reservation_and_inbox_claim_roll_back_and_retry_once(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id="run-budget-claim-rollback")
+    _prepare_one_tool(execution)
+    lease = store.agent_runs.update_continuation(
+        execution.lease,
+        {"remaining_budgets": {"tool_calls": 1}},
+        now=NOW,
+    )
+    execution._lease = lease
+    execution._refresh_snapshot()
+    execution.waiting_approval_atomic(
+        [],
+        [],
+        "call-budget-rollback",
+        0,
+        0,
+        "call-budget-rollback",
+        "gmail_draft",
+        False,
+        arguments={"body": "PRIVATE_APPROVAL_ARGUMENT"},
+        reason="review",
+        resource=None,
+        approval_ttl_seconds=7 * 24 * 60 * 60,
+    )
+    original = store.agent_runs.reserve_approval_tool_budget_locked
+
+    def reserve_then_fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("forced claim failure after reservation")
+
+    monkeypatch.setattr(
+        store.agent_runs,
+        "reserve_approval_tool_budget_locked",
+        reserve_then_fail,
+    )
+    with pytest.raises(RuntimeError, match="after reservation"):
+        Inbox(store).decide_and_claim(
+            "call-budget-rollback",
+            "allow",
+            actor=None,
+            scope="once",
+            claimant="claim-owner",
+        )
+
+    item = Inbox(store).get("call-budget-rollback")
+    run = store.get_agent_run(identity.run_id)
+    assert item["state"] == "pending"
+    assert item["decision"] is None
+    assert item["execution_status"] == "pending"
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 1
+    assert run["continuation"]["pending_tool"]["budget_reserved"] is False
+    assert "tool_budget_reserved" not in {
+        checkpoint["kind"]
+        for checkpoint in store.list_agent_run_checkpoints(identity.run_id)
+    }
+    monkeypatch.setattr(
+        store.agent_runs,
+        "reserve_approval_tool_budget_locked",
+        original,
+    )
+
+    first = Inbox(store).decide_and_claim(
+        "call-budget-rollback",
+        "allow",
+        actor=None,
+        scope="once",
+        claimant="claim-owner",
+    )
+    second = Inbox(store).decide_and_claim(
+        "call-budget-rollback",
+        "allow",
+        actor=None,
+        scope="once",
+        claimant="claim-owner",
+    )
+
+    assert first is not None and first.owned
+    assert second is not None and second.owned
+    run = store.get_agent_run(identity.run_id)
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 0
+    assert run["continuation"]["pending_tool"]["budget_reserved"] is True
+    assert [
+        checkpoint["kind"]
+        for checkpoint in store.list_agent_run_checkpoints(identity.run_id)
+    ].count("tool_budget_reserved") == 1
+
+
 def test_approved_completion_merge_failure_rolls_back_then_classifies_unknown(
     tmp_path, monkeypatch
 ):
@@ -494,7 +584,7 @@ def test_external_factory_transaction_rollback_retries_once(tmp_path):
     waiting = store.get_agent_run(identity.run_id)
     assert waiting["current_state"] == "waiting_external"
     assert waiting["usage"] == {"model_calls": 1}
-    assert waiting["continuation"]["remaining_budgets"]["tool_calls"] == 4
+    assert waiting["continuation"]["remaining_budgets"]["tool_calls"] == 3
     with sqlite3.connect(store.db_path) as db:
         db.execute("DROP TRIGGER fail_external_factory_checkpoint")
 

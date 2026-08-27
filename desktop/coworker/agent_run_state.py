@@ -215,6 +215,11 @@ def tool_pending_transition(
         and pending.get("status") == "not_started"
         and pending.get("budget_reserved") is False
     )
+    reserved_approval = (
+        exact_pending
+        and pending.get("status") == "not_started"
+        and pending.get("budget_reserved") is True
+    )
     retry = (
         exact_pending
         and pending.get("retry_class") == "safe"
@@ -234,7 +239,7 @@ def tool_pending_transition(
             "tool_pending must match the exact next expected tool"
         )
     budgets = _budgets(current)
-    if not retry:
+    if not retry and not reserved_approval:
         if pending is not None and not prebound_approval:
             raise AgentRunTransitionError("tool_pending conflicts with pending tool")
         if budgets.get("tool_calls", 0) < 1:
@@ -252,6 +257,40 @@ def tool_pending_transition(
                 "status": "in_flight",
                 "budget_reserved": True,
             },
+            "remaining_budgets": budgets,
+        },
+    )
+
+
+def reserve_approved_tool_budget_transition(
+    snapshot: dict[str, Any], interaction_id: str
+) -> dict[str, Any]:
+    current = project_continuation(snapshot)
+    cursor = _cursor(current)
+    interaction = _text(interaction_id, MAX_SAFE_ID, "interaction_id")
+    pending = current.get("pending_tool")
+    if (
+        cursor.get("phase") != "waiting_approval"
+        or current.get("pending_interaction")
+        != {"kind": "approval", "id": interaction}
+        or not isinstance(pending, dict)
+        or pending.get("call_id") != interaction
+        or pending.get("status") != "not_started"
+        or not isinstance(pending.get("budget_reserved"), bool)
+    ):
+        raise AgentRunTransitionError(
+            "tool budget reservation must match the exact waiting approval"
+        )
+    if pending["budget_reserved"] is True:
+        return current
+    budgets = _budgets(current)
+    if budgets.get("tool_calls", 0) < 1:
+        raise AgentRunTransitionError("Agent Run tool budget exhausted")
+    budgets["tool_calls"] -= 1
+    return merge_continuation(
+        current,
+        {
+            "pending_tool": {**pending, "budget_reserved": True},
             "remaining_budgets": budgets,
         },
     )
@@ -340,7 +379,7 @@ def tool_skipped_transition(
     digest = valid_sha256(result_digest)
     if digest is None:
         raise AgentRunTransitionError("result_digest must be a SHA-256 digest")
-    if outcome not in {"denied", "skipped"}:
+    if outcome not in {"denied", "skipped", "failed_unexecuted"}:
         raise AgentRunTransitionError("unexecuted tool outcome is invalid")
     pending = current.get("pending_tool")
     expected_attempt = tool_attempt_id(run_id, step, tool, safe_call_id)
@@ -461,7 +500,7 @@ def adopt_completed_approval_transition(
         or pending.get("name") != safe_name
         or pending.get("retry_class") != "consequential"
         or pending.get("status") != "not_started"
-        or pending.get("budget_reserved") is not False
+        or pending.get("budget_reserved") is not True
         or current.get("pending_interaction") is not None
         or current.get("pending_model") is not None
     ):
@@ -469,9 +508,6 @@ def adopt_completed_approval_transition(
             "external approval adoption must match the exact pending tool"
         )
     budgets = _budgets(current)
-    if budgets.get("tool_calls", 0) < 1:
-        raise AgentRunTransitionError("Agent Run tool-call budget exhausted")
-    budgets["tool_calls"] -= 1
     receipt = {
         "attempt_id": pending["attempt_id"],
         "call_id": safe_call_id,
@@ -584,7 +620,7 @@ def waiting_external_execution_transition(
         or pending.get("name") != safe_name
         or pending.get("retry_class") != "consequential"
         or pending.get("status") != "not_started"
-        or pending.get("budget_reserved") is not False
+        or pending.get("budget_reserved") is not True
         or current.get("pending_interaction") is not None
         or current.get("pending_model") is not None
     ):
@@ -628,7 +664,7 @@ def adopt_waiting_external_completion_transition(
         != {"kind": "approval", "id": pending.get("call_id")}
         or pending.get("retry_class") != "consequential"
         or pending.get("status") != "not_started"
-        or pending.get("budget_reserved") is not False
+        or pending.get("budget_reserved") is not True
         or current.get("pending_model") is not None
     ):
         raise AgentRunTransitionError(
@@ -640,9 +676,6 @@ def adopt_waiting_external_completion_transition(
     if pending.get("attempt_id") != tool_attempt_id(run_id, step, tool, call_id):
         raise AgentRunTransitionError("external completion attempt identity changed")
     budgets = _budgets(current)
-    if budgets.get("tool_calls", 0) < 1:
-        raise AgentRunTransitionError("Agent Run tool-call budget exhausted")
-    budgets["tool_calls"] -= 1
     receipt = {
         "attempt_id": pending["attempt_id"],
         "call_id": call_id,
@@ -682,7 +715,13 @@ def approval_ready_transition(
         != {"kind": "approval", "id": interaction}
         or not isinstance(current.get("pending_tool"), dict)
         or current["pending_tool"].get("status") != "not_started"
-        or current["pending_tool"].get("budget_reserved") is not False
+        or not isinstance(
+            current["pending_tool"].get("budget_reserved"), bool
+        )
+        or (
+            decision == "deny"
+            and current["pending_tool"].get("budget_reserved") is not False
+        )
     ):
         raise AgentRunTransitionError(
             "approval decision must match the exact waiting tool"
@@ -717,7 +756,11 @@ def approval_resolved_transition(
         or current.get("pending_model") is not None
         or not isinstance(pending_tool, dict)
         or pending_tool.get("status") != "not_started"
-        or pending_tool.get("budget_reserved") is not False
+        or not isinstance(pending_tool.get("budget_reserved"), bool)
+        or (
+            resolved.get("decision") == "deny"
+            and pending_tool.get("budget_reserved") is not False
+        )
     ):
         raise AgentRunTransitionError(
             "approval_resolved must match the pending approval"

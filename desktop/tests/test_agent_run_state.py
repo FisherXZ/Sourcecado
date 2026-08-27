@@ -11,6 +11,7 @@ from coworker.agent_run_state import (
     interrupt_inflight_tool_transition,
     model_completed_transition,
     model_pending_transition,
+    reserve_approved_tool_budget_transition,
     terminal_transition,
     tool_completed_transition,
     tool_pending_transition,
@@ -129,7 +130,16 @@ def test_external_approval_adoption_advances_and_charges_once():
         "gmail_draft",
         False,
     )
-    ready = approval_ready_transition(waiting, "call-external", "allow")
+    reserved = reserve_approved_tool_budget_transition(
+        waiting, "call-external"
+    )
+    assert reserved["remaining_budgets"]["tool_calls"] == 2
+    assert reserved["pending_tool"]["budget_reserved"] is True
+    assert (
+        reserve_approved_tool_budget_transition(reserved, "call-external")
+        == reserved
+    )
+    ready = approval_ready_transition(reserved, "call-external", "allow")
     pending = approval_resolved_transition(ready, [], [], "call-external")
 
     adopted = adopt_completed_approval_transition(

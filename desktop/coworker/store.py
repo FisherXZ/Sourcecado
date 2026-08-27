@@ -17,7 +17,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from coworker.agent_run_approval import project_inbox_row
+from coworker.agent_run_approval import (
+    AGENT_RUN_TOOL_BUDGET_EXHAUSTED,
+    project_inbox_row,
+)
 from coworker.agent_run_repository import (
     AgentRunLease,
     AgentRunRepository,
@@ -1036,17 +1039,45 @@ class ConversationStore:
                 claimed = False
                 execution_status = str(row["execution_status"] or "pending")
                 if decision == "allow" and execution_status == "pending":
-                    cursor = self._conn.execute(
-                        """
-                        UPDATE inbox SET
-                            execution_status = 'executing',
-                            execution_claimant = ?
-                        WHERE id = ? AND state = 'resolved' AND decision = 'allow'
-                          AND COALESCE(execution_status, 'pending') = 'pending'
-                        """,
-                        (claimant, item_id),
+                    reservation = (
+                        self.agent_runs.reserve_approval_tool_budget_locked(
+                            row["run_id"], item_id
+                        )
+                        if row["recovery_command_id"] is None
+                        else None
                     )
-                    claimed = cursor.rowcount == 1
+                    if reservation is not None and reservation.status == "exhausted":
+                        self._conn.execute(
+                            """
+                            UPDATE inbox SET
+                                execution_status = 'not_run',
+                                execution_error = ?, execution_claimant = NULL,
+                                execution_result = ?
+                            WHERE id = ? AND state = 'resolved'
+                              AND decision = 'allow'
+                              AND COALESCE(execution_status, 'pending') = 'pending'
+                            """,
+                            (
+                                AGENT_RUN_TOOL_BUDGET_EXHAUSTED,
+                                json.dumps(
+                                    {"error": AGENT_RUN_TOOL_BUDGET_EXHAUSTED}
+                                ),
+                                item_id,
+                            ),
+                        )
+                    else:
+                        cursor = self._conn.execute(
+                            """
+                            UPDATE inbox SET
+                                execution_status = 'executing',
+                                execution_claimant = ?
+                            WHERE id = ? AND state = 'resolved'
+                              AND decision = 'allow'
+                              AND COALESCE(execution_status, 'pending') = 'pending'
+                            """,
+                            (claimant, item_id),
+                        )
+                        claimed = cursor.rowcount == 1
                 elif decision == "deny" and execution_status == "pending":
                     self._conn.execute(
                         """

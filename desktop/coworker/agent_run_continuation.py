@@ -183,6 +183,7 @@ def project_continuation(value: Any) -> dict[str, Any]:
                 "skipped",
                 "executed_external",
                 "failed_external",
+                "failed_unexecuted",
             }:
                 safe_receipt["outcome"] = receipt["outcome"]
             receipts.append(safe_receipt)
@@ -427,7 +428,7 @@ def _validate_pending_updates(
             and prior.get("budget_reserved") is False
             and candidate.get("budget_reserved") is True
             and prior.get("status") == "not_started"
-            and candidate.get("status") == "in_flight"
+            and candidate.get("status") in {"not_started", "in_flight"}
         )
         if changed and not reserves_approved_tool:
             raise ValueError(f"continuation {section} cannot change reservation")

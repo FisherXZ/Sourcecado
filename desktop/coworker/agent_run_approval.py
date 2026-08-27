@@ -14,6 +14,7 @@ APPROVED_TOOL_OUTCOME_UNKNOWN_ERROR = (
     "Outcome is unknown: the approved action did not durably record completion. "
     "Verify the external resource before retrying."
 )
+AGENT_RUN_TOOL_BUDGET_EXHAUSTED = "Agent Run tool budget exhausted"
 
 
 @dataclass(frozen=True)

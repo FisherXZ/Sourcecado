@@ -47,6 +47,23 @@ def _run(tmp_path, provider, *, identity=None):
     return store, result
 
 
+def _force_waiting_tool_budget(monkeypatch, store, amount):
+    original = AgentRunExecution.waiting_approval_atomic
+
+    def force_budget(self, *args, **kwargs):
+        lease = store.agent_runs.update_continuation(
+            self.lease,
+            {"remaining_budgets": {"tool_calls": amount}},
+        )
+        self._lease = lease
+        self._refresh_snapshot()
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        AgentRunExecution, "waiting_approval_atomic", force_budget
+    )
+
+
 def test_provider_observes_committed_model_pending_boundary(tmp_path):
     class InspectingProvider:
         model_id = "inspecting"
@@ -1075,7 +1092,7 @@ def test_external_execution_timeout_waits_lease_free_then_resumes_once(
     assert run["current_state"] == "waiting_external"
     assert run["continuation"]["cursor"]["phase"] == "waiting_external"
     assert run["usage"] == {"model_calls": 1}
-    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 8
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 7
     assert external_inbox.get("call-waiting-external")["execution_status"] == (
         "executing"
     )
@@ -1150,6 +1167,260 @@ def test_external_execution_timeout_waits_lease_free_then_resumes_once(
     assert store.get_agent_run(identity.run_id)["continuation"]["cursor"][
         "phase"
     ] == "model_in_flight"
+
+
+def test_zero_tool_budget_allow_is_not_run_and_live_turn_advances_partial(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-zero-budget-allow")
+    store = ConversationStore(tmp_path)
+    external_store = ConversationStore(tmp_path)
+    external_inbox = Inbox(external_store)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-zero-budget",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            },
+            {"deltas": ("Could not draft",)},
+        ]
+    )
+    external_executions = []
+    _force_waiting_tool_budget(monkeypatch, store, 0)
+    monkeypatch.setenv("CLUB_APPROVAL_WAIT_TIMEOUT", "0.02")
+
+    async def external_allow(call_id):
+        claim = external_inbox.decide_and_claim(
+            call_id,
+            "allow",
+            actor="external",
+            scope="once",
+            claimant="external-owner",
+        )
+        assert claim is not None
+        if claim.owned:
+            external_executions.append(call_id)
+        return "allow"
+
+    result = asyncio.run(
+        run_turn(
+            text="Draft with no budget",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=external_allow,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "partial"
+    assert external_executions == []
+    item = external_inbox.get("call-zero-budget")
+    assert item["state"] == "resolved"
+    assert item["decision"] == "allow"
+    assert item["execution_status"] == "not_run"
+    assert item["execution_claimant"] is None
+    assert item["execution_error"] == "Agent Run tool budget exhausted"
+    run = store.get_agent_run(identity.run_id)
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 0
+    assert run["usage"] == {"model_calls": 2}
+    assert "tool_budget_reserved" not in {
+        checkpoint["kind"]
+        for checkpoint in store.list_agent_run_checkpoints(identity.run_id)
+    }
+
+
+def test_external_claim_observes_reserved_last_tool_budget(tmp_path, monkeypatch):
+    identity = _identity("run-one-budget-external")
+    store = ConversationStore(tmp_path)
+    external_store = ConversationStore(tmp_path)
+    external_inbox = Inbox(external_store)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-one-budget-external",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            },
+            {"deltas": ("Drafted externally",)},
+        ]
+    )
+    observed = {}
+    external_executions = []
+    _force_waiting_tool_budget(monkeypatch, store, 1)
+
+    async def external_allow(call_id):
+        claim = external_inbox.decide_and_claim(
+            call_id,
+            "allow",
+            actor="external",
+            scope="once",
+            claimant="external-owner",
+        )
+        assert claim is not None and claim.owned
+        run = store.get_agent_run(identity.run_id)
+        observed.update(
+            budget=run["continuation"]["remaining_budgets"]["tool_calls"],
+            pending=run["continuation"]["pending_tool"],
+            checkpoint=store.list_agent_run_checkpoints(identity.run_id)[-1],
+        )
+        external_executions.append(call_id)
+        external_inbox.complete_execution(
+            call_id,
+            claimant="external-owner",
+            ok=True,
+            result={"draft_id": "draft-one-budget"},
+        )
+        return "allow"
+
+    result = asyncio.run(
+        run_turn(
+            text="Use last budget externally",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=external_allow,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert external_executions == ["call-one-budget-external"]
+    assert observed["budget"] == 0
+    assert observed["pending"]["budget_reserved"] is True
+    assert observed["checkpoint"]["kind"] == "tool_budget_reserved"
+    run = store.get_agent_run(identity.run_id)
+    assert run["usage"] == {"model_calls": 2, "tool_calls": 1}
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 0
+
+
+def test_local_allow_reserves_budget_before_execute_without_second_debit(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-one-budget-local")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-one-budget-local",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            },
+            {"deltas": ("Drafted locally",)},
+        ]
+    )
+    observed = {}
+    _force_waiting_tool_budget(monkeypatch, store, 1)
+
+    async def allow(_call_id):
+        return "allow"
+
+    def inspect_execute(name, arguments, **kwargs):
+        run = store.get_agent_run(identity.run_id)
+        observed.update(
+            budget=run["continuation"]["remaining_budgets"]["tool_calls"],
+            pending=run["continuation"]["pending_tool"],
+            kinds=[
+                item["kind"]
+                for item in store.list_agent_run_checkpoints(identity.run_id)
+            ],
+        )
+        return True, {"draft_id": "draft-local"}
+
+    monkeypatch.setattr("coworker.turn.execute", inspect_execute)
+    result = asyncio.run(
+        run_turn(
+            text="Use last budget locally",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=allow,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert observed["budget"] == 0
+    assert observed["pending"]["budget_reserved"] is True
+    assert observed["kinds"].count("tool_budget_reserved") == 1
+    run = store.get_agent_run(identity.run_id)
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 0
+    assert run["usage"] == {"model_calls": 2, "tool_calls": 1}
+
+
+def test_deny_never_reserves_tool_budget(tmp_path, monkeypatch):
+    identity = _identity("run-budget-deny")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-budget-deny",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            },
+            {"deltas": ("Denied",)},
+        ]
+    )
+    _force_waiting_tool_budget(monkeypatch, store, 1)
+
+    async def deny(_call_id):
+        return "deny"
+
+    result = asyncio.run(
+        run_turn(
+            text="Deny with budget",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=deny,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "partial"
+    run = store.get_agent_run(identity.run_id)
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 1
+    assert "tool_budget_reserved" not in {
+        checkpoint["kind"]
+        for checkpoint in store.list_agent_run_checkpoints(identity.run_id)
+    }
 
 
 def test_approval_allow_reacquires_same_run_and_executes_once(

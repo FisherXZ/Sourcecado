@@ -33,6 +33,7 @@ AGENT_RUN_CHECKPOINT_KINDS = frozenset(
         "model_pending",
         "model_completed",
         "tool_pending",
+        "tool_budget_reserved",
         "tool_completed",
         "tool_outcome_unknown",
         "waiting_approval",

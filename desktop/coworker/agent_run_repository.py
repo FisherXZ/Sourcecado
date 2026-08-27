@@ -45,6 +45,7 @@ from coworker.agent_run_state import (
     adopt_completed_approval_transition,
     adopt_waiting_external_completion_transition,
     approval_ready_transition,
+    reserve_approved_tool_budget_transition,
 )
 
 
@@ -82,6 +83,11 @@ class AdoptedExternalCompletionLease:
     run: dict[str, Any]
     checkpoint: dict[str, Any]
     inbox: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolBudgetReservation:
+    status: Literal["reserved", "already_reserved", "exhausted", "not_applicable"]
 
 
 class AgentRunVersionConflict(RuntimeError):
@@ -543,7 +549,7 @@ class _AgentRunRepositoryBase:
                     or not isinstance(pending, dict)
                     or pending.get("call_id") != interaction
                     or pending.get("status") != "not_started"
-                    or pending.get("budget_reserved") is not False
+                    or pending.get("budget_reserved") is not True
                     or inbox_row is None
                     or inbox_row["run_id"] != run_id
                     or str(inbox_row["state"]) != "resolved"
@@ -922,6 +928,87 @@ def _checkpoint_projection(
 
 
 class AgentRunRepository(_AgentRunRepositoryBase):
+    def reserve_approval_tool_budget_locked(
+        self,
+        run_id: str | None,
+        interaction_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> ToolBudgetReservation:
+        """Reserve budget inside the caller's existing locked transaction."""
+        if not run_id:
+            return ToolBudgetReservation("not_applicable")
+        row = self._conn.execute(
+            "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return ToolBudgetReservation("not_applicable")
+        continuation = project_continuation(json_object(row["continuation"]))
+        pending = continuation.get("pending_tool")
+        if (
+            str(row["current_state"]) != "waiting_approval"
+            or row["lease_owner"] is not None
+            or row["lease_expires_at"] is not None
+            or continuation.get("cursor", {}).get("phase")
+            != "waiting_approval"
+            or continuation.get("pending_interaction")
+            != {"kind": "approval", "id": interaction_id}
+            or not isinstance(pending, dict)
+            or pending.get("call_id") != interaction_id
+            or pending.get("status") != "not_started"
+        ):
+            raise ValueError("approval budget reservation identity mismatch")
+        if pending.get("budget_reserved") is True:
+            return ToolBudgetReservation("already_reserved")
+        if continuation.get("remaining_budgets", {}).get("tool_calls", 0) < 1:
+            return ToolBudgetReservation("exhausted")
+        reserved = reserve_approved_tool_budget_transition(
+            continuation, interaction_id
+        )
+        stamp = _timestamp(now)
+        sequence = int(row["checkpoint_sequence"]) + 1
+        cursor = self._conn.execute(
+            """
+            UPDATE agent_runs SET
+                checkpoint_sequence = ?, continuation = ?,
+                version = version + 1, updated_at = ?
+            WHERE run_id = ? AND version = ?
+              AND current_state = 'waiting_approval'
+              AND lease_owner IS NULL AND lease_expires_at IS NULL
+            """,
+            (
+                sequence,
+                _json(reserved),
+                stamp,
+                run_id,
+                int(row["version"]),
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise AgentRunVersionConflict(run_id)
+        self._conn.execute(
+            """
+            INSERT INTO agent_run_checkpoints
+                (run_id, sequence, kind, payload, created_at)
+            VALUES (?, ?, 'tool_budget_reserved', ?, ?)
+            """,
+            (
+                run_id,
+                sequence,
+                _json(
+                    bounded_checkpoint_payload(
+                        {
+                            "id": interaction_id,
+                            "call_id": pending["call_id"],
+                            "name": pending["name"],
+                        }
+                    )
+                ),
+                stamp,
+            ),
+        )
+        return ToolBudgetReservation("reserved")
+
     def start_and_acquire_lease(
         self,
         *,
@@ -1835,7 +1922,7 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     or not isinstance(pending, dict)
                     or pending.get("call_id") != interaction_id
                     or pending.get("status") != "not_started"
-                    or pending.get("budget_reserved") is not False
+                    or pending.get("budget_reserved") is not True
                     or inbox is None
                     or inbox["run_id"] != lease.run_id
                     or str(inbox["state"]) != "resolved"
@@ -2294,7 +2381,11 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                             == {"kind": "approval", "id": resolved.get("id")}
                             and isinstance(pending, dict)
                             and pending.get("status") == "not_started"
-                            and pending.get("budget_reserved") is False
+                            and isinstance(pending.get("budget_reserved"), bool)
+                            and not (
+                                resolved.get("decision") == "deny"
+                                and pending.get("budget_reserved") is not False
+                            )
                         ):
                             cursor_data["phase"] = "review_required"
                     elif phase == "model_in_flight":
