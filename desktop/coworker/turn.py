@@ -440,6 +440,30 @@ def _persist_closed(store: ConversationStore, sid: str, history: list[dict[str, 
     store.replace_all(sid, [m for m in closed if m.get("role") != "system"])
 
 
+async def resume_turn(
+    *,
+    run_id: str,
+    store: ConversationStore,
+    provider,
+    dependencies: dict[str, Any],
+    emit: Callable[[dict], Awaitable[None]] | None = None,
+    control: RunControl | None = None,
+    lease_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Public explicit-resume entrypoint; never called during app startup."""
+    from coworker.agent_run_resume import resume_turn as _resume_turn
+
+    return await _resume_turn(
+        run_id=run_id,
+        store=store,
+        provider=provider,
+        dependencies=dependencies,
+        emit=emit,
+        control=control,
+        lease_seconds=lease_seconds,
+    )
+
+
 async def run_turn(
     *,
     text: str,

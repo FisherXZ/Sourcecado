@@ -517,6 +517,17 @@ class ConversationStore:
                 fh.write(json.dumps(event, ensure_ascii=False) + "\n")
                 fh.flush()
 
+    def replace_events(self, sid: str, events: list[dict[str, Any]]) -> None:
+        """Atomically rewrite the canonical presentation-event projection."""
+        with self._lock:
+            path = self._event_file(sid)
+            tmp = path.with_suffix(".jsonl.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for event in events:
+                    fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+                fh.flush()
+            tmp.replace(path)
+
     def append(self, sid: str, message: dict[str, Any]) -> None:
         with self._lock:
             with open(self._file(sid), "a", encoding="utf-8") as fh:

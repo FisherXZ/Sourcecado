@@ -41,6 +41,7 @@ AGENT_RUN_CHECKPOINT_KINDS = frozenset(
         "approval_resolved",
         "terminal",
         "process_interrupted",
+        "projection_mismatch",
     }
 )
 
