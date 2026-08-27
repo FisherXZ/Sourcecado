@@ -21,6 +21,7 @@ _PHASES = frozenset(
         "tool_in_flight",
         "tools_ready",
         "waiting_approval",
+        "approval_ready",
         "waiting_question",
         "review_required",
         "terminal_ready",
@@ -96,6 +97,22 @@ def project_continuation(value: Any) -> dict[str, Any]:
             "id": interaction_id,
         }
 
+    resolved = raw.get("resolved_approval")
+    resolved_id = (
+        _safe_text(resolved.get("id"), MAX_SAFE_ID)
+        if isinstance(resolved, dict)
+        else None
+    )
+    if (
+        isinstance(resolved, dict)
+        and resolved_id
+        and resolved.get("decision") in {"allow", "deny"}
+    ):
+        projected["resolved_approval"] = {
+            "id": resolved_id,
+            "decision": resolved["decision"],
+        }
+
     pending_model = raw.get("pending_model")
     if isinstance(pending_model, dict):
         attempt_id = _safe_text(pending_model.get("attempt_id"), MAX_SAFE_ID)
@@ -149,8 +166,7 @@ def project_continuation(value: Any) -> dict[str, Any]:
             name = _safe_text(receipt.get("name"), MAX_TOOL_NAME)
             if not attempt_id or not call_id or not name:
                 continue
-            receipts.append(
-                {
+            safe_receipt = {
                     "attempt_id": attempt_id,
                     "call_id": call_id,
                     "name": name,
@@ -160,7 +176,9 @@ def project_continuation(value: Any) -> dict[str, Any]:
                     ),
                     "result_sha256": valid_sha256(receipt.get("result_sha256")),
                 }
-            )
+            if receipt.get("outcome") in {"executed", "denied"}:
+                safe_receipt["outcome"] = receipt["outcome"]
+            receipts.append(safe_receipt)
     if "completed_tool_receipts" in raw:
         projected["completed_tool_receipts"] = receipts
 
@@ -246,6 +264,7 @@ def merge_continuation(
     for section in (
         "visible_partial",
         "pending_interaction",
+        "resolved_approval",
         "pending_model",
         "pending_tool",
     ):
@@ -392,5 +411,28 @@ def _validate_pending_updates(
         candidate = new[section]
         if not isinstance(prior, dict):
             continue
-        if any(prior.get(key) != candidate.get(key) for key in keys):
+        changed = [
+            key for key in keys if prior.get(key) != candidate.get(key)
+        ]
+        reserves_approved_tool = (
+            section == "pending_tool"
+            and changed == ["budget_reserved"]
+            and prior.get("budget_reserved") is False
+            and candidate.get("budget_reserved") is True
+            and prior.get("status") == "not_started"
+            and candidate.get("status") == "in_flight"
+        )
+        if changed and not reserves_approved_tool:
             raise ValueError(f"continuation {section} cannot change reservation")
+    if (
+        "resolved_approval" in incoming
+        and incoming["resolved_approval"] is not None
+        and "resolved_approval" not in new
+    ):
+        raise ValueError("continuation resolved_approval is malformed")
+    if (
+        isinstance(old.get("resolved_approval"), dict)
+        and isinstance(new.get("resolved_approval"), dict)
+        and old["resolved_approval"] != new["resolved_approval"]
+    ):
+        raise ValueError("continuation resolved_approval cannot change")

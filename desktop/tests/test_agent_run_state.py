@@ -4,6 +4,7 @@ import pytest
 
 from coworker.agent_run_state import (
     AgentRunTransitionError,
+    approval_ready_transition,
     approval_resolved_transition,
     initial_continuation,
     model_completed_transition,
@@ -132,19 +133,74 @@ def test_zero_tool_model_becomes_terminal_ready_and_can_complete():
 def test_approval_wait_and_resolution_return_to_identical_tool_cursor():
     tools = _tools_ready(1)
     waiting = waiting_approval_transition(
-        tools, [], [], "approval-1"
+        tools,
+        "run-state",
+        [],
+        [],
+        "approval-1",
+        0,
+        0,
+        "call-approved",
+        "gmail_draft",
+        False,
     )
+    ready = approval_ready_transition(waiting, "approval-1", "allow")
 
     resumed = approval_resolved_transition(
-        waiting, [], [], "approval-1"
+        ready, [], [], "approval-1"
     )
 
     assert waiting["cursor"]["phase"] == "waiting_approval"
+    assert waiting["pending_tool"]["budget_reserved"] is False
+    assert ready["cursor"]["phase"] == "approval_ready"
     assert resumed["cursor"] == {
-        **waiting["cursor"],
+        **ready["cursor"],
         "phase": "tools_ready",
     }
     assert "pending_interaction" not in resumed
+    assert resumed["pending_tool"] == waiting["pending_tool"]
+    reserved = tool_pending_transition(
+        resumed,
+        "run-state",
+        [],
+        [],
+        0,
+        0,
+        "call-approved",
+        "gmail_draft",
+        False,
+    )
+    assert reserved["pending_tool"]["budget_reserved"] is True
+    assert reserved["remaining_budgets"]["tool_calls"] == 2
+
+
+def test_denied_approval_advances_without_tool_budget_or_execution():
+    waiting = waiting_approval_transition(
+        _tools_ready(1),
+        "run-state",
+        [],
+        [],
+        "approval-deny",
+        0,
+        0,
+        "call-deny",
+        "gmail_draft",
+        False,
+    )
+    ready = approval_ready_transition(waiting, "approval-deny", "deny")
+
+    denied = approval_resolved_transition(
+        ready, [], [], "approval-deny"
+    )
+
+    assert denied["cursor"]["next_tool_index"] == 1
+    assert denied["remaining_budgets"]["tool_calls"] == 3
+    assert "pending_tool" not in denied
+    assert denied["completed_tool_receipts"][-1]["outcome"] == "denied"
+    next_model = model_pending_transition(
+        denied, "run-state", [], [], 1
+    )
+    assert next_model["cursor"]["phase"] == "model_in_flight"
 
 
 @pytest.mark.parametrize(
@@ -171,7 +227,16 @@ def test_approval_wait_and_resolution_return_to_identical_tool_cursor():
             _tool_completed(_tools_ready(2)), "run-state", [], [], 1
         ),
         lambda: waiting_approval_transition(
-            _model_pending(), [], [], "approval-1"
+            _model_pending(),
+            "run-state",
+            [],
+            [],
+            "approval-1",
+            0,
+            0,
+            "call-1",
+            "gmail_draft",
+            False,
         ),
         lambda: waiting_approval_transition(
             model_completed_transition(
@@ -184,17 +249,38 @@ def test_approval_wait_and_resolution_return_to_identical_tool_cursor():
                 0,
                 IDENTITY["message_id"],
             ),
+            "run-state",
             [],
             [],
             "approval-1",
+            0,
+            0,
+            "call-1",
+            "gmail_draft",
+            False,
         ),
         lambda: waiting_approval_transition(
             waiting_approval_transition(
-                _tools_ready(1), [], [], "approval-1"
+                _tools_ready(1),
+                "run-state",
+                [],
+                [],
+                "approval-1",
+                0,
+                0,
+                "call-1",
+                "gmail_draft",
+                False,
             ),
+            "run-state",
             [],
             [],
             "approval-2",
+            0,
+            0,
+            "call-1",
+            "gmail_draft",
+            False,
         ),
         lambda: terminal_transition(
             _tools_ready(1), [], [], "complete", IDENTITY["message_id"], 0

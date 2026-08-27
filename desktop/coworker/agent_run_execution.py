@@ -14,6 +14,7 @@ from coworker.agent_run_repository import (
     MAX_LEASE_SECONDS,
     AgentRunLease,
     AgentRunLeaseLost,
+    AgentRunStartConflict,
     AgentRunVersionConflict,
 )
 from coworker.agent_runs import (
@@ -86,57 +87,6 @@ class AgentRunExecution:
         if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
             raise ValueError("max_steps must be a positive integer")
         owner = owner_id or f"execution_{uuid.uuid4().hex}"
-        started = store.start_agent_run(
-            run_id=identity.run_id,
-            session_id=identity.session_id,
-            trigger=trigger,
-            original_goal=goal,
-            provider_model_id=provider_model_id,
-        )
-        existing = project_continuation(started.get("continuation"))
-        cls._reject_unstartable(identity.run_id, started["current_state"], existing)
-        lease = store.agent_runs.acquire_lease(
-            identity.run_id,
-            owner,
-            started["version"],
-            EXECUTION_LEASE_SECONDS,
-            now=now,
-        )
-        if lease is None:
-            raise AgentRunExecutionOwnershipError(
-                f"Agent Run {identity.run_id} is owned by another execution"
-            )
-        execution = cls(
-            store,
-            identity,
-            owner,
-            lease,
-            existing,
-            max_steps,
-            now,
-        )
-        current = store.get_agent_run(identity.run_id)
-        if current is None:
-            execution._release_after_start_failure()
-            raise KeyError(identity.run_id)
-        existing = project_continuation(current.get("continuation"))
-        execution._snapshot = existing
-        try:
-            cls._reject_unstartable(
-                identity.run_id, current["current_state"], existing
-            )
-        except AgentRunExecutionOwnershipError:
-            execution._release_after_start_failure()
-            raise
-        if existing.get("identity"):
-            if existing["identity"] != {
-                "message_id": identity.message_id,
-                "part_id": identity.part_id,
-            }:
-                execution._release_after_start_failure()
-                raise ValueError("Agent Run continuation identity cannot change")
-            execution._refresh_snapshot()
-            return execution
         initial = initial_continuation(
             {
                 "message_id": identity.message_id,
@@ -145,19 +95,38 @@ class AgentRunExecution:
             max_steps,
         )
         try:
-            execution._lease = store.agent_runs.update_continuation(
-                lease, initial, now=now
+            started = store.agent_runs.start_and_acquire_lease(
+                run_id=identity.run_id,
+                session_id=identity.session_id,
+                trigger=trigger,
+                original_goal=goal,
+                provider_model_id=provider_model_id,
+                owner_id=owner,
+                lease_seconds=EXECUTION_LEASE_SECONDS,
+                continuation=initial,
+                now=now,
             )
-        except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
-            execution._lease = None
+        except AgentRunStartConflict as exc:
+            raise AgentRunExecutionOwnershipError(str(exc)) from exc
+        if started is None:
             raise AgentRunExecutionOwnershipError(
-                f"Agent Run {identity.run_id} lease was lost during initialization"
-            ) from exc
-        except Exception:
+                f"Agent Run {identity.run_id} is owned by another execution"
+            )
+        execution = cls(
+            store,
+            identity,
+            owner,
+            started.lease,
+            started.run["continuation"],
+            max_steps,
+            now,
+        )
+        phase = execution._snapshot.get("cursor", {}).get("phase")
+        if phase == "review_required":
             execution._release_after_start_failure()
-            raise
-        execution._version = execution._lease.version
-        execution._snapshot = project_continuation(initial)
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {identity.run_id} requires explicit review"
+            )
         return execution
 
     @classmethod
@@ -199,18 +168,6 @@ class AgentRunExecution:
         )
         execution._refresh_snapshot()
         return execution
-
-    @staticmethod
-    def _reject_unstartable(
-        run_id: str, state: str, snapshot: dict[str, Any]
-    ) -> None:
-        phase = snapshot.get("cursor", {}).get("phase")
-        if state == "running" and phase != "review_required":
-            return
-        raise AgentRunExecutionOwnershipError(
-            f"Agent Run {run_id} requires explicit review or resume"
-            + (f" from {phase}" if phase else "")
-        )
 
     @property
     def run_id(self) -> str:
@@ -446,13 +403,27 @@ class AgentRunExecution:
         history: list[dict[str, Any]],
         events: list[dict[str, Any]],
         interaction_id: str,
+        step_index: int,
+        tool_index: int,
+        call_id: str,
+        name: str,
+        retry_safe: bool,
     ) -> dict[str, Any]:
         self._require_lease()
         interaction = _safe_boundary_text(
             interaction_id, MAX_SAFE_ID, "interaction_id"
         )
         next_snapshot = waiting_approval_transition(
-            self._snapshot, history, events, interaction
+            self._snapshot,
+            self.run_id,
+            history,
+            events,
+            interaction,
+            step_index,
+            tool_index,
+            call_id,
+            name,
+            retry_safe,
         )
         return self._checkpoint(
             "waiting_approval",
@@ -461,62 +432,104 @@ class AgentRunExecution:
             state="waiting_approval",
         )
 
-    def resume_resolved_approval(self, interaction_id: str) -> dict[str, Any]:
-        if self._lease is not None:
-            raise AgentRunExecutionOwnershipError(
-                f"Agent Run {self.run_id} already has an active execution lease"
-            )
+    @classmethod
+    def resume_resolved_approval(
+        cls,
+        store: ConversationStore,
+        run_id: str,
+        interaction_id: str,
+        max_steps: int,
+        owner_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AgentRunExecution:
         interaction = _safe_boundary_text(
             interaction_id, MAX_SAFE_ID, "interaction_id"
         )
-        pending = self._snapshot.get("pending_interaction")
+        run = store.get_agent_run(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        snapshot = project_continuation(run.get("continuation"))
+        pending = snapshot.get("pending_interaction")
         if pending != {"kind": "approval", "id": interaction}:
             raise AgentRunExecutionOwnershipError(
-                f"Agent Run {self.run_id} has no matching resolved approval"
+                f"Agent Run {run_id} has no matching resolved approval"
             )
+        stored_identity = snapshot.get("identity")
+        if not isinstance(stored_identity, dict):
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {run_id} has no reconstructable identity"
+            )
+        identity = TurnIdentity(
+            session_id=str(run["session_id"]),
+            run_id=run_id,
+            message_id=str(stored_identity["message_id"]),
+            part_id=str(stored_identity["part_id"]),
+        )
+        owner = owner_id or f"execution_{uuid.uuid4().hex}"
         try:
-            acquired = self._store.agent_runs.acquire_resolved_waiting_lease(
-                self.run_id,
-                self.owner_id,
-                self._version,
+            acquired = store.agent_runs.acquire_resolved_waiting_lease(
+                run_id,
+                owner,
+                int(run["version"]),
                 interaction,
                 EXECUTION_LEASE_SECONDS,
-                now=self._now,
+                now=now,
             )
         except AgentRunVersionConflict as exc:
-            raise self._ownership_error("resolved approval lease was fenced") from exc
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {run_id} resolved approval lease was fenced"
+            ) from exc
         if acquired is None:
             raise AgentRunExecutionOwnershipError(
-                f"Agent Run {self.run_id} resolved approval is not available for reacquisition"
+                f"Agent Run {run_id} resolved approval is not available for reacquisition"
             )
-        self._lease = acquired.lease
-        self._version = acquired.lease.version
-        self._resolved_decision = acquired.decision
-        self._refresh_snapshot()
-        return self.metadata
+        execution = cls(
+            store,
+            identity,
+            owner,
+            acquired.lease,
+            snapshot,
+            max_steps,
+            now,
+        )
+        execution._refresh_snapshot()
+        persisted_decision = execution._snapshot.get("resolved_approval", {}).get(
+            "decision"
+        )
+        if persisted_decision != acquired.decision:
+            execution._release_after_start_failure()
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {run_id} approval decision binding changed"
+            )
+        execution._resolved_decision = acquired.decision
+        return execution
 
     def approval_resolved(
         self,
         history: list[dict[str, Any]],
         events: list[dict[str, Any]],
         interaction_id: str,
-        resolution: str | None = None,
     ) -> dict[str, Any]:
         self._require_lease()
         interaction = _safe_boundary_text(
             interaction_id, MAX_SAFE_ID, "interaction_id"
         )
-        decision = self._resolved_decision
+        decision = self._snapshot.get("resolved_approval", {}).get("decision")
         if decision not in {"allow", "deny"}:
             raise ValueError("approval decision is not bound to this execution")
-        if resolution is not None and resolution != decision:
-            raise ValueError("approval resolution does not match exact decision")
         next_snapshot = approval_resolved_transition(
             self._snapshot, history, events, interaction
         )
+        continuation = {
+            **next_snapshot,
+            "pending_interaction": None,
+            "resolved_approval": None,
+        }
+        if "pending_tool" not in next_snapshot:
+            continuation["pending_tool"] = None
         metadata = self._checkpoint(
             "approval_resolved",
-            {**next_snapshot, "pending_interaction": None},
+            continuation,
             payload={"id": interaction, "resolution": decision},
             state="running",
         )

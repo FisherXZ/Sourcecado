@@ -3,7 +3,7 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from threading import Barrier
+from threading import Barrier, Event
 
 import pytest
 
@@ -118,6 +118,26 @@ def _prepare_one_tool(execution):
     execution.model_completed([], [], 0, 1, 0)
 
 
+def _wait_for_tool(
+    execution,
+    interaction_id,
+    *,
+    call_id="call-approved",
+    name="gmail_draft",
+    retry_safe=False,
+):
+    execution.waiting_approval(
+        [],
+        [],
+        interaction_id,
+        0,
+        0,
+        call_id,
+        name,
+        retry_safe,
+    )
+
+
 def test_resolved_waiting_lease_requires_exact_resolved_inbox_and_has_one_owner(
     tmp_path,
 ):
@@ -126,7 +146,7 @@ def test_resolved_waiting_lease_requires_exact_resolved_inbox_and_has_one_owner(
     identity, execution = _start(first, run_id="run-waiting")
     _park(first, identity, "approval-1")
     _prepare_one_tool(execution)
-    execution.waiting_approval([], [], "approval-1")
+    _wait_for_tool(execution, "approval-1")
     waiting = first.get_agent_run(identity.run_id)
 
     assert (
@@ -191,7 +211,7 @@ def test_resolved_waiting_lease_requires_exact_resolved_inbox_and_has_one_owner(
     )
     Inbox(first).resolve("approval-wrong-run", "deny")
     _prepare_one_tool(wrong_execution)
-    wrong_execution.waiting_approval([], [], "approval-wrong-run")
+    _wait_for_tool(wrong_execution, "approval-wrong-run")
     wrong_waiting = first.get_agent_run(wrong_identity.run_id)
     assert (
         first.agent_runs.acquire_resolved_waiting_lease(
@@ -213,7 +233,7 @@ def test_resolved_allow_and_deny_each_reacquire_waiting_run(tmp_path, decision):
     interaction_id = f"approval-{decision}"
     _park(store, identity, interaction_id)
     _prepare_one_tool(execution)
-    execution.waiting_approval([], [], interaction_id)
+    _wait_for_tool(execution, interaction_id)
     waiting = store.get_agent_run(identity.run_id)
     Inbox(store).resolve(interaction_id, decision)
 
@@ -300,6 +320,57 @@ def test_start_initializes_identity_budgets_prefixes_and_single_owner(tmp_path):
     }
 
 
+def test_start_never_inserts_an_unleased_running_row_while_store_contends(
+    tmp_path,
+):
+    store = ConversationStore(tmp_path)
+    unleased_insert = Event()
+
+    def mark_unleased_insert():
+        unleased_insert.set()
+        return 0
+
+    with store._lock:
+        store._conn.create_function("mark_unleased_insert", 0, mark_unleased_insert)
+        store._conn.execute(
+            """
+            CREATE TRIGGER reject_unleased_agent_run_insert
+            BEFORE INSERT ON agent_runs
+            WHEN NEW.current_state = 'running' AND NEW.lease_owner IS NULL
+            BEGIN
+                SELECT mark_unleased_insert();
+                SELECT RAISE(FAIL, 'unleased running insert');
+            END
+            """
+        )
+        store._conn.commit()
+    identity = _identity("run-atomic-start")
+    live_now = datetime.now(UTC)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        start_future = pool.submit(
+            AgentRunExecution.start,
+            store,
+            identity,
+            "Find candidates",
+            "chat",
+            "fake-model",
+            4,
+            "owner-atomic",
+            live_now,
+        )
+        contender_future = pool.submit(ConversationStore, tmp_path)
+        execution = start_future.result(timeout=5)
+        contender = contender_future.result(timeout=5)
+
+    assert unleased_insert.is_set() is False
+    assert execution.lease is not None
+    run = contender.get_agent_run(identity.run_id)
+    assert run["current_state"] == "running"
+    assert run["continuation"]["cursor"]["phase"] == "model_ready"
+    assert _lease_columns(store, identity.run_id)[0] == "owner-atomic"
+
+
 def test_start_rejects_interrupted_review_required_continuation(tmp_path):
     store = ConversationStore(tmp_path)
     started = store.start_agent_run(
@@ -377,18 +448,23 @@ def test_start_releases_lease_if_phase_becomes_review_required_during_acquire(
     store = ConversationStore(tmp_path)
     identity = _identity("run-review-race")
     _seed_running_phase(store, identity, "model_ready")
-    original = store.agent_runs.acquire_lease
+    original = store.agent_runs.start_and_acquire_lease
 
-    def acquire_then_require_review(*args, **kwargs):
-        lease = original(*args, **kwargs)
-        assert lease is not None
-        return store.agent_runs.update_continuation(
-            lease,
+    def acquire_then_require_review(**kwargs):
+        started = original(**kwargs)
+        assert started is not None
+        lease = store.agent_runs.update_continuation(
+            started.lease,
             {"cursor": {"phase": "review_required"}},
             now=NOW,
         )
+        return type(started)(run=store.get_agent_run(identity.run_id), lease=lease)
 
-    monkeypatch.setattr(store.agent_runs, "acquire_lease", acquire_then_require_review)
+    monkeypatch.setattr(
+        store.agent_runs,
+        "start_and_acquire_lease",
+        acquire_then_require_review,
+    )
 
     with pytest.raises(AgentRunExecutionOwnershipError, match="review"):
         AgentRunExecution.start(
@@ -582,20 +658,34 @@ def test_waiting_releases_and_resolved_resume_clears_pending_interaction(tmp_pat
     _park(store, identity, "approval-resume")
     _prepare_one_tool(execution)
 
-    execution.waiting_approval([], [], "approval-resume")
+    _wait_for_tool(execution, "approval-resume")
 
     assert execution.lease is None
     assert _lease_columns(store, identity.run_id) == (None, None)
     with pytest.raises(AgentRunExecutionOwnershipError, match="lease"):
         execution.model_pending([], [], 0)
     with pytest.raises(AgentRunExecutionOwnershipError, match="resolved approval"):
-        execution.resume_resolved_approval("approval-resume")
+        AgentRunExecution.resume_resolved_approval(
+            store,
+            identity.run_id,
+            "approval-resume",
+            4,
+            owner_id="owner-resume",
+            now=NOW,
+        )
 
     Inbox(store).resolve("approval-resume", "deny")
-    execution.resume_resolved_approval("approval-resume")
+    execution = AgentRunExecution.resume_resolved_approval(
+        store,
+        identity.run_id,
+        "approval-resume",
+        4,
+        owner_id="owner-resume",
+        now=NOW,
+    )
     assert execution.lease is not None
     assert execution.run_id == identity.run_id
-    execution.approval_resolved([], [], "approval-resume", "deny")
+    execution.approval_resolved([], [], "approval-resume")
 
     continuation = store.get_agent_run(identity.run_id)["continuation"]
     assert continuation["identity"] == {
@@ -618,9 +708,16 @@ def test_approval_resolution_uses_exact_atomically_acquired_decision(
     interaction_id = f"approval-bound-{decision}"
     _park(store, identity, interaction_id)
     _prepare_one_tool(execution)
-    execution.waiting_approval([], [], interaction_id)
+    _wait_for_tool(execution, interaction_id)
     Inbox(store).resolve(interaction_id, decision)
-    execution.resume_resolved_approval(interaction_id)
+    execution = AgentRunExecution.resume_resolved_approval(
+        store,
+        identity.run_id,
+        interaction_id,
+        4,
+        owner_id="owner-resume",
+        now=NOW,
+    )
 
     execution.approval_resolved([], [], interaction_id)
 
@@ -628,32 +725,149 @@ def test_approval_resolution_uses_exact_atomically_acquired_decision(
         "id": interaction_id,
         "resolution": decision,
     }
+    continuation = store.get_agent_run(identity.run_id)["continuation"]
+    assert continuation["cursor"]["phase"] == "tools_ready"
+    assert continuation["remaining_budgets"]["tool_calls"] == 4
+    assert "pending_interaction" not in continuation
+    assert "resolved_approval" not in continuation
+    if decision == "allow":
+        assert continuation["cursor"]["next_tool_index"] == 0
+        assert continuation["pending_tool"] == {
+            "attempt_id": f"{identity.run_id}:0:call-approved:0",
+            "call_id": "call-approved",
+            "name": "gmail_draft",
+            "retry_class": "consequential",
+            "status": "not_started",
+            "budget_reserved": False,
+        }
+    else:
+        assert continuation["cursor"]["next_tool_index"] == 1
+        assert "pending_tool" not in continuation
+        assert continuation["completed_tool_receipts"][-1] == {
+            "attempt_id": f"{identity.run_id}:0:call-approved:0",
+            "call_id": "call-approved",
+            "name": "gmail_draft",
+            "ok": False,
+            "outcome": "denied",
+            "transcript_index": 0,
+            "result_sha256": None,
+        }
+        assert "tool_pending" not in {
+            item["kind"]
+            for item in store.list_agent_run_checkpoints(identity.run_id)
+        }
 
 
 @pytest.mark.parametrize("resolution", ("deny", "allowed", "arbitrary"))
-def test_approval_resolution_mismatch_cannot_advance_authority(
-    tmp_path, resolution
-):
+def test_approval_resolution_cannot_be_overridden(tmp_path, resolution):
     store = ConversationStore(tmp_path)
     identity, execution = _start(store, run_id=f"run-mismatch-{resolution}")
     interaction_id = f"approval-mismatch-{resolution}"
     _park(store, identity, interaction_id)
     _prepare_one_tool(execution)
-    execution.waiting_approval([], [], interaction_id)
+    _wait_for_tool(execution, interaction_id)
     Inbox(store).resolve(interaction_id, "allow")
-    execution.resume_resolved_approval(interaction_id)
+    execution = AgentRunExecution.resume_resolved_approval(
+        store,
+        identity.run_id,
+        interaction_id,
+        4,
+        owner_id="owner-resume",
+        now=NOW,
+    )
     before = store.get_agent_run(identity.run_id)
     checkpoint_count = len(store.list_agent_run_checkpoints(identity.run_id))
 
-    with pytest.raises(ValueError, match="decision"):
-        execution.approval_resolved(
-            [], [], interaction_id, resolution
-        )
+    with pytest.raises(TypeError):
+        execution.approval_resolved([], [], interaction_id, resolution)
 
     after = store.get_agent_run(identity.run_id)
     assert after["version"] == before["version"]
     assert after["continuation"] == before["continuation"]
     assert len(store.list_agent_run_checkpoints(identity.run_id)) == checkpoint_count
+
+
+@pytest.mark.parametrize("decision", ("allow", "deny"))
+def test_waiting_approval_reopens_and_reconstructs_exact_context(
+    tmp_path, decision
+):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id=f"run-reopen-{decision}")
+    interaction_id = f"approval-reopen-{decision}"
+    _park(store, identity, interaction_id)
+    _prepare_one_tool(execution)
+    _wait_for_tool(execution, interaction_id)
+
+    reopened = ConversationStore(tmp_path)
+    Inbox(reopened).resolve(interaction_id, decision)
+    resumed = AgentRunExecution.resume_resolved_approval(
+        reopened,
+        identity.run_id,
+        interaction_id,
+        4,
+        owner_id="owner-reopened",
+        now=NOW,
+    )
+
+    ready = reopened.get_agent_run(identity.run_id)["continuation"]
+    assert ready["cursor"]["phase"] == "approval_ready"
+    assert ready["resolved_approval"] == {
+        "id": interaction_id,
+        "decision": decision,
+    }
+    resumed.approval_resolved([], [], interaction_id)
+    assert reopened.get_agent_run(identity.run_id)["continuation"]["cursor"][
+        "phase"
+    ] == "tools_ready"
+
+
+@pytest.mark.parametrize("decision", ("allow", "deny"))
+def test_resolved_approval_acquisition_survives_expiry_before_consumption(
+    tmp_path, decision
+):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id=f"run-ready-crash-{decision}")
+    interaction_id = f"approval-ready-crash-{decision}"
+    _park(store, identity, interaction_id)
+    _prepare_one_tool(execution)
+    _wait_for_tool(execution, interaction_id)
+    Inbox(store).resolve(interaction_id, decision)
+    first = AgentRunExecution.resume_resolved_approval(
+        store,
+        identity.run_id,
+        interaction_id,
+        4,
+        owner_id="owner-before-crash",
+        now=NOW,
+    )
+    old_lease = first.lease
+
+    store.agent_runs.reconcile_expired_leases(
+        now=NOW + timedelta(seconds=301)
+    )
+    interrupted = store.get_agent_run(identity.run_id)
+    assert interrupted["current_state"] == "interrupted"
+    assert interrupted["continuation"]["cursor"]["phase"] == "approval_ready"
+    assert interrupted["continuation"]["resolved_approval"]["decision"] == decision
+
+    reopened = ConversationStore(tmp_path)
+    resumed = AgentRunExecution.resume_resolved_approval(
+        reopened,
+        identity.run_id,
+        interaction_id,
+        4,
+        owner_id="owner-after-crash",
+        now=NOW + timedelta(seconds=301),
+    )
+    resumed.approval_resolved([], [], interaction_id)
+
+    continuation = reopened.get_agent_run(identity.run_id)["continuation"]
+    assert continuation["cursor"]["phase"] == "tools_ready"
+    assert "resolved_approval" not in continuation
+    with pytest.raises((AgentRunLeaseLost, AgentRunVersionConflict)):
+        store.agent_runs.renew_lease(
+            old_lease, 30, now=NOW + timedelta(seconds=301)
+        )
 
 
 def test_expired_model_attempt_resumes_without_spending_budget_twice(tmp_path):

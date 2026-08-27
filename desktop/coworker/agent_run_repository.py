@@ -34,6 +34,7 @@ from coworker.agent_runs import (
     redact_sensitive_assignments,
     sanitize_agent_run_value,
 )
+from coworker.agent_run_state import approval_ready_transition
 
 
 _RESUME_MIGRATION = "agent_run_resume_v1"
@@ -58,12 +59,22 @@ class ResolvedApprovalLease:
     decision: Literal["allow", "deny"]
 
 
+@dataclass(frozen=True)
+class StartedAgentRunLease:
+    run: dict[str, Any]
+    lease: AgentRunLease
+
+
 class AgentRunVersionConflict(RuntimeError):
     """The caller's compare-and-swap version is no longer current."""
 
 
 class AgentRunLeaseLost(RuntimeError):
     """The lease expired, was released, or belongs to another owner."""
+
+
+class AgentRunStartConflict(RuntimeError):
+    """An existing run cannot be started through the new-run entry point."""
 
 
 class _AgentRunRepositoryBase:
@@ -196,9 +207,9 @@ class _AgentRunRepositoryBase:
                 ).fetchone()
                 if row is None:
                     raise KeyError(run_id)
-                if (
-                    str(row["current_state"]) != "waiting_approval"
-                    or row["lease_owner"] is not None
+                state = str(row["current_state"])
+                if state not in {"waiting_approval", "interrupted"} or (
+                    row["lease_owner"] is not None
                     or row["lease_expires_at"] is not None
                 ):
                     self._conn.commit()
@@ -214,6 +225,13 @@ class _AgentRunRepositoryBase:
                 }:
                     self._conn.commit()
                     return None
+                phase = continuation.get("cursor", {}).get("phase")
+                if state == "waiting_approval" and phase != "waiting_approval":
+                    self._conn.commit()
+                    return None
+                if state == "interrupted" and phase != "approval_ready":
+                    self._conn.commit()
+                    return None
                 inbox = self._conn.execute(
                     "SELECT state, decision, run_id FROM inbox WHERE id = ?",
                     (interaction,),
@@ -226,22 +244,36 @@ class _AgentRunRepositoryBase:
                 ):
                     self._conn.commit()
                     return None
+                decision = str(inbox["decision"])
+                if state == "waiting_approval":
+                    continuation = approval_ready_transition(
+                        continuation, interaction, decision
+                    )
+                elif continuation.get("resolved_approval") != {
+                    "id": interaction,
+                    "decision": decision,
+                }:
+                    self._conn.commit()
+                    return None
                 cursor = self._conn.execute(
                     """
                     UPDATE agent_runs SET
                         current_state = 'running', lease_owner = ?,
-                        lease_expires_at = ?, version = version + 1,
+                        lease_expires_at = ?, continuation = ?,
+                        version = version + 1,
                         updated_at = ?
                     WHERE run_id = ? AND version = ?
-                      AND current_state = 'waiting_approval'
+                      AND current_state = ?
                       AND lease_owner IS NULL AND lease_expires_at IS NULL
                     """,
                     (
                         owner,
                         expires_at,
+                        _json(continuation),
                         stamp,
                         run_id,
                         int(expected_version),
+                        state,
                     ),
                 )
                 if cursor.rowcount != 1:
@@ -262,7 +294,7 @@ class _AgentRunRepositoryBase:
                 self._conn.rollback()
                 raise
         return ResolvedApprovalLease(
-            lease=_lease_from_row(row), decision=str(inbox["decision"])
+            lease=_lease_from_row(row), decision=decision
         )
 
     def acquire_resumable_lease(
@@ -485,6 +517,167 @@ def _checkpoint_projection(
 
 
 class AgentRunRepository(_AgentRunRepositoryBase):
+    def start_and_acquire_lease(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        trigger: str,
+        original_goal: str,
+        provider_model_id: str | None,
+        owner_id: str,
+        lease_seconds: int | float,
+        continuation: dict[str, Any],
+        parent_run_id: str | None = None,
+        now: datetime | None = None,
+    ) -> StartedAgentRunLease | None:
+        """Create and lease a run atomically, or idempotently claim an exact run."""
+        if not run_id or not _valid_session_id(session_id):
+            raise ValueError("invalid Agent Run identity")
+        if not trigger.strip():
+            raise ValueError("Agent Run trigger is required")
+        owner = _lease_owner(owner_id)
+        seconds = _lease_seconds(lease_seconds)
+        stamp = _timestamp(now)
+        expires_at = _timestamp(_as_datetime(stamp) + timedelta(seconds=seconds))
+        safe_goal = str(sanitize_agent_run_value(original_goal))
+        fingerprint = original_goal_fingerprint(original_goal)
+        initial = project_continuation(continuation)
+        if not initial.get("identity") or initial.get("cursor", {}).get("phase") != "model_ready":
+            raise ValueError("initial Agent Run continuation is invalid")
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    self._conn.execute(
+                        """
+                        INSERT INTO agent_runs (
+                            run_id, session_id, parent_run_id, trigger,
+                            original_goal, original_goal_fingerprint,
+                            original_goal_fingerprint_source, current_state,
+                            provider_model_id, checkpoint_sequence, skills_loaded,
+                            source_refs, artifact_refs, usage, terminal_result,
+                            created_at, started_at, updated_at, finished_at,
+                            version, lease_owner, lease_expires_at, continuation
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, 'raw', 'running', ?, 1, '[]', '[]',
+                            '[]', '{}', NULL, ?, ?, ?, NULL, 1, ?, ?, ?
+                        )
+                        """,
+                        (
+                            run_id,
+                            session_id,
+                            parent_run_id,
+                            trigger,
+                            safe_goal,
+                            fingerprint,
+                            provider_model_id,
+                            stamp,
+                            stamp,
+                            stamp,
+                            owner,
+                            expires_at,
+                            _json(initial),
+                        ),
+                    )
+                    self._conn.execute(
+                        """
+                        INSERT INTO agent_run_checkpoints
+                            (run_id, sequence, kind, payload, created_at)
+                        VALUES (?, 1, 'run_started', ?, ?)
+                        """,
+                        (
+                            run_id,
+                            _json(
+                                bounded_checkpoint_payload(
+                                    {
+                                        "trigger": trigger,
+                                        "provider_model_id": provider_model_id,
+                                        "has_parent": parent_run_id is not None,
+                                    }
+                                )
+                            ),
+                            stamp,
+                        ),
+                    )
+                else:
+                    immutable = {
+                        "session_id": session_id,
+                        "parent_run_id": parent_run_id,
+                        "trigger": trigger,
+                        "provider_model_id": provider_model_id,
+                    }
+                    conflicts = [
+                        field
+                        for field, value in immutable.items()
+                        if row[field] != value
+                    ]
+                    if row["original_goal_fingerprint"] != fingerprint:
+                        conflicts.append("original_goal")
+                    if conflicts:
+                        raise ValueError(
+                            "conflicting Agent Run metadata: " + ", ".join(conflicts)
+                        )
+                    existing = project_continuation(json_object(row["continuation"]))
+                    phase = existing.get("cursor", {}).get("phase")
+                    if str(row["current_state"]) != "running" or phase not in {
+                        None,
+                        "model_ready",
+                        "tools_ready",
+                    }:
+                        raise AgentRunStartConflict(
+                            f"Agent Run {run_id} requires explicit review or resume from {phase}"
+                        )
+                    if existing.get("identity") and existing.get("identity") != initial.get(
+                        "identity"
+                    ):
+                        raise ValueError("Agent Run continuation identity cannot change")
+                    active = (
+                        row["lease_owner"] is not None
+                        and row["lease_expires_at"] is not None
+                        and str(row["lease_expires_at"]) > stamp
+                    )
+                    if active and str(row["lease_owner"]) != owner:
+                        self._conn.commit()
+                        return None
+                    if not active:
+                        cursor = self._conn.execute(
+                            """
+                            UPDATE agent_runs SET
+                                continuation = ?, lease_owner = ?,
+                                lease_expires_at = ?, version = version + 1,
+                                updated_at = ?
+                            WHERE run_id = ? AND version = ?
+                              AND current_state = 'running'
+                              AND (
+                                  lease_owner IS NULL OR lease_expires_at IS NULL
+                                  OR lease_expires_at <= ?
+                              )
+                            """,
+                            (
+                                _json(existing if existing.get("identity") else initial),
+                                owner,
+                                expires_at,
+                                stamp,
+                                run_id,
+                                int(row["version"]),
+                                stamp,
+                            ),
+                        )
+                        if cursor.rowcount != 1:
+                            raise AgentRunVersionConflict(run_id)
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return StartedAgentRunLease(run=_run_row(row), lease=_lease_from_row(row))
+
     def start_agent_run(
         self,
         *,
@@ -1050,7 +1243,20 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     phase = str(cursor_data.get("phase") or "")
                     pending_model = continuation.get("pending_model")
                     pending = continuation.get("pending_tool")
-                    if phase == "model_in_flight":
+                    if phase == "approval_ready":
+                        resolved = continuation.get("resolved_approval")
+                        interaction = continuation.get("pending_interaction")
+                        if not (
+                            isinstance(resolved, dict)
+                            and resolved.get("decision") in {"allow", "deny"}
+                            and interaction
+                            == {"kind": "approval", "id": resolved.get("id")}
+                            and isinstance(pending, dict)
+                            and pending.get("status") == "not_started"
+                            and pending.get("budget_reserved") is False
+                        ):
+                            cursor_data["phase"] = "review_required"
+                    elif phase == "model_in_flight":
                         if (
                             isinstance(pending_model, dict)
                             and pending_model.get("budget_reserved") is True
@@ -1145,7 +1351,7 @@ class AgentRunRepository(_AgentRunRepositoryBase):
             if json_object(row["continuation"])
             .get("cursor", {})
             .get("phase")
-            in {"model_ready", "tools_ready"}
+            in {"model_ready", "tools_ready", "approval_ready"}
         ]
 
     def validate_transcript_prefix(

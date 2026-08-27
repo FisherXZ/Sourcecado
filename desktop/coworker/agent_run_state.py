@@ -32,6 +32,7 @@ _ERROR_TERMINAL_PHASES = frozenset(
         "model_in_flight",
         "tools_ready",
         "waiting_approval",
+        "approval_ready",
         "terminal_ready",
         "review_required",
     }
@@ -202,13 +203,22 @@ def tool_pending_transition(
     attempt_id = tool_attempt_id(run_id, step, tool, safe_call_id)
     retry_class = "safe" if retry_safe else "consequential"
     pending = current.get("pending_tool")
-    retry = (
+    exact_pending = (
         isinstance(pending, dict)
         and pending.get("attempt_id") == attempt_id
         and pending.get("call_id") == safe_call_id
         and pending.get("name") == safe_name
+        and pending.get("retry_class") == retry_class
+    )
+    prebound_approval = (
+        exact_pending
+        and pending.get("status") == "not_started"
+        and pending.get("budget_reserved") is False
+    )
+    retry = (
+        exact_pending
         and pending.get("retry_class") == "safe"
-        and pending.get("status") in {"not_started", "retry_ready"}
+        and pending.get("status") == "retry_ready"
         and pending.get("budget_reserved") is True
         and retry_safe
     )
@@ -225,7 +235,7 @@ def tool_pending_transition(
         )
     budgets = _budgets(current)
     if not retry:
-        if pending is not None:
+        if pending is not None and not prebound_approval:
             raise AgentRunTransitionError("tool_pending conflicts with pending tool")
         if budgets.get("tool_calls", 0) < 1:
             raise AgentRunTransitionError("Agent Run tool-call budget exhausted")
@@ -309,19 +319,35 @@ def tool_completed_transition(
 
 def waiting_approval_transition(
     snapshot: dict[str, Any],
+    run_id: str,
     history: list[dict[str, Any]],
     events: list[dict[str, Any]],
     interaction_id: str,
+    step_index: int,
+    tool_index: int,
+    call_id: str,
+    name: str,
+    retry_safe: bool,
 ) -> dict[str, Any]:
     current = project_continuation(snapshot)
     cursor = _cursor(current)
+    step = _index(step_index, "step_index")
+    tool = _index(tool_index, "tool_index")
+    safe_call_id = _text(call_id, MAX_SAFE_ID, "call_id")
+    safe_name = _text(name, MAX_TOOL_NAME, "name")
     if (
         cursor.get("phase") != "tools_ready"
-        or int(cursor.get("next_tool_index", 0))
-        >= int(cursor.get("expected_tool_count", 0))
+        or cursor.get("step_index") != step
+        or cursor.get("next_tool_index") != tool
+        or tool >= int(cursor.get("expected_tool_count", 0))
         or any(
             current.get(section) is not None
-            for section in ("pending_interaction", "pending_model", "pending_tool")
+            for section in (
+                "pending_interaction",
+                "resolved_approval",
+                "pending_model",
+                "pending_tool",
+            )
         )
     ):
         raise AgentRunTransitionError(
@@ -335,6 +361,44 @@ def waiting_approval_transition(
                 "kind": "approval",
                 "id": _text(interaction_id, MAX_SAFE_ID, "interaction_id"),
             },
+            "pending_tool": {
+                "attempt_id": tool_attempt_id(
+                    run_id, step, tool, safe_call_id
+                ),
+                "call_id": safe_call_id,
+                "name": safe_name,
+                "retry_class": "safe" if retry_safe else "consequential",
+                "status": "not_started",
+                "budget_reserved": False,
+            },
+        },
+    )
+
+
+def approval_ready_transition(
+    snapshot: dict[str, Any], interaction_id: str, decision: str
+) -> dict[str, Any]:
+    current = project_continuation(snapshot)
+    cursor = _cursor(current)
+    interaction = _text(interaction_id, MAX_SAFE_ID, "interaction_id")
+    if decision not in {"allow", "deny"}:
+        raise AgentRunTransitionError("approval decision must be allow or deny")
+    if (
+        cursor.get("phase") != "waiting_approval"
+        or current.get("pending_interaction")
+        != {"kind": "approval", "id": interaction}
+        or not isinstance(current.get("pending_tool"), dict)
+        or current["pending_tool"].get("status") != "not_started"
+        or current["pending_tool"].get("budget_reserved") is not False
+    ):
+        raise AgentRunTransitionError(
+            "approval decision must match the exact waiting tool"
+        )
+    return merge_continuation(
+        current,
+        {
+            "cursor": {**cursor, "phase": "approval_ready"},
+            "resolved_approval": {"id": interaction, "decision": decision},
         },
     )
 
@@ -348,22 +412,48 @@ def approval_resolved_transition(
     current = project_continuation(snapshot)
     cursor = _cursor(current)
     interaction = _text(interaction_id, MAX_SAFE_ID, "interaction_id")
+    resolved = current.get("resolved_approval")
+    pending_tool = current.get("pending_tool")
     if (
-        cursor.get("phase") != "waiting_approval"
+        cursor.get("phase") != "approval_ready"
         or current.get("pending_interaction")
         != {"kind": "approval", "id": interaction}
+        or not isinstance(resolved, dict)
+        or resolved.get("id") != interaction
+        or resolved.get("decision") not in {"allow", "deny"}
         or current.get("pending_model") is not None
-        or current.get("pending_tool") is not None
+        or not isinstance(pending_tool, dict)
+        or pending_tool.get("status") != "not_started"
+        or pending_tool.get("budget_reserved") is not False
     ):
         raise AgentRunTransitionError(
             "approval_resolved must match the pending approval"
         )
+    patch: dict[str, Any] = {
+        "cursor": {**cursor, "phase": "tools_ready", **prefixes(history, events)},
+        "pending_interaction": None,
+        "resolved_approval": None,
+    }
+    if resolved["decision"] == "deny":
+        patch["cursor"] = {
+            **patch["cursor"],
+            "next_tool_index": int(cursor.get("next_tool_index", 0)) + 1,
+        }
+        patch["pending_tool"] = None
+        patch["completed_tool_receipts"] = [
+            {
+                "attempt_id": pending_tool["attempt_id"],
+                "call_id": pending_tool["call_id"],
+                "name": pending_tool["name"],
+                "ok": False,
+                "outcome": "denied",
+                "transcript_index": max(0, len(history) - 1),
+                "result_sha256": None,
+            }
+        ]
     return merge_continuation(
         current,
-        {
-            "cursor": {**cursor, "phase": "tools_ready", **prefixes(history, events)},
-            "pending_interaction": None,
-        },
+        patch,
     )
 
 
