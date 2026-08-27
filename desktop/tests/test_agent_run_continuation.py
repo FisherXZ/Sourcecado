@@ -34,12 +34,18 @@ def _named_continuation():
             "truncated": False,
         },
         "pending_interaction": {"kind": "approval", "id": "approval-1"},
+        "pending_model": {
+            "attempt_id": "model-attempt-1",
+            "status": "in_flight",
+            "budget_reserved": True,
+        },
         "pending_tool": {
             "attempt_id": "attempt-1",
             "call_id": "call-1",
             "name": "apollo_search",
             "retry_class": "safe",
             "status": "in_flight",
+            "budget_reserved": True,
         },
         "completed_tool_receipts": [
             {
@@ -59,6 +65,7 @@ TEXT_FIELD_CASES = (
     (("identity", "part_id"), ("identity", "part_id")),
     (("visible_partial", "message_id"), ("visible_partial", "message_id")),
     (("pending_interaction", "id"), ("pending_interaction",)),
+    (("pending_model", "attempt_id"), ("pending_model",)),
     (("pending_tool", "attempt_id"), ("pending_tool",)),
     (("pending_tool", "call_id"), ("pending_tool",)),
     (("pending_tool", "name"), ("pending_tool",)),
@@ -192,3 +199,84 @@ def test_prefix_pair_is_idempotent_and_advances_only_with_a_new_valid_pair(prefi
     assert merge_continuation(established, {"cursor": second_pair})["cursor"] == (
         second_pair
     )
+
+
+@pytest.mark.parametrize("section", ("pending_model", "pending_tool"))
+@pytest.mark.parametrize("invalid", (None, 0, 1, "true", [], {}))
+def test_budget_reserved_is_strictly_boolean(section, invalid):
+    raw = _named_continuation()
+    raw[section]["budget_reserved"] = invalid
+
+    projected = project_continuation(raw)
+
+    assert section not in projected
+
+    with pytest.raises(ValueError):
+        merge_continuation({}, {section: raw[section]})
+
+
+@pytest.mark.parametrize("section", ("pending_model", "pending_tool"))
+def test_pending_reservation_identity_and_budget_cannot_change(section):
+    initial = _named_continuation()[section]
+    established = merge_continuation({}, {section: initial})
+
+    changed_attempt = {**initial, "attempt_id": "different-attempt"}
+    with pytest.raises(ValueError, match="cannot change"):
+        merge_continuation(established, {section: changed_attempt})
+    changed_budget = {**initial, "budget_reserved": False}
+    with pytest.raises(ValueError, match="cannot change"):
+        merge_continuation(established, {section: changed_budget})
+
+
+def test_expected_tool_count_is_nonnegative_and_resets_only_on_a_new_step():
+    first = merge_continuation(
+        {},
+        {
+            "cursor": {
+                "phase": "tools_ready",
+                "step_index": 0,
+                "next_tool_index": 1,
+                "expected_tool_count": 2,
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="expected_tool_count"):
+        merge_continuation(
+            first,
+            {
+                "cursor": {
+                    "step_index": 0,
+                    "next_tool_index": 1,
+                    "expected_tool_count": 1,
+                }
+            },
+        )
+    advanced = merge_continuation(
+        first,
+        {
+            "cursor": {
+                "phase": "model_in_flight",
+                "step_index": 1,
+                "next_tool_index": 0,
+                "expected_tool_count": 0,
+            }
+        },
+    )
+    assert advanced["cursor"]["expected_tool_count"] == 0
+    assert advanced["cursor"]["next_tool_index"] == 0
+
+    with pytest.raises(ValueError, match="expected_tool_count"):
+        merge_continuation(
+            {}, {"cursor": {"expected_tool_count": -1}}
+        )
+    with pytest.raises(ValueError, match="next_tool_index"):
+        merge_continuation(
+            {},
+            {
+                "cursor": {
+                    "next_tool_index": 2,
+                    "expected_tool_count": 1,
+                }
+            },
+        )

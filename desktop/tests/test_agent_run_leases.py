@@ -30,14 +30,20 @@ def _continuation(
     step_index=1,
     transcript_count=0,
     transcript_sha=None,
+    pending_model=None,
     pending_tool=None,
     receipts=None,
     budgets=None,
 ):
+    if pending_model is not None and "budget_reserved" not in pending_model:
+        pending_model = {**pending_model, "budget_reserved": True}
+    if pending_tool is not None and "budget_reserved" not in pending_tool:
+        pending_tool = {**pending_tool, "budget_reserved": True}
     cursor = {
         "phase": phase,
         "step_index": step_index,
         "next_tool_index": 0,
+        "expected_tool_count": 0,
     }
     if transcript_sha is not None:
         cursor.update(
@@ -46,7 +52,7 @@ def _continuation(
                 "transcript_prefix_sha256": transcript_sha,
             }
         )
-    return {
+    continuation = {
         "schema_version": 1,
         "identity": {"message_id": "message-1", "part_id": "part-1"},
         "cursor": cursor,
@@ -60,6 +66,9 @@ def _continuation(
         "remaining_budgets": budgets
         or {"work_steps": 4, "tool_calls": 3, "delivery_passes": 2},
     }
+    if pending_model is not None:
+        continuation["pending_model"] = pending_model
+    return continuation
 
 
 def _prefix_digest(messages):
@@ -806,7 +815,15 @@ def test_reconcile_expired_leases_classifies_work_without_duplicate_checkpoints(
         assert leases[run_id] is not None
 
     leases["run-model"] = first.agent_runs.update_continuation(
-        leases["run-model"], _continuation("model_in_flight"), now=NOW
+        leases["run-model"],
+        _continuation(
+            "model_in_flight",
+            pending_model={
+                "attempt_id": "run-model:1:model",
+                "status": "in_flight",
+            },
+        ),
+        now=NOW,
     )
     leases["run-safe-tool"] = first.agent_runs.update_continuation(
         leases["run-safe-tool"],
@@ -871,6 +888,11 @@ def test_reconcile_expired_leases_classifies_work_without_duplicate_checkpoints(
     model = first.get_agent_run("run-model")
     assert model["current_state"] == "interrupted"
     assert model["continuation"]["cursor"]["phase"] == "model_ready"
+    assert model["continuation"]["pending_model"] == {
+        "attempt_id": "run-model:1:model",
+        "status": "retry_ready",
+        "budget_reserved": True,
+    }
     assert model["continuation"]["remaining_budgets"] == {
         "work_steps": 4,
         "tool_calls": 3,
@@ -879,7 +901,8 @@ def test_reconcile_expired_leases_classifies_work_without_duplicate_checkpoints(
     safe = first.get_agent_run("run-safe-tool")
     assert safe["current_state"] == "interrupted"
     assert safe["continuation"]["cursor"]["phase"] == "tools_ready"
-    assert safe["continuation"]["pending_tool"]["status"] == "not_started"
+    assert safe["continuation"]["pending_tool"]["status"] == "retry_ready"
+    assert safe["continuation"]["pending_tool"]["budget_reserved"] is True
     unsafe = first.get_agent_run("run-unsafe-tool")
     assert unsafe["current_state"] == "interrupted"
     assert unsafe["continuation"]["cursor"]["phase"] == "review_required"

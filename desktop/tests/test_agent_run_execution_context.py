@@ -2,7 +2,7 @@ import hashlib
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Barrier
 
 import pytest
@@ -12,7 +12,10 @@ from coworker.agent_run_execution import (
     AgentRunExecution,
     AgentRunExecutionOwnershipError,
 )
-from coworker.agent_run_repository import AgentRunLeaseLost
+from coworker.agent_run_repository import (
+    AgentRunLeaseLost,
+    AgentRunVersionConflict,
+)
 from coworker.events import TurnIdentity
 from coworker.inbox import Inbox
 from coworker.store import ConversationStore
@@ -110,6 +113,11 @@ def _seed_running_phase(store, identity, phase):
     store.agent_runs.release_lease(lease, now=NOW)
 
 
+def _prepare_one_tool(execution):
+    execution.model_pending([], [], 0)
+    execution.model_completed([], [], 0, 1, 0)
+
+
 def test_resolved_waiting_lease_requires_exact_resolved_inbox_and_has_one_owner(
     tmp_path,
 ):
@@ -117,6 +125,7 @@ def test_resolved_waiting_lease_requires_exact_resolved_inbox_and_has_one_owner(
     second = ConversationStore(tmp_path)
     identity, execution = _start(first, run_id="run-waiting")
     _park(first, identity, "approval-1")
+    _prepare_one_tool(execution)
     execution.waiting_approval([], [], "approval-1")
     waiting = first.get_agent_run(identity.run_id)
 
@@ -181,6 +190,7 @@ def test_resolved_waiting_lease_requires_exact_resolved_inbox_and_has_one_owner(
         run_id="some-other-run",
     )
     Inbox(first).resolve("approval-wrong-run", "deny")
+    _prepare_one_tool(wrong_execution)
     wrong_execution.waiting_approval([], [], "approval-wrong-run")
     wrong_waiting = first.get_agent_run(wrong_identity.run_id)
     assert (
@@ -202,11 +212,12 @@ def test_resolved_allow_and_deny_each_reacquire_waiting_run(tmp_path, decision):
     identity, execution = _start(store, run_id=f"run-{decision}")
     interaction_id = f"approval-{decision}"
     _park(store, identity, interaction_id)
+    _prepare_one_tool(execution)
     execution.waiting_approval([], [], interaction_id)
     waiting = store.get_agent_run(identity.run_id)
     Inbox(store).resolve(interaction_id, decision)
 
-    lease = store.acquire_resolved_waiting_lease(
+    acquired = store.acquire_resolved_waiting_lease(
         identity.run_id,
         "owner-resume",
         waiting["version"],
@@ -215,8 +226,9 @@ def test_resolved_allow_and_deny_each_reacquire_waiting_run(tmp_path, decision):
         now=NOW,
     )
 
-    assert lease is not None
-    assert lease.owner_id == "owner-resume"
+    assert acquired is not None
+    assert acquired.lease.owner_id == "owner-resume"
+    assert acquired.decision == decision
 
 
 def test_start_initializes_identity_budgets_prefixes_and_single_owner(tmp_path):
@@ -258,6 +270,7 @@ def test_start_initializes_identity_budgets_prefixes_and_single_owner(tmp_path):
         "phase": "model_ready",
         "step_index": 0,
         "next_tool_index": 0,
+        "expected_tool_count": 0,
         "visible_partial": {
             "message_id": identity.message_id,
             "text_length": 0,
@@ -279,6 +292,7 @@ def test_start_initializes_identity_budgets_prefixes_and_single_owner(tmp_path):
         "phase": "model_ready",
         "step_index": 0,
         "next_tool_index": 0,
+        "expected_tool_count": 0,
         "transcript_prefix_count": 0,
         "transcript_prefix_sha256": EMPTY_SHA256,
         "event_prefix_count": 0,
@@ -424,7 +438,7 @@ def test_pending_boundaries_decrement_once_and_exact_retries_are_idempotent(
     first_model_lease = execution.lease
     execution.model_pending(history, events, 0)
     assert execution.lease == first_model_lease
-    execution.model_completed(history, events, 0, True, 0)
+    execution.model_completed(history, events, 0, 2, 0)
     execution.tool_pending(history, events, 0, 0, "call-1", "search", True)
     first_tool_lease = execution.lease
     execution.tool_pending(history, events, 0, 0, "call-1", "search", True)
@@ -484,7 +498,7 @@ def test_pending_retries_recover_after_commit_acknowledgement_loss(
     with pytest.raises(RuntimeError, match="model_pending"):
         execution.model_pending([], [], 0)
     execution.model_pending([], [], 0)
-    execution.model_completed([], [], 0, True, 0)
+    execution.model_completed([], [], 0, 1, 0)
     with pytest.raises(RuntimeError, match="tool_pending"):
         execution.tool_pending([], [], 0, 0, "call-1", "search", True)
     execution.tool_pending([], [], 0, 0, "call-1", "search", True)
@@ -516,7 +530,7 @@ def test_completed_boundaries_update_prefixes_and_append_digest_only_receipt(
     result_digest = hashlib.sha256(b"PRIVATE_RESULT_VALUE").hexdigest()
 
     execution.model_pending(history[:1], [], 0)
-    execution.model_completed(history, [], 0, True, 0)
+    execution.model_completed(history, [], 0, 1, 0)
     assert execution.metadata["phase"] == "tools_ready"
     execution.tool_pending(
         history, events, 0, 0, "call-1", "apollo_search", True
@@ -566,6 +580,7 @@ def test_waiting_releases_and_resolved_resume_clears_pending_interaction(tmp_pat
     store = ConversationStore(tmp_path)
     identity, execution = _start(store, run_id="run-resume")
     _park(store, identity, "approval-resume")
+    _prepare_one_tool(execution)
 
     execution.waiting_approval([], [], "approval-resume")
 
@@ -580,7 +595,7 @@ def test_waiting_releases_and_resolved_resume_clears_pending_interaction(tmp_pat
     execution.resume_resolved_approval("approval-resume")
     assert execution.lease is not None
     assert execution.run_id == identity.run_id
-    execution.approval_resolved([], [], "approval-resume", "denied")
+    execution.approval_resolved([], [], "approval-resume", "deny")
 
     continuation = store.get_agent_run(identity.run_id)["continuation"]
     assert continuation["identity"] == {
@@ -594,9 +609,163 @@ def test_waiting_releases_and_resolved_resume_clears_pending_interaction(tmp_pat
     ][-2:] == ["waiting_approval", "approval_resolved"]
 
 
+@pytest.mark.parametrize("decision", ("allow", "deny"))
+def test_approval_resolution_uses_exact_atomically_acquired_decision(
+    tmp_path, decision
+):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id=f"run-bound-{decision}")
+    interaction_id = f"approval-bound-{decision}"
+    _park(store, identity, interaction_id)
+    _prepare_one_tool(execution)
+    execution.waiting_approval([], [], interaction_id)
+    Inbox(store).resolve(interaction_id, decision)
+    execution.resume_resolved_approval(interaction_id)
+
+    execution.approval_resolved([], [], interaction_id)
+
+    assert store.list_agent_run_checkpoints(identity.run_id)[-1]["payload"] == {
+        "id": interaction_id,
+        "resolution": decision,
+    }
+
+
+@pytest.mark.parametrize("resolution", ("deny", "allowed", "arbitrary"))
+def test_approval_resolution_mismatch_cannot_advance_authority(
+    tmp_path, resolution
+):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id=f"run-mismatch-{resolution}")
+    interaction_id = f"approval-mismatch-{resolution}"
+    _park(store, identity, interaction_id)
+    _prepare_one_tool(execution)
+    execution.waiting_approval([], [], interaction_id)
+    Inbox(store).resolve(interaction_id, "allow")
+    execution.resume_resolved_approval(interaction_id)
+    before = store.get_agent_run(identity.run_id)
+    checkpoint_count = len(store.list_agent_run_checkpoints(identity.run_id))
+
+    with pytest.raises(ValueError, match="decision"):
+        execution.approval_resolved(
+            [], [], interaction_id, resolution
+        )
+
+    after = store.get_agent_run(identity.run_id)
+    assert after["version"] == before["version"]
+    assert after["continuation"] == before["continuation"]
+    assert len(store.list_agent_run_checkpoints(identity.run_id)) == checkpoint_count
+
+
+def test_expired_model_attempt_resumes_without_spending_budget_twice(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id="run-crash-model")
+    history = [{"role": "user", "content": "Find candidates"}]
+    events = [{"type": "turn_start"}]
+    execution.model_pending(history, events, 0)
+    old_lease = execution.lease
+
+    store.agent_runs.reconcile_expired_leases(
+        now=NOW + timedelta(seconds=301)
+    )
+    recovered = store.get_agent_run(identity.run_id)["continuation"]
+    assert recovered["cursor"]["phase"] == "model_ready"
+    assert recovered["pending_model"] == {
+        "attempt_id": f"{identity.run_id}:0:model",
+        "status": "retry_ready",
+        "budget_reserved": True,
+    }
+    assert recovered["remaining_budgets"]["work_steps"] == 3
+
+    reopened = ConversationStore(tmp_path)
+    resumed = AgentRunExecution.resume(
+        reopened,
+        identity,
+        4,
+        owner_id="owner-resumed",
+        now=NOW + timedelta(seconds=301),
+    )
+    resumed.model_pending(history, events, 0)
+    resumed.model_completed(history, events, 0, 0, 0)
+
+    continuation = reopened.get_agent_run(identity.run_id)["continuation"]
+    assert continuation["cursor"]["phase"] == "terminal_ready"
+    assert "pending_model" not in continuation
+    assert continuation["remaining_budgets"]["work_steps"] == 3
+    assert [
+        item["kind"] for item in reopened.list_agent_run_checkpoints(identity.run_id)
+    ].count("model_pending") == 2
+    with pytest.raises((AgentRunLeaseLost, AgentRunVersionConflict)):
+        store.agent_runs.renew_lease(
+            old_lease, 30, now=NOW + timedelta(seconds=301)
+        )
+
+
+def test_expired_safe_tool_attempt_resumes_without_spending_budget_twice(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id="run-crash-tool")
+    history = [{"role": "user", "content": "Find candidates"}]
+    events = [{"type": "turn_start"}]
+    execution.model_pending(history, events, 0)
+    execution.model_completed(history, events, 0, 1, 0)
+    execution.tool_pending(
+        history, events, 0, 0, "call-crash", "search", True
+    )
+    old_lease = execution.lease
+
+    store.agent_runs.reconcile_expired_leases(
+        now=NOW + timedelta(seconds=301)
+    )
+    recovered = store.get_agent_run(identity.run_id)["continuation"]
+    assert recovered["cursor"]["phase"] == "tools_ready"
+    assert recovered["pending_tool"] == {
+        "attempt_id": f"{identity.run_id}:0:call-crash:0",
+        "call_id": "call-crash",
+        "name": "search",
+        "retry_class": "safe",
+        "status": "retry_ready",
+        "budget_reserved": True,
+    }
+    assert recovered["remaining_budgets"]["tool_calls"] == 3
+
+    reopened = ConversationStore(tmp_path)
+    resumed = AgentRunExecution.resume(
+        reopened,
+        identity,
+        4,
+        owner_id="owner-resumed",
+        now=NOW + timedelta(seconds=301),
+    )
+    resumed.tool_pending(
+        history, events, 0, 0, "call-crash", "search", True
+    )
+    resumed.tool_completed(
+        history,
+        events,
+        0,
+        0,
+        "call-crash",
+        "search",
+        True,
+        "b" * 64,
+    )
+
+    continuation = reopened.get_agent_run(identity.run_id)["continuation"]
+    assert continuation["cursor"]["next_tool_index"] == 1
+    assert continuation["remaining_budgets"]["tool_calls"] == 3
+    assert [
+        item["kind"] for item in reopened.list_agent_run_checkpoints(identity.run_id)
+    ].count("tool_pending") == 2
+    with pytest.raises((AgentRunLeaseLost, AgentRunVersionConflict)):
+        store.agent_runs.renew_lease(
+            old_lease, 30, now=NOW + timedelta(seconds=301)
+        )
+
+
 def test_terminal_releases_projects_metadata_and_fences_old_owner(tmp_path):
     store = ConversationStore(tmp_path)
     identity, execution = _start(store, run_id="run-terminal")
+    execution.model_pending([], [], 0)
+    execution.model_completed([], [], 0, 0, len("PRIVATE_FINAL_TEXT"))
     old_lease = execution.lease
 
     execution.terminal(
@@ -631,7 +800,14 @@ def test_terminal_releases_projects_metadata_and_fences_old_owner(tmp_path):
 def test_repository_still_rejects_backwards_cursors_and_budget_increases(tmp_path):
     store = ConversationStore(tmp_path)
     _identity_value, execution = _start(store)
-    execution.model_pending([{"role": "user"}], [], 1)
+    history = [{"role": "user"}]
+    execution.model_pending(history, [], 0)
+    execution.model_completed(history, [], 0, 1, 0)
+    execution.tool_pending(history, [], 0, 0, "call-1", "search", True)
+    execution.tool_completed(
+        history, [], 0, 0, "call-1", "search", True, "a" * 64
+    )
+    execution.model_pending(history, [], 1)
     lease = execution.lease
 
     with pytest.raises(ValueError, match="cannot decrease"):
@@ -667,7 +843,7 @@ def test_prefix_hashes_are_canonical_and_match_every_exact_supplied_array(tmp_pa
 
     second_history = [*first_history, {"role": "assistant", "content": "done"}]
     second_events = [*first_events, {"type": "assistant_delta", "delta": "done"}]
-    execution.model_completed(second_history, second_events, 0, False, 4)
+    execution.model_completed(second_history, second_events, 0, 0, 4)
     second = store.get_agent_run(identity.run_id)["continuation"]["cursor"]
     assert second["transcript_prefix_count"] == len(second_history)
     assert second["transcript_prefix_sha256"] == transcript_prefix_sha256(

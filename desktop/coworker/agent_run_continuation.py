@@ -23,6 +23,7 @@ _PHASES = frozenset(
         "waiting_approval",
         "waiting_question",
         "review_required",
+        "terminal_ready",
         "complete",
         "partial",
         "stopped",
@@ -55,7 +56,7 @@ def project_continuation(value: Any) -> dict[str, Any]:
         phase = cursor.get("phase")
         if phase in _PHASES:
             safe_cursor["phase"] = phase
-        for key in ("step_index", "next_tool_index"):
+        for key in ("step_index", "next_tool_index", "expected_tool_count"):
             if key in cursor:
                 safe_cursor[key] = _nonnegative_int(cursor.get(key))
         for prefix in ("transcript", "event"):
@@ -95,6 +96,22 @@ def project_continuation(value: Any) -> dict[str, Any]:
             "id": interaction_id,
         }
 
+    pending_model = raw.get("pending_model")
+    if isinstance(pending_model, dict):
+        attempt_id = _safe_text(pending_model.get("attempt_id"), MAX_SAFE_ID)
+        status = pending_model.get("status")
+        budget_reserved = pending_model.get("budget_reserved")
+        if (
+            attempt_id
+            and status in {"in_flight", "retry_ready"}
+            and isinstance(budget_reserved, bool)
+        ):
+            projected["pending_model"] = {
+                "attempt_id": attempt_id,
+                "status": status,
+                "budget_reserved": budget_reserved,
+            }
+
     pending_tool = raw.get("pending_tool")
     if isinstance(pending_tool, dict):
         retry_class = pending_tool.get("retry_class")
@@ -102,12 +119,15 @@ def project_continuation(value: Any) -> dict[str, Any]:
         attempt_id = _safe_text(pending_tool.get("attempt_id"), MAX_SAFE_ID)
         call_id = _safe_text(pending_tool.get("call_id"), MAX_SAFE_ID)
         name = _safe_text(pending_tool.get("name"), MAX_TOOL_NAME)
+        budget_reserved = pending_tool.get("budget_reserved")
         if (
             retry_class in {"safe", "consequential"}
-            and status in {"not_started", "in_flight", "outcome_unknown"}
+            and status
+            in {"not_started", "retry_ready", "in_flight", "outcome_unknown"}
             and attempt_id
             and call_id
             and name
+            and isinstance(budget_reserved, bool)
         ):
             projected["pending_tool"] = {
                 "attempt_id": attempt_id,
@@ -115,6 +135,7 @@ def project_continuation(value: Any) -> dict[str, Any]:
                 "name": name,
                 "retry_class": retry_class,
                 "status": status,
+                "budget_reserved": budget_reserved,
             }
 
     receipts: list[dict[str, Any]] = []
@@ -160,8 +181,10 @@ def merge_continuation(
     if not isinstance(incoming, dict):
         raise ValueError("continuation must be an object")
     _validate_incoming_prefix_pairs(incoming)
+    _validate_incoming_cursor_fields(incoming)
     old = project_continuation(existing)
     new = project_continuation(incoming)
+    _validate_pending_updates(incoming, old, new)
     merged = dict(old)
     merged["schema_version"] = 1
 
@@ -175,15 +198,36 @@ def merge_continuation(
     if "cursor" in incoming:
         old_cursor = old.get("cursor", {})
         new_cursor = new.get("cursor", {})
-        for key in (
-            "step_index",
-            "next_tool_index",
-            "transcript_prefix_count",
-            "event_prefix_count",
-        ):
+        for key in ("step_index", "transcript_prefix_count", "event_prefix_count"):
             if key in new_cursor and key in old_cursor:
                 if int(new_cursor[key]) < int(old_cursor[key]):
                     raise ValueError(f"continuation cursor {key} cannot decrease")
+        old_step = int(old_cursor.get("step_index", 0))
+        new_step = int(new_cursor.get("step_index", old_step))
+        if new_step == old_step:
+            if (
+                "next_tool_index" in new_cursor
+                and "next_tool_index" in old_cursor
+                and int(new_cursor["next_tool_index"])
+                < int(old_cursor["next_tool_index"])
+            ):
+                raise ValueError(
+                    "continuation cursor next_tool_index cannot decrease"
+                )
+            if (
+                "expected_tool_count" in new_cursor
+                and "expected_tool_count" in old_cursor
+            ):
+                old_expected = int(old_cursor["expected_tool_count"])
+                new_expected = int(new_cursor["expected_tool_count"])
+                if new_expected < old_expected:
+                    raise ValueError(
+                        "continuation cursor expected_tool_count cannot decrease"
+                    )
+                if old_expected > 0 and new_expected != old_expected:
+                    raise ValueError(
+                        "continuation cursor expected_tool_count cannot change in place"
+                    )
         for count_key, digest_key in (
             ("transcript_prefix_count", "transcript_prefix_sha256"),
             ("event_prefix_count", "event_prefix_sha256"),
@@ -199,7 +243,12 @@ def merge_continuation(
                 raise ValueError(f"continuation {digest_key} cannot change in place")
         merged["cursor"] = {**old_cursor, **new_cursor}
 
-    for section in ("visible_partial", "pending_interaction", "pending_tool"):
+    for section in (
+        "visible_partial",
+        "pending_interaction",
+        "pending_model",
+        "pending_tool",
+    ):
         if section not in incoming:
             continue
         if section in new:
@@ -297,3 +346,51 @@ def _validate_incoming_prefix_pairs(incoming: dict[str, Any]) -> None:
             raise ValueError(f"continuation {count_key} must be nonnegative")
         if valid_sha256(cursor[digest_key]) is None:
             raise ValueError(f"continuation {digest_key} must be a SHA-256 digest")
+
+
+def _validate_incoming_cursor_fields(incoming: dict[str, Any]) -> None:
+    cursor = incoming.get("cursor")
+    if not isinstance(cursor, dict):
+        return
+    if "expected_tool_count" in cursor and not _is_nonnegative_int(
+        cursor["expected_tool_count"]
+    ):
+        raise ValueError(
+            "continuation expected_tool_count must be nonnegative"
+        )
+    if (
+        _is_nonnegative_int(cursor.get("next_tool_index"))
+        and _is_nonnegative_int(cursor.get("expected_tool_count"))
+        and cursor["next_tool_index"] > cursor["expected_tool_count"]
+    ):
+        raise ValueError(
+            "continuation next_tool_index cannot exceed expected_tool_count"
+        )
+
+
+def _validate_pending_updates(
+    incoming: dict[str, Any],
+    old: dict[str, Any],
+    new: dict[str, Any],
+) -> None:
+    invariants = {
+        "pending_model": ("attempt_id", "budget_reserved"),
+        "pending_tool": (
+            "attempt_id",
+            "call_id",
+            "name",
+            "retry_class",
+            "budget_reserved",
+        ),
+    }
+    for section, keys in invariants.items():
+        if section not in incoming or incoming[section] is None:
+            continue
+        if section not in new:
+            raise ValueError(f"continuation {section} is malformed")
+        prior = old.get(section)
+        candidate = new[section]
+        if not isinstance(prior, dict):
+            continue
+        if any(prior.get(key) != candidate.get(key) for key in keys):
+            raise ValueError(f"continuation {section} cannot change reservation")

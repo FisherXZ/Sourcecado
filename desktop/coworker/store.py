@@ -17,7 +17,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from coworker.agent_run_repository import AgentRunLease, AgentRunRepository
+from coworker.agent_run_repository import (
+    AgentRunLease,
+    AgentRunRepository,
+    ResolvedApprovalLease,
+)
 
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _INTERRUPTED_APPROVAL_ERROR = (
@@ -454,7 +458,7 @@ class ConversationStore:
         interaction_id: str,
         lease_seconds: int | float,
         now: datetime | None = None,
-    ) -> AgentRunLease | None:
+    ) -> ResolvedApprovalLease | None:
         return self.agent_runs.acquire_resolved_waiting_lease(
             run_id,
             owner_id,

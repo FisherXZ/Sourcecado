@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import uuid
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
 from coworker.agent_run_continuation import (
     MAX_SAFE_ID,
-    MAX_TOOL_NAME,
     project_continuation,
-    transcript_prefix_sha256,
-    valid_sha256,
 )
 from coworker.agent_run_repository import (
     MAX_LEASE_SECONDS,
@@ -22,9 +17,21 @@ from coworker.agent_run_repository import (
     AgentRunVersionConflict,
 )
 from coworker.agent_runs import (
-    TERMINAL_AGENT_RUN_STATES,
     redact_sensitive_assignments,
     safe_error_summary,
+)
+from coworker.agent_run_state import (
+    approval_resolved_transition,
+    initial_continuation,
+    model_attempt_id,
+    model_completed_transition,
+    model_pending_transition,
+    prefixes,
+    terminal_transition,
+    tool_attempt_id,
+    tool_completed_transition,
+    tool_pending_transition,
+    waiting_approval_transition,
 )
 from coworker.events import TurnIdentity
 
@@ -62,6 +69,7 @@ class AgentRunExecution:
         self._snapshot = project_continuation(snapshot)
         self._max_steps = max_steps
         self._now = now
+        self._resolved_decision: str | None = None
 
     @classmethod
     def start(
@@ -129,29 +137,13 @@ class AgentRunExecution:
                 raise ValueError("Agent Run continuation identity cannot change")
             execution._refresh_snapshot()
             return execution
-        initial = {
-            "identity": {
+        initial = initial_continuation(
+            {
                 "message_id": identity.message_id,
                 "part_id": identity.part_id,
             },
-            "cursor": {
-                "phase": "model_ready",
-                "step_index": 0,
-                "next_tool_index": 0,
-                **_prefixes([], []),
-            },
-            "visible_partial": {
-                "message_id": identity.message_id,
-                "text_length": 0,
-                "truncated": False,
-            },
-            "completed_tool_receipts": [],
-            "remaining_budgets": {
-                "work_steps": max_steps,
-                "tool_calls": max_steps,
-                "delivery_passes": 1,
-            },
-        }
+            max_steps,
+        )
         try:
             execution._lease = store.agent_runs.update_continuation(
                 lease, initial, now=now
@@ -166,6 +158,46 @@ class AgentRunExecution:
             raise
         execution._version = execution._lease.version
         execution._snapshot = project_continuation(initial)
+        return execution
+
+    @classmethod
+    def resume(
+        cls,
+        store: ConversationStore,
+        identity: TurnIdentity,
+        max_steps: int,
+        owner_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AgentRunExecution:
+        if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
+            raise ValueError("max_steps must be a positive integer")
+        run = store.get_agent_run(identity.run_id)
+        if run is None:
+            raise KeyError(identity.run_id)
+        snapshot = project_continuation(run.get("continuation"))
+        if run["current_state"] != "interrupted" or snapshot.get("identity") != {
+            "message_id": identity.message_id,
+            "part_id": identity.part_id,
+        }:
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {identity.run_id} is not an exact resumable continuation"
+            )
+        owner = owner_id or f"execution_{uuid.uuid4().hex}"
+        lease = store.agent_runs.acquire_resumable_lease(
+            identity.run_id,
+            owner,
+            run["version"],
+            EXECUTION_LEASE_SECONDS,
+            now=now,
+        )
+        if lease is None:
+            raise AgentRunExecutionOwnershipError(
+                f"Agent Run {identity.run_id} resumable lease is unavailable"
+            )
+        execution = cls(
+            store, identity, owner, lease, snapshot, max_steps, now
+        )
+        execution._refresh_snapshot()
         return execution
 
     @staticmethod
@@ -214,6 +246,7 @@ class AgentRunExecution:
             "phase": cursor.get("phase"),
             "step_index": int(cursor.get("step_index", 0)),
             "next_tool_index": int(cursor.get("next_tool_index", 0)),
+            "expected_tool_count": int(cursor.get("expected_tool_count", 0)),
             "visible_partial": dict(projected.get("visible_partial", {})),
             "pending_interaction": (
                 dict(projected["pending_interaction"])
@@ -246,42 +279,32 @@ class AgentRunExecution:
     ) -> dict[str, Any]:
         self._require_lease()
         step = _nonnegative_index(step_index, "step_index")
-        prefixes = _prefixes(history, events)
-        if self._pending_retry_matches(
-            "model_pending",
-            phase="model_in_flight",
-            step_index=step,
-            next_tool_index=0,
-            prefixes=prefixes,
+        supplied_prefixes = prefixes(history, events)
+        persisted = project_continuation(self._current_persisted_snapshot())
+        self._snapshot = persisted
+        if (
+            self._last_checkpoint_kind() == "model_pending"
+            and persisted.get("cursor", {}).get("phase") == "model_in_flight"
+            and persisted.get("cursor", {}).get("step_index") == step
+            and persisted.get("cursor", {}).get("next_tool_index") == 0
+            and _cursor_has_prefixes(
+                persisted.get("cursor", {}), supplied_prefixes
+            )
+            and persisted.get("pending_model")
+            == {
+                "attempt_id": model_attempt_id(self.run_id, step),
+                "status": "in_flight",
+                "budget_reserved": True,
+            }
         ):
             self._recover_ambiguous_lease()
             return self.metadata
-        cursor = self._cursor()
-        phase = cursor.get("phase")
-        current_step = int(cursor.get("step_index", 0))
-        if phase not in {"model_ready", "tools_ready"} or step < current_step:
-            raise ValueError("model_pending cannot move execution backwards")
-        budgets = self._budgets()
-        if budgets.get("work_steps", 0) < 1:
-            raise ValueError("Agent Run work-step budget exhausted")
-        if (
-            phase == "model_ready"
-            and step == current_step
-            and budgets.get("work_steps") != self._max_steps
-        ):
-            raise ValueError("model_pending cannot repeat completed progress")
-        budgets["work_steps"] -= 1
+        next_snapshot = model_pending_transition(
+            persisted, self.run_id, history, events, step
+        )
         return self._checkpoint(
             "model_pending",
-            {
-                "cursor": {
-                    "phase": "model_in_flight",
-                    "step_index": step,
-                    "next_tool_index": 0,
-                    **prefixes,
-                },
-                "remaining_budgets": budgets,
-            },
+            next_snapshot,
             payload={"step_index": step},
         )
 
@@ -290,31 +313,29 @@ class AgentRunExecution:
         history: list[dict[str, Any]],
         events: list[dict[str, Any]],
         step_index: int,
-        has_tools: bool,
+        tool_count: int,
         text_length: int,
     ) -> dict[str, Any]:
         self._require_lease()
         step = _nonnegative_index(step_index, "step_index")
+        count = _nonnegative_index(tool_count, "tool_count")
         length = _nonnegative_index(text_length, "text_length")
-        self._require_phase("model_in_flight", step)
+        next_snapshot = model_completed_transition(
+            self._snapshot,
+            self.run_id,
+            history,
+            events,
+            step,
+            count,
+            length,
+            self._identity.message_id,
+        )
         return self._checkpoint(
             "model_completed",
-            {
-                "cursor": {
-                    "phase": "tools_ready" if has_tools else "model_ready",
-                    "step_index": step,
-                    "next_tool_index": 0,
-                    **_prefixes(history, events),
-                },
-                "visible_partial": {
-                    "message_id": self._identity.message_id,
-                    "text_length": length,
-                    "truncated": False,
-                },
-            },
+            {**next_snapshot, "pending_model": None},
             payload={
                 "step_index": step,
-                "has_tools": bool(has_tools),
+                "tool_count": count,
                 "text_length": length,
             },
             usage_delta={"model_calls": 1},
@@ -333,66 +354,50 @@ class AgentRunExecution:
         self._require_lease()
         step = _nonnegative_index(step_index, "step_index")
         tool = _nonnegative_index(tool_index, "tool_index")
-        safe_call_id = _safe_boundary_text(call_id, MAX_SAFE_ID, "call_id")
-        safe_name = _safe_boundary_text(name, MAX_TOOL_NAME, "name")
-        attempt_id = _attempt_id(self.run_id, step, tool, safe_call_id)
-        prefixes = _prefixes(history, events)
+        supplied_prefixes = prefixes(history, events)
         projected = project_continuation(self._current_persisted_snapshot())
         pending = projected.get("pending_tool")
         cursor = projected.get("cursor", {})
+        attempt_id = tool_attempt_id(self.run_id, step, tool, call_id)
         if (
             self._last_checkpoint_kind() == "tool_pending"
             and cursor.get("phase") == "tool_in_flight"
             and cursor.get("step_index") == step
             and cursor.get("next_tool_index") == tool
-            and _cursor_has_prefixes(cursor, prefixes)
+            and _cursor_has_prefixes(cursor, supplied_prefixes)
             and pending
             == {
                 "attempt_id": attempt_id,
-                "call_id": safe_call_id,
-                "name": safe_name,
+                "call_id": call_id,
+                "name": name,
                 "retry_class": "safe" if retry_safe else "consequential",
                 "status": "in_flight",
+                "budget_reserved": True,
             }
         ):
             self._snapshot = projected
             self._recover_ambiguous_lease()
             return self.metadata
         self._snapshot = projected
-        cursor = self._cursor()
-        if (
-            cursor.get("phase") != "tools_ready"
-            or int(cursor.get("step_index", 0)) != step
-            or int(cursor.get("next_tool_index", 0)) != tool
-        ):
-            raise ValueError("tool_pending does not match the next tool cursor")
-        budgets = self._budgets()
-        if budgets.get("tool_calls", 0) < 1:
-            raise ValueError("Agent Run tool-call budget exhausted")
-        budgets["tool_calls"] -= 1
+        next_snapshot = tool_pending_transition(
+            projected,
+            self.run_id,
+            history,
+            events,
+            step,
+            tool,
+            call_id,
+            name,
+            retry_safe,
+        )
         return self._checkpoint(
             "tool_pending",
-            {
-                "cursor": {
-                    "phase": "tool_in_flight",
-                    "step_index": step,
-                    "next_tool_index": tool,
-                    **prefixes,
-                },
-                "pending_tool": {
-                    "attempt_id": attempt_id,
-                    "call_id": safe_call_id,
-                    "name": safe_name,
-                    "retry_class": "safe" if retry_safe else "consequential",
-                    "status": "in_flight",
-                },
-                "remaining_budgets": budgets,
-            },
+            next_snapshot,
             payload={
                 "step_index": step,
                 "tool_index": tool,
-                "call_id": safe_call_id,
-                "name": safe_name,
+                "call_id": call_id,
+                "name": name,
                 "retry_class": "safe" if retry_safe else "consequential",
             },
         )
@@ -411,49 +416,26 @@ class AgentRunExecution:
         self._require_lease()
         step = _nonnegative_index(step_index, "step_index")
         tool = _nonnegative_index(tool_index, "tool_index")
-        safe_call_id = _safe_boundary_text(call_id, MAX_SAFE_ID, "call_id")
-        safe_name = _safe_boundary_text(name, MAX_TOOL_NAME, "name")
-        digest = valid_sha256(result_digest)
-        if digest is None:
-            raise ValueError("result_digest must be a SHA-256 digest")
-        attempt_id = _attempt_id(self.run_id, step, tool, safe_call_id)
-        cursor = self._cursor()
-        pending = self._snapshot.get("pending_tool")
-        if (
-            cursor.get("phase") != "tool_in_flight"
-            or int(cursor.get("step_index", 0)) != step
-            or int(cursor.get("next_tool_index", 0)) != tool
-            or not isinstance(pending, dict)
-            or pending.get("attempt_id") != attempt_id
-            or pending.get("call_id") != safe_call_id
-            or pending.get("name") != safe_name
-        ):
-            raise ValueError("tool_completed does not match the pending tool")
-        receipt = {
-            "attempt_id": attempt_id,
-            "call_id": safe_call_id,
-            "name": safe_name,
-            "ok": bool(ok),
-            "transcript_index": max(0, len(history) - 1),
-            "result_sha256": digest,
-        }
+        next_snapshot = tool_completed_transition(
+            self._snapshot,
+            self.run_id,
+            history,
+            events,
+            step,
+            tool,
+            call_id,
+            name,
+            ok,
+            result_digest,
+        )
         return self._checkpoint(
             "tool_completed",
-            {
-                "cursor": {
-                    "phase": "tools_ready",
-                    "step_index": step,
-                    "next_tool_index": tool + 1,
-                    **_prefixes(history, events),
-                },
-                "pending_tool": None,
-                "completed_tool_receipts": [receipt],
-            },
+            {**next_snapshot, "pending_tool": None},
             payload={
                 "step_index": step,
                 "tool_index": tool,
-                "call_id": safe_call_id,
-                "name": safe_name,
+                "call_id": call_id,
+                "name": name,
                 "ok": bool(ok),
             },
             usage_delta={"tool_calls": 1},
@@ -469,21 +451,12 @@ class AgentRunExecution:
         interaction = _safe_boundary_text(
             interaction_id, MAX_SAFE_ID, "interaction_id"
         )
-        cursor = self._cursor()
+        next_snapshot = waiting_approval_transition(
+            self._snapshot, history, events, interaction
+        )
         return self._checkpoint(
             "waiting_approval",
-            {
-                "cursor": {
-                    "phase": "waiting_approval",
-                    "step_index": int(cursor.get("step_index", 0)),
-                    "next_tool_index": int(cursor.get("next_tool_index", 0)),
-                    **_prefixes(history, events),
-                },
-                "pending_interaction": {
-                    "kind": "approval",
-                    "id": interaction,
-                },
-            },
+            next_snapshot,
             payload={"id": interaction},
             state="waiting_approval",
         )
@@ -502,7 +475,7 @@ class AgentRunExecution:
                 f"Agent Run {self.run_id} has no matching resolved approval"
             )
         try:
-            lease = self._store.agent_runs.acquire_resolved_waiting_lease(
+            acquired = self._store.agent_runs.acquire_resolved_waiting_lease(
                 self.run_id,
                 self.owner_id,
                 self._version,
@@ -512,12 +485,13 @@ class AgentRunExecution:
             )
         except AgentRunVersionConflict as exc:
             raise self._ownership_error("resolved approval lease was fenced") from exc
-        if lease is None:
+        if acquired is None:
             raise AgentRunExecutionOwnershipError(
                 f"Agent Run {self.run_id} resolved approval is not available for reacquisition"
             )
-        self._lease = lease
-        self._version = lease.version
+        self._lease = acquired.lease
+        self._version = acquired.lease.version
+        self._resolved_decision = acquired.decision
         self._refresh_snapshot()
         return self.metadata
 
@@ -526,35 +500,28 @@ class AgentRunExecution:
         history: list[dict[str, Any]],
         events: list[dict[str, Any]],
         interaction_id: str,
-        resolution: str,
+        resolution: str | None = None,
     ) -> dict[str, Any]:
         self._require_lease()
         interaction = _safe_boundary_text(
             interaction_id, MAX_SAFE_ID, "interaction_id"
         )
-        safe_resolution = _safe_boundary_text(resolution, 64, "resolution")
-        if self._snapshot.get("pending_interaction") != {
-            "kind": "approval",
-            "id": interaction,
-        }:
-            raise ValueError("approval_resolved does not match pending interaction")
-        cursor = self._cursor()
-        if cursor.get("phase") != "waiting_approval":
-            raise ValueError("approval_resolved requires waiting_approval phase")
-        return self._checkpoint(
+        decision = self._resolved_decision
+        if decision not in {"allow", "deny"}:
+            raise ValueError("approval decision is not bound to this execution")
+        if resolution is not None and resolution != decision:
+            raise ValueError("approval resolution does not match exact decision")
+        next_snapshot = approval_resolved_transition(
+            self._snapshot, history, events, interaction
+        )
+        metadata = self._checkpoint(
             "approval_resolved",
-            {
-                "cursor": {
-                    "phase": "tools_ready",
-                    "step_index": int(cursor.get("step_index", 0)),
-                    "next_tool_index": int(cursor.get("next_tool_index", 0)),
-                    **_prefixes(history, events),
-                },
-                "pending_interaction": None,
-            },
-            payload={"id": interaction, "resolution": safe_resolution},
+            {**next_snapshot, "pending_interaction": None},
+            payload={"id": interaction, "resolution": decision},
             state="running",
         )
+        self._resolved_decision = None
+        return metadata
 
     def terminal(
         self,
@@ -567,8 +534,6 @@ class AgentRunExecution:
         error: str | None = None,
     ) -> dict[str, Any]:
         self._require_lease()
-        if state not in TERMINAL_AGENT_RUN_STATES:
-            raise ValueError("terminal state is invalid")
         safe_status = _safe_boundary_text(status, 64, "status")
         safe_message_id = _safe_boundary_text(
             message_id, MAX_SAFE_ID, "message_id"
@@ -581,22 +546,20 @@ class AgentRunExecution:
         }
         if error is not None:
             terminal_result["error"] = safe_error_summary(error)
-        cursor = self._cursor()
+        next_snapshot = terminal_transition(
+            self._snapshot,
+            history,
+            events,
+            state,
+            safe_message_id,
+            length,
+        )
         return self._checkpoint(
             "terminal",
             {
-                "cursor": {
-                    "phase": state,
-                    "step_index": int(cursor.get("step_index", 0)),
-                    "next_tool_index": int(cursor.get("next_tool_index", 0)),
-                    **_prefixes(history, events),
-                },
-                "visible_partial": {
-                    "message_id": safe_message_id,
-                    "text_length": length,
-                    "truncated": False,
-                },
+                **next_snapshot,
                 "pending_interaction": None,
+                "pending_model": None,
                 "pending_tool": None,
             },
             payload={
@@ -639,45 +602,6 @@ class AgentRunExecution:
                 f"Agent Run {self.run_id} has no active execution lease"
             )
         return self._lease
-
-    def _require_phase(self, phase: str, step_index: int) -> None:
-        cursor = self._cursor()
-        if (
-            cursor.get("phase") != phase
-            or int(cursor.get("step_index", 0)) != step_index
-        ):
-            raise ValueError(
-                f"execution boundary requires {phase} at step {step_index}"
-            )
-
-    def _cursor(self) -> dict[str, Any]:
-        return dict(self._snapshot.get("cursor", {}))
-
-    def _budgets(self) -> dict[str, int]:
-        return {
-            key: int(value)
-            for key, value in self._snapshot.get("remaining_budgets", {}).items()
-        }
-
-    def _pending_retry_matches(
-        self,
-        checkpoint_kind: str,
-        *,
-        phase: str,
-        step_index: int,
-        next_tool_index: int,
-        prefixes: dict[str, Any],
-    ) -> bool:
-        persisted = project_continuation(self._current_persisted_snapshot())
-        self._snapshot = persisted
-        cursor = persisted.get("cursor", {})
-        return (
-            self._last_checkpoint_kind() == checkpoint_kind
-            and cursor.get("phase") == phase
-            and cursor.get("step_index") == step_index
-            and cursor.get("next_tool_index") == next_tool_index
-            and _cursor_has_prefixes(cursor, prefixes)
-        )
 
     def _recover_ambiguous_lease(self) -> None:
         lease = self._require_lease()
@@ -736,17 +660,6 @@ class AgentRunExecution:
         )
 
 
-def _prefixes(
-    history: list[dict[str, Any]], events: list[dict[str, Any]]
-) -> dict[str, Any]:
-    return {
-        "transcript_prefix_count": len(history),
-        "transcript_prefix_sha256": transcript_prefix_sha256(history),
-        "event_prefix_count": len(events),
-        "event_prefix_sha256": transcript_prefix_sha256(events),
-    }
-
-
 def _cursor_has_prefixes(
     cursor: dict[str, Any], prefixes: dict[str, Any]
 ) -> bool:
@@ -769,15 +682,3 @@ def _safe_boundary_text(value: str, limit: int, field: str) -> str:
     ):
         raise ValueError(f"invalid {field}")
     return value
-
-
-def _attempt_id(run_id: str, step: int, tool: int, call_id: str) -> str:
-    readable = f"{run_id}:{step}:{call_id}:{tool}"
-    if len(readable) <= MAX_SAFE_ID:
-        return readable
-    canonical = json.dumps(
-        [run_id, step, tool, call_id],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    return "attempt_" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()

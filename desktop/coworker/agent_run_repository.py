@@ -52,6 +52,12 @@ class AgentRunLease:
     expires_at: str
 
 
+@dataclass(frozen=True)
+class ResolvedApprovalLease:
+    lease: AgentRunLease
+    decision: Literal["allow", "deny"]
+
+
 class AgentRunVersionConflict(RuntimeError):
     """The caller's compare-and-swap version is no longer current."""
 
@@ -175,7 +181,7 @@ class _AgentRunRepositoryBase:
         interaction_id: str,
         lease_seconds: int | float,
         now: datetime | None = None,
-    ) -> AgentRunLease | None:
+    ) -> ResolvedApprovalLease | None:
         """Resume one exact, durably resolved approval under a new lease."""
         owner = _lease_owner(owner_id)
         interaction = _bounded_id(interaction_id, "interaction_id")
@@ -237,6 +243,77 @@ class _AgentRunRepositoryBase:
                         run_id,
                         int(expected_version),
                     ),
+                )
+                if cursor.rowcount != 1:
+                    current = self._conn.execute(
+                        "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                    ).fetchone()
+                    if current is None:
+                        raise KeyError(run_id)
+                    if int(current["version"]) != int(expected_version):
+                        raise AgentRunVersionConflict(run_id)
+                    self._conn.commit()
+                    return None
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return ResolvedApprovalLease(
+            lease=_lease_from_row(row), decision=str(inbox["decision"])
+        )
+
+    def acquire_resumable_lease(
+        self,
+        run_id: str,
+        owner_id: str,
+        expected_version: int,
+        lease_seconds: int | float,
+        now: datetime | None = None,
+    ) -> AgentRunLease | None:
+        """Explicitly claim one safely classified interrupted continuation."""
+        owner = _lease_owner(owner_id)
+        seconds = _lease_seconds(lease_seconds)
+        stamp = _timestamp(now)
+        expires_at = _timestamp(_as_datetime(stamp) + timedelta(seconds=seconds))
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if row is None:
+                    raise KeyError(run_id)
+                if (
+                    str(row["current_state"]) != "interrupted"
+                    or row["lease_owner"] is not None
+                    or row["lease_expires_at"] is not None
+                ):
+                    self._conn.commit()
+                    return None
+                if int(row["version"]) != int(expected_version):
+                    raise AgentRunVersionConflict(run_id)
+                phase = (
+                    project_continuation(json_object(row["continuation"]))
+                    .get("cursor", {})
+                    .get("phase")
+                )
+                if phase not in {"model_ready", "tools_ready"}:
+                    self._conn.commit()
+                    return None
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        current_state = 'running', lease_owner = ?,
+                        lease_expires_at = ?, version = version + 1,
+                        updated_at = ?
+                    WHERE run_id = ? AND version = ?
+                      AND current_state = 'interrupted'
+                      AND lease_owner IS NULL AND lease_expires_at IS NULL
+                    """,
+                    (owner, expires_at, stamp, run_id, int(expected_version)),
                 )
                 if cursor.rowcount != 1:
                     current = self._conn.execute(
@@ -971,13 +1048,24 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     )
                     cursor_data = continuation.setdefault("cursor", {})
                     phase = str(cursor_data.get("phase") or "")
+                    pending_model = continuation.get("pending_model")
                     pending = continuation.get("pending_tool")
                     if phase == "model_in_flight":
-                        cursor_data["phase"] = "model_ready"
+                        if (
+                            isinstance(pending_model, dict)
+                            and pending_model.get("budget_reserved") is True
+                        ):
+                            cursor_data["phase"] = "model_ready"
+                            pending_model["status"] = "retry_ready"
+                        else:
+                            cursor_data["phase"] = "review_required"
                     elif phase == "tool_in_flight" and isinstance(pending, dict):
-                        if pending.get("retry_class") == "safe":
+                        if (
+                            pending.get("retry_class") == "safe"
+                            and pending.get("budget_reserved") is True
+                        ):
                             cursor_data["phase"] = "tools_ready"
-                            pending["status"] = "not_started"
+                            pending["status"] = "retry_ready"
                         else:
                             cursor_data["phase"] = "review_required"
                             pending["status"] = "outcome_unknown"
