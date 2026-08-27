@@ -1324,7 +1324,7 @@ def _validate_tool_call(
         if not isinstance(definition, dict):
             continue
         expected = definition.get("type")
-        if expected and not _matches_json_type(value, str(expected)):
+        if expected and not _matches_json_type(value, expected):
             raise RuntimeError(
                 f"tool argument has wrong type for {name}: expected {expected}"
             )
@@ -1333,7 +1333,9 @@ def _validate_tool_call(
             raise RuntimeError(f"tool argument is outside enum for {name}")
 
 
-def _matches_json_type(value: Any, expected: str) -> bool:
+def _matches_json_type(value: Any, expected: Any) -> bool:
+    if isinstance(expected, list):
+        return any(_matches_json_type(value, option) for option in expected)
     if expected == "string":
         return isinstance(value, str)
     if expected == "integer":

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from coworker import provider as provider_module
+from coworker.workspace_runtime import WORKSPACE_TOOL_SCHEMAS
 
 
 def _sse(*payloads):
@@ -1458,3 +1459,83 @@ def test_generic_openai_rejects_arguments_that_violate_tool_schema(monkeypatch):
         asyncio.run(consume())
 
     assert not [event for event in emitted if event.tool_calls]
+
+
+@pytest.mark.parametrize(
+    "expected_before_hash",
+    ["abc123", None],
+    ids=["string-hash", "json-null"],
+)
+def test_deepseek_releases_workspace_write_with_expected_before_hash(
+    expected_before_hash, monkeypatch
+):
+    arguments = {
+        "grant_id": "grant-1",
+        "path": "notes.md",
+        "content": "hello",
+        "expected_before_hash": expected_before_hash,
+    }
+
+    async def handler(request):
+        return httpx.Response(
+            200,
+            text=_sse(
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_write",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "fs_write",
+                                            "arguments": json.dumps(arguments),
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": None,
+                        }
+                    ]
+                },
+                {
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+                    ]
+                },
+            ),
+        )
+
+    _install_http(monkeypatch, handler)
+    provider = provider_module.DeepSeekProvider(
+        api_key="secret", model="deepseek-v4-pro"
+    )
+
+    async def consume():
+        return [
+            event
+            async for event in provider.astream(
+                context_id="workspace-write",
+                messages=[{"role": "user", "content": "write notes.md"}],
+                tools=WORKSPACE_TOOL_SCHEMAS,
+            )
+        ]
+
+    events = asyncio.run(consume())
+    calls = next(event.tool_calls for event in events if event.tool_calls)
+
+    assert calls == [
+        provider_module.ToolCall(
+            id="call_write",
+            name="fs_write",
+            arguments={
+                "grant_id": "grant-1",
+                "path": "notes.md",
+                "content": "hello",
+                "expected_before_hash": expected_before_hash,
+            },
+        )
+    ]
