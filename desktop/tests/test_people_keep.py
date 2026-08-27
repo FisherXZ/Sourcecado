@@ -147,9 +147,13 @@ def test_people_keep_is_auto():
     assert decision.needs_user is False
 
 
-def test_kernel_tells_model_to_keep_after_search():
-    from coworker.server import KERNEL
+def test_versioned_prompt_and_tool_catalog_support_keep_after_search(tmp_path):
+    from coworker.server import system_prompt
+    from coworker.store import ConversationStore
+    from coworker.tools import OPENAI_TOOLS
 
-    assert "people_keep" in KERNEL
-    assert "search" in KERNEL.lower()
-    assert "invent the target" in KERNEL.lower() or "do not invent" in KERNEL.lower()
+    tool_names = {schema["function"]["name"] for schema in OPENAI_TOOLS}
+    prompt = system_prompt(ConversationStore(tmp_path))
+    assert "people_keep" in tool_names
+    assert "search for People" in prompt
+    assert "never invent" in prompt

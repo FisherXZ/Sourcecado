@@ -8,7 +8,8 @@ def test_builtin_weekly_sourcing_skill():
     skill = parse_skill(md)
     assert skill.name == "weekly-sourcing"
     assert "why-now" in skill.description or "why-now" in skill.instructions
-    assert "Never send" in skill.instructions or "never send" in skill.instructions.lower()
+    assert "Outreach Drafts are for review" in skill.instructions
+    assert "per-message Approved Send" in skill.instructions
 
 
 def test_load_skill_returns_full_body(tmp_path):

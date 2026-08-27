@@ -1,17 +1,17 @@
 # Sourcing Director system prompt v1 — co-authoring packet
 
 Date: 2026-08-27
-Status: **UNAPPROVED PROPOSAL — not active runtime policy**
+Status: **Approved and activated as `sourcing-director-v1`**
 Issue: #54
-Proposed version after approval: `sourcing-director-v1`
+Approved version: `sourcing-director-v1`
 
-This packet is for Fisher's section-by-section approval. Nothing in this file is
-loaded by the desktop runtime. The active prompt remains unchanged until every
-section and the assembled order are approved.
+This packet records Fisher's section-by-section approval and the exact prose now
+loaded by the desktop runtime. Fisher approved all seven sections, final order,
+budgets, and content-free diagnostics on 2026-08-27.
 
-## Current runtime inventory
+## Pre-activation runtime inventory
 
-The active desktop prompt is assembled in `desktop/coworker/server.py` as:
+Before activation, the desktop prompt was assembled in `desktop/coworker/server.py` as:
 
 1. the selected persona body (`desktop/coworker/personas/sourcing.md` by default);
 2. the `KERNEL` tool and approval text;
@@ -191,18 +191,22 @@ Give concise progress updates for long, complex, sensitive, or explicitly monito
 
 Recommended answer: **Approve the seven sections in the listed order, the 6,000-character static budget, the dynamic context order and bounds, and the content-free diagnostics fields. Activate them together as `sourcing-director-v1`.**
 
-Approval of individual prose does not activate it. Activation begins only after
-Fisher approves all seven sections and this final checkpoint.
+Fisher approved all seven sections and the final checkpoint on 2026-08-27. The
+runtime definition is active as `sourcing-director-v1`.
 
-## Exact implementation step after approval
+## Activation implementation record
 
-1. Move the seven approved sections into a versioned runtime definition.
+1. Move the seven approved sections into a versioned runtime definition. **Done.**
 2. Route the existing `system_prompt()` through the deterministic assembler while
    preserving the approved dynamic context order and bounds.
+   **Done.**
 3. Replace the active hosted-era sourcing persona and duplicated kernel prose only
    in that activation change.
+   **Done.**
 4. Add run/diagnostics metadata using counts, ordered ids, version, and SHA-256;
    never raw prompt text.
+   **Done.**
 5. Add RED-first tests for approved version, exact order, size bounds, required
    current vocabulary, forbidden historical doctrine, dynamic context order,
    approval commitments, and unchanged secret/content exclusions.
+   **Done.**
