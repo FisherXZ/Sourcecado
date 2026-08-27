@@ -37,6 +37,7 @@ class AgentRunRecoveryService:
         return tuple(self._tasks)
 
     async def start(self) -> int:
+        self._store.agent_runs.reclaim_unattended_leases()
         launched = 0
         for run in self._store.agent_runs.list_resumable_runs():
             continuation = run.get("continuation") or {}

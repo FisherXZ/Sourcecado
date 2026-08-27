@@ -119,6 +119,9 @@ Verification:
 - Production TypeScript/Vite build: passed.
 - Startup recovery resumes the same canonical identity and repairs linked
   schedule receipts.
+- App reconstruction at FastAPI lifespan reclaims dead-process leases, then
+  resumes `model_ready` / `tools_ready` work. `ConversationStore()` open still
+  preserves an unexpired live lease.
 - Explicit resume tests cover competing owners, completed-tool replay
   prevention, outcome-unknown review, and torn projection repair.
 - Person-file tool events now carry their owning canonical `run_id`.

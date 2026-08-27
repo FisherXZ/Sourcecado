@@ -1056,6 +1056,42 @@ def test_reconcile_expired_leases_classifies_work_without_duplicate_checkpoints(
     } == checkpoint_counts
 
 
+def test_reclaim_unattended_leases_classifies_unexpired_running_work(tmp_path):
+    store = ConversationStore(tmp_path)
+    _start(store, "run-live")
+    now = datetime.now(UTC)
+    lease = store.agent_runs.acquire_lease(
+        "run-live", "crashed-owner", 0, 3600, now=now
+    )
+    assert lease is not None
+    store.agent_runs.update_continuation(
+        lease,
+        _continuation(
+            "model_in_flight",
+            pending_model={
+                "attempt_id": "run-live:1:model",
+                "status": "in_flight",
+            },
+        ),
+        now=now,
+    )
+
+    second = ConversationStore(tmp_path)
+    assert second.get_agent_run("run-live")["current_state"] == "running"
+    assert second.agent_runs.reconcile_expired_leases() == []
+    assert second.get_agent_run("run-live")["current_state"] == "running"
+
+    recovered = second.agent_runs.reclaim_unattended_leases()
+    assert [row["run_id"] for row in recovered] == ["run-live"]
+    run = second.get_agent_run("run-live")
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["cursor"]["phase"] == "model_ready"
+    assert run["continuation"]["pending_model"]["status"] == "retry_ready"
+    checkpoint = second.list_agent_run_checkpoints("run-live")[-1]
+    assert checkpoint["kind"] == "process_interrupted"
+    assert checkpoint["payload"]["reason"] == "process_reconstructed"
+
+
 def test_opening_another_store_preserves_an_unexpired_lease(tmp_path):
     first = ConversationStore(tmp_path)
     _start(first)

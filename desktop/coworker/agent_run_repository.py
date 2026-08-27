@@ -2349,32 +2349,49 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                 raise
         return _run_row(row)
 
-    def reconcile_expired_leases(
+    def reclaim_unattended_leases(
         self, now: datetime | None = None
+    ) -> list[dict[str, Any]]:
+        """App reconstruction: every prior owner is dead. Classify and release."""
+        return self.reconcile_expired_leases(now=now, reclaim_active=True)
+
+    def reconcile_expired_leases(
+        self, now: datetime | None = None, *, reclaim_active: bool = False
     ) -> list[dict[str, Any]]:
         stamp = _timestamp(now)
         recovered: list[dict[str, Any]] = []
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                rows = self._conn.execute(
-                    """
-                    SELECT * FROM agent_runs
-                    WHERE (
-                        lease_owner IS NOT NULL
-                        AND (
-                            current_state IN (
-                                'waiting_approval', 'waiting_question', 'waiting_external'
+                if reclaim_active:
+                    rows = self._conn.execute(
+                        """
+                        SELECT * FROM agent_runs
+                        WHERE lease_owner IS NOT NULL
+                           OR (lease_owner IS NULL AND current_state = 'running')
+                        ORDER BY created_at, rowid
+                        """
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        """
+                        SELECT * FROM agent_runs
+                        WHERE (
+                            lease_owner IS NOT NULL
+                            AND (
+                                current_state IN (
+                                    'waiting_approval', 'waiting_question',
+                                    'waiting_external'
+                                )
+                                OR lease_expires_at IS NULL OR lease_expires_at <= ?
                             )
-                            OR lease_expires_at IS NULL OR lease_expires_at <= ?
+                        ) OR (
+                            lease_owner IS NULL AND current_state = 'running'
                         )
-                    ) OR (
-                        lease_owner IS NULL AND current_state = 'running'
-                    )
-                    ORDER BY created_at, rowid
-                    """,
-                    (stamp,),
-                ).fetchall()
+                        ORDER BY created_at, rowid
+                        """,
+                        (stamp,),
+                    ).fetchall()
                 for row in rows:
                     state = str(row["current_state"])
                     run_id = str(row["run_id"])
@@ -2406,17 +2423,29 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     }:
                         if row["lease_owner"] is None:
                             continue
-                        cursor = self._conn.execute(
-                            """
-                            UPDATE agent_runs SET
-                                lease_owner = NULL, lease_expires_at = NULL,
-                                version = version + 1, updated_at = ?
-                            WHERE run_id = ? AND version = ?
-                              AND lease_owner IS NOT NULL
-                              AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
-                            """,
-                            (stamp, run_id, version, stamp),
-                        )
+                        if reclaim_active:
+                            cursor = self._conn.execute(
+                                """
+                                UPDATE agent_runs SET
+                                    lease_owner = NULL, lease_expires_at = NULL,
+                                    version = version + 1, updated_at = ?
+                                WHERE run_id = ? AND version = ?
+                                  AND lease_owner IS NOT NULL
+                                """,
+                                (stamp, run_id, version),
+                            )
+                        else:
+                            cursor = self._conn.execute(
+                                """
+                                UPDATE agent_runs SET
+                                    lease_owner = NULL, lease_expires_at = NULL,
+                                    version = version + 1, updated_at = ?
+                                WHERE run_id = ? AND version = ?
+                                  AND lease_owner IS NOT NULL
+                                  AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                                """,
+                                (stamp, run_id, version, stamp),
+                            )
                         if cursor.rowcount == 1:
                             current = self._conn.execute(
                                 "SELECT * FROM agent_runs WHERE run_id = ?",
@@ -2493,30 +2522,54 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     elif phase not in {"model_ready", "tools_ready"}:
                         cursor_data["phase"] = "review_required"
                     sequence = int(row["checkpoint_sequence"]) + 1
-                    cursor = self._conn.execute(
-                        """
-                        UPDATE agent_runs SET
-                            current_state = 'interrupted', checkpoint_sequence = ?,
-                            continuation = ?, lease_owner = NULL,
-                            lease_expires_at = NULL, version = version + 1,
-                            updated_at = ?
-                        WHERE run_id = ? AND version = ? AND current_state = 'running'
-                          AND (
-                              lease_owner IS NULL OR lease_expires_at IS NULL
-                              OR lease_expires_at <= ?
-                          )
-                        """,
-                        (
-                            sequence,
-                            _json(continuation),
-                            stamp,
-                            run_id,
-                            version,
-                            stamp,
-                        ),
-                    )
+                    if reclaim_active:
+                        cursor = self._conn.execute(
+                            """
+                            UPDATE agent_runs SET
+                                current_state = 'interrupted', checkpoint_sequence = ?,
+                                continuation = ?, lease_owner = NULL,
+                                lease_expires_at = NULL, version = version + 1,
+                                updated_at = ?
+                            WHERE run_id = ? AND version = ? AND current_state = 'running'
+                            """,
+                            (sequence, _json(continuation), stamp, run_id, version),
+                        )
+                    else:
+                        cursor = self._conn.execute(
+                            """
+                            UPDATE agent_runs SET
+                                current_state = 'interrupted', checkpoint_sequence = ?,
+                                continuation = ?, lease_owner = NULL,
+                                lease_expires_at = NULL, version = version + 1,
+                                updated_at = ?
+                            WHERE run_id = ? AND version = ? AND current_state = 'running'
+                              AND (
+                                  lease_owner IS NULL OR lease_expires_at IS NULL
+                                  OR lease_expires_at <= ?
+                              )
+                            """,
+                            (
+                                sequence,
+                                _json(continuation),
+                                stamp,
+                                run_id,
+                                version,
+                                stamp,
+                            ),
+                        )
                     if cursor.rowcount != 1:
                         continue
+                    lease_still_valid = (
+                        row["lease_owner"] is not None
+                        and row["lease_expires_at"] is not None
+                        and str(row["lease_expires_at"]) > stamp
+                    )
+                    if row["lease_owner"] is None:
+                        reason = "legacy_unleased_run"
+                    elif reclaim_active and lease_still_valid:
+                        reason = "process_reconstructed"
+                    else:
+                        reason = "lease_expired"
                     self._conn.execute(
                         """
                         INSERT INTO agent_run_checkpoints
@@ -2529,9 +2582,7 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                             _json(
                                 {
                                     "status": "interrupted",
-                                    "reason": "lease_expired"
-                                    if row["lease_owner"] is not None
-                                    else "legacy_unleased_run",
+                                    "reason": reason,
                                     "phase": cursor_data["phase"],
                                 }
                             ),

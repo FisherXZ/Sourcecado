@@ -1,5 +1,7 @@
 import json
+import sqlite3
 import time
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
@@ -22,8 +24,12 @@ def _identity(run_id: str, session_id: str | None = None) -> TurnIdentity:
     )
 
 
-def _seed_interrupted_model(
-    state_dir, run_id: str, *, session_id: str | None = None
+def _seed_leased_model(
+    state_dir,
+    run_id: str,
+    *,
+    session_id: str | None = None,
+    expire: bool = True,
 ) -> TurnIdentity:
     store = ConversationStore(state_dir)
     identity = _identity(run_id, session_id)
@@ -53,14 +59,21 @@ def _seed_interrupted_model(
     execution.model_pending(
         store.load(identity.session_id), store.load_events(identity.session_id), 0
     )
-    with store._lock:
-        store._conn.execute(
-            "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
-            ("2000-01-01T00:00:00+00:00", run_id),
-        )
-        store._conn.commit()
-    store.agent_runs.reconcile_expired_leases()
+    if expire:
+        with store._lock:
+            store._conn.execute(
+                "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
+                ("2000-01-01T00:00:00+00:00", run_id),
+            )
+            store._conn.commit()
+        store.agent_runs.reconcile_expired_leases()
     return identity
+
+
+def _seed_interrupted_model(
+    state_dir, run_id: str, *, session_id: str | None = None
+) -> TurnIdentity:
+    return _seed_leased_model(state_dir, run_id, session_id=session_id, expire=True)
 
 
 def _wait_for_terminal(store: ConversationStore, run_id: str, timeout: float = 2.0):
@@ -71,6 +84,38 @@ def _wait_for_terminal(store: ConversationStore, run_id: str, timeout: float = 2
             return run
         time.sleep(0.01)
     return store.get_agent_run(run_id)
+
+
+def test_app_startup_resumes_unexpired_leased_model_under_same_identity(tmp_path):
+    identity = _seed_leased_model(tmp_path, "run-startup-live-lease", expire=False)
+    with sqlite3.connect(tmp_path / "club.db") as db:
+        owner, expires = db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone()
+    assert owner == "crashed-owner"
+    assert expires > datetime.now(UTC).isoformat()
+
+    reopened = ConversationStore(tmp_path)
+    with sqlite3.connect(reopened.db_path) as db:
+        state, owner = db.execute(
+            "SELECT current_state, lease_owner FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone()
+    assert state == "running"
+    assert owner == "crashed-owner"
+
+    provider = FakeProvider(deltas=("Recovered live lease",))
+    app = create_app(token=TOKEN, provider=provider, state=tmp_path)
+    with TestClient(app):
+        run = _wait_for_terminal(app.state.store, identity.run_id)
+
+    assert run["current_state"] == "complete"
+    assert provider.i == 1
+    assert json.loads(json.dumps(run["continuation"]))["identity"] == {
+        "message_id": identity.message_id,
+        "part_id": identity.part_id,
+    }
 
 
 def test_app_startup_resumes_interrupted_model_under_same_identity(tmp_path):
