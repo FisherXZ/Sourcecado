@@ -607,6 +607,67 @@ def waiting_external_execution_transition(
     )
 
 
+def adopt_waiting_external_completion_transition(
+    snapshot: dict[str, Any],
+    run_id: str,
+    ok: bool,
+    result_digest: str,
+) -> dict[str, Any]:
+    """Atomically adopt a terminal result from lease-free external waiting."""
+    current = project_continuation(snapshot)
+    cursor = _cursor(current)
+    pending = current.get("pending_tool")
+    interaction = current.get("pending_interaction")
+    digest = valid_sha256(result_digest)
+    if digest is None:
+        raise AgentRunTransitionError("result_digest must be a SHA-256 digest")
+    if (
+        cursor.get("phase") != "waiting_external"
+        or not isinstance(pending, dict)
+        or interaction
+        != {"kind": "approval", "id": pending.get("call_id")}
+        or pending.get("retry_class") != "consequential"
+        or pending.get("status") != "not_started"
+        or pending.get("budget_reserved") is not False
+        or current.get("pending_model") is not None
+    ):
+        raise AgentRunTransitionError(
+            "external completion must match the lease-free waiting tool"
+        )
+    step = int(cursor.get("step_index", 0))
+    tool = int(cursor.get("next_tool_index", 0))
+    call_id = str(pending["call_id"])
+    if pending.get("attempt_id") != tool_attempt_id(run_id, step, tool, call_id):
+        raise AgentRunTransitionError("external completion attempt identity changed")
+    budgets = _budgets(current)
+    if budgets.get("tool_calls", 0) < 1:
+        raise AgentRunTransitionError("Agent Run tool-call budget exhausted")
+    budgets["tool_calls"] -= 1
+    receipt = {
+        "attempt_id": pending["attempt_id"],
+        "call_id": call_id,
+        "name": pending["name"],
+        "ok": bool(ok),
+        "outcome": "executed_external" if ok else "failed_external",
+        "transcript_index": int(cursor.get("transcript_prefix_count", 0)),
+        "result_sha256": digest,
+    }
+    return merge_continuation(
+        current,
+        {
+            "cursor": {
+                **cursor,
+                "phase": "tools_ready",
+                "next_tool_index": tool + 1,
+            },
+            "pending_interaction": None,
+            "pending_tool": None,
+            "completed_tool_receipts": [receipt],
+            "remaining_budgets": budgets,
+        },
+    )
+
+
 def approval_ready_transition(
     snapshot: dict[str, Any], interaction_id: str, decision: str
 ) -> dict[str, Any]:

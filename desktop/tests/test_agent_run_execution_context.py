@@ -160,6 +160,59 @@ def _prepare_approved_inflight(store, *, run_id):
     return identity, resumed, claimant
 
 
+def _prepare_waiting_external_terminal(store, *, run_id):
+    identity, execution = _start(store, run_id=run_id)
+    _prepare_one_tool(execution)
+    execution.waiting_approval_atomic(
+        [],
+        [],
+        "call-external-wait",
+        0,
+        0,
+        "call-external-wait",
+        "gmail_draft",
+        False,
+        arguments={"body": "PRIVATE_APPROVAL_ARGUMENT"},
+        reason="review",
+        resource=None,
+        approval_ttl_seconds=7 * 24 * 60 * 60,
+    )
+    inbox = Inbox(store)
+    claim = inbox.decide_and_claim(
+        "call-external-wait",
+        "allow",
+        actor="external",
+        scope="once",
+        claimant="external-owner",
+    )
+    assert claim is not None and claim.owned
+    resumed = AgentRunExecution.resume_resolved_approval(
+        store,
+        identity.run_id,
+        "call-external-wait",
+        4,
+        owner_id="waiting-owner",
+        now=NOW,
+    )
+    resumed.approval_resolved([], [], "call-external-wait")
+    resumed.waiting_external_execution(
+        [],
+        [],
+        "call-external-wait",
+        0,
+        0,
+        "call-external-wait",
+        "gmail_draft",
+    )
+    assert inbox.complete_execution(
+        "call-external-wait",
+        claimant="external-owner",
+        ok=True,
+        result={"draft_id": "PRIVATE_EXTERNAL_RESULT"},
+    ) is not None
+    return identity
+
+
 def test_atomic_approval_checkpoint_failure_rolls_back_inbox_insert(
     tmp_path, monkeypatch
 ):
@@ -408,6 +461,107 @@ def test_external_approval_adoption_rejects_nonterminal_then_is_idempotent(
     run = store.get_agent_run(identity.run_id)
     assert run["usage"] == {"model_calls": 1, "tool_calls": 1}
     assert run["continuation"]["remaining_budgets"]["tool_calls"] == 3
+    assert [
+        item["kind"] for item in store.list_agent_run_checkpoints(identity.run_id)
+    ].count("tool_completed") == 1
+
+
+def test_external_factory_transaction_rollback_retries_once(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity = _prepare_waiting_external_terminal(
+        store, run_id="run-external-factory-rollback"
+    )
+    with sqlite3.connect(store.db_path) as db:
+        db.executescript(
+            """
+            CREATE TRIGGER fail_external_factory_checkpoint
+            BEFORE INSERT ON agent_run_checkpoints
+            WHEN NEW.kind = 'tool_completed'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced external factory failure');
+            END;
+            """
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="external factory failure"):
+        AgentRunExecution.resume_external_completion(
+            store,
+            identity.run_id,
+            "call-external-wait",
+            4,
+            owner_id="factory-owner",
+            now=NOW,
+        )
+    waiting = store.get_agent_run(identity.run_id)
+    assert waiting["current_state"] == "waiting_external"
+    assert waiting["usage"] == {"model_calls": 1}
+    assert waiting["continuation"]["remaining_budgets"]["tool_calls"] == 4
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TRIGGER fail_external_factory_checkpoint")
+
+    resumed = AgentRunExecution.resume_external_completion(
+        store,
+        identity.run_id,
+        "call-external-wait",
+        4,
+        owner_id="factory-owner",
+        now=NOW,
+    )
+
+    assert resumed.adopted_external_receipt["execution_status"] == "succeeded"
+    run = store.get_agent_run(identity.run_id)
+    assert run["usage"] == {"model_calls": 1, "tool_calls": 1}
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 3
+    assert [
+        item["kind"] for item in store.list_agent_run_checkpoints(identity.run_id)
+    ].count("tool_completed") == 1
+
+
+def test_external_factory_lost_ack_retry_returns_same_adoption(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _prepare_waiting_external_terminal(
+        store, run_id="run-external-factory-ack"
+    )
+    original = store.agent_runs.resume_and_adopt_external_completion
+    lose_ack = True
+
+    def commit_then_lose(*args, **kwargs):
+        nonlocal lose_ack
+        result = original(*args, **kwargs)
+        if lose_ack:
+            lose_ack = False
+            raise RuntimeError("lost external factory acknowledgement")
+        return result
+
+    monkeypatch.setattr(
+        store.agent_runs,
+        "resume_and_adopt_external_completion",
+        commit_then_lose,
+    )
+    with pytest.raises(RuntimeError, match="lost external factory acknowledgement"):
+        AgentRunExecution.resume_external_completion(
+            store,
+            identity.run_id,
+            "call-external-wait",
+            4,
+            owner_id="ack-owner",
+            now=NOW,
+        )
+    resumed = AgentRunExecution.resume_external_completion(
+        store,
+        identity.run_id,
+        "call-external-wait",
+        4,
+        owner_id="ack-owner",
+        now=NOW,
+    )
+
+    assert resumed.adopted_external_receipt["execution_status"] == "succeeded"
+    run = store.get_agent_run(identity.run_id)
+    assert run["usage"] == {"model_calls": 1, "tool_calls": 1}
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 3
+    assert len(run["continuation"]["completed_tool_receipts"]) == 1
     assert [
         item["kind"] for item in store.list_agent_run_checkpoints(identity.run_id)
     ].count("tool_completed") == 1

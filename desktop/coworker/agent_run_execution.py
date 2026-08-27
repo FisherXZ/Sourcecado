@@ -78,6 +78,7 @@ class AgentRunExecution:
         self._now = now
         self._lease_seconds = _execution_lease_seconds(lease_seconds)
         self._resolved_decision: str | None = None
+        self._adopted_external_receipt: dict[str, Any] | None = None
 
     @classmethod
     def start(
@@ -210,6 +211,12 @@ class AgentRunExecution:
     @property
     def lease_seconds(self) -> float:
         return self._lease_seconds
+
+    @property
+    def adopted_external_receipt(self) -> dict[str, Any]:
+        if self._adopted_external_receipt is None:
+            raise ValueError("execution has no adopted external receipt")
+        return dict(self._adopted_external_receipt)
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -1007,7 +1014,7 @@ class AgentRunExecution:
         duration = _execution_lease_seconds(lease_seconds)
         owner = owner_id or f"execution_{uuid.uuid4().hex}"
         try:
-            lease = store.agent_runs.acquire_external_completion_lease(
+            adopted = store.agent_runs.resume_and_adopt_external_completion(
                 run_id,
                 owner,
                 int(run["version"]),
@@ -1019,14 +1026,22 @@ class AgentRunExecution:
             raise AgentRunExecutionOwnershipError(
                 f"Agent Run {run_id} external completion was fenced"
             ) from exc
-        if lease is None:
+        if adopted is None:
             raise AgentRunExecutionOwnershipError(
                 f"Agent Run {run_id} external completion is unavailable"
             )
         execution = cls(
-            store, identity, owner, lease, snapshot, max_steps, now, duration
+            store,
+            identity,
+            owner,
+            adopted.lease,
+            adopted.run["continuation"],
+            max_steps,
+            now,
+            duration,
         )
         execution._refresh_snapshot()
+        execution._adopted_external_receipt = adopted.inbox
         return execution
 
     def approval_resolved(

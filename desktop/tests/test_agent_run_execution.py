@@ -1117,24 +1117,8 @@ def test_external_execution_timeout_waits_lease_free_then_resumes_once(
         8,
         owner_id="resume-external-owner",
     )
-    first = resumed.adopt_completed_approval(
-        store.load(identity.session_id),
-        store.load_events(identity.session_id),
-        0,
-        0,
-        "call-waiting-external",
-        "gmail_draft",
-    )
-    second = resumed.adopt_completed_approval(
-        store.load(identity.session_id),
-        store.load_events(identity.session_id),
-        0,
-        0,
-        "call-waiting-external",
-        "gmail_draft",
-    )
-
-    assert first == second
+    adopted_receipt = resumed.adopted_external_receipt
+    assert adopted_receipt["execution_result"] == {"draft_id": "draft-later"}
     run = store.get_agent_run(identity.run_id)
     assert run["current_state"] == "running"
     assert run["usage"] == {"model_calls": 1, "tool_calls": 1}
@@ -1142,6 +1126,30 @@ def test_external_execution_timeout_waits_lease_free_then_resumes_once(
     assert run["continuation"]["completed_tool_receipts"][-1]["outcome"] == (
         "executed_external"
     )
+    assert "pending_tool" not in run["continuation"]
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
+            ("2000-01-01T00:00:00+00:00", identity.run_id),
+        )
+    store.agent_runs.reconcile_expired_leases()
+    interrupted = store.get_agent_run(identity.run_id)
+    assert interrupted["current_state"] == "interrupted"
+    assert "pending_tool" not in interrupted["continuation"]
+    recovered = AgentRunExecution.resume(
+        store,
+        identity,
+        8,
+        owner_id="after-crash-owner",
+    )
+    recovered.model_pending(
+        store.load(identity.session_id),
+        store.load_events(identity.session_id),
+        1,
+    )
+    assert store.get_agent_run(identity.run_id)["continuation"]["cursor"][
+        "phase"
+    ] == "model_in_flight"
 
 
 def test_approval_allow_reacquires_same_run_and_executes_once(
