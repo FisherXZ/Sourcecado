@@ -859,6 +859,163 @@ def test_persisted_approval_decision_wins_over_wait_callback(tmp_path, monkeypat
     assert run["continuation"]["completed_tool_receipts"][0]["outcome"] == "denied"
 
 
+def test_claim_none_stale_waiter_returns_conflict_without_touching_authority(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-claim-none-race")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-claim-none",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            }
+        ]
+    )
+    winner = []
+    before = {}
+    executions = []
+
+    async def competing_cancel(call_id):
+        competitor_store = ConversationStore(tmp_path)
+        assert Inbox(competitor_store).cancel(call_id) is not None
+        winner_execution = AgentRunExecution.resume_closed_approval(
+            competitor_store,
+            identity.run_id,
+            call_id,
+            "cancelled",
+            8,
+            owner_id="winner-owner",
+        )
+        winner.append(winner_execution)
+        before.update(
+            transcript=store.load(identity.session_id),
+            events=store.load_events(identity.session_id),
+            checkpoints=store.list_agent_run_checkpoints(identity.run_id),
+            usage=store.get_agent_run(identity.run_id)["usage"],
+            continuation=store.get_agent_run(identity.run_id)["continuation"],
+        )
+        return "allow"
+
+    monkeypatch.setattr(
+        "coworker.turn.execute",
+        lambda *args, **kwargs: executions.append((args, kwargs)),
+    )
+    result = asyncio.run(
+        run_turn(
+            text="Compete for approval",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=competing_cancel,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "conflict"
+    assert executions == []
+    assert len(winner) == 1 and winner[0].owner_id == "winner-owner"
+    assert store.load(identity.session_id) == before["transcript"]
+    assert store.load_events(identity.session_id) == before["events"]
+    assert store.list_agent_run_checkpoints(identity.run_id) == before["checkpoints"]
+    run = store.get_agent_run(identity.run_id)
+    assert run["usage"] == before["usage"]
+    assert run["continuation"] == before["continuation"]
+    assert "tool_finished" not in {event["type"] for event in before["events"]}
+    assert "approval_resolved" not in {
+        event["type"] for event in before["events"]
+    }
+
+
+def test_externally_completed_approval_is_adopted_once(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-adopt-external")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-adopt-external",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            },
+            {"deltas": ("Adopted",)},
+        ]
+    )
+    external_executions = []
+
+    async def external_executor(call_id):
+        external_store = ConversationStore(tmp_path)
+        external_inbox = Inbox(external_store)
+        claim = external_inbox.decide_and_claim(
+            call_id,
+            "allow",
+            actor="external",
+            scope="once",
+            claimant="external-owner",
+        )
+        assert claim is not None and claim.owned
+        external_executions.append(call_id)
+        assert external_inbox.complete_execution(
+            call_id,
+            claimant="external-owner",
+            ok=True,
+            result={"draft_id": "draft-external"},
+        ) is not None
+        return "allow"
+
+    monkeypatch.setattr(
+        "coworker.turn.execute",
+        lambda *args, **kwargs: pytest.fail("local execute must not run"),
+    )
+    result = asyncio.run(
+        run_turn(
+            text="Adopt external execution",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=external_executor,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert external_executions == ["call-adopt-external"]
+    run = store.get_agent_run(identity.run_id)
+    assert run["usage"] == {"model_calls": 2, "tool_calls": 1}
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 7
+    receipts = run["continuation"]["completed_tool_receipts"]
+    assert len(receipts) == 1
+    assert receipts[0]["call_id"] == "call-adopt-external"
+    assert receipts[0]["outcome"] == "executed_external"
+    kinds = [
+        item["kind"] for item in store.list_agent_run_checkpoints(identity.run_id)
+    ]
+    assert kinds.count("tool_completed") == 1
+    event_types = [event["type"] for event in store.load_events(identity.session_id)]
+    assert "tool_started" not in event_types
+    assert event_types.count("tool_finished") == 1
+
+
 def test_approval_allow_reacquires_same_run_and_executes_once(
     tmp_path, monkeypatch
 ):

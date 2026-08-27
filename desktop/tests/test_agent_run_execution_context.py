@@ -344,6 +344,75 @@ def test_approved_checkpoint_insert_failure_rolls_back_both_authorities(
     assert Inbox(store).get("call-approved")["execution_status"] == "interrupted"
 
 
+def test_external_approval_adoption_rejects_nonterminal_then_is_idempotent(
+    tmp_path
+):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id="run-adopt-idempotent")
+    _prepare_one_tool(execution)
+    execution.waiting_approval_atomic(
+        [],
+        [],
+        "call-external",
+        0,
+        0,
+        "call-external",
+        "gmail_draft",
+        False,
+        arguments={"body": "PRIVATE_APPROVAL_ARGUMENT"},
+        reason="review",
+        resource=None,
+        approval_ttl_seconds=7 * 24 * 60 * 60,
+    )
+    external = Inbox(store)
+    claim = external.decide_and_claim(
+        "call-external",
+        "allow",
+        actor="external",
+        scope="once",
+        claimant="external-owner",
+    )
+    assert claim is not None and claim.owned
+    resumed = AgentRunExecution.resume_resolved_approval(
+        store,
+        identity.run_id,
+        "call-external",
+        4,
+        owner_id="adopting-owner",
+        now=NOW,
+    )
+    resumed.approval_resolved([], [], "call-external")
+
+    with pytest.raises(ValueError, match="not terminal"):
+        resumed.adopt_completed_approval(
+            [], [], 0, 0, "call-external", "gmail_draft"
+        )
+    before = store.get_agent_run(identity.run_id)
+    assert before["continuation"]["cursor"]["next_tool_index"] == 0
+    assert before["usage"] == {"model_calls": 1}
+
+    assert external.complete_execution(
+        "call-external",
+        claimant="external-owner",
+        ok=True,
+        result={"draft_id": "draft-external"},
+    ) is not None
+    first = resumed.adopt_completed_approval(
+        [], [], 0, 0, "call-external", "gmail_draft"
+    )
+    second = resumed.adopt_completed_approval(
+        [], [], 0, 0, "call-external", "gmail_draft"
+    )
+
+    assert first == second
+    run = store.get_agent_run(identity.run_id)
+    assert run["usage"] == {"model_calls": 1, "tool_calls": 1}
+    assert run["continuation"]["remaining_budgets"]["tool_calls"] == 3
+    assert [
+        item["kind"] for item in store.list_agent_run_checkpoints(identity.run_id)
+    ].count("tool_completed") == 1
+
+
 def _wait_for_tool(
     execution,
     interaction_id,
@@ -818,6 +887,55 @@ def test_pending_retries_recover_after_commit_acknowledgement_loss(
     assert [
         item["kind"] for item in store.list_agent_run_checkpoints(execution.run_id)
     ].count("tool_pending") == 1
+
+
+def test_ambiguous_recovery_uses_configured_tiny_lease(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-tiny-ambiguous")
+    execution = AgentRunExecution.start(
+        store,
+        identity,
+        "Find candidates",
+        "chat",
+        "fake-model",
+        4,
+        owner_id="tiny-owner",
+        now=NOW,
+        lease_seconds=0.09,
+    )
+    original_checkpoint = store.agent_runs.checkpoint_leased
+    original_acquire = store.agent_runs.acquire_lease
+    lost = True
+    recovery_durations = []
+
+    def commit_then_lose(lease, kind, continuation, **kwargs):
+        nonlocal lost
+        result = original_checkpoint(lease, kind, continuation, **kwargs)
+        if lost and kind == "model_pending":
+            lost = False
+            raise RuntimeError("lost tiny acknowledgement")
+        return result
+
+    def record_recovery(run_id, owner_id, expected_version, lease_seconds, **kwargs):
+        recovery_durations.append(lease_seconds)
+        return original_acquire(
+            run_id,
+            owner_id,
+            expected_version,
+            lease_seconds,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(store.agent_runs, "checkpoint_leased", commit_then_lose)
+    monkeypatch.setattr(store.agent_runs, "acquire_lease", record_recovery)
+    with pytest.raises(RuntimeError, match="tiny acknowledgement"):
+        execution.model_pending([], [], 0)
+    execution.model_pending([], [], 0)
+
+    assert recovery_durations == [0.09]
+    assert execution.lease_seconds == 0.09
 
 
 def test_completed_boundaries_update_prefixes_and_append_digest_only_receipt(

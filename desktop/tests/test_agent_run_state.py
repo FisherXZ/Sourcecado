@@ -4,6 +4,7 @@ import pytest
 
 from coworker.agent_run_state import (
     AgentRunTransitionError,
+    adopt_completed_approval_transition,
     approval_ready_transition,
     approval_resolved_transition,
     initial_continuation,
@@ -113,6 +114,43 @@ def test_tool_interruption_rejects_non_inflight_cursor():
         AgentRunTransitionError, match="exact reserved in-flight tool"
     ):
         interrupt_inflight_tool_transition(_tools_ready(1), [], [])
+
+
+def test_external_approval_adoption_advances_and_charges_once():
+    waiting = waiting_approval_transition(
+        _tools_ready(1),
+        "run-state",
+        [],
+        [],
+        "call-external",
+        0,
+        0,
+        "call-external",
+        "gmail_draft",
+        False,
+    )
+    ready = approval_ready_transition(waiting, "call-external", "allow")
+    pending = approval_resolved_transition(ready, [], [], "call-external")
+
+    adopted = adopt_completed_approval_transition(
+        pending,
+        "run-state",
+        [],
+        [],
+        0,
+        0,
+        "call-external",
+        "gmail_draft",
+        True,
+        "c" * 64,
+    )
+
+    assert adopted["cursor"]["next_tool_index"] == 1
+    assert "pending_tool" not in adopted
+    assert adopted["remaining_budgets"]["tool_calls"] == 2
+    assert adopted["completed_tool_receipts"][-1]["outcome"] == (
+        "executed_external"
+    )
 
 
 def test_allowed_transition_path_tracks_exact_tool_count_and_next_step():

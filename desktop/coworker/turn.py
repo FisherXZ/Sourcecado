@@ -966,22 +966,6 @@ async def run_turn(
                         claimant=approval_claimant,
                     )
                     if claim is None:
-                        result = {"error": "approval resolved elsewhere"}
-                        had_tool_failure = True
-                        await _emit(
-                            _tool_finished_event(
-                                call,
-                                ok=False,
-                                result=result,
-                                identity=events.identity,
-                            )
-                        )
-                        failed = _stamp(_tool_result_message(call, result))
-                        history.append(failed)
-                        store.append(sid, failed)
-                        _record_person_file(
-                            sid, call, False, result, execute_kwargs
-                        )
                         return {
                             "status": "conflict",
                             "text": last_text,
@@ -1024,12 +1008,15 @@ async def run_turn(
                     )
                     if not claim.owned:
                         receipt = await inbox.wait_for_execution(call.id)
-                        if receipt is None:
-                            ok, result = False, {
-                                "error": "approval execution unavailable"
-                            }
-                        else:
-                            ok, result = inbox.execution_outcome(receipt)
+                        receipt = execution.adopt_completed_approval(
+                            _durable_history(),
+                            _durable_events(),
+                            step_index,
+                            tool_index,
+                            call.id,
+                            call.name,
+                        )
+                        ok, result = inbox.execution_outcome(receipt)
                         had_tool_failure = had_tool_failure or not ok
                         await _emit(
                             _tool_finished_event(
@@ -1043,19 +1030,7 @@ async def run_turn(
                         history.append(tool_result)
                         store.append(sid, tool_result)
                         _record_person_file(sid, call, ok, result, execute_kwargs)
-                        _checkpoint_skipped(
-                            call,
-                            result=result,
-                            step_index=step_index,
-                            tool_index=tool_index,
-                            outcome="skipped",
-                        )
-                        if receipt is not None and receipt.get(
-                            "execution_status"
-                        ) not in ("executing", "pending"):
-                            await _approval_receipt(
-                                receipt, resolution="allowed"
-                            )
+                        await _approval_receipt(receipt, resolution="allowed")
                         continue
                 if control is not None:
                     control.current_action = call.name

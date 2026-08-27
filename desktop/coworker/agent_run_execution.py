@@ -662,6 +662,58 @@ class AgentRunExecution:
             },
         )
 
+    def adopt_completed_approval(
+        self,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        step_index: int,
+        tool_index: int,
+        call_id: str,
+        name: str,
+    ) -> dict[str, Any]:
+        """Adopt a terminal external approval exactly once."""
+        lease = self._require_lease()
+        step = _nonnegative_index(step_index, "step_index")
+        tool = _nonnegative_index(tool_index, "tool_index")
+        attempt = tool_attempt_id(self.run_id, step, tool, call_id)
+        persisted = project_continuation(self._current_persisted_snapshot())
+        for receipt in persisted.get("completed_tool_receipts", []):
+            if (
+                receipt.get("attempt_id") == attempt
+                and receipt.get("call_id") == call_id
+                and receipt.get("name") == name
+                and receipt.get("outcome")
+                in {"executed_external", "failed_external"}
+            ):
+                self._snapshot = persisted
+                self._recover_ambiguous_lease()
+                item = self._store.get_inbox(call_id)
+                if item is None:
+                    raise ValueError("adopted approval receipt disappeared")
+                return item
+        try:
+            next_lease, _checkpoint, item = (
+                self._store.agent_runs.adopt_completed_approval(
+                    lease,
+                    history=history,
+                    events=events,
+                    step_index=step,
+                    tool_index=tool,
+                    call_id=call_id,
+                    name=name,
+                    now=self._now,
+                )
+            )
+        except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
+            self._lease = None
+            raise self._ownership_error(
+                "external approval adoption lost its lease"
+            ) from exc
+        self._lease = next_lease
+        self._version = next_lease.version
+        self._refresh_snapshot()
+        return item
+
     def interrupt_inflight_tool(
         self,
         history: list[dict[str, Any]],
@@ -1008,7 +1060,7 @@ class AgentRunExecution:
                 self.run_id,
                 self.owner_id,
                 persisted_version,
-                EXECUTION_LEASE_SECONDS,
+                self._lease_seconds,
                 now=self._now,
             )
         except AgentRunVersionConflict as exc:

@@ -426,6 +426,77 @@ def interrupt_inflight_tool_transition(
     )
 
 
+def adopt_completed_approval_transition(
+    snapshot: dict[str, Any],
+    run_id: str,
+    history: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    step_index: int,
+    tool_index: int,
+    call_id: str,
+    name: str,
+    ok: bool,
+    result_digest: str,
+) -> dict[str, Any]:
+    """Adopt one terminal externally executed approval into run accounting."""
+    current = project_continuation(snapshot)
+    cursor = _cursor(current)
+    step = _index(step_index, "step_index")
+    tool = _index(tool_index, "tool_index")
+    safe_call_id = _text(call_id, MAX_SAFE_ID, "call_id")
+    safe_name = _text(name, MAX_TOOL_NAME, "name")
+    digest = valid_sha256(result_digest)
+    if digest is None:
+        raise AgentRunTransitionError("result_digest must be a SHA-256 digest")
+    pending = current.get("pending_tool")
+    if (
+        cursor.get("phase") != "tools_ready"
+        or cursor.get("step_index") != step
+        or cursor.get("next_tool_index") != tool
+        or tool >= int(cursor.get("expected_tool_count", 0))
+        or not isinstance(pending, dict)
+        or pending.get("attempt_id")
+        != tool_attempt_id(run_id, step, tool, safe_call_id)
+        or pending.get("call_id") != safe_call_id
+        or pending.get("name") != safe_name
+        or pending.get("retry_class") != "consequential"
+        or pending.get("status") != "not_started"
+        or pending.get("budget_reserved") is not False
+        or current.get("pending_interaction") is not None
+        or current.get("pending_model") is not None
+    ):
+        raise AgentRunTransitionError(
+            "external approval adoption must match the exact pending tool"
+        )
+    budgets = _budgets(current)
+    if budgets.get("tool_calls", 0) < 1:
+        raise AgentRunTransitionError("Agent Run tool-call budget exhausted")
+    budgets["tool_calls"] -= 1
+    receipt = {
+        "attempt_id": pending["attempt_id"],
+        "call_id": safe_call_id,
+        "name": safe_name,
+        "ok": bool(ok),
+        "outcome": "executed_external" if ok else "failed_external",
+        "transcript_index": len(history),
+        "result_sha256": digest,
+    }
+    return merge_continuation(
+        current,
+        {
+            "cursor": {
+                **cursor,
+                "phase": "tools_ready",
+                "next_tool_index": tool + 1,
+                **prefixes(history, events),
+            },
+            "pending_tool": None,
+            "completed_tool_receipts": [receipt],
+            "remaining_budgets": budgets,
+        },
+    )
+
+
 def waiting_approval_transition(
     snapshot: dict[str, Any],
     run_id: str,

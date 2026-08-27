@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -40,7 +41,10 @@ from coworker.agent_runs import (
     redact_sensitive_assignments,
     sanitize_agent_run_value,
 )
-from coworker.agent_run_state import approval_ready_transition
+from coworker.agent_run_state import (
+    adopt_completed_approval_transition,
+    approval_ready_transition,
+)
 
 
 _RESUME_MIGRATION = "agent_run_resume_v1"
@@ -1694,6 +1698,156 @@ class AgentRunRepository(_AgentRunRepositoryBase):
         if checkpoint_row is None or inbox_row is None:
             raise RuntimeError("approved interruption did not persist")
         return None, _checkpoint_row(checkpoint_row), project_inbox_row(inbox_row)
+
+    def adopt_completed_approval(
+        self,
+        lease: AgentRunLease,
+        *,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        step_index: int,
+        tool_index: int,
+        call_id: str,
+        name: str,
+        now: datetime | None = None,
+    ) -> tuple[AgentRunLease, dict[str, Any], dict[str, Any]]:
+        """Atomically read and adopt one externally completed approval."""
+        stamp = _timestamp(now)
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._fenced_row(lease, stamp)
+                inbox_row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (call_id,)
+                ).fetchone()
+                if (
+                    inbox_row is None
+                    or inbox_row["run_id"] != lease.run_id
+                    or str(inbox_row["state"]) != "resolved"
+                    or str(inbox_row["decision"]) != "allow"
+                    or str(inbox_row["execution_status"])
+                    not in {"succeeded", "failed"}
+                ):
+                    raise ValueError(
+                        "external approval is not terminal for this Agent Run"
+                    )
+                try:
+                    result = json.loads(str(inbox_row["execution_result"] or ""))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "external approval result is not durable JSON"
+                    ) from exc
+                if not isinstance(result, dict):
+                    raise ValueError("external approval result must be an object")
+                ok = str(inbox_row["execution_status"]) == "succeeded"
+                digest = hashlib.sha256(
+                    canonical_json(result).encode("utf-8")
+                ).hexdigest()
+                continuation = adopt_completed_approval_transition(
+                    json_object(row["continuation"]),
+                    lease.run_id,
+                    history,
+                    events,
+                    step_index,
+                    tool_index,
+                    call_id,
+                    name,
+                    ok,
+                    digest,
+                )
+                values = _checkpoint_projection(
+                    row,
+                    state=None,
+                    skills_loaded=None,
+                    source_refs=(
+                        result.get("sources")
+                        if isinstance(result.get("sources"), list)
+                        else None
+                    ),
+                    artifact_refs=(
+                        result.get("artifacts")
+                        if isinstance(result.get("artifacts"), list)
+                        else None
+                    ),
+                    usage_delta={"tool_calls": 1},
+                    terminal_result=None,
+                    kind="tool_completed",
+                    now=stamp,
+                )
+                sequence = int(row["checkpoint_sequence"]) + 1
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        checkpoint_sequence = ?, source_refs = ?, artifact_refs = ?,
+                        usage = ?, continuation = ?, version = version + 1,
+                        updated_at = ?
+                    WHERE run_id = ? AND version = ? AND lease_owner = ?
+                      AND lease_expires_at > ? AND current_state = 'running'
+                    """,
+                    (
+                        sequence,
+                        values["sources"],
+                        values["artifacts"],
+                        values["usage"],
+                        _json(continuation),
+                        stamp,
+                        lease.run_id,
+                        lease.version,
+                        lease.owner_id,
+                        stamp,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    self._raise_fence_failure(lease, stamp)
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_run_checkpoints
+                        (run_id, sequence, kind, payload, created_at)
+                    VALUES (?, ?, 'tool_completed', ?, ?)
+                    """,
+                    (
+                        lease.run_id,
+                        sequence,
+                        _json(
+                            bounded_checkpoint_payload(
+                                {
+                                    "step_index": step_index,
+                                    "tool_index": tool_index,
+                                    "call_id": call_id,
+                                    "name": name,
+                                    "ok": ok,
+                                    "outcome": (
+                                        "executed_external"
+                                        if ok
+                                        else "failed_external"
+                                    ),
+                                }
+                            )
+                        ),
+                        stamp,
+                    ),
+                )
+                checkpoint_row = self._conn.execute(
+                    """
+                    SELECT * FROM agent_run_checkpoints
+                    WHERE run_id = ? AND sequence = ?
+                    """,
+                    (lease.run_id, sequence),
+                ).fetchone()
+                run_row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (lease.run_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        if checkpoint_row is None:
+            raise RuntimeError("external approval adoption did not persist")
+        return (
+            _lease_from_row(run_row),
+            _checkpoint_row(checkpoint_row),
+            project_inbox_row(inbox_row),
+        )
 
     def release_lease(
         self,
