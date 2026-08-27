@@ -1,8 +1,4 @@
-"""SecretStore — json file mode 0600. Values never go in the prompt.
-
-Copied shape from OpenWorker `coworker/secrets.py`: get/put by key, no secret in
-API responses. Slice 12 stores the Gmail refresh token here, not in `.env`.
-"""
+"""Sourcecado secret storage: mode-0600 JSON excluded from prompts and APIs."""
 
 from __future__ import annotations
 

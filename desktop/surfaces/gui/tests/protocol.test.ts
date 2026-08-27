@@ -215,6 +215,38 @@ describe("permission_required resource contract", () => {
     });
   });
 
+  it("keeps only the sanitized shell fingerprint contract", () => {
+    const parsed = parseChatEvent({
+      ...base,
+      resource: {
+        kind: "shell_command",
+        execution_target: "host",
+        command_summary: "bash · 1 argument",
+        command_display: "bash inspect.sh",
+        environment_keys: ["MODE"],
+        cwd: "/workspace/project",
+        fingerprint: "abc123",
+        unsandboxed: true,
+        permanent_eligible: true,
+        command: "bash secret-script.sh",
+        environment: { TOKEN: "secret" },
+      },
+    }) as { resource?: Record<string, unknown> };
+
+    expect(parsed.resource).toEqual({
+      kind: "shell_command",
+      execution_target: "host",
+      command_summary: "bash · 1 argument",
+      command_display: "bash inspect.sh",
+      environment_keys: ["MODE"],
+      cwd: "/workspace/project",
+      fingerprint: "abc123",
+      unsandboxed: true,
+      permanent_eligible: true,
+    });
+    expect(JSON.stringify(parsed.resource)).not.toContain("secret");
+  });
+
   it("drops a malformed resource but keeps the approval event valid", () => {
     const cases = [
       { ...base, resource: "not-an-object" },

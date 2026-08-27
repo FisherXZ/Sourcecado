@@ -1,8 +1,4 @@
-"""Inbox — parked approvals. First resolve wins.
-
-Copied shape from OpenWorker inbox: pending → resolved once. Slice 14 uses this
-when the live card is gone; the WS card still works in parallel.
-"""
+"""Sourcecado Inbox — durable parked approvals where first resolution wins."""
 
 from __future__ import annotations
 

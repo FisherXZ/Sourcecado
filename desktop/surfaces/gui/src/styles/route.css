@@ -245,6 +245,167 @@
   font-weight: 500;
 }
 
+.workspace-settings {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border);
+}
+
+.workspace-runtime-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0 18px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.workspace-runtime-status strong {
+  color: var(--warn);
+}
+
+.workspace-runtime-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.workspace-runtime-diagnostics > div {
+  padding: 9px 10px;
+  border-radius: 7px;
+  background: var(--raised);
+}
+
+.workspace-runtime-diagnostics :where(dt, dd) {
+  margin: 0;
+}
+
+.workspace-runtime-diagnostics dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.workspace-runtime-diagnostics dd {
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-add-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, .65fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.workspace-add-form label,
+.workspace-grant-list label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-add-form label:has(input[type="checkbox"]),
+.workspace-grant-list label:has(input[type="checkbox"]) {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+}
+
+.workspace-add-form :where(input:not([type="checkbox"]), select),
+.workspace-grant-list select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+}
+
+.workspace-settings button {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workspace-settings button:disabled {
+  cursor: wait;
+  opacity: .62;
+}
+
+.workspace-request-list,
+.workspace-standing-approvals,
+.workspace-running-tasks {
+  margin: 16px 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--warn-bg);
+}
+
+.workspace-request-list h3,
+.workspace-standing-approvals h3,
+.workspace-running-tasks h3 {
+  margin: 0 0 9px;
+  font-size: 13px;
+}
+
+.workspace-request-list > div,
+.workspace-running-tasks > div,
+.workspace-standing-approvals li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-grant-list,
+.workspace-standing-approvals ul {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-grant-list > li {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, auto) auto auto;
+  align-items: end;
+  gap: 10px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-grant-list > li > div,
+.workspace-standing-approvals li > span:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.workspace-grant-list span,
+.workspace-standing-approvals span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 @media (max-width: 1179px) {
   .route-page {
     padding-top: 72px;
@@ -263,6 +424,23 @@
 
   .persona-options button,
   .route-error button {
+    min-height: 44px;
+  }
+
+  .workspace-add-form,
+  .workspace-grant-list > li,
+  .workspace-runtime-diagnostics {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-request-list > div,
+  .workspace-running-tasks > div,
+  .workspace-standing-approvals li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workspace-settings button {
     min-height: 44px;
   }
 }

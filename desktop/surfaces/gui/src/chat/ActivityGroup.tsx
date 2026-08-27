@@ -133,7 +133,34 @@ function AnswerResults({ tools }: { readonly tools: readonly ToolCallMessagePart
   );
 }
 
+const WORKSPACE_RECEIPT_LABELS: Readonly<Record<string, string>> = {
+  created: "Created workspace file",
+  updated: "Updated workspace file",
+  moved: "Moved workspace item",
+  trashed: "Trashed workspace item",
+  shell_approved: "Ran approved workspace command",
+  shell_auto_read: "Ran read-only workspace command",
+  denied: "Workspace action denied",
+  interrupted: "Workspace action interrupted",
+  stale: "Workspace write was stale",
+  read: "Read workspace data",
+  directory_requested: "Requested workspace access",
+};
+
+function workspaceReceiptLabel(tool: ToolCallMessagePart): string | null {
+  const result = tool.result;
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  const receiptType = (result as Record<string, unknown>).receipt_type;
+  return typeof receiptType === "string"
+    ? WORKSPACE_RECEIPT_LABELS[receiptType] ?? null
+    : null;
+}
+
 function receiptLabel(tools: readonly ToolCallMessagePart[]): string {
+  if (tools.length === 1) {
+    const workspaceLabel = workspaceReceiptLabel(tools[0]);
+    if (workspaceLabel) return workspaceLabel;
+  }
   const presentations = tools.map((tool) => toolPresentation(tool.toolName));
   if (tools.length === 1) return presentations[0]?.label ?? "Ran Sourcecado action";
   if (presentations.every((item) => item.category === "source")) {

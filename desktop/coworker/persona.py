@@ -1,9 +1,4 @@
-"""Markdown persona — YAML frontmatter + body as the on-duty identity.
-
-Copied shape from OpenWorker `coworker/personas/manifest.py`: frontmatter is
-identity, the markdown body is the system prompt. No PyYAML; slice 7 only
-needs id, name, tools, body.
-"""
+"""Sourcecado Markdown personas: frontmatter identity and prompt body."""
 
 from __future__ import annotations
 

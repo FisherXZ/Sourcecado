@@ -59,6 +59,17 @@ type GmailSendResource = {
   readonly account: string | null;
 };
 
+type ShellCommandResource = {
+  readonly executionTarget: "docker" | "host" | "unknown";
+  readonly commandSummary: string;
+  readonly commandDisplay: string;
+  readonly environmentKeys: readonly string[];
+  readonly cwd: string | null;
+  readonly fingerprint: string | null;
+  readonly unsandboxed: boolean;
+  readonly permanentEligible: boolean;
+};
+
 function gmailSendResourceOf(
   part: ToolCallMessagePartProps,
 ): GmailSendResource | null {
@@ -77,6 +88,42 @@ function gmailSendResourceOf(
     to: field("to"),
     subject: field("subject"),
     account: field("account"),
+  };
+}
+
+function shellCommandResourceOf(
+  part: ToolCallMessagePartProps,
+): ShellCommandResource | null {
+  const raw = part.providerMetadata?.sourcecado as
+    | Record<string, unknown>
+    | undefined;
+  const resource = raw?.resource;
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
+    return null;
+  }
+  const record = resource as Record<string, unknown>;
+  if (
+    record.kind !== "shell_command" ||
+    !["docker", "host", "unknown"].includes(String(record.execution_target)) ||
+    typeof record.command_summary !== "string" ||
+    typeof record.command_display !== "string" ||
+    !Array.isArray(record.environment_keys) ||
+    !record.environment_keys.every((key) => typeof key === "string") ||
+    typeof record.unsandboxed !== "boolean" ||
+    typeof record.permanent_eligible !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    executionTarget: record.execution_target as "docker" | "host" | "unknown",
+    commandSummary: record.command_summary,
+    commandDisplay: record.command_display,
+    environmentKeys: record.environment_keys as string[],
+    cwd: typeof record.cwd === "string" ? record.cwd : null,
+    fingerprint:
+      typeof record.fingerprint === "string" ? record.fingerprint : null,
+    unsandboxed: record.unsandboxed,
+    permanentEligible: record.permanent_eligible === true,
   };
 }
 
@@ -126,6 +173,9 @@ function scopeStatement(toolName: string): string {
   if (toolName === "calendar_create" || toolName === "calendar_update") {
     return "Scope: allow once. This changes Google Calendar and will not send email.";
   }
+  if (toolName === "shell_exec") {
+    return "Scope: allow once. Only this exact command request will run.";
+  }
   return "Scope: allow once.";
 }
 
@@ -153,6 +203,7 @@ export function ApprovalCard({
   readonly part: ToolCallMessagePartProps;
   readonly onDecision: (
     approved: boolean,
+    scope?: "once" | "always",
   ) => Promise<"queued" | void> | "queued" | void;
 }) {
   const audit = auditOf(part);
@@ -177,6 +228,8 @@ export function ApprovalCard({
     part.toolName === "calendar_create" || part.toolName === "calendar_update";
   const gmailBody =
     gmailDraft && typeof args.body === "string" ? args.body : null;
+  const shellCommand =
+    part.toolName === "shell_exec" ? shellCommandResourceOf(part) : null;
 
   useEffect(() => {
     if (pending) headingRef.current?.focus();
@@ -212,13 +265,16 @@ export function ApprovalCard({
     return () => window.clearTimeout(timer);
   }, [submitting]);
 
-  async function decide(approved: boolean) {
+  async function decide(approved: boolean, scope: "once" | "always" = "once") {
     setSubmitting(true);
     setSubmitFailed(false);
     setSubmitOutcomeUnknown(false);
     setSubmitQueued(false);
     try {
-      const outcome = await onDecision(approved);
+      const outcome =
+        scope === "once"
+          ? await onDecision(approved)
+          : await onDecision(approved, scope);
       if (outcome === "queued") setSubmitQueued(true);
     } catch {
       setSubmitting(false);
@@ -337,6 +393,31 @@ export function ApprovalCard({
           )}
         </div>
       ) : null}
+      {part.toolName === "shell_exec" ? (
+        <div className="sourcecado-shell-approval-summary">
+          <strong>{shellCommand?.unsandboxed ? "Not sandboxed" : "Docker sandbox"}</strong>
+          <dl>
+            <div>
+              <dt>Command</dt>
+              <dd><code>{shellCommand?.commandDisplay ?? "Command details unavailable"}</code></dd>
+            </div>
+            <div>
+              <dt>Working folder</dt>
+              <dd>{shellCommand?.cwd ?? "Could not be resolved"}</dd>
+            </div>
+          </dl>
+          {shellCommand?.environmentKeys.length ? (
+            <p>Environment keys: {shellCommand.environmentKeys.join(", ")}</p>
+          ) : (
+            <p>No additional environment values.</p>
+          )}
+          {shellCommand?.unsandboxed ? (
+            <p>This runs directly under your macOS account and can access everything that account can access.</p>
+          ) : (
+            <p>The real workspace is mounted read-write and container networking is unrestricted.</p>
+          )}
+        </div>
+      ) : null}
       {part.toolName === "apollo_enrich_contact" ? (
         <p className="sourcecado-approval-credit-note">
           Apollo enrichment uses credits. No credit is spent until you choose Allow once.
@@ -353,7 +434,13 @@ export function ApprovalCard({
       </button>
       {showDetails ? (
         <div id={detailsId} className="sourcecado-approval-details">
-          <pre>{JSON.stringify(args, null, 2)}</pre>
+          {part.toolName === "shell_exec" ? (
+            <p>
+              Exact fingerprint: {shellCommand?.fingerprint?.slice(0, 16) ?? "unavailable"}
+            </p>
+          ) : (
+            <pre>{JSON.stringify(args, null, 2)}</pre>
+          )}
           <p>{scopeStatement(part.toolName)}</p>
         </div>
       ) : null}
@@ -380,6 +467,17 @@ export function ApprovalCard({
         <button type="button" disabled={submitting} onClick={() => void decide(true)}>
           Allow once
         </button>
+        {shellCommand?.unsandboxed &&
+        shellCommand.fingerprint &&
+        shellCommand.permanentEligible ? (
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => void decide(true, "always")}
+          >
+            Always allow this exact command
+          </button>
+        ) : null}
       </div>
     </section>
   );

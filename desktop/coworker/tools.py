@@ -1,8 +1,4 @@
-"""Slice 6 tools — `now` auto, memory auto, drafts ask.
-
-Copied shape from OpenWorker: named function + JSON schema the model sees,
-execute() returns JSON the model gets back.
-"""
+"""Sourcecado tool schemas and execution dispatch."""
 
 from __future__ import annotations
 
@@ -17,6 +13,7 @@ from coworker.gmail import GmailError, MissingGmail
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
+from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES, WORKSPACE_TOOL_SCHEMAS
 
 TZ = ZoneInfo("America/Los_Angeles")
 
@@ -415,6 +412,7 @@ OPENAI_TOOLS = [
     LOAD_SKILL_SCHEMA,
     WEB_SEARCH_SCHEMA,
     *BOARD_TOOL_SCHEMAS,
+    *WORKSPACE_TOOL_SCHEMAS,
 ]
 
 
@@ -452,8 +450,25 @@ def execute(
     actor: str = "assistant",
     run_id: str | None = None,
     allowed_source_ids: set[str] | None = None,
+    workspace_runtime: Any = None,
+    approval_granted: bool = False,
+    approval_scope: str = "once",
+    approval_fingerprint: str | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
+    if name in WORKSPACE_TOOL_NAMES:
+        if workspace_runtime is None:
+            return False, {"status": "failed", "error": "workspace runtime missing"}
+        return workspace_runtime.execute_tool(
+            name,
+            args,
+            approval_granted=approval_granted,
+            approval_scope=approval_scope,
+            approval_fingerprint=approval_fingerprint,
+            actor=actor,
+            session_id=session_id,
+            run_id=run_id,
+        )
     if name in BOARD_TOOL_NAMES:
         if people is None:
             return False, {"status": "failed", "error": "people store missing"}

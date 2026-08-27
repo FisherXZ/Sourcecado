@@ -4,22 +4,144 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "../src/routes/SettingsPage";
 
 const api = vi.hoisted(() => ({
+  createWorkspaceGrant: vi.fn(),
   getConnectors: vi.fn(),
   getSettings: vi.fn(),
+  pickDirectory: vi.fn(),
+  revokeHostApproval: vi.fn(),
+  revokeWorkspaceGrant: vi.fn(),
   setPersona: vi.fn(),
+  updateWorkspaceGrant: vi.fn(),
 }));
 
 vi.mock("../src/api", () => ({
+  createWorkspaceGrant: api.createWorkspaceGrant,
   getConnectors: api.getConnectors,
   getSettings: api.getSettings,
+  pickDirectory: api.pickDirectory,
+  revokeHostApproval: api.revokeHostApproval,
+  revokeWorkspaceGrant: api.revokeWorkspaceGrant,
   setPersona: api.setPersona,
+  updateWorkspaceGrant: api.updateWorkspaceGrant,
 }));
 
 describe("SettingsPage", () => {
   beforeEach(() => {
+    api.createWorkspaceGrant.mockReset();
     api.getConnectors.mockReset();
     api.getSettings.mockReset();
+    api.pickDirectory.mockReset();
+    api.revokeHostApproval.mockReset();
+    api.revokeWorkspaceGrant.mockReset();
     api.setPersona.mockReset();
+    api.updateWorkspaceGrant.mockReset();
+  });
+
+  it("manages workspace grants, Docker fallback, directory requests, and permanent approvals", async () => {
+    const workspace = {
+      docker: {
+        cli_available: true,
+        daemon_available: false,
+        image_available: false,
+        available: false,
+        image: "python:3.13-slim",
+        network: "unrestricted",
+      },
+      execution_target: "host_fallback",
+      host_fallback_enabled: true,
+      grants: [
+        {
+          id: "grant-1",
+          path: "/Users/operator/Candidates",
+          label: "Candidates",
+          access: "read_write",
+          allow_shell: true,
+          filesystem_identity: { device: 1, inode: 2 },
+          created_at: "2026-08-26T12:00:00Z",
+          updated_at: "2026-08-26T12:00:00Z",
+          revoked_at: null,
+        },
+      ],
+      directory_requests: [
+        {
+          id: "directory-request-1",
+          label: "Candidate packets",
+          access: "read_write",
+          allow_shell: true,
+          session_id: "session-1",
+          run_id: "run-1",
+          created_at: "2026-08-26T12:00:00Z",
+          resolved_at: null,
+          grant_id: null,
+        },
+      ],
+      host_approvals: [
+        {
+          id: "host-approval-1",
+          command_summary: "bash · 1 argument",
+          cwd: "/Users/operator/Candidates",
+          fingerprint: "abcdef123456",
+          created_at: "2026-08-26T12:00:00Z",
+          revoked_at: null,
+        },
+      ],
+      tasks: [],
+    };
+    api.getSettings.mockResolvedValue({
+      persona: { id: "sourcing", name: "Sourcecado Sourcing Agent" },
+      model: "configured-model-id",
+      gmail: { connected: false, email: null },
+      apollo: { configured: false },
+      workspace,
+    });
+    api.getConnectors.mockResolvedValue({ connectors: [] });
+    api.pickDirectory.mockResolvedValue("/Users/operator/Packets");
+    api.createWorkspaceGrant.mockResolvedValue({
+      grant: {
+        ...workspace.grants[0],
+        id: "grant-2",
+        path: "/Users/operator/Packets",
+        label: "Candidate packets",
+      },
+    });
+    api.revokeHostApproval.mockResolvedValue({
+      approval: { ...workspace.host_approvals[0], revoked_at: "now" },
+    });
+
+    const { container } = render(<SettingsPage />);
+
+    const access = await screen.findByRole("region", { name: "Workspace access" });
+    expect(access).toHaveTextContent("Docker unavailable");
+    expect(access).toHaveTextContent("Host fallback is not sandboxed");
+    expect(access).toHaveTextContent("CLI installed");
+    expect(access).toHaveTextContent("Daemon unavailable");
+    expect(access).toHaveTextContent("Image missing");
+    expect(access).toHaveTextContent("Network unrestricted");
+    expect(access).toHaveTextContent("Candidates");
+    expect(access).toHaveTextContent("/Users/operator/Candidates");
+    expect(access).toHaveTextContent("Read and write");
+    expect(access).toHaveTextContent("Shell enabled");
+
+    fireEvent.click(
+      within(access).getByRole("button", { name: "Choose Candidate packets" }),
+    );
+    await waitFor(() =>
+      expect(api.createWorkspaceGrant).toHaveBeenCalledWith({
+        path: "/Users/operator/Packets",
+        label: "Candidate packets",
+        access: "read_write",
+        allow_shell: true,
+        request_id: "directory-request-1",
+      }),
+    );
+    expect(container).not.toHaveTextContent("directory-request-1");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Revoke permanent approval bash · 1 argument" }),
+    );
+    await waitFor(() =>
+      expect(api.revokeHostApproval).toHaveBeenCalledWith("host-approval-1"),
+    );
   });
 
   it("announces that operator settings are loading", () => {

@@ -33,19 +33,26 @@ export type ToolFailure = {
   readonly state: "failed";
 };
 
-/**
- * Sidecar approval enrichment (gmail_send only today). Optional; fields
- * degrade to null individually when resolution fails upstream. Carries no
- * body, tokens, or headers by design (DU-12) — the parser strips anything
- * beyond these keys.
- */
-export type ApprovalResource = {
-  readonly kind: "gmail_draft";
-  readonly draft_id: string;
-  readonly to: string | null;
-  readonly subject: string | null;
-  readonly account: string | null;
-};
+/** Sanitized fields needed to judge an approval; raw bodies/env never cross. */
+export type ApprovalResource =
+  | {
+      readonly kind: "gmail_draft";
+      readonly draft_id: string;
+      readonly to: string | null;
+      readonly subject: string | null;
+      readonly account: string | null;
+    }
+  | {
+      readonly kind: "shell_command";
+      readonly execution_target: "docker" | "host" | "unknown";
+      readonly command_summary: string;
+      readonly command_display: string;
+      readonly environment_keys: readonly string[];
+      readonly cwd: string | null;
+      readonly fingerprint: string | null;
+      readonly unsandboxed: boolean;
+      readonly permanent_eligible: boolean;
+    };
 
 export type ProvenanceSource = {
   readonly id: string;
@@ -308,6 +315,32 @@ function isQueueSnapshot(value: unknown): value is QueueSnapshotEvent {
  */
 function approvalResource(value: unknown): ApprovalResource | undefined {
   if (!isRecord(value)) return undefined;
+  if (value.kind === "shell_command") {
+    if (
+      !["docker", "host", "unknown"].includes(String(value.execution_target)) ||
+      typeof value.command_summary !== "string" ||
+      typeof value.command_display !== "string" ||
+      !Array.isArray(value.environment_keys) ||
+      !value.environment_keys.every((key) => typeof key === "string") ||
+      (value.cwd !== null && typeof value.cwd !== "string") ||
+      (value.fingerprint !== null && typeof value.fingerprint !== "string") ||
+      typeof value.unsandboxed !== "boolean" ||
+      typeof value.permanent_eligible !== "boolean"
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "shell_command",
+      execution_target: value.execution_target as "docker" | "host" | "unknown",
+      command_summary: value.command_summary,
+      command_display: value.command_display,
+      environment_keys: value.environment_keys as string[],
+      cwd: typeof value.cwd === "string" ? value.cwd : null,
+      fingerprint: typeof value.fingerprint === "string" ? value.fingerprint : null,
+      unsandboxed: value.unsandboxed,
+      permanent_eligible: value.permanent_eligible,
+    };
+  }
   if (value.kind !== "gmail_draft" || typeof value.draft_id !== "string") {
     return undefined;
   }

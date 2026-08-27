@@ -1,13 +1,12 @@
-"""Permission engine — allow / deny / ask for each tool.
-
-Copied shape from OpenWorker `coworker/permissions.py`: the engine only *decides*;
-the loop waits when `needs_user`. Slice 4: `now` auto-runs, drafts ask.
-"""
+"""Sourcecado permission decisions for connector and local tools."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
+
+from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES
 
 AUTO = frozenset(
     {
@@ -67,9 +66,38 @@ class Decision:
     allowed: bool
     needs_user: bool = False
     reason: str = ""
+    risk_class: str | None = None
+    execution_target: str | None = None
+    command_fingerprint: str | None = None
 
 
-def decide(name: str) -> Decision:
+def decide(
+    name: str,
+    arguments: dict[str, Any] | None = None,
+    *,
+    workspace_runtime: Any = None,
+    actor: str | None = None,
+    session_id: str | None = None,
+    run_id: str | None = None,
+) -> Decision:
+    if name in WORKSPACE_TOOL_NAMES:
+        if workspace_runtime is None:
+            return Decision(False, False, "workspace runtime is unavailable")
+        outcome = workspace_runtime.decide_tool(
+            name,
+            arguments,
+            actor=actor,
+            session_id=session_id,
+            run_id=run_id,
+        )
+        return Decision(
+            outcome.allowed,
+            outcome.needs_approval,
+            outcome.reason,
+            outcome.risk_class.value,
+            outcome.execution_target,
+            outcome.command_fingerprint,
+        )
     if name.startswith("mcp__"):
         last = name.rsplit("__", 1)[-1]
         if _MCP_WRITE.search(last):
