@@ -533,12 +533,17 @@ def _continuity_key(
         shaped = deepcopy(message)
         shaped.pop("reasoning_content", None)
         shaped.pop("message_id", None)
-        if (
-            shaped.get("role") == "assistant"
-            and shaped.get("tool_calls")
-            and shaped.get("content") is None
-        ):
-            shaped["content"] = ""
+        if shaped.get("role") == "assistant":
+            if shaped.get("tool_calls") and shaped.get("content") is None:
+                shaped["content"] = ""
+            for call in shaped.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if isinstance(function, dict):
+                    function.pop("arguments", None)
+        if shaped.get("role") == "tool":
+            shaped.pop("content", None)
         return shaped
 
     canonical = [

@@ -14,8 +14,10 @@ from coworker.provider import (
     provider_from_env,
 )
 from coworker.inbox import Inbox
+from coworker.permissions import Decision
 from coworker.store import ConversationStore
 from coworker.turn import run_turn
+from coworker.workspace_runtime import WorkspaceRuntime
 
 
 def _sse(*payloads):
@@ -852,6 +854,324 @@ def test_turn_binds_deepseek_transient_context_without_persisting_reasoning(
     )
     assert private_reasoning not in durable
     assert "second private step" not in durable
+    assert "reasoning_content" not in durable
+
+
+def test_turn_continues_after_workspace_read_without_persisting_reasoning(
+    tmp_path, monkeypatch
+):
+    private_first = "PRIVATE_FS_READ_REASONING"
+    private_final = "PRIVATE_FS_FINAL_REASONING"
+    private_follow = "PRIVATE_FS_FOLLOW_REASONING"
+    file_body = "SECRET_FILE_BODY"
+    requests = []
+
+    async def handler(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                text=_sse(
+                    {
+                        "choices": [
+                            {
+                                "delta": {"reasoning_content": private_first},
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_read",
+                                            "function": {
+                                                "name": "fs_read",
+                                                "arguments": (
+                                                    '{"grant_id":"g1","path":"notes.md"}'
+                                                ),
+                                            },
+                                        }
+                                    ]
+                                },
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [
+                            {"delta": {}, "finish_reason": "tool_calls"}
+                        ]
+                    },
+                ),
+            )
+        if len(requests) == 2:
+            return httpx.Response(
+                200,
+                text=_sse(
+                    {
+                        "choices": [
+                            {
+                                "delta": {"reasoning_content": private_final},
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [
+                            {
+                                "delta": {"content": "I read the notes."},
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                ),
+            )
+        return httpx.Response(
+            200,
+            text=_sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {"reasoning_content": private_follow},
+                            "finish_reason": None,
+                        }
+                    ]
+                },
+                {
+                    "choices": [
+                        {
+                            "delta": {"content": "The notes are ready."},
+                            "finish_reason": None,
+                        }
+                    ]
+                },
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ),
+        )
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        "coworker.turn.decide",
+        lambda *args, **kwargs: Decision(True, False, "auto"),
+    )
+    monkeypatch.setattr(
+        "coworker.turn.execute",
+        lambda name, arguments, **kwargs: (
+            True,
+            {"content": file_body, "path": "notes.md", "truncated": False},
+        ),
+    )
+    provider = DeepSeekProvider(api_key="secret", model=DEEPSEEK_MODEL)
+    store = ConversationStore(tmp_path)
+    sid = "workspace-read-session"
+    store.create_session(sid)
+
+    first = asyncio.run(
+        run_turn(
+            text="read notes.md",
+            sid=sid,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[
+                {"type": "function", "function": {"name": "fs_read"}}
+            ],
+            execute_kwargs={"workspace_runtime": WorkspaceRuntime(tmp_path)},
+        )
+    )
+    follow = asyncio.run(
+        run_turn(
+            text="summarize them",
+            sid=sid,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[
+                {"type": "function", "function": {"name": "fs_read"}}
+            ],
+            execute_kwargs={"workspace_runtime": WorkspaceRuntime(tmp_path)},
+        )
+    )
+
+    assert first == {"status": "ok", "text": "I read the notes."}
+    assert follow == {"status": "ok", "text": "The notes are ready."}
+    assert len(requests) == 3
+    follow_messages = requests[2]["messages"]
+    assert follow_messages[2]["reasoning_content"] == private_first
+    assert follow_messages[4]["reasoning_content"] == private_final
+    durable = json.dumps(
+        {"messages": store.load(sid), "events": store.load_events(sid)}
+    )
+    assert file_body not in durable
+    assert private_first not in durable
+    assert private_final not in durable
+    assert private_follow not in durable
+    assert "reasoning_content" not in durable
+
+
+def test_turn_continues_after_workspace_shell_without_persisting_reasoning(
+    tmp_path, monkeypatch
+):
+    private_first = "PRIVATE_SHELL_REASONING"
+    private_final = "PRIVATE_SHELL_FINAL_REASONING"
+    private_follow = "PRIVATE_SHELL_FOLLOW_REASONING"
+    command_output = "SECRET_SHELL_OUTPUT"
+    requests = []
+
+    async def handler(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                text=_sse(
+                    {
+                        "choices": [
+                            {
+                                "delta": {"reasoning_content": private_first},
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_shell",
+                                            "function": {
+                                                "name": "shell_exec",
+                                                "arguments": (
+                                                    '{"grant_id":"g1","command":"echo hi","cwd":"."}'
+                                                ),
+                                            },
+                                        }
+                                    ]
+                                },
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [
+                            {"delta": {}, "finish_reason": "tool_calls"}
+                        ]
+                    },
+                ),
+            )
+        if len(requests) == 2:
+            return httpx.Response(
+                200,
+                text=_sse(
+                    {
+                        "choices": [
+                            {
+                                "delta": {"reasoning_content": private_final},
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {
+                        "choices": [
+                            {
+                                "delta": {"content": "The command finished."},
+                                "finish_reason": None,
+                            }
+                        ]
+                    },
+                    {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                ),
+            )
+        return httpx.Response(
+            200,
+            text=_sse(
+                {
+                    "choices": [
+                        {
+                            "delta": {"reasoning_content": private_follow},
+                            "finish_reason": None,
+                        }
+                    ]
+                },
+                {
+                    "choices": [
+                        {
+                            "delta": {"content": "Ready for the next step."},
+                            "finish_reason": None,
+                        }
+                    ]
+                },
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+            ),
+        )
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(transport=transport, **kwargs),
+    )
+    monkeypatch.setattr(
+        "coworker.turn.decide",
+        lambda *args, **kwargs: Decision(True, False, "auto"),
+    )
+    monkeypatch.setattr(
+        "coworker.turn.execute",
+        lambda name, arguments, **kwargs: (
+            True,
+            {"output": command_output, "exit_code": 0},
+        ),
+    )
+    provider = DeepSeekProvider(api_key="secret", model=DEEPSEEK_MODEL)
+    store = ConversationStore(tmp_path)
+    sid = "workspace-shell-session"
+    store.create_session(sid)
+    tools = [{"type": "function", "function": {"name": "shell_exec"}}]
+    kwargs = {
+        "sid": sid,
+        "store": store,
+        "provider": provider,
+        "persona": None,
+        "skills": None,
+        "inbox": Inbox(store),
+        "openai_tools": tools,
+        "execute_kwargs": {"workspace_runtime": WorkspaceRuntime(tmp_path)},
+    }
+
+    first = asyncio.run(run_turn(text="echo hi", **kwargs))
+    follow = asyncio.run(run_turn(text="what next?", **kwargs))
+
+    assert first == {"status": "ok", "text": "The command finished."}
+    assert follow == {"status": "ok", "text": "Ready for the next step."}
+    assert len(requests) == 3
+    follow_messages = requests[2]["messages"]
+    assert follow_messages[2]["reasoning_content"] == private_first
+    assert follow_messages[4]["reasoning_content"] == private_final
+    durable = json.dumps(
+        {"messages": store.load(sid), "events": store.load_events(sid)}
+    )
+    assert command_output not in durable
+    assert "[COMMAND REDACTED]" in durable
+    assert private_first not in durable
+    assert private_final not in durable
+    assert private_follow not in durable
     assert "reasoning_content" not in durable
 
 
