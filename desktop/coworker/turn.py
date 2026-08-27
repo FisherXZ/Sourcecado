@@ -729,6 +729,20 @@ async def run_turn(
             )
         return {"status": "stopped", "text": text_so_far}
 
+    people = execute_kwargs.get("people")
+    if people is not None:
+        bound_person_id = people.person_for_session(sid)
+        if bound_person_id is not None and people.get(bound_person_id) is None:
+            turn_span.fail(ErrorKind.POLICY)
+            await _terminal(
+                {
+                    "type": "error",
+                    "state": "failed",
+                    "message": "This conversation's bound person file is unavailable.",
+                }
+            )
+            return {"status": "error", "text": ""}
+
     await _emit({"type": "turn_start", "state": "running"})
     if provider is None:
         turn_span.fail(ErrorKind.PROVIDER)

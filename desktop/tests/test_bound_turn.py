@@ -77,6 +77,37 @@ def test_keep_one_person_binds_that_session_only(tmp_path):
     assert people.person_for_session("sess-b") is None
 
 
+def test_deleted_bound_person_stops_turn_before_model_request(tmp_path):
+    people = PersonStore(tmp_path)
+    person = people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="L",
+        title="Founder",
+        company="Analytic",
+    )
+    people.bind_session("sess-ada", person["person_id"])
+    people.delete(
+        person["person_id"],
+        expected_version=person["version"],
+        actor="director",
+        rationale_summary="Remove stale person file.",
+    )
+    provider = FakeProvider(deltas=("must not run",))
+
+    result = _run(
+        tmp_path=tmp_path,
+        sid="sess-ada",
+        text="continue",
+        provider=provider,
+        people=people,
+    )
+
+    assert result == {"status": "error", "text": ""}
+    assert provider.calls == []
+    assert ConversationStore(tmp_path).load("sess-ada") == []
+
+
 def _ada() -> dict:
     return {
         "apolloId": "ada",
