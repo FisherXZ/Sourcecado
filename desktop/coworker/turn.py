@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -22,12 +23,23 @@ from coworker.provider import (
     ToolCall,
     provider_model_metadata,
 )
+from coworker.provider_retry import (
+    ProviderRequestCancelled,
+    RecoveryAction,
+    RetryController,
+    RetryPolicy,
+    cancellable_stream,
+    compatible_failover_chain,
+    safe_provider_failure_message,
+)
 from coworker.store import ConversationStore
 from coworker.telemetry import (
     AgentTurnSpan,
     CostEstimate,
     ErrorKind,
     ProviderSpan,
+    RetryEvent,
+    RetryReason,
     StopReason,
     TelemetryRecorder,
     TraceContext,
@@ -613,6 +625,10 @@ async def run_turn(
     identity: TurnIdentity | None = None,
     control: RunControl | None = None,
     telemetry: TelemetryRecorder | None = None,
+    failover_providers: tuple[Any, ...] = (),
+    retry_policy: RetryPolicy | None = None,
+    retry_sleep: Callable[[float], Awaitable[None]] | None = None,
+    retry_random: Callable[[], float] = random.random,
 ) -> dict[str, Any]:
     workspace_runtime = execute_kwargs.get("workspace_runtime")
     events = TurnEventStream(
@@ -725,8 +741,18 @@ async def run_turn(
         )
         return {"status": "error", "text": ""}
 
+    provider_chain = (provider,) + tuple(
+        candidate
+        for candidate in failover_providers
+        if candidate is not provider
+    )
+    selected_provider = provider
+    retry_count = 0
+
     last_text = ""
     had_tool_failure = False
+    turn_error_kind = ErrorKind.INTERNAL
+    turn_error_message: str | None = None
     history: list[dict[str, Any]] = []
     try:
         raw = store.load(sid)
@@ -755,97 +781,202 @@ async def run_turn(
             history.append(user_msg)
             _persist_message(user_msg)
         for _ in range(MAX_STEPS):
-            chunks: list[str] = []
-            calls: list[ToolCall] = []
-            provider_usage: UsageEvent | None = None
-            provider_finish_reason: str | None = None
-            provider_cost: CostEstimate | None = None
-            provider_span = None
-            provider_context_window: int | None = None
             _persist_closed(store, sid, history, workspace_runtime)
             model_messages = [
                 {k: v for k, v in message.items() if k != "message_id"}
                 for message in history
             ]
-            stream_kwargs: dict[str, Any] = {
-                "messages": model_messages,
-                "tools": openai_tools,
-            }
-            if getattr(provider, "uses_transient_context", False):
-                stream_kwargs["context_id"] = sid
-            def _ensure_provider_span(start: ProviderStart | None = None):
-                nonlocal provider_span, provider_context_window
-                if provider_span is None:
-                    schema = _telemetry_provider_span(provider, start)
-                    provider_context_window = schema.context_window_tokens
-                    provider_span = turn_span.child(schema)
-                return provider_span
+            selected_index = provider_chain.index(selected_provider)
+            attempt_chain = compatible_failover_chain(
+                provider_chain[selected_index:],
+                selected_provider=selected_provider,
+                messages=model_messages,
+            )
+            controller = RetryController(
+                attempt_chain,
+                policy=retry_policy or RetryPolicy(),
+                sleep=retry_sleep or asyncio.sleep,
+                random_value=retry_random,
+                cancel_event=(control.cancel_requested if control is not None else None),
+            )
+            while True:
+                attempt_provider = controller.provider
+                chunks: list[str] = []
+                calls: list[ToolCall] = []
+                provider_usage: UsageEvent | None = None
+                provider_finish_reason: str | None = None
+                provider_cost: CostEstimate | None = None
+                provider_span = None
+                provider_context_window: int | None = None
+                meaningful_stream = False
+                stream_kwargs: dict[str, Any] = {
+                    "messages": model_messages,
+                    "tools": openai_tools,
+                }
+                if getattr(attempt_provider, "uses_transient_context", False):
+                    stream_kwargs["context_id"] = sid
 
-            try:
-                async for chunk in provider.astream(**stream_kwargs):
-                    if chunk.kind is StreamKind.START and chunk.start is not None:
-                        _ensure_provider_span(chunk.start)
-                        continue
-                    active_provider_span = _ensure_provider_span()
-                    if control is not None and control.cancel_requested.is_set():
-                        active_provider_span.cancel(usage=provider_usage, cost=provider_cost)
-                        return await _stopped(history, "".join(chunks) or last_text)
-                    if chunk.text_delta:
-                        chunks.append(chunk.text_delta)
-                        await _emit({"type": "assistant_delta", "delta": chunk.text_delta})
-                    if chunk.tool_calls:
-                        calls = chunk.tool_calls
-                    if chunk.usage is not None:
-                        provider_usage = _telemetry_usage(
-                            chunk.usage,
-                            context_window_tokens=provider_context_window,
-                        )
-                        active_provider_span.record(provider_usage)
-                    if chunk.kind is StreamKind.TERMINAL and chunk.terminal is not None:
-                        provider_finish_reason = chunk.terminal.stop_reason
-                        if chunk.terminal.usage is not None:
-                            terminal_usage = _telemetry_usage(
-                                chunk.terminal.usage,
+                def _ensure_provider_span(start: ProviderStart | None = None):
+                    nonlocal provider_span, provider_context_window
+                    if provider_span is None:
+                        schema = _telemetry_provider_span(attempt_provider, start)
+                        provider_context_window = schema.context_window_tokens
+                        provider_span = turn_span.child(schema)
+                    return provider_span
+
+                try:
+                    async for chunk in cancellable_stream(
+                        attempt_provider.astream(**stream_kwargs),
+                        cancel_event=(
+                            control.cancel_requested if control is not None else None
+                        ),
+                    ):
+                        if chunk.kind is StreamKind.START and chunk.start is not None:
+                            _ensure_provider_span(chunk.start)
+                            continue
+                        if chunk.kind is not None:
+                            meaningful_stream = True
+                        active_provider_span = _ensure_provider_span()
+                        if control is not None and control.cancel_requested.is_set():
+                            active_provider_span.cancel(
+                                usage=provider_usage,
+                                cost=provider_cost,
+                            )
+                            return await _stopped(
+                                history, "".join(chunks) or last_text
+                            )
+                        if chunk.text_delta:
+                            chunks.append(chunk.text_delta)
+                            await _emit(
+                                {"type": "assistant_delta", "delta": chunk.text_delta}
+                            )
+                        if chunk.tool_calls:
+                            calls = chunk.tool_calls
+                        if chunk.usage is not None:
+                            provider_usage = _telemetry_usage(
+                                chunk.usage,
                                 context_window_tokens=provider_context_window,
                             )
-                            if provider_usage is None:
-                                active_provider_span.record(terminal_usage)
-                            provider_usage = terminal_usage
-                        if chunk.terminal.estimated_cost_usd is not None:
-                            try:
-                                provider_cost = CostEstimate(
-                                    estimated_cost_usd=(
-                                        chunk.terminal.estimated_cost_usd
-                                    )
+                            active_provider_span.record(provider_usage)
+                        if (
+                            chunk.kind is StreamKind.TERMINAL
+                            and chunk.terminal is not None
+                        ):
+                            provider_finish_reason = chunk.terminal.stop_reason
+                            if chunk.terminal.usage is not None:
+                                terminal_usage = _telemetry_usage(
+                                    chunk.terminal.usage,
+                                    context_window_tokens=provider_context_window,
                                 )
-                            except ValueError:
-                                provider_cost = None
-                    if chunk.finish_reason is not None:
-                        provider_finish_reason = chunk.finish_reason
-            except asyncio.CancelledError:
-                _ensure_provider_span().cancel(
+                                if provider_usage is None:
+                                    active_provider_span.record(terminal_usage)
+                                provider_usage = terminal_usage
+                            if chunk.terminal.estimated_cost_usd is not None:
+                                try:
+                                    provider_cost = CostEstimate(
+                                        estimated_cost_usd=(
+                                            chunk.terminal.estimated_cost_usd
+                                        )
+                                    )
+                                except ValueError:
+                                    provider_cost = None
+                        if chunk.finish_reason is not None:
+                            provider_finish_reason = chunk.finish_reason
+                except ProviderRequestCancelled:
+                    _ensure_provider_span().cancel(
+                        usage=provider_usage,
+                        cost=provider_cost,
+                    )
+                    return await _stopped(
+                        history, "".join(chunks) or last_text
+                    )
+                except asyncio.CancelledError:
+                    _ensure_provider_span().cancel(
+                        usage=provider_usage,
+                        cost=provider_cost,
+                    )
+                    turn_span.cancel()
+                    raise
+                except Exception as exc:
+                    error_kind = _telemetry_provider_error_kind(exc)
+                    _ensure_provider_span().fail(
+                        error_kind,
+                        usage=provider_usage,
+                        cost=provider_cost,
+                    )
+                    directive = await controller.recover(
+                        exc,
+                        partial_stream=meaningful_stream,
+                    )
+                    if directive.action in {
+                        RecoveryAction.RETRY,
+                        RecoveryAction.FAILOVER,
+                    }:
+                        retry_count += 1
+                        turn_span.record(
+                            RetryEvent(
+                                operation="provider.request",
+                                retry_count=retry_count,
+                                reason=(
+                                    directive.reason
+                                    or RetryReason.TRANSIENT_PROVIDER
+                                ),
+                                delay_ms=round(directive.delay_seconds * 1000),
+                            )
+                        )
+                        recovery_provider = _telemetry_provider_span(
+                            directive.provider
+                        )
+                        await _emit(
+                            {
+                                "type": "provider_recovery",
+                                "action": directive.action.value,
+                                "provider": recovery_provider.provider,
+                                "model": recovery_provider.model,
+                                "attempt": directive.attempt_number,
+                                "reason": (
+                                    directive.reason
+                                    or RetryReason.TRANSIENT_PROVIDER
+                                ).value,
+                                "delay_ms": round(
+                                    directive.delay_seconds * 1000
+                                ),
+                                "message": (
+                                    "Switching to a verified fallback model provider."
+                                    if directive.action is RecoveryAction.FAILOVER
+                                    else "Retrying the model provider after a temporary failure."
+                                ),
+                            }
+                        )
+                        if directive.action is RecoveryAction.FAILOVER:
+                            selected_provider = directive.provider
+                        continue
+                    if directive.action is RecoveryAction.CANCELLED:
+                        return await _stopped(
+                            history, "".join(chunks) or last_text
+                        )
+                    if directive.action is RecoveryAction.REVIEW:
+                        turn_error_kind = error_kind
+                        turn_error_message = safe_provider_failure_message(
+                            exc,
+                            review_required=True,
+                        )
+                        raise RuntimeError(
+                            turn_error_message
+                        ) from exc
+                    turn_error_kind = error_kind
+                    turn_error_message = safe_provider_failure_message(exc)
+                    raise
+                _ensure_provider_span().finish(
+                    stop_reason=_telemetry_stop_reason(
+                        provider_finish_reason,
+                        used_tools=bool(calls),
+                    ),
                     usage=provider_usage,
                     cost=provider_cost,
                 )
-                turn_span.cancel()
-                raise
-            except Exception as exc:
-                error_kind = _telemetry_provider_error_kind(exc)
-                _ensure_provider_span().fail(
-                    error_kind,
-                    usage=provider_usage,
-                    cost=provider_cost,
-                )
-                turn_span.fail(error_kind)
-                raise
-            _ensure_provider_span().finish(
-                stop_reason=_telemetry_stop_reason(
-                    provider_finish_reason,
-                    used_tools=bool(calls),
-                ),
-                usage=provider_usage,
-                cost=provider_cost,
-            )
+                selected_provider = attempt_provider
+                break
             if control is not None and control.cancel_requested.is_set():
                 return await _stopped(history, "".join(chunks) or last_text)
             last_text = "".join(chunks)
@@ -1116,9 +1247,15 @@ async def run_turn(
         turn_span.cancel()
         raise
     except Exception as exc:
-        turn_span.fail(ErrorKind.INTERNAL)
+        turn_span.fail(turn_error_kind)
         _persist_closed(store, sid, history, workspace_runtime)
-        await _terminal({"type": "error", "state": "failed", "message": str(exc)})
+        await _terminal(
+            {
+                "type": "error",
+                "state": "failed",
+                "message": turn_error_message or str(exc),
+            }
+        )
         return {"status": "error", "text": last_text}
     final_state = "partial" if had_tool_failure else "complete"
     await _terminal({"type": "turn_end", "text": last_text, "state": final_state})

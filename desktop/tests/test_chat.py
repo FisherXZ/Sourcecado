@@ -548,7 +548,10 @@ def test_ws_persists_a_failed_terminal_event_with_the_turn_identity(tmp_path):
     failed = events[-1]
     assert failed["type"] == "error"
     assert failed["state"] == "failed"
-    assert failed["message"] == "provider stream failed"
+    assert failed["message"] == (
+        "The model provider failed after bounded recovery attempts."
+    )
+    assert "provider stream failed" not in failed["message"]
     assert failed["run_id"] == events[0]["run_id"]
     assert failed["message_id"] == events[0]["message_id"]
     assert failed["part_id"] == events[0]["part_id"]

@@ -142,6 +142,16 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly approval_id?: string;
       }
     | {
+        readonly type: "provider_recovery";
+        readonly action: "retry" | "failover";
+        readonly provider: string;
+        readonly model: string;
+        readonly attempt: number;
+        readonly reason: string;
+        readonly delay_ms: number;
+        readonly message: string;
+      }
+    | {
         readonly type: "turn_end";
         readonly text: string;
         readonly state: "complete" | "partial" | "stopped" | "interrupted";
@@ -422,8 +432,36 @@ export function parseChatEvent(value: unknown): ChatEvent {
         typeof value.call_id === "string" &&
         typeof value.name === "string" &&
         ["retry", "repair", "continue"].includes(String(value.action)) &&
-        typeof value.status === "string");
+        typeof value.status === "string") ||
+      (value.type === "provider_recovery" &&
+        ["retry", "failover"].includes(String(value.action)) &&
+        typeof value.provider === "string" &&
+        typeof value.model === "string" &&
+        typeof value.attempt === "number" &&
+        value.attempt >= 1 &&
+        typeof value.reason === "string" &&
+        typeof value.delay_ms === "number" &&
+        value.delay_ms >= 0 &&
+        typeof value.message === "string");
     if (valid) {
+      if (value.type === "provider_recovery") {
+        return {
+          version: 2,
+          type: "provider_recovery",
+          session_id: value.session_id as string,
+          run_id: value.run_id as string,
+          event_id: value.event_id as string,
+          message_id: value.message_id as string,
+          part_id: value.part_id as string,
+          action: value.action as "retry" | "failover",
+          provider: value.provider as string,
+          model: value.model as string,
+          attempt: value.attempt as number,
+          reason: value.reason as string,
+          delay_ms: value.delay_ms as number,
+          message: value.message as string,
+        };
+      }
       if (value.type === "permission_required" && "resource" in value) {
         const resource = approvalResource(value.resource);
         const sanitized: Record<string, unknown> = { ...value };

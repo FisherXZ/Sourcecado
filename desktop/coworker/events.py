@@ -19,6 +19,7 @@ EVENT_TYPES = frozenset(
         "tool_started",
         "tool_finished",
         "tool_recovery",
+        "provider_recovery",
         "turn_end",
         "error",
     }
@@ -141,6 +142,16 @@ def validate_event(event: object) -> str | None:
                 return f"tool_recovery.{field} must be a non-empty string"
         if event.get("action") not in {"retry", "repair", "continue"}:
             return "tool_recovery.action is invalid"
+    if event_type == "provider_recovery":
+        for field in ("action", "provider", "model", "reason", "message"):
+            if not isinstance(event.get(field), str) or not event[field]:
+                return f"provider_recovery.{field} must be a non-empty string"
+        if event.get("action") not in {"retry", "failover"}:
+            return "provider_recovery.action is invalid"
+        if not isinstance(event.get("attempt"), int) or event["attempt"] < 1:
+            return "provider_recovery.attempt must be a positive integer"
+        if not isinstance(event.get("delay_ms"), int) or event["delay_ms"] < 0:
+            return "provider_recovery.delay_ms must be a non-negative integer"
     return None
 
 

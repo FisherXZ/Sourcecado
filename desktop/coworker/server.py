@@ -56,11 +56,11 @@ from coworker.persona import ManifestError, Persona, load_persona
 from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
 from coworker.provider import (
     ToolCall,
-    provider_from_env,
     provider_model_metadata,
     provider_verifications,
     safe_model_identifier,
 )
+from coworker.provider_retry import verified_provider_chain
 from coworker.secrets import SecretStore
 from coworker.store import ConversationStore, valid_session_id
 from coworker.telemetry import (
@@ -273,13 +273,20 @@ def create_app(
     browser_opener: Callable[[str], bool] | None = None,
     workspace_runtime: WorkspaceRuntime | None = None,
     telemetry_adapter: TelemetryAdapter | None = None,
+    provider_failovers: tuple[Any, ...] | None = None,
 ) -> FastAPI:
     if not token:
         raise ValueError("sidecar token must be non-empty")
 
     app = FastAPI(title="Club sidecar", version="0.0.2")
     app.state.token = token
-    app.state.provider = provider_from_env() if provider is _UNSET else provider
+    if provider is _UNSET:
+        provider_chain = verified_provider_chain()
+        app.state.provider = provider_chain[0] if provider_chain else None
+        app.state.provider_failovers = provider_chain[1:]
+    else:
+        app.state.provider = provider
+        app.state.provider_failovers = tuple(provider_failovers or ())
     app.state.telemetry_adapter = (
         telemetry_adapter
         if telemetry_adapter is not None
@@ -349,6 +356,7 @@ def create_app(
                 sid=sid,
                 store=app.state.store,
                 provider=app.state.provider,
+                failover_providers=app.state.provider_failovers,
                 persona=app.state.persona,
                 skills=app.state.skills,
                 inbox=app.state.inbox,
@@ -2005,6 +2013,7 @@ def create_app(
                     sid=run_sid,
                     store=store,
                     provider=app.state.provider,
+                    failover_providers=app.state.provider_failovers,
                     persona=app.state.persona,
                     skills=app.state.skills,
                     inbox=app.state.inbox,
