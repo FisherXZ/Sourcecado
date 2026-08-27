@@ -303,3 +303,46 @@ def test_approved_recovery_records_retry_only_when_the_tool_executes(tmp_path):
     )
     assert agent.span.operation == "agent.recovery"
     assert tool.parent_span_id == agent.span_id
+
+
+def test_later_inbox_allow_does_not_replace_the_current_chat_run(tmp_path):
+    app = create_app(token=TOKEN, provider=UsageProvider(), state=tmp_path)
+    client = TestClient(app)
+    sid = app.state.store.open_session_id()
+
+    with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        def chat(text: str) -> str:
+            ws.send_json({"type": "chat", "text": text, "session_id": sid})
+            events = []
+            while not events or events[-1]["type"] not in {"turn_end", "error"}:
+                events.append(ws.receive_json())
+            start = next(event for event in events if event["type"] == "turn_start")
+            return start["run_id"]
+
+        first_run_id = chat("first")
+        second_run_id = chat("second")
+    app.state.inbox.park(
+        "now",
+        {},
+        item_id="leftover-allow",
+        reason="leftover approval from the first run",
+        session_id=sid,
+        run_id=first_run_id,
+        message_id="message-first",
+        part_id="part-first",
+    )
+
+    allow = client.post(
+        "/v1/inbox/leftover-allow",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"decision": "allow", "actor": "operator", "scope": "once"},
+    )
+    response = client.get(
+        f"/v1/sessions/{sid}/telemetry/current",
+        headers={TOKEN_HEADER: TOKEN},
+    )
+
+    assert first_run_id != second_run_id
+    assert allow.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["current_run"]["run_id"] == second_run_id

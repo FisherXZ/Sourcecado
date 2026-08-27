@@ -74,6 +74,7 @@ class InMemoryTelemetryAdapter:
             for record in self.records
             if isinstance(record, SpanStartedRecord)
             and isinstance(record.span, AgentTurnSpan)
+            and record.span.operation == "agent.turn"
             and record.context.session_id == session_id
         ]
         if not starts:
