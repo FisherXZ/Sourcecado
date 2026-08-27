@@ -774,3 +774,17 @@ def test_cancel_requested_before_worker_start_pauses_without_touching_drive(tmp_
 
     assert paused["status"] == "paused"
     assert paused["progress"]["remaining"] == 1
+
+
+def test_ingestion_store_keeps_database_and_sidecars_private(tmp_path):
+    state = tmp_path / "state"
+    DriveIngestionStore(state).create_job(
+        folder_id="root",
+        resolved_path="Sourcing/Fall 2026",
+    )
+
+    assert state.stat().st_mode & 0o777 == 0o700
+    for path in state.iterdir():
+        if path.is_file():
+            assert path.stat().st_mode & 0o077 == 0
+    assert not any(path.name.endswith(("-wal", "-shm")) for path in state.iterdir())

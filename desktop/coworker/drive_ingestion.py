@@ -42,14 +42,15 @@ DRIVE_INDEX_QUERY_SCHEMA: dict[str, Any] = {
 class DriveIngestionStore:
     def __init__(self, state_dir: str | Path) -> None:
         root = Path(state_dir).expanduser()
-        root.mkdir(parents=True, exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        root.chmod(0o700)
         self.db_path = root / "drive_ingestion.db"
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(
             """
-            PRAGMA journal_mode=WAL;
+            PRAGMA journal_mode=DELETE;
             CREATE TABLE IF NOT EXISTS drive_ingestion_jobs (
                 id TEXT PRIMARY KEY,
                 folder_id TEXT NOT NULL,
@@ -119,6 +120,7 @@ class DriveIngestionStore:
             (_now(),),
         )
         self._conn.commit()
+        self.db_path.chmod(0o600)
 
     def create_job(self, *, folder_id: str, resolved_path: str) -> dict[str, Any]:
         folder_id = folder_id.strip()
