@@ -194,6 +194,104 @@ def _seed_safe_tool_retry(
     store.agent_runs.reconcile_expired_leases()
 
 
+def _seed_unstarted_tool_boundary(
+    store: ConversationStore,
+    identity: TurnIdentity,
+    calls: list[ToolCall],
+    *,
+    next_index: int,
+) -> None:
+    execution = AgentRunExecution.start(
+        store,
+        identity,
+        "Find candidates",
+        "chat",
+        "fake",
+        8,
+        owner_id="crashed-unstarted-owner",
+        lease_seconds=30,
+    )
+    store.append(identity.session_id, {"role": "user", "content": "Find candidates"})
+    store.append_event(
+        identity.session_id,
+        build_event(
+            identity,
+            "turn_start",
+            event_id=f"event-{identity.run_id}-start",
+            state="running",
+        ),
+    )
+    execution.user_input(
+        store.load(identity.session_id), store.load_events(identity.session_id), 15
+    )
+    execution.model_pending(
+        store.load(identity.session_id), store.load_events(identity.session_id), 0
+    )
+    store.append(
+        identity.session_id,
+        {
+            "role": "assistant",
+            "content": "Searching",
+            "message_id": identity.message_id,
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.arguments),
+                    },
+                }
+                for call in calls
+            ],
+        },
+    )
+    execution.model_completed(
+        store.load(identity.session_id),
+        store.load_events(identity.session_id),
+        0,
+        len(calls),
+        len("Searching"),
+    )
+    for index, call in enumerate(calls[:next_index]):
+        execution.tool_pending(
+            store.load(identity.session_id),
+            store.load_events(identity.session_id),
+            0,
+            index,
+            call.id,
+            call.name,
+            True,
+        )
+        payload = {"seeded": call.id}
+        store.append(
+            identity.session_id,
+            {
+                "role": "tool",
+                "name": call.name,
+                "tool_call_id": call.id,
+                "content": json.dumps(payload),
+                "message_id": identity.message_id,
+            },
+        )
+        execution.tool_completed(
+            store.load(identity.session_id),
+            store.load_events(identity.session_id),
+            0,
+            index,
+            call.id,
+            call.name,
+            True,
+            _digest(payload),
+        )
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
+            ("2000-01-01T00:00:00+00:00", identity.run_id),
+        )
+    store.agent_runs.reconcile_expired_leases()
+
+
 def test_resume_model_retry_preserves_identity_and_budget_without_duplicate_user(
     tmp_path,
 ):
@@ -229,6 +327,29 @@ def test_resume_model_retry_preserves_identity_and_budget_without_duplicate_user
         (event["run_id"], event["message_id"], event["part_id"])
         for event in resume_events
     } == {(identity.run_id, identity.message_id, identity.part_id)}
+
+
+def test_exact_projection_resume_does_not_create_repair_marker(tmp_path, monkeypatch):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-exact-no-repair")
+    _seed_model_retry(store, identity)
+
+    def reject_marker(self, marker):
+        raise AssertionError("exact projections must not create a repair marker")
+
+    monkeypatch.setattr(
+        AgentRunExecution, "begin_projection_repair", reject_marker
+    )
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=FakeProvider(deltas=("Done",)),
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "ok"
 
 
 def test_resume_truncates_uncommitted_transcript_and_event_tails_before_provider(
@@ -267,6 +388,158 @@ def test_resume_truncates_uncommitted_transcript_and_event_tails_before_provider
     assert "event-uncommitted-tail" not in {
         event["event_id"] for event in store.load_events(identity.session_id)
     }
+    assert "projection_repair" not in store.get_agent_run(identity.run_id)[
+        "continuation"
+    ]
+
+
+def test_active_resume_attempt_leaves_projection_tails_untouched(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-active-projection-owner")
+    _seed_model_retry(store, identity)
+    AgentRunExecution.resume(store, identity, 8, owner_id="active-owner")
+    store.append(identity.session_id, {"role": "user", "content": "TAIL"})
+    store.append_event(
+        identity.session_id,
+        build_event(
+            identity,
+            "assistant_delta",
+            event_id="event-active-tail",
+            delta="TAIL",
+        ),
+    )
+    before_messages = store.load(identity.session_id)
+    before_events = store.load_events(identity.session_id)
+
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=FakeProvider(deltas=("must not run",)),
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "conflict"
+    assert store.load(identity.session_id) == before_messages
+    assert store.load_events(identity.session_id) == before_events
+
+
+def test_projection_repair_crash_between_files_is_durable_and_retryable(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-projection-repair-crash")
+    _seed_model_retry(store, identity)
+    store.append(identity.session_id, {"role": "user", "content": "TAIL"})
+    store.append_event(
+        identity.session_id,
+        build_event(
+            identity,
+            "assistant_delta",
+            event_id="event-repair-tail",
+            delta="TAIL",
+        ),
+    )
+    original_replace_events = store.replace_events
+    replacements = []
+
+    def fail_first_event_rewrite(sid, events):
+        replacements.append("event")
+        if len(replacements) == 1:
+            raise OSError("injected event rewrite crash")
+        return original_replace_events(sid, events)
+
+    monkeypatch.setattr(store, "replace_events", fail_first_event_rewrite)
+    provider = FakeProvider(deltas=("Recovered",))
+    first = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=provider,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert first["status"] == "error"
+    assert provider.calls == []
+    interrupted_repair = store.get_agent_run(identity.run_id)
+    marker = interrupted_repair["continuation"]["projection_repair"]
+    assert marker["transcript_prefix_count"] == 1
+    assert marker["event_prefix_count"] == 1
+    assert [message["content"] for message in store.load(identity.session_id)] == [
+        "Find candidates"
+    ]
+    assert "event-repair-tail" in {
+        event["event_id"] for event in store.load_events(identity.session_id)
+    }
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
+            ("2000-01-01T00:00:00+00:00", identity.run_id),
+        )
+    store.agent_runs.reconcile_expired_leases()
+
+    second = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=provider,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert second["status"] == "ok"
+    assert len(provider.calls) == 1
+    final = store.get_agent_run(identity.run_id)
+    assert "projection_repair" not in final["continuation"]
+    assert "event-repair-tail" not in {
+        event["event_id"] for event in store.load_events(identity.session_id)
+    }
+
+
+def test_projection_repair_failure_before_marker_leaves_files_untouched(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-projection-repair-marker-failure")
+    _seed_model_retry(store, identity)
+    store.append(identity.session_id, {"role": "user", "content": "TAIL"})
+    store.append_event(
+        identity.session_id,
+        build_event(
+            identity,
+            "assistant_delta",
+            event_id="event-marker-tail",
+            delta="TAIL",
+        ),
+    )
+    before_messages = store.load(identity.session_id)
+    before_events = store.load_events(identity.session_id)
+
+    def fail_marker(self, marker):
+        raise OSError("marker write failed")
+
+    monkeypatch.setattr(
+        AgentRunExecution, "begin_projection_repair", fail_marker, raising=False
+    )
+    provider = FakeProvider(deltas=("must not run",))
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=provider,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "error"
+    assert provider.calls == []
+    assert store.load(identity.session_id) == before_messages
+    assert store.load_events(identity.session_id) == before_events
+    assert "projection_repair" not in store.get_agent_run(identity.run_id)[
+        "continuation"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -415,6 +688,69 @@ def test_resume_multiple_tools_starts_at_pending_index_and_never_reexecutes_prio
         "call-2",
     ]
     assert run["usage"] == {"model_calls": 2, "tool_calls": 3}
+
+
+@pytest.mark.parametrize("next_index", [0, 1])
+def test_resume_tools_ready_without_pending_starts_at_unstarted_index(
+    tmp_path, monkeypatch, next_index
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity(f"run-unstarted-tool-{next_index}")
+    calls = [
+        ToolCall(
+            id=f"call-unstarted-{index}",
+            name="gmail_search",
+            arguments={"q": index},
+        )
+        for index in range(3)
+    ]
+    _seed_unstarted_tool_boundary(store, identity, calls, next_index=next_index)
+    executed = []
+
+    def execute_tool(name, arguments, **kwargs):
+        executed.append(arguments["q"])
+        return True, {"q": arguments["q"]}
+
+    monkeypatch.setattr("coworker.turn.execute", execute_tool)
+    provider = FakeProvider(deltas=("Done",))
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=provider,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert executed == list(range(next_index, 3))
+    run = store.get_agent_run(identity.run_id)
+    assert [
+        receipt["call_id"]
+        for receipt in run["continuation"]["completed_tool_receipts"]
+    ] == [call.id for call in calls]
+
+
+def test_resume_unstarted_consequential_tool_enters_approval_wait(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-unstarted-consequential")
+    call = ToolCall(id="call-unstarted-draft", name="gmail_draft", arguments={})
+    _seed_unstarted_tool_boundary(store, identity, [call], next_index=0)
+    provider = FakeProvider(deltas=("must not run",))
+
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=provider,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "waiting"
+    assert provider.calls == []
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "waiting_approval"
 
 
 @pytest.mark.parametrize("case", ["consequential", "policy_drift"])

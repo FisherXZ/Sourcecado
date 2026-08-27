@@ -280,3 +280,35 @@ def test_expected_tool_count_is_nonnegative_and_resets_only_on_a_new_step():
                 }
             },
         )
+
+
+def test_projection_repair_marker_is_exact_private_and_clearable():
+    marker = {
+        "transcript_prefix_count": 2,
+        "transcript_prefix_sha256": "a" * 64,
+        "event_prefix_count": 3,
+        "event_prefix_sha256": "b" * 64,
+    }
+    established = merge_continuation({}, {"projection_repair": marker})
+
+    assert established["projection_repair"] == marker
+    assert merge_continuation(
+        established, {"projection_repair": marker}
+    ) == established
+    assert "projection_repair" not in merge_continuation(
+        established, {"projection_repair": None}
+    )
+    with pytest.raises(ValueError, match="cannot change"):
+        merge_continuation(
+            established,
+            {
+                "projection_repair": {
+                    **marker,
+                    "event_prefix_sha256": "c" * 64,
+                }
+            },
+        )
+    with pytest.raises(ValueError, match="exact targets"):
+        merge_continuation(
+            {}, {"projection_repair": {"transcript_prefix_count": 2}}
+        )

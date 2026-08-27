@@ -287,6 +287,118 @@ class AgentRunExecution:
             payload={"text_length": length},
         )
 
+    def begin_projection_repair(self, marker: dict[str, Any]) -> dict[str, Any]:
+        """Fence filesystem projection repair with a privacy-safe target marker."""
+        self._require_lease()
+        persisted = project_continuation(self._current_persisted_snapshot())
+        existing = persisted.get("projection_repair")
+        next_snapshot = merge_continuation(
+            persisted, {"projection_repair": marker}
+        )
+        if existing is not None and existing != next_snapshot.get(
+            "projection_repair"
+        ):
+            raise ValueError("projection repair target cannot change")
+        self._update_continuation(next_snapshot)
+        return dict(self._snapshot["projection_repair"])
+
+    def clear_projection_repair(self) -> dict[str, Any]:
+        """Clear a completed repair only while the execution still owns its lease."""
+        self._require_lease()
+        persisted = project_continuation(self._current_persisted_snapshot())
+        if "projection_repair" not in persisted:
+            return self.metadata
+        self._update_continuation({**persisted, "projection_repair": None})
+        return self.metadata
+
+    def projection_mismatch(self, projections: list[str]) -> dict[str, Any]:
+        """Fail closed from an owned resume when committed bodies do not match."""
+        self._require_lease()
+        persisted = project_continuation(self._current_persisted_snapshot())
+        cursor = dict(persisted.get("cursor", {}))
+        next_snapshot = {
+            **persisted,
+            "cursor": {**cursor, "phase": "review_required"},
+            "projection_repair": None,
+        }
+        safe_projections = sorted(
+            {value for value in projections if value in {"transcript", "event"}}
+        )
+        return self._checkpoint(
+            "projection_mismatch",
+            next_snapshot,
+            payload={
+                "status": "interrupted",
+                "phase": "review_required",
+                "reason": "projection_mismatch",
+                "projections": safe_projections,
+            },
+            state="interrupted",
+        )
+
+    def resume_review_required(self, reason: str) -> dict[str, Any]:
+        if reason not in {"policy_changed", "invalid_resume_boundary"}:
+            raise ValueError("invalid resume review reason")
+        persisted = project_continuation(self._current_persisted_snapshot())
+        cursor = dict(persisted.get("cursor", {}))
+        next_snapshot = merge_continuation(
+            persisted,
+            {"cursor": {**cursor, "phase": "review_required"}},
+        )
+        return self._checkpoint(
+            "process_interrupted",
+            next_snapshot,
+            payload={
+                "status": "interrupted",
+                "phase": "review_required",
+                "reason": reason,
+            },
+            state="interrupted",
+        )
+
+    def recover_completed_tool_receipt(self) -> dict[str, Any]:
+        """Advance one stale pending cursor without charging usage again."""
+        persisted = project_continuation(self._current_persisted_snapshot())
+        cursor = dict(persisted.get("cursor", {}))
+        pending = persisted.get("pending_tool")
+        matching = next(
+            (
+                receipt
+                for receipt in persisted.get("completed_tool_receipts", [])
+                if isinstance(pending, dict)
+                and receipt.get("attempt_id") == pending.get("attempt_id")
+                and receipt.get("call_id") == pending.get("call_id")
+                and receipt.get("name") == pending.get("name")
+            ),
+            None,
+        )
+        next_index = int(cursor.get("next_tool_index", 0))
+        if (
+            cursor.get("phase") != "tools_ready"
+            or not isinstance(pending, dict)
+            or pending.get("status") != "retry_ready"
+            or matching is None
+            or next_index >= int(cursor.get("expected_tool_count", 0))
+        ):
+            raise ValueError("no completed receipt matches the stale pending cursor")
+        next_snapshot = {
+            **persisted,
+            "cursor": {**cursor, "next_tool_index": next_index + 1},
+            "pending_tool": None,
+        }
+        return self._checkpoint(
+            "process_interrupted",
+            next_snapshot,
+            payload={
+                "status": "running",
+                "phase": "tools_ready",
+                "reason": "completed_receipt_recovered",
+                "call_id": pending["call_id"],
+                "name": pending["name"],
+                "tool_index": next_index,
+            },
+        )
+
     def model_pending(
         self,
         history: list[dict[str, Any]],
@@ -1153,6 +1265,21 @@ class AgentRunExecution:
         )
         self._refresh_snapshot()
         return self.metadata
+
+    def _update_continuation(self, continuation: dict[str, Any]) -> None:
+        lease = self._require_lease()
+        try:
+            next_lease = self._store.agent_runs.update_continuation(
+                lease, continuation, now=self._now
+            )
+        except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
+            self._lease = None
+            raise self._ownership_error(
+                "continuation update lost its lease"
+            ) from exc
+        self._lease = next_lease
+        self._version = next_lease.version
+        self._refresh_snapshot()
 
     def _require_lease(self) -> AgentRunLease:
         if self._lease is None:

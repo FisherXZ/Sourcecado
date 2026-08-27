@@ -16,6 +16,7 @@ from coworker.agent_run_execution import (
     AgentRunExecution,
     AgentRunExecutionOwnershipError,
 )
+from coworker.agent_run_continuation import transcript_prefix_sha256
 from coworker.agent_run_heartbeat import AgentRunHeartbeat, AgentRunHeartbeatError
 from coworker.agent_runs import safe_error_summary
 from coworker.events import TurnEventStream, TurnIdentity
@@ -105,25 +106,53 @@ def _identity_for(run: dict[str, Any], run_id: str) -> TurnIdentity | None:
     )
 
 
-def _repair_and_classify(
+def _projection_status(
+    values: list[dict[str, Any]], count: int, digest: str
+) -> str:
+    if len(values) < count:
+        return "mismatch"
+    if transcript_prefix_sha256(values[:count]) != digest:
+        return "mismatch"
+    return "exact" if len(values) == count else "extra_tail"
+
+
+def _repair_projections(
     *,
-    run_id: str,
     store: ConversationStore,
-    run: dict[str, Any],
+    execution: AgentRunExecution,
     identity: TurnIdentity,
-    retry_safe_tools: frozenset[str],
-) -> tuple[
-    dict[str, Any],
-    list[dict[str, Any]],
-    tuple[str, list[ToolCall]] | None,
-    str | None,
-]:
-    continuation = run.get("continuation") or {}
+    continuation: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], str | None]:
     cursor = continuation.get("cursor") or {}
+    cursor_target = {
+        key: cursor.get(key)
+        for key in (
+            "transcript_prefix_count",
+            "transcript_prefix_sha256",
+            "event_prefix_count",
+            "event_prefix_sha256",
+        )
+    }
+    marker = continuation.get("projection_repair")
+    if marker is not None and marker != cursor_target:
+        execution.projection_mismatch(["transcript", "event"])
+        return continuation, [], "review_required"
+    target = dict(marker or cursor_target)
+    try:
+        transcript_count = int(target["transcript_prefix_count"])
+        transcript_digest = str(target["transcript_prefix_sha256"])
+        event_count = int(target["event_prefix_count"])
+        event_digest = str(target["event_prefix_sha256"])
+    except (KeyError, TypeError, ValueError):
+        execution.projection_mismatch(["transcript", "event"])
+        return continuation, [], "review_required"
+
     loaded = store.load(identity.session_id)
     durable_events = store.load_events(identity.session_id)
-    transcript_status = store.agent_runs.validate_transcript_prefix(run_id, loaded)
-    event_status = store.agent_runs.validate_event_prefix(run_id, durable_events)
+    transcript_status = _projection_status(
+        loaded, transcript_count, transcript_digest
+    )
+    event_status = _projection_status(durable_events, event_count, event_digest)
     mismatches = [
         name
         for name, status in (
@@ -133,28 +162,68 @@ def _repair_and_classify(
         if status == "mismatch"
     ]
     if mismatches:
-        marked = store.agent_runs.mark_projection_mismatch(
-            run_id, int(run["version"]), mismatches
-        )
-        return continuation, loaded, None, (
-            "review_required" if marked is not None else "conflict"
-        )
-    if transcript_status == "extra_tail":
-        loaded = loaded[: int(cursor["transcript_prefix_count"])]
-        store.replace_all(identity.session_id, loaded)
-    if event_status == "extra_tail":
-        durable_events = durable_events[: int(cursor["event_prefix_count"])]
-        store.replace_events(identity.session_id, durable_events)
+        execution.projection_mismatch(mismatches)
+        return continuation, loaded, "review_required"
 
+    needs_repair = marker is not None or "extra_tail" in {
+        transcript_status,
+        event_status,
+    }
+    if not needs_repair:
+        return continuation, loaded, None
+
+    if marker is None:
+        execution.begin_projection_repair(target)
+        continuation = store.get_agent_run(execution.run_id)["continuation"]
+    execution.renew()
+    store.replace_all(identity.session_id, loaded[:transcript_count])
+    execution.renew()
+    store.replace_events(identity.session_id, durable_events[:event_count])
+
+    repaired_messages = store.load(identity.session_id)
+    repaired_events = store.load_events(identity.session_id)
+    post_mismatches = [
+        name
+        for name, status in (
+            (
+                "transcript",
+                _projection_status(
+                    repaired_messages, transcript_count, transcript_digest
+                ),
+            ),
+            (
+                "event",
+                _projection_status(repaired_events, event_count, event_digest),
+            ),
+        )
+        if status != "exact"
+    ]
+    if post_mismatches:
+        execution.projection_mismatch(post_mismatches)
+        return continuation, repaired_messages, "review_required"
+    execution.clear_projection_repair()
+    continuation = store.get_agent_run(execution.run_id)["continuation"]
+    return continuation, repaired_messages, None
+
+
+def _classify_owned_continuation(
+    *,
+    store: ConversationStore,
+    execution: AgentRunExecution,
+    continuation: dict[str, Any],
+    loaded: list[dict[str, Any]],
+    retry_safe_tools: frozenset[str],
+) -> tuple[
+    dict[str, Any],
+    tuple[str, list[ToolCall]] | None,
+    str | None,
+]:
+    cursor = continuation.get("cursor") or {}
     phase = cursor.get("phase")
     pending_tool = continuation.get("pending_tool")
     pending_model = continuation.get("pending_model")
     recovered: tuple[str, list[ToolCall]] | None = None
     review_reason: str | None = None
-    if run.get("current_state") != "interrupted":
-        return continuation, loaded, None, "conflict"
-    if phase == "review_required":
-        return continuation, loaded, None, "review_required"
     if phase == "model_ready":
         if not (
             isinstance(pending_model, dict)
@@ -182,23 +251,21 @@ def _repair_and_classify(
                     and message.get("tool_call_id") == pending_tool.get("call_id")
                     for message in loaded
                 )
-                repaired = (
-                    store.agent_runs.repair_completed_tool_receipt(
-                        run_id, int(run["version"])
-                    )
-                    if has_result
-                    else None
-                )
-                if repaired is None:
+                if not has_result:
                     review_reason = "invalid_resume_boundary"
                 else:
-                    continuation = repaired["continuation"]
+                    execution.recover_completed_tool_receipt()
+                    continuation = store.get_agent_run(execution.run_id)[
+                        "continuation"
+                    ]
                     cursor = continuation["cursor"]
                     next_index = int(cursor.get("next_tool_index", 0))
                     expected_count = int(cursor.get("expected_tool_count", 0))
                     if next_index < expected_count:
                         try:
-                            recovered = _committed_tool_batch(loaded, cursor, None)
+                            recovered = _committed_tool_batch(
+                                loaded, cursor, None
+                            )
                         except ValueError:
                             review_reason = "invalid_resume_boundary"
             elif (
@@ -211,21 +278,25 @@ def _repair_and_classify(
                 review_reason = "policy_changed"
             else:
                 try:
-                    recovered = _committed_tool_batch(loaded, cursor, pending_tool)
+                    recovered = _committed_tool_batch(
+                        loaded, cursor, pending_tool
+                    )
                 except ValueError:
                     review_reason = "invalid_resume_boundary"
+        elif next_index < expected_count:
+            try:
+                recovered = _committed_tool_batch(loaded, cursor, None)
+            except ValueError:
+                review_reason = "invalid_resume_boundary"
         elif next_index != expected_count:
             review_reason = "invalid_resume_boundary"
     else:
-        return continuation, loaded, None, "conflict"
+        return continuation, None, "conflict"
     if review_reason is not None:
-        marked = store.agent_runs.mark_resume_review_required(
-            run_id, int(run["version"]), review_reason
-        )
-        return continuation, loaded, None, (
-            "review_required" if marked is not None else "conflict"
-        )
-    return continuation, loaded, recovered, None
+        execution.resume_review_required(review_reason)
+        return continuation, None, "review_required"
+    return continuation, recovered, None
+
 
 
 async def resume_turn(
@@ -249,15 +320,14 @@ async def resume_turn(
     identity = _identity_for(run, run_id)
     if identity is None:
         return {"status": "conflict", "text": "", "run_id": run_id}
-    continuation, loaded, recovered, rejected = _repair_and_classify(
-        run_id=run_id,
-        store=store,
-        run=run,
-        identity=identity,
-        retry_safe_tools=live_turn._SAFE_RETRY_TOOLS,
-    )
-    if rejected is not None:
-        return {"status": rejected, "text": "", "run_id": run_id}
+    continuation = run.get("continuation") or {}
+    phase = continuation.get("cursor", {}).get("phase")
+    if run.get("current_state") != "interrupted":
+        return {"status": "conflict", "text": "", "run_id": run_id}
+    if phase == "review_required":
+        return {"status": "review_required", "text": "", "run_id": run_id}
+    if phase not in {"model_ready", "tools_ready"}:
+        return {"status": "conflict", "text": "", "run_id": run_id}
     duration = EXECUTION_LEASE_SECONDS if lease_seconds is None else lease_seconds
     try:
         execution = AgentRunExecution.resume(
@@ -265,6 +335,26 @@ async def resume_turn(
         )
     except AgentRunExecutionOwnershipError:
         return {"status": "conflict", "text": "", "run_id": run_id}
+    try:
+        continuation, loaded, rejected = _repair_projections(
+            store=store,
+            execution=execution,
+            identity=identity,
+            continuation=continuation,
+        )
+    except Exception:
+        return {"status": "error", "text": "", "run_id": run_id}
+    if rejected is not None:
+        return {"status": rejected, "text": "", "run_id": run_id}
+    continuation, recovered, rejected = _classify_owned_continuation(
+        store=store,
+        execution=execution,
+        continuation=continuation,
+        loaded=loaded,
+        retry_safe_tools=live_turn._SAFE_RETRY_TOOLS,
+    )
+    if rejected is not None:
+        return {"status": rejected, "text": "", "run_id": run_id}
 
     events = TurnEventStream(identity=identity, store=store, emit=emit)
     if control is not None:

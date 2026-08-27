@@ -156,6 +156,20 @@ def project_continuation(value: Any) -> dict[str, Any]:
                 "budget_reserved": budget_reserved,
             }
 
+    repair = raw.get("projection_repair")
+    if isinstance(repair, dict):
+        safe_repair: dict[str, Any] = {}
+        for prefix in ("transcript", "event"):
+            count_key = f"{prefix}_prefix_count"
+            digest_key = f"{prefix}_prefix_sha256"
+            count = repair.get(count_key)
+            digest = valid_sha256(repair.get(digest_key))
+            if _is_nonnegative_int(count) and digest is not None:
+                safe_repair[count_key] = count
+                safe_repair[digest_key] = digest
+        if len(safe_repair) == 4:
+            projected["projection_repair"] = safe_repair
+
     receipts: list[dict[str, Any]] = []
     raw_receipts = raw.get("completed_tool_receipts")
     if isinstance(raw_receipts, list):
@@ -208,6 +222,7 @@ def merge_continuation(
         raise ValueError("continuation must be an object")
     _validate_incoming_prefix_pairs(incoming)
     _validate_incoming_cursor_fields(incoming)
+    _validate_incoming_projection_repair(incoming)
     old = project_continuation(existing)
     new = project_continuation(incoming)
     _validate_pending_updates(incoming, old, new)
@@ -275,10 +290,17 @@ def merge_continuation(
         "resolved_approval",
         "pending_model",
         "pending_tool",
+        "projection_repair",
     ):
         if section not in incoming:
             continue
         if section in new:
+            if (
+                section == "projection_repair"
+                and isinstance(old.get(section), dict)
+                and old[section] != new[section]
+            ):
+                raise ValueError("continuation projection repair cannot change")
             merged[section] = new[section]
         else:
             merged.pop(section, None)
@@ -393,6 +415,29 @@ def _validate_incoming_cursor_fields(incoming: dict[str, Any]) -> None:
         raise ValueError(
             "continuation next_tool_index cannot exceed expected_tool_count"
         )
+
+
+def _validate_incoming_projection_repair(incoming: dict[str, Any]) -> None:
+    if (
+        "projection_repair" not in incoming
+        or incoming["projection_repair"] is None
+    ):
+        return
+    repair = incoming["projection_repair"]
+    if not isinstance(repair, dict):
+        raise ValueError("continuation projection repair must be an object")
+    required = {
+        f"{prefix}_prefix_{suffix}"
+        for prefix in ("transcript", "event")
+        for suffix in ("count", "sha256")
+    }
+    if set(repair) != required:
+        raise ValueError("continuation projection repair requires exact targets")
+    for prefix in ("transcript", "event"):
+        if not _is_nonnegative_int(repair[f"{prefix}_prefix_count"]):
+            raise ValueError("continuation projection repair count must be nonnegative")
+        if valid_sha256(repair[f"{prefix}_prefix_sha256"]) is None:
+            raise ValueError("continuation projection repair digest must be SHA-256")
 
 
 def _validate_pending_updates(
