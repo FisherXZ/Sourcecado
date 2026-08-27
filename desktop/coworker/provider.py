@@ -349,7 +349,19 @@ _MODEL_METADATA: dict[tuple[str, str], tuple[int, ModelPricing]] = {
     ),
 }
 _MODEL_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
-_SECRET_MODEL_PREFIXES = ("sk-", "ghp_", "github_pat_", "ya29.", "aiza")
+_WINDOWS_ABSOLUTE_MODEL = re.compile(r"^[A-Za-z]:/")
+_SECRET_MODEL_PREFIXES = (
+    "sk-",
+    "ghp_",
+    "github_pat_",
+    "ya29.",
+    "aiza",
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxr-",
+    "xapp-",
+)
 
 
 def provider_model_metadata(provider: str, model: str) -> ProviderModelMetadata:
@@ -385,10 +397,16 @@ def estimate_model_cost(
 
 
 def safe_model_identifier(value: str) -> bool:
-    return bool(
-        _MODEL_IDENTIFIER.fullmatch(value)
-        and not value.lower().startswith(_SECRET_MODEL_PREFIXES)
-    )
+    if not _MODEL_IDENTIFIER.fullmatch(value):
+        return False
+    lowered = value.lower()
+    if lowered.startswith(_SECRET_MODEL_PREFIXES):
+        return False
+    if lowered.startswith("file:/") or "://" in lowered:
+        return False
+    if _WINDOWS_ABSOLUTE_MODEL.match(value):
+        return False
+    return all(segment not in {"", ".", ".."} for segment in value.split("/"))
 
 
 def _first_configured_provider(env: Mapping[str, str]) -> str | None:

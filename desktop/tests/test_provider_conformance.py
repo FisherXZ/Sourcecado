@@ -171,8 +171,20 @@ def test_public_model_metadata_is_the_single_context_and_pricing_lookup():
     "unsafe_model",
     (
         "sk-settings-PLANTED",
+        "xoxb-PLANTED-SENTINEL",
+        "xoxp-PLANTED-SENTINEL",
+        "xapp-PLANTED-SENTINEL",
         "/private/operator/model",
+        "C:/Users/operator/model",
+        "file:/private/operator/model",
+        "https://provider.example/model",
+        "org/../model",
+        "org/./model",
+        "org//model",
         "model with spaces",
+        "model\nwith-control",
+        "model\x00with-null",
+        "m" * 129,
     ),
 )
 def test_provider_verification_rejects_and_redacts_unsafe_model_identifiers(
@@ -193,6 +205,69 @@ def test_provider_verification_rejects_and_redacts_unsafe_model_identifiers(
     assert report.model == "gpt-4o-mini"
     assert report.failures == ("invalid_model_identifier",)
     assert unsafe_model not in repr(report)
+
+
+def test_xoxb_explicit_model_is_never_selected_or_returned(monkeypatch):
+    planted = "xoxb-PLANTED-SENTINEL"
+    for key in (
+        "DEEPSEEK_API_KEY",
+        "MOONSHOT_API_KEY",
+        "KIMI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "real-key")
+    monkeypatch.setenv("CLUB_MODEL", planted)
+
+    reports = provider_module.provider_verifications()
+    openai = next(report for report in reports if report.provider == "openai")
+
+    assert provider_module.provider_from_env() is None
+    assert openai.eligible is False
+    assert openai.model == "gpt-4o-mini"
+    assert openai.failures == ("invalid_model_identifier",)
+    assert planted not in repr(reports)
+
+
+@pytest.mark.parametrize(
+    "custom_model",
+    (
+        "deepseek-v4-pro",
+        "kimi-k3",
+        "claude-sonnet-4-6",
+        "gpt-4o-mini",
+        "openrouter/meta-llama/llama-3.3-70b-instruct",
+        "accounts/fireworks/models/deepseek-v3",
+        "ft:gpt-4o-mini:org:project:suffix",
+        "vendor/model.v1",
+        "gpt-4o-mini-2024-07-18",
+        "us.anthropic.claude-sonnet-4-6-v1:0",
+    ),
+)
+def test_safe_custom_openai_compatible_model_identifier_remains_supported(
+    monkeypatch, custom_model
+):
+    for key in (
+        "DEEPSEEK_API_KEY",
+        "MOONSHOT_API_KEY",
+        "KIMI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "real-key")
+    monkeypatch.setenv("CLUB_MODEL", custom_model)
+
+    report = next(
+        report
+        for report in provider_module.provider_verifications()
+        if report.provider == "openai"
+    )
+    provider = provider_module.provider_from_env()
+
+    assert report.eligible is True
+    assert report.model == custom_model
+    assert isinstance(provider, provider_module.OpenAICompatProvider)
+    assert provider.model_id == custom_model
 
 
 def test_unsupported_configured_model_is_rejected_before_provider_creation(

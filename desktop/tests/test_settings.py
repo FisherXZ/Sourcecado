@@ -141,7 +141,7 @@ def test_settings_exposes_provider_verification_without_credentials(
 def test_settings_redacts_invalid_explicit_model_from_legacy_and_provider_fields(
     tmp_path, monkeypatch
 ):
-    planted = "sk-settings-PLANTED"
+    planted = "xoxb-PLANTED-SENTINEL"
     for key in (
         "DEEPSEEK_API_KEY",
         "MOONSHOT_API_KEY",

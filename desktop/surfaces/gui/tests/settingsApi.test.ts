@@ -14,7 +14,7 @@ describe("settings provider verification boundary", () => {
         ok: true,
         json: async () => ({
           persona: { id: "sourcing", name: "Sourcing agent" },
-          model: "sk-settings-PLANTED",
+          model: "xoxb-PLANTED-SENTINEL",
           gmail: { connected: false, email: null },
           apollo: { configured: false },
           providers: [
@@ -36,6 +36,22 @@ describe("settings provider verification boundary", () => {
               },
               api_key: "provider-secret",
               raw_error: "private path",
+            },
+            {
+              provider: "openai",
+              model: "xoxb-PLANTED-SENTINEL",
+              selected: true,
+              eligible: true,
+              failures: [],
+              context_window_tokens: null,
+              capabilities: {
+                text: true,
+                transient_reasoning: true,
+                tool_calling: true,
+                terminal_usage: true,
+                cache_usage: true,
+                reasoning_usage: true,
+              },
             },
             {
               provider: "unknown-provider",
@@ -73,7 +89,107 @@ describe("settings provider verification boundary", () => {
             reasoning_usage: true,
           },
         },
+        {
+          provider: "openai",
+          model: null,
+          selected: false,
+          eligible: false,
+          failures: [],
+          context_window_tokens: null,
+          capabilities: {
+            text: true,
+            transient_reasoning: true,
+            tool_calling: true,
+            terminal_usage: true,
+            cache_usage: true,
+            reasoning_usage: true,
+          },
+        },
       ],
+    });
+  });
+
+  it.each([
+    "xoxb-PLANTED-SENTINEL",
+    "xoxp-PLANTED-SENTINEL",
+    "xapp-PLANTED-SENTINEL",
+    "C:/Users/operator/model",
+    "file:/private/model",
+    "https://provider.example/model",
+    "org/../model",
+    "org/./model",
+    "org//model",
+    "model with spaces",
+    "model\nwith-control",
+  ])("rejects unsafe model shape %s symmetrically", async (unsafeModel) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          persona: { id: "sourcing", name: "Sourcing agent" },
+          model: unsafeModel,
+          gmail: { connected: false, email: null },
+          apollo: { configured: false },
+          providers: [
+            {
+              provider: "openai",
+              model: unsafeModel,
+              selected: true,
+              eligible: true,
+              failures: [],
+              context_window_tokens: null,
+              capabilities: {},
+            },
+          ],
+        }),
+      }),
+    );
+
+    const settings = await getSettings();
+
+    expect(settings.model).toBeNull();
+    expect(settings.providers[0]).toMatchObject({
+      model: null,
+      selected: false,
+      eligible: false,
+    });
+    expect(JSON.stringify(settings)).not.toContain(unsafeModel);
+  });
+
+  it("preserves a safe custom OpenAI-compatible model identifier", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          persona: { id: "sourcing", name: "Sourcing agent" },
+          model: "vendor/custom-model:v2",
+          gmail: { connected: false, email: null },
+          apollo: { configured: false },
+          providers: [
+            {
+              provider: "openai",
+              model: "vendor/custom-model:v2",
+              selected: true,
+              eligible: true,
+              failures: [],
+              context_window_tokens: null,
+              capabilities: {},
+            },
+          ],
+        }),
+      }),
+    );
+
+    const settings = await getSettings();
+
+    expect(settings.model).toBe("vendor/custom-model:v2");
+    expect(settings.providers[0]).toMatchObject({
+      provider: "openai",
+      model: "vendor/custom-model:v2",
+      selected: true,
+      eligible: true,
     });
   });
 });
