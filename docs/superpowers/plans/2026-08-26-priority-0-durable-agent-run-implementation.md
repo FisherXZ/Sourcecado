@@ -1,7 +1,7 @@
 # Priority 0 Durable Agent Run Implementation Plan
 
 Date: 2026-08-26
-Status: Priority 0 in progress; Slice A complete
+Status: Priority 0 in progress; Slices A and B complete
 Architecture basis: `2026-08-26-evidence-reconciled-agent-os-roadmap.md`
 Primary donor: OpenWorker prompt-driven `TurnEngine` lifecycle
 Contract reference: OpenClaw Session / Agent Run / model-turn distinction
@@ -108,6 +108,21 @@ Acceptance tests:
 
 ## Slice B — Durable ownership, leases, and restart resume
 
+Status: complete
+
+Implementation commits: `73d7cd3..6bd48a6`
+
+Verification:
+
+- Full Python suite: 616 passed, 1 skipped.
+- GUI suite: 336 passed.
+- Production TypeScript/Vite build: passed.
+- Startup recovery resumes the same canonical identity and repairs linked
+  schedule receipts.
+- Explicit resume tests cover competing owners, completed-tool replay
+  prevention, outcome-unknown review, and torn projection repair.
+- Person-file tool events now carry their owning canonical `run_id`.
+
 Make checkpoints authoritative for continuation rather than treating JSONL
 repair as resume.
 
@@ -211,13 +226,12 @@ Acceptance tests:
 - `turn.py` and `server.py` are already large. New state transitions should live
   behind a focused Agent Run service rather than growing ad hoc branches.
 
-Non-blocking Slice A follow-ups:
+Resolved Slice A follow-ups:
 
-- When the run persistence surface grows in Slice B, extract an
-  `AgentRunRepository` that shares the existing SQLite connection and lock.
-- Extend the migration rollback test so failure occurs after at least one prior
-  row/checkpoint rewrite, proving rollback from partial progress as well as from
-  the first write.
+- Slice B extracted an `AgentRunRepository` that shares the existing SQLite
+  connection and lock.
+- The resume migration rollback test now fails after prior durable state exists
+  and proves the transaction and migration marker roll back together.
 
 ## Session checklist
 
@@ -227,4 +241,8 @@ Non-blocking Slice A follow-ups:
 - [x] Lock the identity and migration strategy.
 - [x] Land Slice A with focused and full verification.
 - [x] Review Slice A for roadmap compliance and code quality.
-- [ ] Begin Slice B only after the canonical run record is proven.
+- [x] Begin Slice B only after the canonical run record is proven.
+- [x] Land Slice B with leases, atomic continuation checkpoints, explicit and
+  startup resume, schedule projection repair, and person-ledger identity.
+- [x] Verify Slice B with the full Python and GUI suites and a production build.
+- [ ] Begin Slice C human-question suspension as the next Priority 0 branch.
