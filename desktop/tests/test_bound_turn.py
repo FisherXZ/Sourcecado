@@ -77,6 +77,60 @@ def test_keep_one_person_binds_that_session_only(tmp_path):
     assert people.person_for_session("sess-b") is None
 
 
+def test_keep_existing_person_from_another_thread_preserves_chat_and_turn(tmp_path):
+    people = PersonStore(tmp_path)
+    person = people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="L",
+        title="Founder",
+        company="Analytic",
+        target="initial target",
+    )
+    people.bind_session("sess-ada", person["person_id"])
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="keep_existing",
+                        name="people_keep",
+                        arguments={
+                            "people": [_ada()],
+                            "target": "updated target",
+                        },
+                    )
+                ]
+            },
+            {"deltas": ("Kept Ada in her existing sourcing chat.",)},
+        ]
+    )
+
+    result = _run(
+        tmp_path=tmp_path,
+        sid="sess-other",
+        text="keep Ada here too",
+        provider=provider,
+        people=people,
+    )
+
+    assert result == {
+        "status": "ok",
+        "text": "Kept Ada in her existing sourcing chat.",
+    }
+    assert people.person_for_session("sess-ada") == person["person_id"]
+    assert people.person_for_session("sess-other") is None
+    assert people.get(person["person_id"])["target"] == "updated target"
+    tool_receipt = next(
+        message
+        for message in ConversationStore(tmp_path).load("sess-other")
+        if message.get("role") == "tool"
+    )
+    assert '"sourcing_chat": {"session_id": "sess-ada"}' in tool_receipt[
+        "content"
+    ]
+
+
 def test_deleted_bound_person_stops_turn_before_model_request(tmp_path):
     people = PersonStore(tmp_path)
     person = people.keep_from_apollo(

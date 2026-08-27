@@ -695,6 +695,10 @@ def execute(
                 company=row.get("organizationName"),
                 target=target,
             )
+            try:
+                sourcing_session = people.session_for_person(person["person_id"])
+            except ValueError:
+                sourcing_session = None
             kept.append(
                 {
                     "person_id": person["person_id"],
@@ -703,6 +707,11 @@ def execute(
                     "last_name": person["last_name"],
                     "title": person["title"],
                     "company": person["company"],
+                    "sourcing_chat": (
+                        {"session_id": sourcing_session}
+                        if sourcing_session is not None
+                        else None
+                    ),
                 }
             )
         return True, {"kept": kept}

@@ -280,9 +280,16 @@ def record_tool_on_person(
     if name == "people_keep" and ok:
         kept = result.get("kept") or []
         if len(kept) == 1:
-            person_id = kept[0].get("person_id") if isinstance(kept[0], dict) else None
+            item = kept[0] if isinstance(kept[0], dict) else {}
+            person_id = item.get("person_id")
             if person_id:
-                people.bind_session(session_id, str(person_id))
+                sourcing_chat = item.get("sourcing_chat")
+                if isinstance(sourcing_chat, dict) and sourcing_chat.get("session_id"):
+                    return
+                try:
+                    people.bind_session(session_id, str(person_id))
+                except ValueError:
+                    return
         return
     if not ok and str(result.get("error") or "") == "denied by user":
         return
