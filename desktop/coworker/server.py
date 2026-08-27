@@ -46,8 +46,14 @@ from coworker.connectors.google_oauth import (
     save_google,
 )
 from coworker.drive import drive_from_secrets
+from coworker.effective_tools import (
+    EffectiveToolCatalog,
+    ToolAvailability,
+    ToolCatalogError,
+    effective_tool_catalog,
+)
 from coworker.events import build_event, new_turn_identity, TurnIdentity
-from coworker.gmail import gmail_from_secrets
+from coworker.gmail import MissingGmail, gmail_from_secrets
 from coworker.inbox import Inbox
 from coworker.mcp import LiveMcp, write_default_mcp_json
 from coworker.mcp_oauth import McpOAuth
@@ -366,7 +372,25 @@ def create_app(
             oauth=app.state.mcp_oauth,
         )
     )
-    app.state.openai_tools = list(OPENAI_TOOLS) + app.state.mcp.schemas()
+
+    def _effective_tool_catalog(
+        persona: Persona | None = None,
+    ) -> EffectiveToolCatalog:
+        return effective_tool_catalog(
+            persona=persona or app.state.persona,
+            registered_schemas=(*OPENAI_TOOLS, *app.state.mcp.schemas()),
+            workspace_runtime=app.state.workspace_runtime,
+            availability=ToolAvailability(
+                gmail=not isinstance(app.state.gmail, MissingGmail),
+                drive=app.state.drive is not None,
+                calendar=app.state.calendar is not None,
+                apollo=bool(app.state.apollo_key),
+                web=bool(app.state.tavily_key),
+            ),
+        )
+
+    app.state.effective_tool_catalog = _effective_tool_catalog
+    _effective_tool_catalog()  # Fail startup on invalid persona/registry contracts.
 
     def _default_job_runner(job: dict[str, Any]) -> dict[str, Any]:
         import asyncio
@@ -385,7 +409,7 @@ def create_app(
                 persona=app.state.persona,
                 skills=app.state.skills,
                 inbox=app.state.inbox,
-                openai_tools=app.state.openai_tools,
+                openai_tools=list(_effective_tool_catalog().schemas),
                 execute_kwargs={
                     "store": app.state.store,
                     "gmail": app.state.gmail,
@@ -891,7 +915,11 @@ def create_app(
     @app.get("/v1/persona")
     def persona():
         p = app.state.persona
-        return {"id": p.id, "name": p.name, "tools": p.tools}
+        return {
+            "id": p.id,
+            "name": p.name,
+            "tools": list(_effective_tool_catalog().names),
+        }
 
     @app.get("/v1/skills")
     def skills():
@@ -956,7 +984,8 @@ def create_app(
         pid = str(payload.get("id") or "").strip()
         try:
             nxt = load_persona(pid)
-        except ManifestError as exc:
+            _effective_tool_catalog(nxt)
+        except (ManifestError, ToolCatalogError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         app.state.store.set_setting("persona", nxt.id)
         app.state.persona = nxt
@@ -1400,7 +1429,6 @@ def create_app(
     @app.post("/v1/connectors/granola/disconnect")
     def granola_disconnect():
         app.state.secrets.delete("mcp-oauth:granola")
-        app.state.openai_tools = list(OPENAI_TOOLS) + app.state.mcp.schemas()
         return {"connected": False, "disconnected": ["granola"]}
 
     @app.get("/v1/mcp/oauth/callback")
@@ -1413,7 +1441,6 @@ def create_app(
             return HTMLResponse("<p>Granola connect failed: missing code.</p>", status_code=400)
         try:
             app.state.mcp_oauth.finish(code=code, state=state)
-            app.state.openai_tools = list(OPENAI_TOOLS) + app.state.mcp.schemas()
         except Exception as exc:
             return HTMLResponse(
                 f"<p>Granola connect failed: {html.escape(str(exc))}</p>", status_code=400
@@ -1653,6 +1680,7 @@ def create_app(
             "version": 1,
             "session_id": sid,
             **asdict(assembled.diagnostics),
+            "effective_tools": list(_effective_tool_catalog().diagnostics()),
         }
 
     @app.patch("/v1/sessions/{sid}")
@@ -2059,7 +2087,7 @@ def create_app(
                     persona=app.state.persona,
                     skills=app.state.skills,
                     inbox=app.state.inbox,
-                    openai_tools=app.state.openai_tools,
+                    openai_tools=list(_effective_tool_catalog().schemas),
                     execute_kwargs={
                         "store": store,
                         "gmail": app.state.gmail,
