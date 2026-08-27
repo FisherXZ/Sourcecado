@@ -125,6 +125,7 @@ export type CurrentRunMetrics = {
   total_tokens: number | null;
   cache_hit_input_tokens: number | null;
   cache_miss_input_tokens: number | null;
+  cache_write_input_tokens: number | null;
   reasoning_tokens: number | null;
   current_context_tokens: number | null;
   context_window_tokens: number | null;
@@ -290,6 +291,7 @@ export async function getCurrentRunTelemetry(
       total_tokens: measurement(candidate.total_tokens),
       cache_hit_input_tokens: measurement(candidate.cache_hit_input_tokens),
       cache_miss_input_tokens: measurement(candidate.cache_miss_input_tokens),
+      cache_write_input_tokens: measurement(candidate.cache_write_input_tokens),
       reasoning_tokens: measurement(candidate.reasoning_tokens),
       current_context_tokens: measurement(candidate.current_context_tokens),
       context_window_tokens: measurement(candidate.context_window_tokens),
@@ -606,13 +608,114 @@ export type Settings = {
   model: string | null;
   gmail: GmailStatus;
   apollo: { configured: boolean };
+  providers: ProviderVerification[];
   workspace?: WorkspaceDiagnostics;
 };
+
+export type ProviderVerification = {
+  provider: "deepseek" | "kimi" | "anthropic" | "openai";
+  model: string | null;
+  selected: boolean;
+  eligible: boolean;
+  failures: string[];
+  context_window_tokens: number | null;
+  capabilities: {
+    text: boolean;
+    transient_reasoning: boolean;
+    tool_calling: boolean;
+    terminal_usage: boolean;
+    cache_usage: boolean;
+    reasoning_usage: boolean;
+  };
+};
+
+const PROVIDER_IDS = new Set(["deepseek", "kimi", "anthropic", "openai"]);
+const PROVIDER_FAILURES = new Set([
+  "missing_credentials",
+  "invalid_base_url",
+  "unsupported_model",
+  "provider_contract_unverified",
+  "invalid_model_identifier",
+]);
+const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const SECRET_MODEL_PREFIXES = ["sk-", "ghp_", "github_pat_", "ya29.", "aiza"];
+
+function safeModel(value: unknown): string | null {
+  if (typeof value !== "string" || !SAFE_MODEL.test(value)) return null;
+  const lowered = value.toLowerCase();
+  return SECRET_MODEL_PREFIXES.some((prefix) => lowered.startsWith(prefix))
+    ? null
+    : value;
+}
+
+function providerVerification(value: unknown): ProviderVerification | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.provider !== "string" || !PROVIDER_IDS.has(raw.provider)) {
+    return null;
+  }
+  const capabilities =
+    typeof raw.capabilities === "object" &&
+    raw.capabilities !== null &&
+    !Array.isArray(raw.capabilities)
+      ? (raw.capabilities as Record<string, unknown>)
+      : {};
+  const model = safeModel(raw.model);
+  return {
+    provider: raw.provider as ProviderVerification["provider"],
+    model,
+    selected: raw.selected === true && model !== null,
+    eligible: raw.eligible === true && model !== null,
+    failures: Array.isArray(raw.failures)
+      ? raw.failures.filter(
+          (failure): failure is string =>
+            typeof failure === "string" && PROVIDER_FAILURES.has(failure),
+        )
+      : [],
+    context_window_tokens: measurement(raw.context_window_tokens),
+    capabilities: {
+      text: capabilities.text === true,
+      transient_reasoning: capabilities.transient_reasoning === true,
+      tool_calling: capabilities.tool_calling === true,
+      terminal_usage: capabilities.terminal_usage === true,
+      cache_usage: capabilities.cache_usage === true,
+      reasoning_usage: capabilities.reasoning_usage === true,
+    },
+  };
+}
 
 export async function getSettings(): Promise<Settings> {
   const res = await get("/v1/settings");
   if (!res.ok) throw new Error(`settings ${res.status}`);
-  return res.json();
+  const raw = (await res.json()) as Record<string, unknown>;
+  const persona = (raw.persona ?? {}) as Record<string, unknown>;
+  const gmail = (raw.gmail ?? {}) as Record<string, unknown>;
+  const apollo = (raw.apollo ?? {}) as Record<string, unknown>;
+  const providers = Array.isArray(raw.providers)
+    ? raw.providers
+        .map(providerVerification)
+        .filter((provider): provider is ProviderVerification => provider !== null)
+    : [];
+  return {
+    persona: {
+      id: typeof persona.id === "string" ? persona.id : "",
+      name: typeof persona.name === "string" ? persona.name : "",
+    },
+    model: safeModel(raw.model),
+    gmail: {
+      connected: gmail.connected === true,
+      email: typeof gmail.email === "string" ? gmail.email : null,
+    },
+    apollo: { configured: apollo.configured === true },
+    providers,
+    ...(
+      typeof raw.workspace === "object" && raw.workspace !== null
+        ? { workspace: raw.workspace as WorkspaceDiagnostics }
+        : {}
+    ),
+  };
 }
 
 export async function setPersona(id: string): Promise<{ persona: { id: string; name: string } }> {

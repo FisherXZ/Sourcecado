@@ -162,6 +162,62 @@
   color: var(--warn);
 }
 
+.provider-verification-list {
+  display: grid;
+  gap: 0;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-verification-list > li {
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
+}
+
+.provider-verification-list header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.provider-verification-list p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.provider-verification-status,
+.provider-selected {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.provider-verification-status.verified {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.provider-verification-status.needs-setup {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.provider-selected {
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.provider-verification-list .provider-verification-failures {
+  color: var(--warn);
+}
+
 .persona-options {
   display: grid;
   gap: 8px;

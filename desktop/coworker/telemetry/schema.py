@@ -165,6 +165,7 @@ class UsageEvent:
     total_tokens: int | None = None
     cache_hit_input_tokens: int | None = None
     cache_miss_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
     reasoning_tokens: int | None = None
     current_context_tokens: int | None = None
     context_window_tokens: int | None = None
@@ -175,6 +176,7 @@ class UsageEvent:
         _require_count(self.total_tokens, "total_tokens")
         _require_count(self.cache_hit_input_tokens, "cache_hit_input_tokens")
         _require_count(self.cache_miss_input_tokens, "cache_miss_input_tokens")
+        _require_count(self.cache_write_input_tokens, "cache_write_input_tokens")
         _require_count(self.reasoning_tokens, "reasoning_tokens")
         _require_count(self.current_context_tokens, "current_context_tokens")
         _require_count(self.context_window_tokens, "context_window_tokens")

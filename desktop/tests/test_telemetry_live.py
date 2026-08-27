@@ -6,11 +6,19 @@ import pytest
 from coworker.events import TurnIdentity
 from coworker.inbox import Inbox
 from coworker.permissions import decide
-from coworker.provider import ModelUsage, StreamChunk, ToolCall
+from coworker.provider import (
+    ModelUsage,
+    ProviderErrorKind,
+    ProviderStreamError,
+    ProviderTerminal,
+    StreamChunk,
+    ToolCall,
+)
 from coworker.store import ConversationStore
 from coworker.telemetry import InMemoryTelemetryAdapter, TelemetryRecorder
 from coworker.telemetry.schema import (
     AgentTurnSpan,
+    CostEstimate,
     ErrorKind,
     ProviderSpan,
     SpanEventRecord,
@@ -140,6 +148,7 @@ def test_run_turn_records_provider_usage_under_the_authoritative_agent_span(tmp_
             total_tokens=150,
             cache_hit_input_tokens=20,
             cache_miss_input_tokens=100,
+            cache_write_input_tokens=0,
             reasoning_tokens=8,
             current_context_tokens=120,
         )
@@ -153,6 +162,86 @@ def test_run_turn_records_provider_usage_under_the_authoritative_agent_span(tmp_
     assert terminals[0].terminal.stop_reason is StopReason.COMPLETED
     assert terminals[0].terminal.usage == usage_records[0].event
     assert terminals[1].terminal.status is SpanStatus.SUCCESS
+
+
+def test_run_turn_uses_start_and_terminal_as_authoritative_provider_metadata(
+    tmp_path,
+):
+    usage = ModelUsage(
+        input_tokens=120,
+        output_tokens=30,
+        total_tokens=150,
+        cached_input_tokens=20,
+        uncached_input_tokens=100,
+        reasoning_tokens=8,
+        cache_write_input_tokens=5,
+    )
+
+    class BoundaryProvider:
+        provider_id = "wrong-object-provider"
+        model_id = "wrong-object-model"
+
+        async def astream(self, *, messages, tools):
+            yield StreamChunk.started(
+                provider="deepseek",
+                model="deepseek-v4-pro",
+            )
+            yield StreamChunk(text_delta="done")
+            yield StreamChunk(usage=usage)
+            yield StreamChunk(
+                finish_reason="stop",
+                terminal=ProviderTerminal(
+                    stop_reason="stop",
+                    usage=usage,
+                    latency_ms=12.5,
+                    estimated_cost_usd=0.000123,
+                ),
+            )
+
+    result, adapter = run_with_telemetry(tmp_path, BoundaryProvider())
+
+    assert result == {"status": "ok", "text": "done"}
+    provider_start = next(
+        record
+        for record in adapter.records
+        if isinstance(record, SpanStartedRecord)
+        and isinstance(record.span, ProviderSpan)
+    )
+    assert provider_start.span.provider == "deepseek"
+    assert provider_start.span.model == "deepseek-v4-pro"
+    assert provider_start.span.context_window_tokens == 1_000_000
+    usage_records = [
+        record.event
+        for record in adapter.records
+        if isinstance(record, SpanEventRecord)
+        and isinstance(record.event, UsageEvent)
+    ]
+    assert usage_records == [
+        UsageEvent(
+            input_tokens=120,
+            output_tokens=30,
+            total_tokens=150,
+            cache_hit_input_tokens=20,
+            cache_miss_input_tokens=100,
+            cache_write_input_tokens=5,
+            reasoning_tokens=8,
+            current_context_tokens=120,
+            context_window_tokens=1_000_000,
+        )
+    ]
+    provider_terminal = next(
+        record.terminal
+        for record in adapter.records
+        if isinstance(record, SpanSettledRecord)
+        and record.span_id == provider_start.span_id
+    )
+    assert provider_terminal.stop_reason is StopReason.COMPLETED
+    assert provider_terminal.usage == usage_records[0]
+    assert provider_terminal.cost == CostEstimate(estimated_cost_usd=0.000123)
+    metrics = adapter.current_run_metrics(run_id="run-1", now_ns=0)
+    assert metrics.context_window_tokens == 1_000_000
+    assert metrics.context_use_ratio == pytest.approx(0.00012)
+    assert metrics.estimated_cost_usd == pytest.approx(0.000123)
 
 
 def test_live_telemetry_never_captures_prompt_response_or_transient_reasoning(tmp_path):
@@ -278,6 +367,41 @@ def test_run_turn_settles_provider_and_agent_spans_on_provider_failure(tmp_path)
     )
 
 
+def test_run_turn_maps_typed_provider_error_kind_without_raw_error_content(tmp_path):
+    planted = "rate limit raw body sk-live-PLANTED"
+
+    class RateLimitedProvider:
+        provider_id = "deepseek"
+        model_id = "deepseek-v4-pro"
+
+        async def astream(self, *, messages, tools):
+            yield StreamChunk.started(provider=self.provider_id, model=self.model_id)
+            raise ProviderStreamError(
+                provider=self.provider_id,
+                model=self.model_id,
+                kind=ProviderErrorKind.RATE_LIMIT,
+                message=planted,
+                retryable=True,
+                http_status=429,
+            )
+
+    result, adapter = run_with_telemetry(tmp_path, RateLimitedProvider())
+
+    assert result["status"] == "error"
+    terminals = [
+        record.terminal
+        for record in adapter.records
+        if isinstance(record, SpanSettledRecord)
+    ]
+    assert [terminal.error_kind for terminal in terminals] == [
+        ErrorKind.RATE_LIMIT,
+        ErrorKind.RATE_LIMIT,
+    ]
+    assert planted not in json.dumps(
+        [record_to_dict(record) for record in adapter.records]
+    )
+
+
 def test_run_turn_settles_provider_and_agent_spans_when_cancelled(tmp_path):
     identity = TurnIdentity(
         session_id="session-1",
@@ -356,6 +480,46 @@ def test_unsafe_provider_model_identifier_cannot_change_the_turn_outcome(tmp_pat
     assert "PLANTED" not in json.dumps(
         [record_to_dict(record) for record in adapter.records]
     )
+
+
+def test_inconsistent_context_metadata_cannot_change_the_turn_outcome(tmp_path):
+    usage = ModelUsage(
+        input_tokens=130_000,
+        output_tokens=1,
+        total_tokens=130_001,
+        cached_input_tokens=0,
+        uncached_input_tokens=130_000,
+        reasoning_tokens=0,
+    )
+
+    class OversizedUsageProvider:
+        provider_id = "openai"
+        model_id = "gpt-4o-mini"
+
+        async def astream(self, *, messages, tools):
+            yield StreamChunk.started(provider=self.provider_id, model=self.model_id)
+            yield StreamChunk(text_delta="done")
+            yield StreamChunk(
+                finish_reason="stop",
+                terminal=ProviderTerminal(
+                    stop_reason="stop",
+                    usage=usage,
+                    latency_ms=1,
+                    estimated_cost_usd=0.01,
+                ),
+            )
+
+    result, adapter = run_with_telemetry(tmp_path, OversizedUsageProvider())
+
+    assert result == {"status": "ok", "text": "done"}
+    telemetry_usage = next(
+        record.event
+        for record in adapter.records
+        if isinstance(record, SpanEventRecord)
+        and isinstance(record.event, UsageEvent)
+    )
+    assert telemetry_usage.input_tokens == 130_000
+    assert telemetry_usage.context_window_tokens is None
 
 
 def test_invalid_auto_allowed_tool_name_cannot_change_the_turn_outcome(tmp_path):

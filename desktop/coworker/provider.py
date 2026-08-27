@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -123,6 +124,14 @@ class ModelPricing:
     cached_input_per_million: float
     output_per_million: float
     cache_write_input_per_million: float | None = None
+
+
+@dataclass(frozen=True)
+class ProviderModelMetadata:
+    provider: str
+    model: str
+    context_window_tokens: int | None
+    pricing: ModelPricing | None
 
 
 class ProviderStreamError(RuntimeError):
@@ -284,7 +293,8 @@ class FakeProvider:
                     stop_reason=reason,
                     usage=usage if isinstance(usage, ModelUsage) else None,
                     latency_ms=max(0.0, monotonic() - started_at) * 1000,
-                    estimated_cost_usd=_estimate_cost(
+                    estimated_cost_usd=estimate_model_cost(
+                        self.provider_id,
                         self.model_id,
                         usage if isinstance(usage, ModelUsage) else None,
                     ),
@@ -314,16 +324,50 @@ _PROVIDER_CAPABILITIES = {
     "openai": ProviderCapabilities(True, True, True, True, True, True),
 }
 
-_MODEL_PRICING = {
-    "deepseek-v4-flash": ModelPricing(0.14, 0.0028, 0.28),
-    "deepseek-v4-pro": ModelPricing(0.435, 0.003625, 0.87),
-    "claude-sonnet-4-6": ModelPricing(3.0, 0.30, 15.0, 3.75),
-    "gpt-4o-mini": ModelPricing(0.15, 0.075, 0.60),
+# Verified against provider catalogs on 2026-08-27. Unknown or newly priced
+# models stay unavailable until this Sourcecado-owned table is revalidated.
+_MODEL_METADATA: dict[tuple[str, str], tuple[int, ModelPricing]] = {
+    ("deepseek", "deepseek-v4-flash"): (
+        1_000_000,
+        ModelPricing(0.14, 0.0028, 0.28),
+    ),
+    ("deepseek", "deepseek-v4-pro"): (
+        1_000_000,
+        ModelPricing(0.435, 0.003625, 0.87),
+    ),
+    ("kimi", "kimi-k3"): (
+        1_000_000,
+        ModelPricing(3.0, 0.30, 15.0),
+    ),
+    ("anthropic", "claude-sonnet-4-6"): (
+        1_000_000,
+        ModelPricing(3.0, 0.30, 15.0, 3.75),
+    ),
+    ("openai", "gpt-4o-mini"): (
+        128_000,
+        ModelPricing(0.15, 0.075, 0.60),
+    ),
 }
+_MODEL_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+_SECRET_MODEL_PREFIXES = ("sk-", "ghp_", "github_pat_", "ya29.", "aiza")
 
 
-def _estimate_cost(model: str, usage: ModelUsage | None) -> float | None:
-    pricing = _MODEL_PRICING.get(model)
+def provider_model_metadata(provider: str, model: str) -> ProviderModelMetadata:
+    known = _MODEL_METADATA.get((provider, model))
+    return ProviderModelMetadata(
+        provider=provider,
+        model=model,
+        context_window_tokens=known[0] if known is not None else None,
+        pricing=known[1] if known is not None else None,
+    )
+
+
+def estimate_model_cost(
+    provider: str,
+    model: str,
+    usage: ModelUsage | None,
+) -> float | None:
+    pricing = provider_model_metadata(provider, model).pricing
     if pricing is None or usage is None:
         return None
     cache_write_rate = (
@@ -340,12 +384,15 @@ def _estimate_cost(model: str, usage: ModelUsage | None) -> float | None:
     ) / 1_000_000
 
 
-def provider_verifications(
-    environment: Mapping[str, str] | None = None,
-) -> tuple[ProviderVerification, ...]:
-    env = os.environ if environment is None else environment
-    override = str(env.get("CLUB_MODEL") or "").strip()
-    first_configured = next(
+def safe_model_identifier(value: str) -> bool:
+    return bool(
+        _MODEL_IDENTIFIER.fullmatch(value)
+        and not value.lower().startswith(_SECRET_MODEL_PREFIXES)
+    )
+
+
+def _first_configured_provider(env: Mapping[str, str]) -> str | None:
+    return next(
         (
             provider
             for provider, _model, key_name in _PROVIDER_DEFAULTS
@@ -357,13 +404,30 @@ def provider_verifications(
         ),
         None,
     )
+
+
+def provider_verifications(
+    environment: Mapping[str, str] | None = None,
+) -> tuple[ProviderVerification, ...]:
+    env = os.environ if environment is None else environment
+    override = str(env.get("CLUB_MODEL") or "").strip()
+    first_configured = _first_configured_provider(env)
     reports: list[ProviderVerification] = []
     for provider, default_model, key_name in _PROVIDER_DEFAULTS:
-        model = override if override and provider == first_configured else default_model
+        requested_model = (
+            override if override and provider == first_configured else default_model
+        )
+        model = (
+            requested_model
+            if safe_model_identifier(requested_model)
+            else default_model
+        )
         key = str(env.get(key_name) or "").strip()
         if provider == "kimi" and not key:
             key = str(env.get("KIMI_API_KEY") or "").strip()
         failures: list[str] = []
+        if requested_model != model:
+            failures.append("invalid_model_identifier")
         if not key:
             failures.append("missing_api_key")
         base_url = ""
@@ -736,7 +800,9 @@ class AnthropicProvider:
                 stop_reason=finish_reason,
                 usage=usage,
                 latency_ms=max(0.0, monotonic() - started_at) * 1000,
-                estimated_cost_usd=_estimate_cost(self.model_id, usage),
+                estimated_cost_usd=estimate_model_cost(
+                    self.provider_id, self.model_id, usage
+                ),
             ),
         )
         if calls:
@@ -914,7 +980,7 @@ class OpenAICompatProvider:
                     try:
                         data = json.loads(payload)
                         usage = _parse_usage(data.get("usage"))
-                    except (json.JSONDecodeError, RuntimeError) as exc:
+                    except (json.JSONDecodeError, RuntimeError, ValueError) as exc:
                         raise self._protocol_error(
                             "stream payload or usage is malformed"
                         ) from exc
@@ -1028,7 +1094,9 @@ class OpenAICompatProvider:
                 stop_reason=terminal_reason,
                 usage=latest_usage,
                 latency_ms=max(0.0, monotonic() - started_at) * 1000,
-                estimated_cost_usd=_estimate_cost(self.model_id, latest_usage),
+                estimated_cost_usd=estimate_model_cost(
+                    self.provider_id, self.model_id, latest_usage
+                ),
             ),
         )
         if calls:
@@ -1187,6 +1255,31 @@ class KimiProvider(DeepSeekProvider):
             model=self.model_id,
             status_code=status_code,
         )
+
+    def _prepare_messages(
+        self,
+        *,
+        context_id: str | None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        if context_id or not tools:
+            return super()._prepare_messages(
+                context_id=context_id,
+                messages=messages,
+                tools=tools,
+            )
+        prepared = deepcopy(messages)
+        for message in prepared:
+            if message.get("role") != "assistant" or not message.get("tool_calls"):
+                continue
+            if message.get("content") is None:
+                message["content"] = ""
+            if "reasoning_content" not in message:
+                raise self._protocol_error(
+                    "kimi tool continuation requires retained reasoning"
+                )
+        return prepared
 
     def _request_body(
         self,
@@ -1356,6 +1449,14 @@ def _matches_json_type(value: Any, expected: Any) -> bool:
 def provider_from_env() -> Optional[StreamProvider]:
     """DeepSeek V4 Pro first, Kimi K3 second. Other keys are last-resort."""
     reports = {report.provider: report for report in provider_verifications()}
+    override = _env("CLUB_MODEL")
+    first_configured = _first_configured_provider(os.environ)
+    if (
+        override
+        and first_configured is not None
+        and not reports[first_configured].eligible
+    ):
+        return None
     if _deepseek_key() and reports["deepseek"].eligible:
         return DeepSeekProvider(
             api_key=_deepseek_key(),

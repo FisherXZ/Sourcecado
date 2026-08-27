@@ -5,6 +5,7 @@ import {
   getSettings,
   setPersona as persistPersona,
   type Connector,
+  type ProviderVerification,
   type Settings,
   type WorkspaceDiagnostics,
 } from "../api";
@@ -50,6 +51,46 @@ function connectorStatusLabel(status: string): string {
   if (status === "configured") return "Configured";
   if (status === "missing") return "Needs setup";
   return "Needs attention";
+}
+
+function providerLabel(provider: ProviderVerification["provider"]): string {
+  return {
+    deepseek: "DeepSeek",
+    kimi: "Kimi",
+    anthropic: "Anthropic",
+    openai: "OpenAI",
+  }[provider];
+}
+
+function providerFailureLabel(failure: string): string {
+  return {
+    missing_credentials: "Credentials missing",
+    invalid_base_url: "Provider URL is invalid",
+    unsupported_model: "Model is not supported",
+    provider_contract_unverified: "Provider contract is not verified",
+    invalid_model_identifier: "Model identifier is invalid",
+  }[failure] ?? "Provider setup needs attention";
+}
+
+function contextWindowLabel(tokens: number | null): string {
+  if (tokens === null) return "Context unknown";
+  if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) {
+    return `${tokens / 1_000_000}M context`;
+  }
+  if (tokens >= 1_000 && tokens % 1_000 === 0) {
+    return `${tokens / 1_000}K context`;
+  }
+  return `${tokens.toLocaleString()} context`;
+}
+
+function capabilityLabels(provider: ProviderVerification): string[] {
+  const capabilities = provider.capabilities;
+  return [
+    ...(capabilities.tool_calling ? ["Tools"] : []),
+    ...(capabilities.terminal_usage ? ["Usage"] : []),
+    ...(capabilities.cache_usage ? ["Cache usage"] : []),
+    ...(capabilities.reasoning_usage ? ["Reasoning usage"] : []),
+  ];
 }
 
 export function SettingsPage() {
@@ -175,6 +216,43 @@ export function SettingsPage() {
                 <span>Chat needs a configured model before it can run.</span>
               </p>
             )}
+            <ul
+              className="provider-verification-list"
+              aria-label="Provider verification"
+            >
+              {(state.settings.providers ?? []).map((provider) => (
+                <li
+                  key={provider.provider}
+                  aria-label={`${providerLabel(provider.provider)} provider`}
+                >
+                  <header>
+                    <strong>{providerLabel(provider.provider)}</strong>
+                    <span
+                      className={
+                        provider.eligible
+                          ? "provider-verification-status verified"
+                          : "provider-verification-status needs-setup"
+                      }
+                    >
+                      {provider.eligible ? "Verified" : "Needs setup"}
+                    </span>
+                    {provider.selected ? (
+                      <span className="provider-selected">Selected</span>
+                    ) : null}
+                  </header>
+                  <p>
+                    <span>{provider.model ?? "Model unavailable"}</span>
+                    <span>{contextWindowLabel(provider.context_window_tokens)}</span>
+                  </p>
+                  <p>{capabilityLabels(provider).join(" · ")}</p>
+                  {provider.failures.length ? (
+                    <p className="provider-verification-failures">
+                      {provider.failures.map(providerFailureLabel).join(" · ")}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
           </section>
 
           <section className="settings-section settings-connectors" aria-labelledby="connectors-heading">

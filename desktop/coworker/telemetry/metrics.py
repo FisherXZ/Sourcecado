@@ -28,6 +28,7 @@ class CurrentRunMetrics:
     total_tokens: int | None
     cache_hit_input_tokens: int | None
     cache_miss_input_tokens: int | None
+    cache_write_input_tokens: int | None
     reasoning_tokens: int | None
     current_context_tokens: int | None
     context_window_tokens: int | None
@@ -131,6 +132,9 @@ def current_run_metrics(
         total_tokens=_sum_known(selected_usages, "total_tokens"),
         cache_hit_input_tokens=_sum_known(selected_usages, "cache_hit_input_tokens"),
         cache_miss_input_tokens=_sum_known(selected_usages, "cache_miss_input_tokens"),
+        cache_write_input_tokens=_sum_known(
+            selected_usages, "cache_write_input_tokens"
+        ),
         reasoning_tokens=_sum_known(selected_usages, "reasoning_tokens"),
         current_context_tokens=current_context_tokens,
         context_window_tokens=context_window_tokens,

@@ -54,7 +54,13 @@ from coworker.brief import build_brief
 from coworker.people import PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
-from coworker.provider import ToolCall, provider_from_env
+from coworker.provider import (
+    ToolCall,
+    provider_from_env,
+    provider_model_metadata,
+    provider_verifications,
+    safe_model_identifier,
+)
 from coworker.secrets import SecretStore
 from coworker.store import ConversationStore, valid_session_id
 from coworker.telemetry import (
@@ -863,9 +869,46 @@ def create_app(
         p = app.state.provider
         profile = load_google(app.state.secrets)
         on_duty = app.state.persona
+        reports = provider_verifications()
+        active_provider = str(getattr(p, "provider_id", "")) if p is not None else ""
+        active_model = str(getattr(p, "model_id", "")) if p is not None else ""
+        safe_active_model = (
+            active_model if active_model and safe_model_identifier(active_model) else None
+        )
         return {
             "persona": {"id": on_duty.id, "name": on_duty.name},
-            "model": None if p is None else p.model_id,
+            "model": safe_active_model,
+            "providers": [
+                {
+                    "provider": report.provider,
+                    "model": report.model,
+                    "selected": (
+                        report.provider == active_provider
+                        and report.model == safe_active_model
+                    ),
+                    "eligible": report.eligible,
+                    "failures": [
+                        "missing_credentials"
+                        if failure == "missing_api_key"
+                        else failure
+                        for failure in report.failures
+                    ],
+                    "context_window_tokens": provider_model_metadata(
+                        report.provider, report.model
+                    ).context_window_tokens,
+                    "capabilities": {
+                        "text": report.capabilities.text,
+                        "transient_reasoning": (
+                            report.capabilities.transient_reasoning
+                        ),
+                        "tool_calling": report.capabilities.tool_calling,
+                        "terminal_usage": report.capabilities.terminal_usage,
+                        "cache_usage": report.capabilities.cache_usage,
+                        "reasoning_usage": report.capabilities.reasoning_usage,
+                    },
+                }
+                for report in reports
+            ],
             "gmail": {
                 "connected": bool(profile.get("refresh_token")),
                 "email": profile.get("email"),
@@ -1546,6 +1589,7 @@ def create_app(
                 "total_tokens": metrics.total_tokens,
                 "cache_hit_input_tokens": metrics.cache_hit_input_tokens,
                 "cache_miss_input_tokens": metrics.cache_miss_input_tokens,
+                "cache_write_input_tokens": metrics.cache_write_input_tokens,
                 "reasoning_tokens": metrics.reasoning_tokens,
                 "current_context_tokens": metrics.current_context_tokens,
                 "context_window_tokens": metrics.context_window_tokens,

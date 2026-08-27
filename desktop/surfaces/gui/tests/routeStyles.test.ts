@@ -18,4 +18,16 @@ describe("Skills and Settings route styles", () => {
       /@media \(max-width: 767px\)[\s\S]*?\.workspace-settings button[^}]*min-height:\s*44px;/,
     );
   });
+
+  it("renders provider verification as compact divided operational rows", () => {
+    expect(styles).toMatch(
+      /\.provider-verification-list\s*\{[^}]*display:\s*grid;[^}]*list-style:\s*none;/,
+    );
+    expect(styles).toMatch(
+      /\.provider-verification-list > li\s*\{[^}]*border-top:\s*1px solid var\(--border\);/,
+    );
+    expect(styles).toMatch(
+      /\.provider-verification-status\.verified\s*\{[^}]*background:\s*var\(--accent-tint\);[^}]*color:\s*var\(--accent-deep\);/,
+    );
+  });
 });
