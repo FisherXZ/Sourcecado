@@ -276,20 +276,13 @@ def record_tool_on_person(
     *,
     ok: bool,
 ) -> None:
-    """Bind a one-person keep to this session, then file connector events on the bound person."""
+    """Bind a first one-person keep to this session, then file connector events on the bound person."""
     if name == "people_keep" and ok:
         kept = result.get("kept") or []
         if len(kept) == 1:
-            item = kept[0] if isinstance(kept[0], dict) else {}
-            person_id = item.get("person_id")
-            if person_id:
-                sourcing_chat = item.get("sourcing_chat")
-                if isinstance(sourcing_chat, dict) and sourcing_chat.get("session_id"):
-                    return
-                try:
-                    people.bind_session(session_id, str(person_id))
-                except ValueError:
-                    return
+            person_id = kept[0].get("person_id") if isinstance(kept[0], dict) else None
+            if person_id and people.session_for_person(str(person_id)) is None:
+                people.bind_session(session_id, str(person_id))
         return
     if not ok and str(result.get("error") or "") == "denied by user":
         return

@@ -119,6 +119,7 @@ def test_keep_existing_person_from_another_thread_preserves_chat_and_turn(tmp_pa
         "text": "Kept Ada in her existing sourcing chat.",
     }
     assert people.person_for_session("sess-ada") == person["person_id"]
+    assert people.session_for_person(person["person_id"]) == "sess-ada"
     assert people.person_for_session("sess-other") is None
     assert people.get(person["person_id"])["target"] == "updated target"
     tool_receipt = next(
