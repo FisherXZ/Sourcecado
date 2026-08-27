@@ -355,9 +355,9 @@ def test_safe_tool_event_persistence_failure_suspends_for_retry(
     durable_history = store.load(identity.session_id)
     durable_events = store.load_events(identity.session_id)
     cursor = run["continuation"]["cursor"]
-    assert cursor["transcript_prefix_count"] == len(durable_history)
+    assert cursor["transcript_prefix_count"] == 2
     assert cursor["transcript_prefix_sha256"] == transcript_prefix_sha256(
-        durable_history
+        durable_history[:2]
     )
     assert cursor["event_prefix_count"] == len(durable_events) - 1
     assert cursor["event_prefix_sha256"] == transcript_prefix_sha256(

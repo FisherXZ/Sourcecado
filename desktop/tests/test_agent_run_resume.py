@@ -7,12 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from coworker.agent_run_continuation import transcript_prefix_sha256
 from coworker.agent_run_execution import AgentRunExecution
 from coworker.events import TurnIdentity, build_event
 from coworker.inbox import Inbox
 from coworker.provider import FakeProvider, StreamChunk, ToolCall
 from coworker.store import ConversationStore
-from coworker.turn import resume_turn
+from coworker.turn import resume_turn, run_turn
 
 
 def _identity(run_id: str = "run-resume-model") -> TurnIdentity:
@@ -441,7 +442,7 @@ def test_projection_repair_crash_between_files_is_durable_and_retryable(
             delta="TAIL",
         ),
     )
-    original_replace_events = store.replace_events
+    original_replace_events = store._rewrite_event_projection
     replacements = []
 
     def fail_first_event_rewrite(sid, events):
@@ -450,7 +451,7 @@ def test_projection_repair_crash_between_files_is_durable_and_retryable(
             raise OSError("injected event rewrite crash")
         return original_replace_events(sid, events)
 
-    monkeypatch.setattr(store, "replace_events", fail_first_event_rewrite)
+    monkeypatch.setattr(store, "_rewrite_event_projection", fail_first_event_rewrite)
     provider = FakeProvider(deltas=("Recovered",))
     first = asyncio.run(
         resume_turn(
@@ -473,12 +474,7 @@ def test_projection_repair_crash_between_files_is_durable_and_retryable(
     assert "event-repair-tail" in {
         event["event_id"] for event in store.load_events(identity.session_id)
     }
-    with sqlite3.connect(store.db_path) as db:
-        db.execute(
-            "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
-            ("2000-01-01T00:00:00+00:00", identity.run_id),
-        )
-    store.agent_runs.reconcile_expired_leases()
+    assert interrupted_repair["current_state"] == "interrupted"
 
     second = asyncio.run(
         resume_turn(
@@ -540,6 +536,81 @@ def test_projection_repair_failure_before_marker_leaves_files_untouched(
     assert "projection_repair" not in store.get_agent_run(identity.run_id)[
         "continuation"
     ]
+
+
+def test_stale_projection_owner_cannot_publish_after_new_owner_repairs(
+    tmp_path,
+):
+    first = ConversationStore(tmp_path)
+    identity = _identity("run-stale-projection-publisher")
+    _seed_model_retry(first, identity)
+    first.append(identity.session_id, {"role": "user", "content": "TAIL"})
+    first.append_event(
+        identity.session_id,
+        build_event(
+            identity,
+            "assistant_delta",
+            event_id="event-stale-tail",
+            delta="TAIL",
+        ),
+    )
+    stale = AgentRunExecution.resume(
+        first, identity, 8, owner_id="stale-projection-owner"
+    )
+    cursor = first.get_agent_run(identity.run_id)["continuation"]["cursor"]
+    marker = {
+        key: cursor[key]
+        for key in (
+            "transcript_prefix_count",
+            "transcript_prefix_sha256",
+            "event_prefix_count",
+            "event_prefix_sha256",
+        )
+    }
+    stale.begin_projection_repair(marker)
+    with sqlite3.connect(first.db_path) as db:
+        db.execute(
+            "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
+            ("2000-01-01T00:00:00+00:00", identity.run_id),
+        )
+    second = ConversationStore(tmp_path)
+    second.agent_runs.reconcile_expired_leases()
+    ready = threading.Barrier(2)
+    release_stale = threading.Event()
+    stale_callback = []
+    stale_errors = []
+
+    def stale_publish():
+        ready.wait()
+        release_stale.wait()
+        try:
+            stale.publish_projection_repair(
+                lambda: stale_callback.append("published")
+            )
+        except Exception as exc:
+            stale_errors.append(type(exc).__name__)
+
+    thread = threading.Thread(target=stale_publish)
+    thread.start()
+    ready.wait()
+    provider = FakeProvider(deltas=("New owner result",))
+    repaired = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=second,
+            provider=provider,
+            dependencies=_dependencies(second),
+        )
+    )
+    release_stale.set()
+    thread.join(timeout=2)
+
+    assert repaired["status"] == "ok"
+    assert stale_callback == []
+    assert stale_errors
+    assert [message.get("content") for message in second.load(identity.session_id)][
+        -1
+    ] == "New owner result"
 
 
 @pytest.mark.parametrize(
@@ -731,6 +802,47 @@ def test_resume_tools_ready_without_pending_starts_at_unstarted_index(
     ] == [call.id for call in calls]
 
 
+def test_resume_rejects_wrong_prior_tool_result_name_even_with_matching_prefix(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-wrong-prior-result-name")
+    calls = [
+        ToolCall(id="call-prior", name="gmail_search", arguments={}),
+        ToolCall(id="call-next", name="gmail_search", arguments={}),
+    ]
+    _seed_unstarted_tool_boundary(store, identity, calls, next_index=1)
+    messages = store.load(identity.session_id)
+    messages[-1]["name"] = "drive_search"
+    store.replace_all(identity.session_id, messages)
+    continuation = store.get_agent_run(identity.run_id)["continuation"]
+    continuation["cursor"]["transcript_prefix_sha256"] = transcript_prefix_sha256(
+        messages
+    )
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE agent_runs SET continuation = ? WHERE run_id = ?",
+            (json.dumps(continuation), identity.run_id),
+        )
+    executed = []
+    monkeypatch.setattr(
+        "coworker.turn.execute",
+        lambda *args, **kwargs: executed.append("tool") or (True, {}),
+    )
+
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=FakeProvider(deltas=("must not run",)),
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "review_required"
+    assert executed == []
+
+
 def test_resume_unstarted_consequential_tool_enters_approval_wait(tmp_path):
     store = ConversationStore(tmp_path)
     identity = _identity("run-unstarted-consequential")
@@ -751,6 +863,44 @@ def test_resume_unstarted_consequential_tool_enters_approval_wait(tmp_path):
     assert provider.calls == []
     run = store.get_agent_run(identity.run_id)
     assert run["current_state"] == "waiting_approval"
+
+
+@pytest.mark.parametrize(
+    ("outcome", "ok"),
+    [
+        ("executed", False),
+        ("failed_unexecuted", False),
+        ("failed_external", False),
+        ("denied", False),
+    ],
+)
+def test_resume_preserves_durable_prior_tool_failure_as_partial(
+    tmp_path, outcome, ok
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity(f"run-prior-failure-{outcome}")
+    call = ToolCall(id="call-prior-failure", name="gmail_search", arguments={})
+    _seed_unstarted_tool_boundary(store, identity, [call], next_index=1)
+    continuation = store.get_agent_run(identity.run_id)["continuation"]
+    continuation["completed_tool_receipts"][0]["outcome"] = outcome
+    continuation["completed_tool_receipts"][0]["ok"] = ok
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE agent_runs SET continuation = ? WHERE run_id = ?",
+            (json.dumps(continuation), identity.run_id),
+        )
+
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=FakeProvider(deltas=("Done",)),
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "partial"
+    assert store.get_agent_run(identity.run_id)["current_state"] == "partial"
 
 
 @pytest.mark.parametrize("case", ["consequential", "policy_drift"])
@@ -961,6 +1111,82 @@ def test_resumed_model_can_continue_through_safe_tool_and_followup_model(
     ]
 
 
+def test_safe_tool_checkpoint_failure_truncates_uncommitted_result_before_retry(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-safe-tool-result-retry")
+    call = ToolCall(id="call-result-retry", name="gmail_search", arguments={})
+    provider = FakeProvider(
+        steps=[
+            {"tool_calls": [call]},
+            {"deltas": ("Recovered",)},
+        ]
+    )
+    executions = []
+
+    def execute_tool(name, arguments, **kwargs):
+        executions.append(name)
+        return True, {"attempt": len(executions)}
+
+    original_completed = AgentRunExecution.tool_completed
+    failures = []
+
+    def fail_first_completion(self, *args, **kwargs):
+        if not failures:
+            failures.append("failed")
+            raise OSError("checkpoint unavailable")
+        return original_completed(self, *args, **kwargs)
+
+    monkeypatch.setattr("coworker.turn.execute", execute_tool)
+    monkeypatch.setattr(AgentRunExecution, "tool_completed", fail_first_completion)
+    first = asyncio.run(
+        run_turn(
+            text="Find candidates",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+        )
+    )
+
+    assert first["status"] == "interrupted"
+    interrupted = store.get_agent_run(identity.run_id)
+    assert interrupted["continuation"]["pending_tool"]["status"] == "retry_ready"
+
+    second = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=provider,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert second["status"] == "ok"
+    assert executions == [call.name, call.name]
+    transcript = store.load(identity.session_id)
+    assert [
+        message.get("tool_call_id")
+        for message in transcript
+        if message.get("role") == "tool"
+    ] == [call.id]
+    assert [
+        event.get("id")
+        for event in store.load_events(identity.session_id)
+        if event.get("type") == "tool_finished"
+    ] == [call.id]
+    final = store.get_agent_run(identity.run_id)
+    assert final["continuation"]["remaining_budgets"]["tool_calls"] == 7
+    assert final["usage"] == {"model_calls": 2, "tool_calls": 1}
+    assert len(final["continuation"]["completed_tool_receipts"]) == 1
+
+
 def test_tool_completion_lost_ack_resumes_without_duplicate_usage_or_receipt(
     tmp_path, monkeypatch
 ):
@@ -1124,3 +1350,418 @@ def test_matching_completed_receipt_repairs_stale_pending_cursor_without_reexecu
         checkpoint["payload"].get("reason") == "completed_receipt_recovered"
         for checkpoint in store.list_agent_run_checkpoints(identity.run_id)
     )
+
+
+def _seed_terminal_without_event(
+    store: ConversationStore, identity: TurnIdentity, state: str
+) -> None:
+    asyncio.run(
+        run_turn(
+            text="Finish",
+            sid=identity.session_id,
+            store=store,
+            provider=FakeProvider(deltas=("Visible answer",)),
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+        )
+    )
+    store.replace_events(
+        identity.session_id,
+        [
+            event
+            for event in store.load_events(identity.session_id)
+            if event.get("type") not in {"turn_end", "turn_stopped", "error"}
+        ],
+    )
+    run = store.get_agent_run(identity.run_id)
+    continuation = run["continuation"]
+    continuation["cursor"]["phase"] = state
+    terminal_result = {
+        "status": {
+            "complete": "ok",
+            "partial": "partial",
+            "stopped": "stopped",
+            "failed": "error",
+        }[state],
+        "message_id": identity.message_id,
+        "text_length": len("Visible answer"),
+    }
+    if state == "failed":
+        terminal_result["error"] = "Recovered failure"
+        terminal_result["class"] = "run_error"
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            """
+            UPDATE agent_runs
+            SET current_state = ?, continuation = ?, terminal_result = ?
+            WHERE run_id = ?
+            """,
+            (
+                state,
+                json.dumps(continuation),
+                json.dumps(terminal_result),
+                identity.run_id,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("state", "status", "event_type"),
+    [
+        ("complete", "ok", "turn_end"),
+        ("partial", "partial", "turn_end"),
+        ("stopped", "stopped", "turn_end"),
+        ("failed", "error", "error"),
+    ],
+)
+def test_explicit_terminal_projection_repair_is_idempotent(
+    tmp_path, state, status, event_type
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity(f"run-terminal-repair-{state}")
+    _seed_terminal_without_event(store, identity, state)
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    first = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=None,
+            dependencies=_dependencies(store),
+            emit=emit,
+        )
+    )
+    second = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=None,
+            dependencies=_dependencies(store),
+            emit=emit,
+        )
+    )
+
+    assert first["status"] == second["status"] == status
+    terminal_events = [
+        event
+        for event in store.load_events(identity.session_id)
+        if event.get("type") in {"turn_end", "turn_stopped", "error"}
+    ]
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["type"] == event_type
+    assert terminal_events[0]["event_id"].startswith("event_terminal_")
+    assert emitted == terminal_events
+
+
+def test_terminal_projection_repair_race_and_torn_line_append_once(tmp_path):
+    seed = ConversationStore(tmp_path)
+    identity = _identity("run-terminal-repair-race")
+    _seed_terminal_without_event(seed, identity, "complete")
+    with open(seed.event_dir / f"{identity.session_id}.jsonl", "ab") as fh:
+        fh.write(b'{"event_id":"torn')
+    barrier = threading.Barrier(2)
+
+    def repair():
+        store = ConversationStore(tmp_path)
+        barrier.wait()
+        return asyncio.run(
+            resume_turn(
+                run_id=identity.run_id,
+                store=store,
+                provider=None,
+                dependencies=_dependencies(store),
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: repair(), range(2)))
+
+    assert [result["status"] for result in results] == ["ok", "ok"]
+    terminal_events = [
+        event
+        for event in seed.load_events(identity.session_id)
+        if event.get("type") == "turn_end"
+    ]
+    assert len(terminal_events) == 1
+
+
+def test_live_terminal_event_failure_is_repaired_explicitly(tmp_path, monkeypatch):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-live-terminal-repair")
+    original_append = store.append_event
+
+    def fail_terminal(sid, event):
+        if event.get("type") == "turn_end":
+            raise OSError("terminal event unavailable")
+        return original_append(sid, event)
+
+    monkeypatch.setattr(store, "append_event", fail_terminal)
+    live = asyncio.run(
+        run_turn(
+            text="Finish",
+            sid=identity.session_id,
+            store=store,
+            provider=FakeProvider(deltas=("Done",)),
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+        )
+    )
+    assert live["status"] == "error"
+    assert store.get_agent_run(identity.run_id)["current_state"] == "complete"
+
+    repaired = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=None,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert repaired["status"] == "ok"
+    assert len(
+        [
+            event
+            for event in store.load_events(identity.session_id)
+            if event.get("type") == "turn_end"
+        ]
+    ) == 1
+
+
+def test_resumed_terminal_event_failure_is_repaired_explicitly(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-resumed-terminal-repair")
+    _seed_model_retry(store, identity)
+    original_append = store.append_event
+
+    def fail_terminal(sid, event):
+        if event.get("type") == "turn_end":
+            raise OSError("resumed terminal event unavailable")
+        return original_append(sid, event)
+
+    monkeypatch.setattr(store, "append_event", fail_terminal)
+    first = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=FakeProvider(deltas=("Done",)),
+            dependencies=_dependencies(store),
+        )
+    )
+    assert first["status"] == "error"
+    assert store.get_agent_run(identity.run_id)["current_state"] == "complete"
+
+    repaired = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=None,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert repaired["status"] == "ok"
+    assert len(
+        [
+            event
+            for event in store.load_events(identity.session_id)
+            if event.get("type") == "turn_end"
+            and event.get("state") == "complete"
+        ]
+    ) == 1
+
+
+def test_terminal_repair_write_failure_can_retry_immediately(tmp_path, monkeypatch):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-terminal-repair-write-failure")
+    _seed_terminal_without_event(store, identity, "complete")
+    original_append_once = store.append_event_once
+    attempts = []
+
+    def fail_once(sid, event):
+        attempts.append(event["event_id"])
+        if len(attempts) == 1:
+            raise OSError("recovery append failed")
+        return original_append_once(sid, event)
+
+    monkeypatch.setattr(store, "append_event_once", fail_once)
+    first = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=None,
+            dependencies=_dependencies(store),
+        )
+    )
+    second = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=None,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert first["status"] == "error"
+    assert second["status"] == "ok"
+    assert attempts[0] == attempts[1]
+
+
+def test_interrupted_event_does_not_mask_missing_final_terminal_event(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-interrupted-before-terminal-repair")
+    _seed_terminal_without_event(store, identity, "complete")
+    store.append_event(
+        identity.session_id,
+        build_event(
+            identity,
+            "turn_end",
+            event_id="event-earlier-interruption",
+            state="interrupted",
+            text="",
+            message="Earlier interruption",
+        ),
+    )
+
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=None,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert [
+        event["state"]
+        for event in store.load_events(identity.session_id)
+        if event.get("type") == "turn_end"
+    ] == ["interrupted", "complete"]
+
+
+def test_resume_memory_tool_refreshes_system_prompt_before_followup_model(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-resume-memory-refresh")
+    call = ToolCall(id="call-remember", name="remember", arguments={"content": "x"})
+    _seed_unstarted_tool_boundary(store, identity, [call], next_index=0)
+    prompt_versions = []
+    memory = {"version": 0}
+
+    def system_prompt(*args, **kwargs):
+        prompt_versions.append(memory["version"])
+        return f"memory-version-{memory['version']}"
+
+    def execute_tool(name, arguments, **kwargs):
+        memory["version"] = 1
+        return True, {"remembered": True}
+
+    monkeypatch.setattr("coworker.turn.execute", execute_tool)
+    provider = FakeProvider(deltas=("Done",))
+    dependencies = _dependencies(store)
+    dependencies["system_prompt_fn"] = system_prompt
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=provider,
+            dependencies=dependencies,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert prompt_versions == [0, 1]
+    assert provider.calls[0][0]["content"] == "memory-version-1"
+
+
+def test_resume_policy_denial_projects_person_file_failure(tmp_path, monkeypatch):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-resume-denied-person")
+    call = ToolCall(id="call-denied", name="unknown_tool", arguments={})
+    _seed_unstarted_tool_boundary(store, identity, [call], next_index=0)
+    projected = []
+
+    def record(sid, tool_call, ok, result, execute_kwargs):
+        projected.append((sid, tool_call.id, ok, result))
+
+    monkeypatch.setattr("coworker.turn._record_person_file", record)
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=FakeProvider(deltas=("Done",)),
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "partial"
+    assert projected == [
+        (
+            identity.session_id,
+            call.id,
+            False,
+            {"error": "unknown tool unknown_tool"},
+        )
+    ]
+
+
+def test_resume_permission_event_includes_approval_resource(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-resume-permission-resource")
+    call = ToolCall(
+        id="call-draft-resource",
+        name="gmail_send",
+        arguments={"draft_id": "draft-1"},
+    )
+    _seed_unstarted_tool_boundary(store, identity, [call], next_index=0)
+
+    class Gmail:
+        def get_draft(self, *, draft_id):
+            return {"to": "person@example.com", "subject": "Hello"}
+
+        def account(self):
+            return "fisher@example.com"
+
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    dependencies = _dependencies(store)
+    dependencies["execute_kwargs"] = {"gmail": Gmail()}
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=FakeProvider(deltas=("must not run",)),
+            dependencies=dependencies,
+            emit=emit,
+        )
+    )
+
+    assert result["status"] == "waiting"
+    permission = next(
+        event for event in emitted if event["type"] == "permission_required"
+    )
+    assert permission["resource"] == {
+        "kind": "gmail_draft",
+        "draft_id": "draft-1",
+        "to": "person@example.com",
+        "subject": "Hello",
+        "account": "fisher@example.com",
+    }

@@ -18,8 +18,8 @@ from coworker.agent_run_execution import (
 )
 from coworker.agent_run_continuation import transcript_prefix_sha256
 from coworker.agent_run_heartbeat import AgentRunHeartbeat, AgentRunHeartbeatError
-from coworker.agent_runs import safe_error_summary
-from coworker.events import TurnEventStream, TurnIdentity
+from coworker.agent_runs import TERMINAL_AGENT_RUN_STATES, safe_error_summary
+from coworker.events import TurnEventStream, TurnIdentity, build_event
 from coworker.provider import ToolCall
 
 if TYPE_CHECKING:
@@ -28,6 +28,114 @@ if TYPE_CHECKING:
 
 
 MAX_STEPS = 8
+
+
+def _terminal_status(state: str) -> str:
+    return {
+        "complete": "ok",
+        "partial": "partial",
+        "stopped": "stopped",
+        "failed": "error",
+    }[state]
+
+
+def _is_terminal_event(
+    event: dict[str, Any], identity: TurnIdentity, state: str
+) -> bool:
+    if (
+        event.get("run_id") != identity.run_id
+        or event.get("message_id") != identity.message_id
+    ):
+        return False
+    if state == "failed":
+        return event.get("type") == "error" and event.get("state") == "failed"
+    if state == "stopped" and event.get("type") == "turn_stopped":
+        return event.get("state") == "stopped"
+    return event.get("type") == "turn_end" and event.get("state") == state
+
+
+async def _repair_terminal_projection(
+    *,
+    store: ConversationStore,
+    run: dict[str, Any],
+    identity: TurnIdentity,
+    emit: Callable[[dict[str, Any]], Awaitable[None]] | None,
+) -> dict[str, Any]:
+    state = str(run["current_state"])
+    events = store.load_events(identity.session_id)
+    existing = next(
+        (
+            event
+            for event in events
+            if _is_terminal_event(event, identity, state)
+        ),
+        None,
+    )
+    terminal = run.get("terminal_result") or {}
+    text = ""
+    messages = store.load(identity.session_id)
+    for message in reversed(messages):
+        if (
+            message.get("role") == "assistant"
+            and message.get("message_id") == identity.message_id
+            and isinstance(message.get("content"), str)
+        ):
+            text = message["content"]
+            break
+    visible_deltas: list[str] = []
+    for event in events:
+        if (
+            event.get("run_id") != identity.run_id
+            or event.get("message_id") != identity.message_id
+        ):
+            continue
+        if event.get("type") in {
+            "turn_start",
+            "tool_started",
+            "tool_finished",
+            "permission_required",
+            "approval_resolved",
+        }:
+            visible_deltas.clear()
+        elif event.get("type") == "assistant_delta":
+            visible_deltas.append(str(event.get("delta") or ""))
+    visible_text = "".join(visible_deltas)
+    expected_length = int(terminal.get("text_length") or 0)
+    if visible_text and (not text or len(text) != expected_length):
+        text = visible_text
+    result = {
+        "status": _terminal_status(state),
+        "text": text,
+        "run_id": identity.run_id,
+    }
+    if existing is not None:
+        return result
+    event_id = "event_terminal_" + hashlib.sha256(
+        identity.run_id.encode("utf-8")
+    ).hexdigest()[:32]
+    if state == "failed":
+        event = build_event(
+            identity,
+            "error",
+            event_id=event_id,
+            state="failed",
+            message=str(terminal.get("error") or "Run failed."),
+        )
+    else:
+        event = build_event(
+            identity,
+            "turn_end",
+            event_id=event_id,
+            state=state,
+            text=text,
+        )
+    try:
+        appended = store.append_event_once(identity.session_id, event)
+    except Exception:
+        return {"status": "error", "text": text, "run_id": identity.run_id}
+    if appended and emit is not None:
+        await emit(event)
+    return result
 
 
 def _committed_tool_batch(
@@ -69,13 +177,19 @@ def _committed_tool_batch(
             or calls[next_index].name != pending.get("name")
         ):
             continue
-        trailing_results = {
-            str(item.get("tool_call_id"))
+        trailing_results = [
+            item
             for item in messages[message_index + 1 :]
             if item.get("role") == "tool"
-        }
-        if any(call.id not in trailing_results for call in calls[:next_index]):
-            raise ValueError("committed tool batch is missing an earlier result")
+        ]
+        if len(trailing_results) != next_index or any(
+            result.get("tool_call_id") != call.id
+            or result.get("name") != call.name
+            for result, call in zip(trailing_results, calls[:next_index])
+        ):
+            raise ValueError(
+                "committed tool batch has invalid earlier result order"
+            )
         return str(message.get("content") or ""), calls
     raise ValueError("committed assistant tool-call message is unavailable")
 
@@ -175,35 +289,28 @@ def _repair_projections(
     if marker is None:
         execution.begin_projection_repair(target)
         continuation = store.get_agent_run(execution.run_id)["continuation"]
-    execution.renew()
-    store.replace_all(identity.session_id, loaded[:transcript_count])
-    execution.renew()
-    store.replace_events(identity.session_id, durable_events[:event_count])
 
-    repaired_messages = store.load(identity.session_id)
-    repaired_events = store.load_events(identity.session_id)
-    post_mismatches = [
-        name
-        for name, status in (
-            (
-                "transcript",
-                _projection_status(
-                    repaired_messages, transcript_count, transcript_digest
-                ),
-            ),
-            (
-                "event",
-                _projection_status(repaired_events, event_count, event_digest),
-            ),
+    def publish() -> None:
+        store.rewrite_projections_in_transaction(
+            identity.session_id,
+            loaded[:transcript_count],
+            durable_events[:event_count],
         )
-        if status != "exact"
-    ]
-    if post_mismatches:
-        execution.projection_mismatch(post_mismatches)
-        return continuation, repaired_messages, "review_required"
-    execution.clear_projection_repair()
+        repaired_messages = store.load(identity.session_id)
+        repaired_events = store.load_events(identity.session_id)
+        if (
+            _projection_status(
+                repaired_messages, transcript_count, transcript_digest
+            )
+            != "exact"
+            or _projection_status(repaired_events, event_count, event_digest)
+            != "exact"
+        ):
+            raise OSError("projection repair did not publish exact targets")
+
+    execution.publish_projection_repair(publish)
     continuation = store.get_agent_run(execution.run_id)["continuation"]
-    return continuation, repaired_messages, None
+    return continuation, store.load(identity.session_id), None
 
 
 def _classify_owned_continuation(
@@ -320,6 +427,13 @@ async def resume_turn(
     identity = _identity_for(run, run_id)
     if identity is None:
         return {"status": "conflict", "text": "", "run_id": run_id}
+    if run.get("current_state") in TERMINAL_AGENT_RUN_STATES:
+        return await _repair_terminal_projection(
+            store=store,
+            run=run,
+            identity=identity,
+            emit=emit,
+        )
     continuation = run.get("continuation") or {}
     phase = continuation.get("cursor", {}).get("phase")
     if run.get("current_state") != "interrupted":
@@ -343,6 +457,11 @@ async def resume_turn(
             continuation=continuation,
         )
     except Exception:
+        if execution.current_lease is not None:
+            try:
+                execution.suspend_projection_repair()
+            except Exception:
+                pass
         return {"status": "error", "text": "", "run_id": run_id}
     if rejected is not None:
         return {"status": rejected, "text": "", "run_id": run_id}
@@ -381,7 +500,9 @@ async def resume_turn(
     step_index = int(cursor.get("step_index", 0))
     last_text = ""
     had_tool_failure = any(
-        receipt.get("outcome") in {"failed", "failed_external", "denied"}
+        receipt.get("ok") is False
+        or receipt.get("outcome")
+        in {"failed_unexecuted", "failed_external", "denied"}
         for receipt in continuation.get("completed_tool_receipts", [])
     )
     calls_to_process: list[ToolCall] | None = None
@@ -439,6 +560,9 @@ async def resume_turn(
             gate = live_turn.decide(call.name)
             retry_safe = call.name in live_turn._SAFE_RETRY_TOOLS
             if gate.needs_user:
+                resource = live_turn.approval_resource(
+                    call.name, call.arguments, execute_kwargs.get("gmail")
+                )
                 parked = execution.waiting_approval_atomic(
                     store.load(identity.session_id),
                     store.load_events(identity.session_id),
@@ -450,9 +574,7 @@ async def resume_turn(
                     retry_safe,
                     arguments=call.arguments,
                     reason=gate.reason,
-                    resource=live_turn.approval_resource(
-                        call.name, call.arguments, execute_kwargs.get("gmail")
-                    ),
+                    resource=resource,
                     approval_ttl_seconds=store.approval_ttl_seconds,
                 )
                 await send(
@@ -464,6 +586,7 @@ async def resume_turn(
                         "reason": gate.reason,
                         "requested_at": parked["requested_at"],
                         "scope": parked["scope"],
+                        **({"resource": resource} if resource else {}),
                     }
                 )
                 return "waiting", had_tool_failure
@@ -479,6 +602,9 @@ async def resume_turn(
                 tool_result["message_id"] = identity.message_id
                 history.append(tool_result)
                 store.append(identity.session_id, tool_result)
+                live_turn._record_person_file(
+                    identity.session_id, call, ok, result, execute_kwargs
+                )
                 execution.tool_skipped(
                     store.load(identity.session_id),
                     store.load_events(identity.session_id),
@@ -525,6 +651,21 @@ async def resume_turn(
                 raise
             except Exception as exc:
                 ok, result = False, {"error": str(exc)}
+            if (
+                call.name in {"remember", "memory_update", "memory_forget"}
+                and system_prompt_fn is not None
+                and ok
+            ):
+                history[0] = {
+                    "role": "system",
+                    "content": system_prompt_fn(
+                        store,
+                        persona,
+                        skills,
+                        people=execute_kwargs.get("people"),
+                        session_id=identity.session_id,
+                    ),
+                }
             had_tool_failure = had_tool_failure or not ok
             await send(
                 live_turn._tool_finished_event(

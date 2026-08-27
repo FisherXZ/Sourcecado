@@ -449,14 +449,16 @@ def interrupt_inflight_tool_transition(
             "tool interruption requires the exact reserved in-flight tool"
         )
     retry_safe = pending["retry_class"] == "safe"
+    next_cursor = {
+        **cursor,
+        "phase": "tools_ready" if retry_safe else "review_required",
+    }
+    if not retry_safe:
+        next_cursor.update(prefixes(history, events))
     return merge_continuation(
         current,
         {
-            "cursor": {
-                **cursor,
-                "phase": "tools_ready" if retry_safe else "review_required",
-                **prefixes(history, events),
-            },
+            "cursor": next_cursor,
             "pending_tool": {
                 **pending,
                 "status": "retry_ready" if retry_safe else "outcome_unknown",

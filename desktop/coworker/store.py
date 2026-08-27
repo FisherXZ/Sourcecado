@@ -7,6 +7,7 @@ Copied shape from OpenWorker `coworker/conversations.py`:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -517,6 +518,38 @@ class ConversationStore:
                 fh.write(json.dumps(event, ensure_ascii=False) + "\n")
                 fh.flush()
 
+    def append_event_once(self, sid: str, event: dict[str, Any]) -> bool:
+        """Cross-process-safe idempotent append for terminal repair events."""
+        path = self._event_file(sid)
+        lock_path = path.with_suffix(".jsonl.lock")
+        with open(lock_path, "a+b") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                raw = path.read_bytes() if path.exists() else b""
+                for line in raw.splitlines():
+                    try:
+                        existing = json.loads(line)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if (
+                        isinstance(existing, dict)
+                        and existing.get("event_id") == event.get("event_id")
+                    ):
+                        return False
+                with open(path, "ab") as event_file:
+                    if raw and not raw.endswith(b"\n"):
+                        event_file.write(b"\n")
+                    event_file.write(
+                        (json.dumps(event, ensure_ascii=False) + "\n").encode(
+                            "utf-8"
+                        )
+                    )
+                    event_file.flush()
+                    os.fsync(event_file.fileno())
+                return True
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def replace_events(self, sid: str, events: list[dict[str, Any]]) -> None:
         """Atomically rewrite the canonical presentation-event projection."""
         with self._lock:
@@ -527,6 +560,39 @@ class ConversationStore:
                     fh.write(json.dumps(event, ensure_ascii=False) + "\n")
                 fh.flush()
             tmp.replace(path)
+
+    def rewrite_projections_in_transaction(
+        self,
+        sid: str,
+        messages: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+    ) -> None:
+        """Publish both projections inside the caller's SQLite transaction."""
+        if not self._conn.in_transaction:
+            raise RuntimeError("projection rewrite requires an active transaction")
+        with self._lock:
+            self._rewrite_transcript_projection(sid, messages)
+            self._rewrite_event_projection(sid, events)
+            self._reindex_uncommitted(sid, messages)
+
+    def _rewrite_transcript_projection(
+        self, sid: str, messages: list[dict[str, Any]]
+    ) -> None:
+        self._rewrite_jsonl(self._file(sid), messages)
+
+    def _rewrite_event_projection(
+        self, sid: str, events: list[dict[str, Any]]
+    ) -> None:
+        self._rewrite_jsonl(self._event_file(sid), events)
+
+    @staticmethod
+    def _rewrite_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
+        tmp = path.with_suffix(".jsonl.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            for value in values:
+                fh.write(json.dumps(value, ensure_ascii=False) + "\n")
+            fh.flush()
+        tmp.replace(path)
 
     def append(self, sid: str, message: dict[str, Any]) -> None:
         with self._lock:
@@ -548,6 +614,12 @@ class ConversationStore:
             self._reindex(sid, messages)
 
     def _reindex(self, sid: str, messages: list[dict[str, Any]]) -> None:
+        self._reindex_uncommitted(sid, messages)
+        self._conn.commit()
+
+    def _reindex_uncommitted(
+        self, sid: str, messages: list[dict[str, Any]]
+    ) -> None:
         title = title_from(messages)
         self._conn.execute(
             """
@@ -560,7 +632,6 @@ class ConversationStore:
             """,
             (sid, title, len(messages)),
         )
-        self._conn.commit()
 
     def index(self, sid: str) -> dict[str, Any] | None:
         with self._lock:

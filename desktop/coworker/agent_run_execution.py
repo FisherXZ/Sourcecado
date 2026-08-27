@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 from coworker.agent_run_approval import build_approval_park_request
 from coworker.agent_run_continuation import (
@@ -310,6 +310,48 @@ class AgentRunExecution:
             return self.metadata
         self._update_continuation({**persisted, "projection_repair": None})
         return self.metadata
+
+    def publish_projection_repair(
+        self, callback: Callable[[], None]
+    ) -> dict[str, Any]:
+        """Publish both files while SQLite excludes stale or competing owners."""
+        lease = self._require_lease()
+        marker = project_continuation(
+            self._current_persisted_snapshot()
+        ).get("projection_repair")
+        if not isinstance(marker, dict):
+            raise ValueError("projection repair marker is not durable")
+        try:
+            next_lease = self._store.agent_runs.publish_projection_repair(
+                lease,
+                marker,
+                callback,
+                self._lease_seconds,
+                now=self._now,
+            )
+        except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
+            self._lease = None
+            raise self._ownership_error(
+                "projection repair publish lost its lease"
+            ) from exc
+        self._lease = next_lease
+        self._version = next_lease.version
+        self._refresh_snapshot()
+        return self.metadata
+
+    def suspend_projection_repair(self) -> dict[str, Any]:
+        """Relinquish a failed repair immediately while preserving its marker."""
+        persisted = project_continuation(self._current_persisted_snapshot())
+        return self._checkpoint(
+            "process_interrupted",
+            persisted,
+            payload={
+                "status": "interrupted",
+                "phase": persisted.get("cursor", {}).get("phase"),
+                "reason": "projection_repair_failed",
+            },
+            state="interrupted",
+        )
 
     def projection_mismatch(self, projections: list[str]) -> dict[str, Any]:
         """Fail closed from an owned resume when committed bodies do not match."""

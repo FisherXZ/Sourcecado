@@ -9,7 +9,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from coworker.agent_run_approval import (
     APPROVED_TOOL_OUTCOME_UNKNOWN_ERROR,
@@ -1496,6 +1496,67 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                     """,
                     (
                         _json(next_continuation),
+                        stamp,
+                        lease.run_id,
+                        lease.version,
+                        lease.owner_id,
+                        stamp,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    self._raise_fence_failure(lease, stamp)
+                row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (lease.run_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return _lease_from_row(row)
+
+    def publish_projection_repair(
+        self,
+        lease: AgentRunLease,
+        marker: dict[str, Any],
+        callback: Callable[[], None],
+        lease_seconds: int | float,
+        now: datetime | None = None,
+    ) -> AgentRunLease:
+        """Fence both projection replacements under one SQLite write lock."""
+        seconds = _lease_seconds(lease_seconds)
+        stamp = _timestamp(now)
+        expires_at = _timestamp(_as_datetime(stamp) + timedelta(seconds=seconds))
+        expected_marker = project_continuation(
+            {"projection_repair": marker}
+        ).get("projection_repair")
+        if expected_marker != marker:
+            raise ValueError("invalid projection repair marker")
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._fenced_row(lease, stamp)
+                continuation = project_continuation(
+                    json_object(row["continuation"])
+                )
+                if continuation.get("projection_repair") != expected_marker:
+                    raise AgentRunLeaseLost(
+                        "projection repair marker no longer belongs to this lease"
+                    )
+                callback()
+                next_continuation = merge_continuation(
+                    continuation, {"projection_repair": None}
+                )
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        continuation = ?, lease_expires_at = ?,
+                        version = version + 1, updated_at = ?
+                    WHERE run_id = ? AND version = ? AND lease_owner = ?
+                      AND lease_expires_at > ? AND current_state = 'running'
+                    """,
+                    (
+                        _json(next_continuation),
+                        expires_at,
                         stamp,
                         lease.run_id,
                         lease.version,
