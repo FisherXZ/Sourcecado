@@ -834,6 +834,8 @@ async def run_turn(
                         if chunk.kind is StreamKind.START and chunk.start is not None:
                             _ensure_provider_span(chunk.start)
                             continue
+                        if chunk.kind is StreamKind.REASONING:
+                            continue
                         if chunk.kind is not None:
                             meaningful_stream = True
                         active_provider_span = _ensure_provider_span()

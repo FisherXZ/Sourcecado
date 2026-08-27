@@ -1157,6 +1157,89 @@ def test_partial_stream_requires_review_without_retry_or_failover(tmp_path):
     assert "must not concatenate" not in str(emitted)
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        _error(ProviderErrorKind.RATE_LIMIT, status=429, retryable=True),
+        TimeoutError(),
+    ],
+    ids=["rate_limit", "timeout"],
+)
+def test_hidden_reasoning_still_retries_and_fails_over(tmp_path, failure):
+    retry = importlib.import_module("coworker.provider_retry")
+
+    class HiddenReasoningThenFailure:
+        provider_id = "deepseek"
+        model_id = "deepseek-v4-pro"
+
+        def __init__(self):
+            self.attempts = 0
+
+        async def astream(self, *, messages, tools, context_id=None):
+            self.attempts += 1
+            yield StreamChunk.started(
+                provider=self.provider_id,
+                model=self.model_id,
+            )
+            yield StreamChunk(transient_reasoning_delta="hidden plan")
+            raise failure
+
+    class FallbackProvider:
+        provider_id = "openai"
+        model_id = "gpt-4o-mini"
+
+        def __init__(self):
+            self.attempts = 0
+
+        async def astream(self, *, messages, tools):
+            self.attempts += 1
+            yield StreamChunk(text_delta="fallback answer")
+            yield StreamChunk(finish_reason="stop")
+
+    async def no_sleep(delay):
+        return None
+
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    active = HiddenReasoningThenFailure()
+    fallback = FallbackProvider()
+    store = ConversationStore(tmp_path)
+    sid = "hidden-reasoning-failover"
+    store.create_session(sid)
+    result = asyncio.run(
+        run_turn(
+            text="hello",
+            sid=sid,
+            store=store,
+            provider=active,
+            failover_providers=(fallback,),
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            emit=emit,
+            retry_policy=retry.RetryPolicy(max_attempts_per_provider=1),
+            retry_sleep=no_sleep,
+        )
+    )
+
+    assert result == {"status": "ok", "text": "fallback answer"}
+    assert active.attempts == 1
+    assert fallback.attempts == 1
+    assert [
+        event.get("delta")
+        for event in emitted
+        if event["type"] == "assistant_delta"
+    ] == ["fallback answer"]
+    assert [event["type"] for event in emitted if event["type"] == "error"] == []
+    assert "hidden plan" not in str(emitted)
+    assert "Review the partial response" not in str(emitted)
+
+
 def test_cancellable_stream_interrupts_blocked_provider_request():
     retry = importlib.import_module("coworker.provider_retry")
     assert hasattr(retry, "cancellable_stream")
