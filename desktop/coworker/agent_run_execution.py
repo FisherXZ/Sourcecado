@@ -85,16 +85,8 @@ class AgentRunExecution:
             original_goal=goal,
             provider_model_id=provider_model_id,
         )
-        if started["current_state"] != "running":
-            phase = (
-                project_continuation(started.get("continuation"))
-                .get("cursor", {})
-                .get("phase")
-            )
-            raise AgentRunExecutionOwnershipError(
-                f"Agent Run {identity.run_id} requires explicit review or resume"
-                + (f" from {phase}" if phase else "")
-            )
+        existing = project_continuation(started.get("continuation"))
+        cls._reject_unstartable(identity.run_id, started["current_state"], existing)
         lease = store.agent_runs.acquire_lease(
             identity.run_id,
             owner,
@@ -106,7 +98,6 @@ class AgentRunExecution:
             raise AgentRunExecutionOwnershipError(
                 f"Agent Run {identity.run_id} is owned by another execution"
             )
-        existing = project_continuation(started.get("continuation"))
         execution = cls(
             store,
             identity,
@@ -116,6 +107,19 @@ class AgentRunExecution:
             max_steps,
             now,
         )
+        current = store.get_agent_run(identity.run_id)
+        if current is None:
+            execution._release_after_start_failure()
+            raise KeyError(identity.run_id)
+        existing = project_continuation(current.get("continuation"))
+        execution._snapshot = existing
+        try:
+            cls._reject_unstartable(
+                identity.run_id, current["current_state"], existing
+            )
+        except AgentRunExecutionOwnershipError:
+            execution._release_after_start_failure()
+            raise
         if existing.get("identity"):
             if existing["identity"] != {
                 "message_id": identity.message_id,
@@ -163,6 +167,18 @@ class AgentRunExecution:
         execution._version = execution._lease.version
         execution._snapshot = project_continuation(initial)
         return execution
+
+    @staticmethod
+    def _reject_unstartable(
+        run_id: str, state: str, snapshot: dict[str, Any]
+    ) -> None:
+        phase = snapshot.get("cursor", {}).get("phase")
+        if state == "running" and phase != "review_required":
+            return
+        raise AgentRunExecutionOwnershipError(
+            f"Agent Run {run_id} requires explicit review or resume"
+            + (f" from {phase}" if phase else "")
+        )
 
     @property
     def run_id(self) -> str:

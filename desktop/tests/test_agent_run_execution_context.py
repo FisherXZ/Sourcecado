@@ -66,6 +66,50 @@ def _park(store, identity, interaction_id, *, run_id=None):
     )
 
 
+def _seed_running_phase(store, identity, phase):
+    started = store.start_agent_run(
+        run_id=identity.run_id,
+        session_id=identity.session_id,
+        trigger="chat",
+        original_goal="Find candidates",
+        provider_model_id="fake-model",
+    )
+    lease = store.agent_runs.acquire_lease(
+        identity.run_id, "seed-owner", started["version"], 30, now=NOW
+    )
+    lease = store.agent_runs.update_continuation(
+        lease,
+        {
+            "identity": {
+                "message_id": identity.message_id,
+                "part_id": identity.part_id,
+            },
+            "cursor": {
+                "phase": phase,
+                "step_index": 0,
+                "next_tool_index": 0,
+                "transcript_prefix_count": 0,
+                "transcript_prefix_sha256": EMPTY_SHA256,
+                "event_prefix_count": 0,
+                "event_prefix_sha256": EMPTY_SHA256,
+            },
+            "visible_partial": {
+                "message_id": identity.message_id,
+                "text_length": 0,
+                "truncated": False,
+            },
+            "completed_tool_receipts": [],
+            "remaining_budgets": {
+                "work_steps": 4,
+                "tool_calls": 4,
+                "delivery_passes": 1,
+            },
+        },
+        now=NOW,
+    )
+    store.agent_runs.release_lease(lease, now=NOW)
+
+
 def test_resolved_waiting_lease_requires_exact_resolved_inbox_and_has_one_owner(
     tmp_path,
 ):
@@ -289,6 +333,83 @@ def test_start_rejects_interrupted_review_required_continuation(tmp_path):
             owner_id="new-owner",
             now=NOW,
         )
+
+
+def test_start_rejects_running_review_required_without_leaving_a_lease(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-running-review-required")
+    _seed_running_phase(store, identity, "review_required")
+
+    assert store.get_agent_run(identity.run_id)["current_state"] == "running"
+    assert _lease_columns(store, identity.run_id) == (None, None)
+    with pytest.raises(AgentRunExecutionOwnershipError, match="review"):
+        AgentRunExecution.start(
+            store,
+            identity,
+            "Find candidates",
+            "chat",
+            "fake-model",
+            4,
+            owner_id="new-owner",
+            now=NOW,
+        )
+
+    assert _lease_columns(store, identity.run_id) == (None, None)
+
+
+def test_start_releases_lease_if_phase_becomes_review_required_during_acquire(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-review-race")
+    _seed_running_phase(store, identity, "model_ready")
+    original = store.agent_runs.acquire_lease
+
+    def acquire_then_require_review(*args, **kwargs):
+        lease = original(*args, **kwargs)
+        assert lease is not None
+        return store.agent_runs.update_continuation(
+            lease,
+            {"cursor": {"phase": "review_required"}},
+            now=NOW,
+        )
+
+    monkeypatch.setattr(store.agent_runs, "acquire_lease", acquire_then_require_review)
+
+    with pytest.raises(AgentRunExecutionOwnershipError, match="review"):
+        AgentRunExecution.start(
+            store,
+            identity,
+            "Find candidates",
+            "chat",
+            "fake-model",
+            4,
+            owner_id="new-owner",
+            now=NOW,
+        )
+
+    assert _lease_columns(store, identity.run_id) == (None, None)
+
+
+@pytest.mark.parametrize("phase", ("model_ready", "tools_ready"))
+def test_start_accepts_valid_running_resumable_phases(tmp_path, phase):
+    store = ConversationStore(tmp_path)
+    identity = _identity(f"run-{phase}")
+    _seed_running_phase(store, identity, phase)
+
+    execution = AgentRunExecution.start(
+        store,
+        identity,
+        "Find candidates",
+        "chat",
+        "fake-model",
+        4,
+        owner_id="new-owner",
+        now=NOW,
+    )
+
+    assert execution.lease is not None
+    assert execution.metadata["phase"] == phase
 
 
 def test_pending_boundaries_decrement_once_and_exact_retries_are_idempotent(
