@@ -200,7 +200,7 @@ def _keep(tmp_path, people, sid, row):
                     ToolCall(
                         id="keep_1",
                         name="people_keep",
-                        arguments={"people": [row]},
+                        arguments={"people": [row], "target": "test target"},
                     )
                 ]
             },
@@ -317,7 +317,10 @@ def test_keep_two_people_does_not_bind(tmp_path):
                     ToolCall(
                         id="keep_2",
                         name="people_keep",
-                        arguments={"people": [_ada(), _alonzo()]},
+                            arguments={
+                                "people": [_ada(), _alonzo()],
+                                "target": "test target",
+                            },
                     )
                 ]
             },
@@ -334,6 +337,39 @@ def test_keep_two_people_does_not_bind(tmp_path):
     assert people.person_for_session("sess-a") is None
     assert people.get_by_apollo_id("ada") is not None
     assert people.get_by_apollo_id("alonzo") is not None
+
+
+def test_partial_multi_keep_does_not_guess_owner_from_one_success(tmp_path):
+    people = PersonStore(tmp_path)
+    fake = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="keep_partial",
+                        name="people_keep",
+                        arguments={
+                            "people": [_ada(), {"firstName": "Missing identity"}],
+                            "target": "Director-authored target",
+                        },
+                    )
+                ]
+            },
+            {"deltas": ("Kept one; one row needs review.",)},
+        ]
+    )
+
+    result = _run(
+        tmp_path=tmp_path,
+        sid="sess-partial",
+        text="review and keep these two",
+        provider=fake,
+        people=people,
+    )
+
+    assert result["status"] == "ok"
+    assert people.get_by_apollo_id("ada") is not None
+    assert people.person_for_session("sess-partial") is None
 
 
 def _draft_call():

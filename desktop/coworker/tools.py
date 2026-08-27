@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from coworker.apollo import MISSING_KEY, enrich_contact, search_people
+from coworker.apollo_curation import curate_apollo_candidates
 from coworker.web import MISSING_KEY as TAVILY_MISSING, search_web
 from coworker.gmail import GmailError, MissingGmail
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
@@ -143,7 +144,7 @@ PEOPLE_KEEP_SCHEMA: dict[str, Any] = {
                     "description": "Why the director wants to write these people.",
                 },
             },
-            "required": ["people"],
+            "required": ["people", "target"],
             "additionalProperties": False,
         },
     },
@@ -682,39 +683,19 @@ def execute(
         rows = args.get("people") or []
         if not isinstance(rows, list):
             return False, {"error": "people must be a list"}
-        target = str(args.get("target") or "").strip() or None
-        kept: list[dict[str, Any]] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                return False, {"error": "people rows must be objects"}
-            person = people.keep_from_apollo(
-                apollo_id=str(row.get("apolloId") or "") or None,
-                first_name=row.get("firstName"),
-                last_name_obfuscated=row.get("lastNameObfuscated"),
-                title=row.get("title"),
-                company=row.get("organizationName"),
-                target=target,
+        if not rows:
+            return True, {"kept": []}
+        if any(not isinstance(row, dict) for row in rows):
+            return False, {"error": "people rows must be objects"}
+        try:
+            result = curate_apollo_candidates(
+                people,
+                rows,
+                target=str(args.get("target") or ""),
             )
-            try:
-                sourcing_session = people.session_for_person(person["person_id"])
-            except ValueError:
-                sourcing_session = None
-            kept.append(
-                {
-                    "person_id": person["person_id"],
-                    "apollo_id": person["apollo_id"],
-                    "first_name": person["first_name"],
-                    "last_name": person["last_name"],
-                    "title": person["title"],
-                    "company": person["company"],
-                    "sourcing_chat": (
-                        {"session_id": sourcing_session}
-                        if sourcing_session is not None
-                        else None
-                    ),
-                }
-            )
-        return True, {"kept": kept}
+        except ValueError as exc:
+            return False, {"error": str(exc)}
+        return bool(result["kept"]), result
     if name == "web_search":
         if not tavily_key:
             return False, {"error": TAVILY_MISSING}

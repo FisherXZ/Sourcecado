@@ -312,7 +312,17 @@ class PersonStore:
             if existing is not None:
                 restoring = bool(existing["deleted_at"])
                 now = self._now()
-                next_version = int(existing["version"] or 1) + (1 if restoring else 0)
+                changed = restoring or any(
+                    incoming is not None and incoming != existing[field]
+                    for incoming, field in (
+                        (first_name, "first_name"),
+                        (last_name_obfuscated, "last_name"),
+                        (title, "title"),
+                        (company, "company"),
+                        (cleaned_target, "target"),
+                    )
+                )
+                next_version = int(existing["version"] or 1) + int(changed)
                 self._conn.execute(
                     """
                     UPDATE people SET

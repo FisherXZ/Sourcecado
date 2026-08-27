@@ -28,6 +28,7 @@ from coworker.automation.scheduler import (
     next_monday_0900,
     now_iso,
 )
+from coworker.apollo_curation import curate_apollo_candidates
 from coworker.calendar import calendar_from_secrets
 from coworker.connectors.google_oauth import (
     CALENDAR_SCOPE,
@@ -1521,6 +1522,69 @@ def create_app(
     @app.get("/v1/board")
     def board_get():
         return app.state.people.list_board()
+
+    @app.post("/v1/apollo/curate")
+    async def apollo_curate(request: Request):
+        payload = await request.json()
+        session_id = str(payload.get("session_id") or "").strip()
+        if not valid_session_id(session_id) or app.state.store.index(session_id) is None:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+        rows = payload.get("people")
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            return JSONResponse({"error": "people must be a list of rows"}, status_code=400)
+        try:
+            result = curate_apollo_candidates(
+                app.state.people,
+                rows,
+                target=str(payload.get("target") or ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        binding_reason = (
+            "multiple_selection"
+            if result["selected_row_count"] > 1
+            else "unbound"
+        )
+        if (
+            payload.get("bind_original") is True
+            and result["selected_row_count"] == 1
+            and len(result["kept"]) == 1
+        ):
+            person_id = str(result["kept"][0]["person_id"])
+            try:
+                app.state.people.bind_session(session_id, person_id)
+            except ValueError:
+                binding_reason = "existing_person_chat"
+            else:
+                binding_reason = "single_selection"
+
+        kept = []
+        for item in result["kept"]:
+            person_session = app.state.people.session_for_person(item["person_id"])
+            kept.append(
+                {
+                    **item,
+                    "sourcing_chat": (
+                        {"session_id": person_session}
+                        if person_session is not None
+                        else None
+                    ),
+                }
+            )
+        bound_person_id = app.state.people.person_for_session(session_id)
+        if bound_person_id is not None and binding_reason in {
+            "multiple_selection",
+            "unbound",
+        }:
+            binding_reason = "already_bound"
+        result["kept"] = kept
+        result["original_session"] = {
+            "session_id": session_id,
+            "bound_person_id": bound_person_id,
+            "reason": binding_reason,
+        }
+        return result
 
     @app.post("/v1/people/{person_id}/sequence")
     async def people_sequence(person_id: str, request: Request):

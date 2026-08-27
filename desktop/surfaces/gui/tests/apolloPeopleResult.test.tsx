@@ -1,9 +1,19 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ToolCallMessagePart } from "@assistant-ui/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
+
+const api = vi.hoisted(() => ({
+  curateApolloCandidates: vi.fn(),
+  openPersonSourcingChat: vi.fn(),
+}));
+
+vi.mock("../src/api", () => ({
+  curateApolloCandidates: api.curateApolloCandidates,
+  openPersonSourcingChat: api.openPersonSourcingChat,
+}));
 
 function apolloSearch(
   overrides: Partial<ToolCallMessagePart> = {},
@@ -78,6 +88,333 @@ function renderApollo(tool = apolloSearch()) {
 }
 
 describe("Apollo people result", () => {
+  beforeEach(() => {
+    api.curateApolloCandidates.mockReset();
+    api.curateApolloCandidates.mockResolvedValue({
+      status: "success",
+      selected_row_count: 2,
+      selected_identity_count: 2,
+      kept: [],
+      failed: [],
+      duplicates: [],
+      original_session: {
+        session_id: "thread-apollo",
+        bound_person_id: null,
+        reason: "multiple_selection",
+      },
+    });
+    api.openPersonSourcingChat.mockReset();
+  });
+
+  it("lets the director select several candidates and review before keeping", async () => {
+    renderApollo();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Target for selected people" }),
+      { target: { value: "Invite senior operators to the director's dinner." } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review 2 selected candidates" }),
+    );
+
+    const review = screen.getByRole("region", {
+      name: "Review selected Apollo candidates",
+    });
+    expect(review).toHaveTextContent("Tim Zh***g");
+    expect(review).toHaveTextContent("Maya");
+    expect(review).toHaveTextContent(
+      "Invite senior operators to the director's dinner.",
+    );
+    expect(review).toHaveTextContent("does not enrich or use Apollo credits");
+    expect(api.curateApolloCandidates).not.toHaveBeenCalled();
+
+    fireEvent.click(within(review).getByRole("button", { name: "Keep 2 people" }));
+    await waitFor(() =>
+      expect(api.curateApolloCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "thread-apollo",
+          target: "Invite senior operators to the director's dinner.",
+          bindOriginal: false,
+        }),
+      ),
+    );
+    expect(api.curateApolloCandidates.mock.calls[0]?.[0].people).toHaveLength(2);
+  });
+
+  it("binds the original conversation only for one reviewed candidate", async () => {
+    api.curateApolloCandidates.mockResolvedValueOnce({
+      status: "success",
+      selected_row_count: 1,
+      selected_identity_count: 1,
+      kept: [
+        {
+          row_index: 0,
+          apollo_id: "person-tim",
+          person_id: "person-tim-file",
+          version: 1,
+          operation: "created",
+          first_name: "Tim",
+          last_name: "Zh***g",
+          title: "CEO",
+          company: "Apollo.io",
+          sourcing_chat: { session_id: "thread-apollo" },
+        },
+      ],
+      failed: [],
+      duplicates: [],
+      original_session: {
+        session_id: "thread-apollo",
+        bound_person_id: "person-tim-file",
+        reason: "single_selection",
+      },
+    });
+    renderApollo();
+    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
+      target: { value: "Director-authored target" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review 1 selected candidate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep 1 person" }));
+
+    await waitFor(() =>
+      expect(api.curateApolloCandidates).toHaveBeenCalledWith(
+        expect.objectContaining({ bindOriginal: true }),
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Open sourcing chat for Tim Zh***g" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/original target conversation remains unbound/i)).not.toBeInTheDocument();
+  });
+
+  it("deduplicates repeated Apollo identities before selection", () => {
+    renderApollo(
+      apolloSearch({
+        result: {
+          people: [
+            (apolloSearch().result as { people: unknown[] }).people[0],
+            {
+              ...(apolloSearch().result as { people: Record<string, unknown>[] }).people[0],
+              title: "Duplicate must not replace first",
+            },
+          ],
+        },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+
+    expect(screen.getAllByRole("checkbox", { name: "Select Tim Zh***g" })).toHaveLength(1);
+    expect(screen.getByText("1 candidate")).toBeInTheDocument();
+    expect(screen.queryByText("Duplicate must not replace first")).not.toBeInTheDocument();
+  });
+
+  it("offers a direct person file and create-chat action for every kept row", async () => {
+    api.curateApolloCandidates.mockResolvedValueOnce({
+      status: "success",
+      selected_row_count: 2,
+      selected_identity_count: 2,
+      kept: [
+        {
+          row_index: 0,
+          apollo_id: "person-tim",
+          person_id: "person-tim-file",
+          version: 1,
+          operation: "created",
+          first_name: "Tim",
+          last_name: "Zh***g",
+          title: "CEO",
+          company: "Apollo.io",
+          sourcing_chat: null,
+        },
+        {
+          row_index: 1,
+          apollo_id: "person-partial",
+          person_id: "person-maya-file",
+          version: 1,
+          operation: "created",
+          first_name: "Maya",
+          last_name: null,
+          title: null,
+          company: "Apollo.io",
+          sourcing_chat: null,
+        },
+      ],
+      failed: [],
+      duplicates: [],
+      original_session: {
+        session_id: "thread-apollo",
+        bound_person_id: null,
+        reason: "multiple_selection",
+      },
+    });
+    api.openPersonSourcingChat.mockResolvedValueOnce({
+      created: true,
+      session: { id: "thread-tim", title: "Sourcing · Tim", n_msgs: 0 },
+      active_person: { person_id: "person-tim-file", version: 1, label: "Tim Zh***g" },
+    });
+    renderApollo();
+    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
+      target: { value: "Director-authored target" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review 2 selected candidates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep 2 people" }));
+
+    expect(
+      await screen.findByRole("link", { name: "Open person file for Tim Zh***g" }),
+    ).toHaveAttribute("href", "#/people/person-tim-file");
+    expect(
+      screen.getByRole("link", { name: "Open person file for Maya" }),
+    ).toHaveAttribute("href", "#/people/person-maya-file");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create sourcing chat for Tim Zh***g" }),
+    );
+    await waitFor(() =>
+      expect(api.openPersonSourcingChat).toHaveBeenCalledWith("person-tim-file", 1),
+    );
+    expect(window.location.hash).toBe(
+      "#/chat/thread-tim/person/person-tim-file",
+    );
+  });
+
+  it("shows a visible error when a kept person's chat cannot be opened", async () => {
+    api.curateApolloCandidates.mockResolvedValueOnce({
+      status: "success",
+      selected_row_count: 1,
+      selected_identity_count: 1,
+      kept: [
+        {
+          row_index: 0,
+          apollo_id: "person-tim",
+          person_id: "person-tim-file",
+          version: 1,
+          operation: "created",
+          first_name: "Tim",
+          last_name: "Zh***g",
+          title: "CEO",
+          company: "Apollo.io",
+          sourcing_chat: null,
+        },
+      ],
+      failed: [],
+      duplicates: [],
+      original_session: {
+        session_id: "thread-apollo",
+        bound_person_id: null,
+        reason: "existing_person_chat",
+      },
+    });
+    api.openPersonSourcingChat.mockRejectedValueOnce(new Error("stale person version"));
+    renderApollo();
+    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
+      target: { value: "Director-authored target" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review 1 selected candidate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep 1 person" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create sourcing chat for Tim Zh***g" }),
+    );
+
+    expect(
+      await screen.findByRole("alert", { name: "Sourcing chat unavailable" }),
+    ).toHaveTextContent("Couldn’t open this person’s sourcing chat");
+  });
+
+  it("retries only failed rows while preserving successful receipts", async () => {
+    api.curateApolloCandidates
+      .mockResolvedValueOnce({
+        status: "partial",
+        selected_row_count: 2,
+        selected_identity_count: 2,
+        kept: [
+          {
+            row_index: 0,
+            apollo_id: "person-tim",
+            person_id: "person-tim-file",
+            version: 1,
+            operation: "created",
+            first_name: "Tim",
+            last_name: "Zh***g",
+            title: "CEO",
+            company: "Apollo.io",
+            sourcing_chat: null,
+          },
+        ],
+        failed: [
+          { row_index: 1, apollo_id: "person-partial", code: "invalid_candidate" },
+        ],
+        duplicates: [],
+        original_session: {
+          session_id: "thread-apollo",
+          bound_person_id: null,
+          reason: "multiple_selection",
+        },
+      })
+      .mockResolvedValueOnce({
+        status: "success",
+        selected_row_count: 1,
+        selected_identity_count: 1,
+        kept: [
+          {
+            row_index: 0,
+            apollo_id: "person-partial",
+            person_id: "person-maya-file",
+            version: 1,
+            operation: "created",
+            first_name: "Maya",
+            last_name: null,
+            title: null,
+            company: "Apollo.io",
+            sourcing_chat: null,
+          },
+        ],
+        failed: [],
+        duplicates: [],
+        original_session: {
+          session_id: "thread-apollo",
+          bound_person_id: null,
+          reason: "unbound",
+        },
+      });
+    renderApollo();
+    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
+      target: { value: "Director-authored target" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review 2 selected candidates" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep 2 people" }));
+
+    expect(
+      await screen.findByText("Maya needs review (invalid candidate)."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open person file for Tim Zh***g" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry 1 failed candidate" }));
+
+    await waitFor(() => expect(api.curateApolloCandidates).toHaveBeenCalledTimes(2));
+    const retry = api.curateApolloCandidates.mock.calls[1]?.[0];
+    expect(retry.people).toEqual([
+      expect.objectContaining({ apolloId: "person-partial" }),
+    ]);
+    expect(retry.bindOriginal).toBe(false);
+    expect(screen.getByRole("link", { name: "Open person file for Tim Zh***g" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: "Open person file for Maya" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/needs review/)).not.toBeInTheDocument();
+  });
+
   it("keeps the original search query beside the result count", () => {
     renderApollo();
     fireEvent.click(
