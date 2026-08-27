@@ -630,9 +630,13 @@ async def run_turn(
                 {k: v for k, v in message.items() if k != "message_id"}
                 for message in history
             ]
-            async for chunk in provider.astream(
-                messages=model_messages, tools=openai_tools
-            ):
+            stream_kwargs: dict[str, Any] = {
+                "messages": model_messages,
+                "tools": openai_tools,
+            }
+            if getattr(provider, "uses_transient_context", False):
+                stream_kwargs["context_id"] = sid
+            async for chunk in provider.astream(**stream_kwargs):
                 if control is not None and control.cancel_requested.is_set():
                     return await _stopped(history, "".join(chunks) or last_text)
                 if chunk.text_delta:
