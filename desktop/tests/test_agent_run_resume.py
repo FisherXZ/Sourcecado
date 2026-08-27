@@ -843,6 +843,58 @@ def test_resume_rejects_wrong_prior_tool_result_name_even_with_matching_prefix(
     assert executed == []
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    ["content_digest", "transcript_index", "message_id"],
+)
+def test_resume_rejects_prior_tool_result_that_disagrees_with_receipt(
+    tmp_path, monkeypatch, mutation
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity(f"run-prior-receipt-mismatch-{mutation}")
+    calls = [
+        ToolCall(id="call-prior", name="gmail_search", arguments={}),
+        ToolCall(id="call-next", name="gmail_search", arguments={}),
+    ]
+    _seed_unstarted_tool_boundary(store, identity, calls, next_index=1)
+    messages = store.load(identity.session_id)
+    continuation = store.get_agent_run(identity.run_id)["continuation"]
+
+    if mutation == "content_digest":
+        messages[-1]["content"] = json.dumps({"tampered": True})
+    elif mutation == "transcript_index":
+        continuation["completed_tool_receipts"][0]["transcript_index"] = 0
+    else:
+        messages[-1]["message_id"] = "message-other"
+
+    continuation["cursor"]["transcript_prefix_sha256"] = transcript_prefix_sha256(
+        messages
+    )
+    store.replace_all(identity.session_id, messages)
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE agent_runs SET continuation = ? WHERE run_id = ?",
+            (json.dumps(continuation), identity.run_id),
+        )
+    executed = []
+    monkeypatch.setattr(
+        "coworker.turn.execute",
+        lambda *args, **kwargs: executed.append("tool") or (True, {}),
+    )
+
+    result = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=FakeProvider(deltas=("must not run",)),
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert result["status"] == "review_required"
+    assert executed == []
+
+
 def test_resume_unstarted_consequential_tool_enters_approval_wait(tmp_path):
     store = ConversationStore(tmp_path)
     identity = _identity("run-unstarted-consequential")
@@ -1537,6 +1589,66 @@ def test_live_terminal_event_failure_is_repaired_explicitly(tmp_path, monkeypatc
             if event.get("type") == "turn_end"
         ]
     ) == 1
+
+
+def test_terminal_repair_preserves_empty_final_answer_after_text_bearing_tool_call(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity = _identity("run-terminal-empty-after-tool")
+    provider = FakeProvider(
+        steps=[
+            {
+                "deltas": ("Searching",),
+                "tool_calls": [
+                    ToolCall(id="call-now", name="now", arguments={})
+                ],
+            },
+            {"deltas": ()},
+        ]
+    )
+    original_append = store.append_event
+
+    def fail_terminal(sid, event):
+        if event.get("type") == "turn_end":
+            raise OSError("terminal event unavailable")
+        return original_append(sid, event)
+
+    monkeypatch.setattr(store, "append_event", fail_terminal)
+    live = asyncio.run(
+        run_turn(
+            text="Search then finish empty",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+        )
+    )
+    assert live["status"] == "error"
+    assert store.get_agent_run(identity.run_id)["terminal_result"]["text_length"] == 0
+
+    repaired = asyncio.run(
+        resume_turn(
+            run_id=identity.run_id,
+            store=store,
+            provider=None,
+            dependencies=_dependencies(store),
+        )
+    )
+
+    assert repaired["status"] == "ok"
+    assert repaired["text"] == ""
+    terminal = next(
+        event
+        for event in store.load_events(identity.session_id)
+        if event.get("type") == "turn_end"
+    )
+    assert terminal["text"] == ""
 
 
 def test_resumed_terminal_event_failure_is_repaired_explicitly(

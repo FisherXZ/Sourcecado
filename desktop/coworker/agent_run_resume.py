@@ -74,14 +74,6 @@ async def _repair_terminal_projection(
     terminal = run.get("terminal_result") or {}
     text = ""
     messages = store.load(identity.session_id)
-    for message in reversed(messages):
-        if (
-            message.get("role") == "assistant"
-            and message.get("message_id") == identity.message_id
-            and isinstance(message.get("content"), str)
-        ):
-            text = message["content"]
-            break
     visible_deltas: list[str] = []
     for event in events:
         if (
@@ -101,7 +93,19 @@ async def _repair_terminal_projection(
             visible_deltas.append(str(event.get("delta") or ""))
     visible_text = "".join(visible_deltas)
     expected_length = int(terminal.get("text_length") or 0)
-    if visible_text and (not text or len(text) != expected_length):
+    if expected_length > 0:
+        for message in reversed(messages):
+            content = message.get("content")
+            if (
+                message.get("role") == "assistant"
+                and message.get("message_id") == identity.message_id
+                and not message.get("tool_calls")
+                and isinstance(content, str)
+                and len(content) == expected_length
+            ):
+                text = content
+                break
+    if not text and len(visible_text) == expected_length:
         text = visible_text
     result = {
         "status": _terminal_status(state),
@@ -142,6 +146,8 @@ def _committed_tool_batch(
     messages: list[dict[str, Any]],
     cursor: dict[str, Any],
     pending: dict[str, Any] | None,
+    continuation: dict[str, Any],
+    identity: TurnIdentity,
 ) -> tuple[str, list[ToolCall]]:
     expected = int(cursor.get("expected_tool_count", 0))
     next_index = int(cursor.get("next_tool_index", 0))
@@ -177,19 +183,35 @@ def _committed_tool_batch(
             or calls[next_index].name != pending.get("name")
         ):
             continue
-        trailing_results = [
-            item
-            for item in messages[message_index + 1 :]
-            if item.get("role") == "tool"
-        ]
-        if len(trailing_results) != next_index or any(
-            result.get("tool_call_id") != call.id
-            or result.get("name") != call.name
-            for result, call in zip(trailing_results, calls[:next_index])
-        ):
-            raise ValueError(
-                "committed tool batch has invalid earlier result order"
-            )
+        receipts = continuation.get("completed_tool_receipts", [])
+        for prior_index, call in enumerate(calls[:next_index]):
+            result_index = message_index + 1 + prior_index
+            if result_index >= len(messages):
+                raise ValueError("committed tool batch is missing an earlier result")
+            result = messages[result_index]
+            matching_receipts = [
+                receipt
+                for receipt in receipts
+                if receipt.get("call_id") == call.id
+                and receipt.get("name") == call.name
+            ]
+            if len(matching_receipts) != 1:
+                raise ValueError("committed tool batch has invalid earlier receipts")
+            receipt = matching_receipts[0]
+            if (
+                receipt.get("transcript_index") != result_index
+                or result.get("role") != "tool"
+                or result.get("tool_call_id") != call.id
+                or result.get("name") != call.name
+                or result.get("message_id") != identity.message_id
+            ):
+                raise ValueError("committed tool batch has invalid earlier result order")
+            try:
+                payload = json.loads(str(result.get("content") or "{}"))
+            except json.JSONDecodeError as exc:
+                raise ValueError("committed tool result is not valid JSON") from exc
+            if not isinstance(payload, dict) or receipt.get("result_sha256") != _result_digest(payload):
+                raise ValueError("committed tool result does not match its receipt")
         return str(message.get("content") or ""), calls
     raise ValueError("committed assistant tool-call message is unavailable")
 
@@ -371,7 +393,11 @@ def _classify_owned_continuation(
                     if next_index < expected_count:
                         try:
                             recovered = _committed_tool_batch(
-                                loaded, cursor, None
+                                loaded,
+                                cursor,
+                                None,
+                                continuation,
+                                execution.identity,
                             )
                         except ValueError:
                             review_reason = "invalid_resume_boundary"
@@ -386,13 +412,23 @@ def _classify_owned_continuation(
             else:
                 try:
                     recovered = _committed_tool_batch(
-                        loaded, cursor, pending_tool
+                        loaded,
+                        cursor,
+                        pending_tool,
+                        continuation,
+                        execution.identity,
                     )
                 except ValueError:
                     review_reason = "invalid_resume_boundary"
         elif next_index < expected_count:
             try:
-                recovered = _committed_tool_batch(loaded, cursor, None)
+                recovered = _committed_tool_batch(
+                    loaded,
+                    cursor,
+                    None,
+                    continuation,
+                    execution.identity,
+                )
             except ValueError:
                 review_reason = "invalid_resume_boundary"
         elif next_index != expected_count:
