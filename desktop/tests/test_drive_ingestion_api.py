@@ -356,6 +356,7 @@ def test_api_marks_operator_added_global_source_out_of_scope(tmp_path):
             if job["status"] == "completed":
                 break
             time.sleep(0.01)
+        assert job["status"] == "completed"
 
         added = client.post(
             f"/v1/drive-ingestions/{job_id}/external-sources",
@@ -375,15 +376,20 @@ def test_api_marks_operator_added_global_source_out_of_scope(tmp_path):
             if job["status"] == "completed":
                 break
             time.sleep(0.01)
+        assert job["status"] == "completed"
         default = client.get(
             f"/v1/drive-ingestions/{job_id}/query", params={"q": "global"}
         )
+        assert default.status_code == 200
         assert default.json()["matches"] == []
         included = client.get(
             f"/v1/drive-ingestions/{job_id}/query",
             params={"q": "global", "include_external": True},
         )
+        assert included.status_code == 200
+        assert included.json()["matches"][0]["drive_id"] == "global"
         assert included.json()["matches"][0]["out_of_scope"] is True
+        assert included.json()["matches"][0]["extraction_status"] == "read"
 
 
 def test_active_sidecar_mounts_ingestion_under_local_auth_and_state(tmp_path):
