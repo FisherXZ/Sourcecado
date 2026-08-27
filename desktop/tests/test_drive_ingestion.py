@@ -537,13 +537,87 @@ def test_coordinator_runs_ingestion_outside_the_requesting_coroutine(tmp_path):
         coordinator = DriveIngestionCoordinator(store, lambda: BlockingDrive())
 
         task = await coordinator.start(job["id"])
+        duplicate_start = await coordinator.start(job["id"])
 
         assert await asyncio.to_thread(started.wait, 1)
+        assert duplicate_start is task
         assert task.done() is False
         assert store.get_job(job["id"])["status"] == "running"
         release.set()
         completed = await coordinator.wait(job["id"])
         assert completed["status"] == "completed"
+
+    asyncio.run(scenario())
+
+
+def test_coordinator_replaces_terminal_task_when_new_work_revision_is_queued(tmp_path):
+    terminal_written = threading.Event()
+    release_first_task = threading.Event()
+
+    class TerminalBlockingStore(DriveIngestionStore):
+        def __init__(self, state_dir):
+            super().__init__(state_dir)
+            self.block_once = True
+
+        def _set_status(self, job_id, status):
+            super()._set_status(job_id, status)
+            if status == "completed" and self.block_once:
+                self.block_once = False
+                terminal_written.set()
+                assert release_first_task.wait(2)
+
+    class Drive:
+        def __init__(self):
+            self.read_calls = []
+
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            return {"files": [], "nextPageToken": None}
+
+        def read(self, file_id, max_chars=20000):
+            self.read_calls.append(file_id)
+            return {
+                "id": file_id,
+                "name": "Global.txt",
+                "mimeType": "text/plain",
+                "modifiedTime": "2026-08-27T10:00:00Z",
+                "parents": ["elsewhere"],
+                "webViewLink": "https://drive.example/global",
+                "content": "Explicit global evidence.",
+                "status": "read",
+                "sources": [],
+                "sensitive_content_redacted": False,
+                "redaction_count": 0,
+            }
+
+    async def scenario():
+        store = TerminalBlockingStore(tmp_path)
+        drive = Drive()
+        coordinator = DriveIngestionCoordinator(store, lambda: drive)
+        job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
+        first_task = await coordinator.start(job["id"])
+        assert await asyncio.to_thread(terminal_written.wait, 1)
+        assert store.get_job(job["id"])["status"] == "completed"
+        store.add_explicit_source(
+            job["id"],
+            drive_id="global",
+            name="Global.txt",
+            parent_id="elsewhere",
+            display_path="External/Global.txt",
+            mime_type="text/plain",
+            modified_time="2026-08-27T10:00:00Z",
+            web_view_link="https://drive.example/global",
+        )
+
+        second_task = await coordinator.start(job["id"])
+        different_task = second_task is not first_task
+        release_first_task.set()
+        await first_task
+        if different_task:
+            await second_task
+
+        assert different_task is True
+        assert drive.read_calls == ["global"]
+        assert store.get_job(job["id"])["status"] == "completed"
 
     asyncio.run(scenario())
 

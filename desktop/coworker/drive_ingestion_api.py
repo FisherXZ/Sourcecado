@@ -85,6 +85,7 @@ def drive_ingestion_router(
         if job["status"] != "paused":
             return JSONResponse({"error": "job_not_paused"}, status_code=409)
         try:
+            store.prepare_resume(job_id)
             await coordinator.start(job_id)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)

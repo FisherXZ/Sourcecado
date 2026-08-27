@@ -57,6 +57,7 @@ class DriveIngestionStore:
                 resolved_path TEXT NOT NULL,
                 status TEXT NOT NULL,
                 generation INTEGER NOT NULL,
+                work_revision INTEGER NOT NULL DEFAULT 1,
                 cancel_requested INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -111,6 +112,19 @@ class DriveIngestionStore:
             );
             """
         )
+        job_columns = {
+            str(row["name"])
+            for row in self._conn.execute(
+                "PRAGMA table_info(drive_ingestion_jobs)"
+            ).fetchall()
+        }
+        if "work_revision" not in job_columns:
+            self._conn.execute(
+                """
+                ALTER TABLE drive_ingestion_jobs
+                ADD COLUMN work_revision INTEGER NOT NULL DEFAULT 1
+                """
+            )
         self._conn.execute(
             """
             UPDATE drive_ingestion_jobs
@@ -212,6 +226,7 @@ class DriveIngestionStore:
             "resolved_path": row["resolved_path"],
             "status": row["status"],
             "generation": int(row["generation"]),
+            "work_revision": int(row["work_revision"]),
             "progress": {
                 "folders_discovered": folder_count,
                 "files_discovered": int(source_counts["discovered"] or 0),
@@ -270,12 +285,33 @@ class DriveIngestionStore:
                 """
                 UPDATE drive_ingestion_jobs
                 SET status = 'pending', generation = ?, cancel_requested = 0,
-                    updated_at = ?
+                    work_revision = work_revision + 1, updated_at = ?
                 WHERE id = ?
                 """,
                 (generation, _now(), job_id),
             )
             self._conn.commit()
+        job = self.get_job(job_id)
+        assert job is not None
+        return job
+
+    def prepare_resume(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            changed = self._conn.execute(
+                """
+                UPDATE drive_ingestion_jobs
+                SET status = 'pending', cancel_requested = 0,
+                    work_revision = work_revision + 1, updated_at = ?
+                WHERE id = ? AND status = 'paused'
+                """,
+                (_now(), job_id),
+            ).rowcount
+            self._conn.commit()
+        if not changed:
+            job = self.get_job(job_id)
+            if job is None:
+                raise ValueError("unknown Drive ingestion job")
+            raise ValueError("Drive ingestion job is not paused")
         job = self.get_job(job_id)
         assert job is not None
         return job
@@ -309,7 +345,17 @@ class DriveIngestionStore:
             generation=int(job["generation"]),
             scope="explicit_global",
         )
-        self._set_status(job_id, "pending")
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE drive_ingestion_jobs
+                SET status = 'pending', cancel_requested = 0,
+                    work_revision = work_revision + 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (_now(), job_id),
+            )
+            self._conn.commit()
         source = next(
             row for row in self.list_sources(job_id) if row["drive_id"] == drive_id
         )
@@ -945,29 +991,37 @@ class DriveIngestionCoordinator:
     ) -> None:
         self.store = store
         self.drive_factory = drive_factory
-        self._tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self._tasks: dict[str, tuple[int, asyncio.Task[dict[str, Any]]]] = {}
 
     async def start(self, job_id: str) -> asyncio.Task[dict[str, Any]]:
+        job = self.store.get_job(job_id)
+        if job is None:
+            raise ValueError("unknown Drive ingestion job")
+        work_revision = int(job["work_revision"])
         existing = self._tasks.get(job_id)
-        if existing is not None and not existing.done():
-            return existing
+        if (
+            existing is not None
+            and existing[0] == work_revision
+            and not existing[1].done()
+        ):
+            return existing[1]
         drive = self.drive_factory()
         if drive is None:
             raise ValueError("Drive is not connected")
         task = asyncio.create_task(
             asyncio.to_thread(DriveIngestionRunner(self.store, drive).run, job_id)
         )
-        self._tasks[job_id] = task
+        self._tasks[job_id] = (work_revision, task)
         return task
 
     async def wait(self, job_id: str) -> dict[str, Any]:
-        task = self._tasks.get(job_id)
-        if task is None:
+        entry = self._tasks.get(job_id)
+        if entry is None:
             job = self.store.get_job(job_id)
             if job is None:
                 raise ValueError("unknown Drive ingestion job")
             return job
-        return await task
+        return await entry[1]
 
     def cancel(self, job_id: str) -> dict[str, Any]:
         return self.store.request_cancel(job_id)
