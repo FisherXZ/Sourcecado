@@ -526,11 +526,18 @@ def test_denied_send_does_not_send(tmp_path):
     assert gmail.sends == []
 
 
-def test_kernel_says_send_requires_allow():
-    from coworker.server import KERNEL
+def test_versioned_prompt_and_runtime_policy_require_per_message_send_approval(
+    tmp_path,
+):
+    from coworker.permissions import decide
+    from coworker.server import system_prompt
+    from coworker.store import ConversationStore
+    from coworker.tools import OPENAI_TOOLS
 
-    assert "gmail_send" in KERNEL
-    assert "board_query" in KERNEL
-    assert "board_delete" in KERNEL
-    assert "Allow" in KERNEL
-    assert "never sends" not in KERNEL
+    tool_names = {schema["function"]["name"] for schema in OPENAI_TOOLS}
+    prompt = system_prompt(ConversationStore(tmp_path))
+    assert {"gmail_send", "board_query", "board_delete"} <= tool_names
+    assert decide("gmail_send").needs_user is True
+    assert "Wait for explicit approval for each send" in prompt
+    assert "Approval is not standing permission" in prompt
+    assert "auto-send" in prompt

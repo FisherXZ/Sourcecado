@@ -11,7 +11,7 @@ import re
 import secrets
 import threading
 import time
-import coworker.turn as turn_runtime
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +20,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
+import coworker.turn as turn_runtime
 from coworker.automation.scheduler import (
     ROUTINE_TEMPLATES,
     SUPPORTED_CADENCES,
@@ -53,6 +54,13 @@ from coworker.mcp_oauth import McpOAuth
 from coworker.brief import build_brief
 from coworker.people import PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
+from coworker.prompt_contract import (
+    AssembledSystemPrompt,
+    PromptDefinition,
+    PromptSection,
+    SOURCING_DIRECTOR_V1,
+    assemble_system_prompt,
+)
 from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
 from coworker.provider import (
     ToolCall,
@@ -99,33 +107,87 @@ TOKEN_HEADER = "X-Club-Token"
 TOKEN_ENV = "CLUB_API_TOKEN"
 SLICE = 29
 MAX_STEPS = 8
-KERNEL = (
-    "Tools: now (America/Los_Angeles clock, auto), remember / memory_update / "
-    "memory_forget (auto), load_skill (auto), gmail_search / gmail_read (auto), "
-    "gmail_draft (ask), gmail_send (ask; sends a reviewed draft after Allow), "
-    "drive_search / drive_list_folder / drive_read (auto, readonly; list folders before reading files), "
-    "calendar_list (auto; upcoming from now unless a time range is given), "
-    "calendar_create / calendar_update (ask, no delete), "
-    "fs_stat / fs_list / fs_find / fs_search / fs_read (auto inside grants), "
-    "fs_mkdir / fs_write / fs_patch / fs_copy / fs_move (auto only when reversible and version-checked), "
-    "fs_trash (ask), request_directory (asks the operator to choose a folder), "
-    "shell_exec (Docker-first; only vetted reads auto), shell_poll / shell_kill, shell_write_stdin (ask), "
-    "apollo_search_people (no emails), people_keep (auto; file curated search "
-    "rows after the director chooses, do not invent the target), "
-    "board_get / board_query (auto; person files on Open / In conversation / Done), "
-    "board_upsert / board_mutate (auto; artifacts, gaps, source refs, sequence, outcomes), "
-    "board_delete (ask; deletes a person file), "
-    "apollo_enrich_contact "
-    "(ask), web_search (auto). MCP tools are named mcp__server__tool. Do not invent the time, tool "
-    "results, emails, or memories. Do not claim you sent or drafted unless the "
-    "matching tool ran and was allowed. Do not send without Allow. Legal templates "
-    "are source evidence, not ready-to-use agreements. If source_safety.ready_to_use "
-    "is false, verify every named party, date, term, and approval status; record a "
-    "knowledge gap and do not adapt or recommend the document as ready to use."
-)
-
-
 _PERSON_FILE_EVENT_CAP = 12
+
+
+def _runtime_prompt_definition(persona: Persona | None) -> PromptDefinition:
+    if persona is None or persona.id == "sourcing":
+        return SOURCING_DIRECTOR_V1
+    return PromptDefinition(
+        version=f"persona-{persona.id}-v1",
+        sections=(PromptSection("persona", persona.name, persona.body),),
+        static_budget_chars=6_000,
+        dynamic_budgets=dict(SOURCING_DIRECTOR_V1.dynamic_budgets),
+        labels_budget_chars=500,
+        total_budget_chars=15_500,
+    )
+
+
+def _bounded_context(text: str, budget_chars: int) -> str:
+    return text if len(text) <= budget_chars else text[:budget_chars]
+
+
+def system_prompt_assembly(
+    store: ConversationStore,
+    persona: Persona | None = None,
+    skills: SkillLoader | None = None,
+    *,
+    people: PersonStore | None = None,
+    session_id: str | None = None,
+) -> AssembledSystemPrompt:
+    dynamic: list[PromptSection] = []
+    items = store.list_memories()
+    if items:
+        memory = "\n".join(f"[#{item['id']}] {item['content']}" for item in items)
+        dynamic.append(
+            PromptSection(
+                "saved_memory",
+                "Saved memory",
+                _bounded_context(memory, 4_000),
+            )
+        )
+    if skills is not None:
+        catalog = catalog_text(skills)
+        if catalog:
+            dynamic.append(
+                PromptSection(
+                    "skill_catalog",
+                    "Skill catalog",
+                    _bounded_context(catalog, 3_000),
+                )
+            )
+    if people is not None and session_id:
+        person_id = people.person_for_session(session_id)
+        person = people.get(person_id) if person_id else None
+        if person is not None:
+            events = people.timeline(person_id)
+            brief = build_brief(person, events)
+            recent = events[-_PERSON_FILE_EVENT_CAP:]
+            learned_lines = [
+                str(event.get("summary") or "")
+                for event in recent
+                if event.get("summary")
+            ]
+            person_context = (
+                "Person file:\n"
+                f"who: {brief['who']}\n"
+                f"why: {brief['why']}\n"
+                "learned:\n"
+                + ("\n".join(f"- {line}" for line in learned_lines) or "-")
+                + "\n"
+                f"missing: {', '.join(brief['missing'])}"
+            )
+            dynamic.append(
+                PromptSection(
+                    "person_file",
+                    "Person File context",
+                    _bounded_context(person_context, 2_000),
+                )
+            )
+    return assemble_system_prompt(
+        definition=_runtime_prompt_definition(persona),
+        dynamic_sections=tuple(dynamic),
+    )
 
 
 def system_prompt(
@@ -136,50 +198,13 @@ def system_prompt(
     people: PersonStore | None = None,
     session_id: str | None = None,
 ) -> str:
-    identity = persona.body if persona is not None else KERNEL
-    parts = [identity, KERNEL]
-    items = store.list_memories()
-    if items:
-        lines = "\n".join(f"[#{item['id']}] {item['content']}" for item in items)
-        if len(lines) > 4000:
-            index_path = store.memory_dir / "MEMORY.md"
-            if index_path.is_file():
-                blob = index_path.read_text(encoding="utf-8")
-                kept: list[str] = []
-                size = 0
-                for line in blob.splitlines():
-                    extra = len(line) + 1
-                    if size + extra > 4000 and kept:
-                        break
-                    kept.append(line)
-                    size += extra
-                parts.append("\n".join(kept))
-            else:
-                parts.append("Known memories:\n" + lines[:4000])
-        else:
-            parts.append("Known memories:\n" + lines)
-    else:
-        parts.append("No saved memories yet.")
-    if skills is not None:
-        catalog = catalog_text(skills)
-        if catalog:
-            parts.append(catalog)
-    if people is not None and session_id:
-        person_id = people.person_for_session(session_id)
-        person = people.get(person_id) if person_id else None
-        if person is not None:
-            events = people.timeline(person_id)
-            brief = build_brief(person, events)
-            recent = events[-_PERSON_FILE_EVENT_CAP:]
-            learned_lines = [str(event.get("summary") or "") for event in recent if event.get("summary")]
-            parts.append(
-                "Person file:\n"
-                f"who: {brief['who']}\n"
-                f"why: {brief['why']}\n"
-                f"learned:\n" + ("\n".join(f"- {line}" for line in learned_lines) or "-") + "\n"
-                f"missing: {', '.join(brief['missing'])}"
-            )
-    return "\n\n".join(parts)
+    return system_prompt_assembly(
+        store,
+        persona,
+        skills,
+        people=people,
+        session_id=session_id,
+    ).text
 
 
 def state_dir() -> Path:
@@ -1611,6 +1636,23 @@ def create_app(
             "version": 1,
             "session_id": sid,
             "current_run": current_run,
+        }
+
+    @app.get("/v1/sessions/{sid}/prompt/current")
+    def session_current_prompt_diagnostics(sid: str):
+        if app.state.store.index(sid) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        assembled = system_prompt_assembly(
+            app.state.store,
+            app.state.persona,
+            app.state.skills,
+            people=app.state.people,
+            session_id=sid,
+        )
+        return {
+            "version": 1,
+            "session_id": sid,
+            **asdict(assembled.diagnostics),
         }
 
     @app.patch("/v1/sessions/{sid}")

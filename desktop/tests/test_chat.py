@@ -112,8 +112,8 @@ def test_ws_streams_deltas_then_turn_end(tmp_path):
     assert roles[0] == "system"
     assert roles[-1] == "user"
     assert fake.calls[0][-1]["content"] == "hi"
-    assert "now" in fake.calls[0][0]["content"]
-    assert "Sourcecado's sourcing agent" in fake.calls[0][0]["content"]
+    assert "## Identity and authority" in fake.calls[0][0]["content"]
+    assert "local executive assistant" in fake.calls[0][0]["content"]
     presentation_fields = {
         "version",
         "session_id",
@@ -1669,7 +1669,8 @@ def test_ws_sourcing_persona_on_duty(tmp_path):
         ws.send_json({"type": "chat", "text": "who are you?"})
         _drain(ws)
     system = fake.calls[0][0]["content"]
-    assert "Sourcecado's sourcing agent" in system
+    assert "## Identity and authority" in system
+    assert "Sourcing Director" in system
     assert "personal coworker" not in system
     res = client.get("/v1/persona", headers={TOKEN_HEADER: TOKEN})
     assert res.json()["id"] == "sourcing"
