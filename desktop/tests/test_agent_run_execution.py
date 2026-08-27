@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import sqlite3
+import time
 
 from coworker.agent_run_continuation import transcript_prefix_sha256
 from coworker.agent_run_execution import AgentRunExecution
@@ -639,6 +640,172 @@ def test_approval_deny_reacquires_from_inbox_and_advances_without_execute(
         ).fetchone() == (None, None)
 
 
+def test_atomic_approval_boundary_failure_leaves_no_inbox_or_permission(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-approval-atomic-failure")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-atomic-failure",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            }
+        ]
+    )
+
+    def fail_atomic(*args, **kwargs):
+        raise RuntimeError("atomic approval boundary failed")
+
+    monkeypatch.setattr(
+        AgentRunExecution,
+        "waiting_approval_atomic",
+        fail_atomic,
+        raising=False,
+    )
+    result = asyncio.run(
+        run_turn(
+            text="Draft outreach",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "error"
+    assert Inbox(store).get("call-atomic-failure") is None
+    assert "permission_required" not in {
+        event["type"] for event in store.load_events(identity.session_id)
+    }
+    assert store.get_agent_run(identity.run_id)["current_state"] == "failed"
+
+
+def test_permission_projection_observes_atomic_waiting_authority(
+    tmp_path
+):
+    identity = _identity("run-approval-atomic-order")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-atomic-order",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            }
+        ]
+    )
+    observed = {}
+
+    async def inspect_emit(event):
+        if event["type"] == "permission_required":
+            run = store.get_agent_run(identity.run_id)
+            with sqlite3.connect(store.db_path) as db:
+                lease = db.execute(
+                    "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+                    (identity.run_id,),
+                ).fetchone()
+            observed.update(
+                run_state=run["current_state"],
+                phase=run["continuation"]["cursor"]["phase"],
+                lease=lease,
+                inbox=Inbox(store).get("call-atomic-order"),
+            )
+
+    result = asyncio.run(
+        run_turn(
+            text="Draft outreach",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            emit=inspect_emit,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "waiting"
+    assert observed["run_state"] == "waiting_approval"
+    assert observed["phase"] == "waiting_approval"
+    assert observed["lease"] == (None, None)
+    assert observed["inbox"]["state"] == "pending"
+    assert observed["inbox"]["arguments"] == {"body": "private body"}
+
+
+def test_permission_projection_failure_preserves_atomic_waiting_authority(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-permission-projection-failure")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-projection-failure",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            }
+        ]
+    )
+    original_append_event = store.append_event
+
+    def fail_permission_event(session_id, event):
+        if event.get("type") == "permission_required":
+            raise RuntimeError("permission projection failed")
+        return original_append_event(session_id, event)
+
+    monkeypatch.setattr(store, "append_event", fail_permission_event)
+    result = asyncio.run(
+        run_turn(
+            text="Draft outreach",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "error"
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "waiting_approval"
+    assert run["continuation"]["cursor"]["phase"] == "waiting_approval"
+    assert Inbox(store).get("call-projection-failure")["state"] == "pending"
+    assert "permission_required" not in {
+        event["type"] for event in store.load_events(identity.session_id)
+    }
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone() == (None, None)
+
+
 def test_persisted_approval_decision_wins_over_wait_callback(tmp_path, monkeypatch):
     identity = _identity("run-approval-race")
     store = ConversationStore(tmp_path)
@@ -772,6 +939,141 @@ def test_approval_allow_reacquires_same_run_and_executes_once(
     ]
     assert kinds.index("waiting_approval") < kinds.index("approval_resolved")
     assert kinds.index("approval_resolved") < kinds.index("tool_pending")
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone() == (None, None)
+
+
+def test_approved_completion_uses_one_joint_run_and_inbox_commit(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-approved-atomic-success")
+    store = ConversationStore(tmp_path)
+    inbox = Inbox(store)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-approved-atomic",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            },
+            {"deltas": ("Drafted",)},
+        ]
+    )
+    executions = []
+
+    async def allow(_call_id):
+        return "allow"
+
+    def execute_once(name, arguments, **kwargs):
+        executions.append(name)
+        return True, {"draft_id": "draft-atomic"}
+
+    def forbidden_legacy_completion(*args, **kwargs):
+        raise AssertionError("legacy inbox completion must not be called")
+
+    monkeypatch.setattr("coworker.turn.execute", execute_once)
+    monkeypatch.setattr(inbox, "complete_execution", forbidden_legacy_completion)
+    result = asyncio.run(
+        run_turn(
+            text="Draft outreach",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=inbox,
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=allow,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert executions == ["gmail_draft"]
+    run = store.get_agent_run(identity.run_id)
+    receipt = inbox.get("call-approved-atomic")
+    assert run["current_state"] == "complete"
+    assert run["continuation"]["completed_tool_receipts"][0]["call_id"] == (
+        "call-approved-atomic"
+    )
+    assert receipt["execution_status"] == "succeeded"
+    assert receipt["execution_result"] == {"draft_id": "draft-atomic"}
+
+
+def test_approved_atomic_completion_failure_classifies_both_outcomes_unknown(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-approved-atomic-failure")
+    store = ConversationStore(tmp_path)
+    inbox = Inbox(store)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-approved-failure",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            }
+        ]
+    )
+    executions = []
+
+    async def allow(_call_id):
+        return "allow"
+
+    def execute_once(name, arguments, **kwargs):
+        executions.append(name)
+        return True, {"draft_id": "draft-unknown"}
+
+    def fail_joint_completion(*args, **kwargs):
+        raise RuntimeError("forced joint completion failure")
+
+    monkeypatch.setattr("coworker.turn.execute", execute_once)
+    monkeypatch.setattr(
+        AgentRunExecution,
+        "complete_approved_tool",
+        fail_joint_completion,
+        raising=False,
+    )
+    result = asyncio.run(
+        run_turn(
+            text="Draft outreach",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=inbox,
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=allow,
+            identity=identity,
+        )
+    )
+
+    assert result["status"] == "interrupted"
+    assert executions == ["gmail_draft"]
+    run = store.get_agent_run(identity.run_id)
+    receipt = inbox.get("call-approved-failure")
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["cursor"]["phase"] == "review_required"
+    assert run["continuation"]["pending_tool"]["status"] == "outcome_unknown"
+    assert receipt["execution_status"] == "interrupted"
+    assert receipt["execution_claimant"] is None
+    assert store.list_agent_run_checkpoints(identity.run_id)[-1]["kind"] == (
+        "tool_outcome_unknown"
+    )
     with sqlite3.connect(store.db_path) as db:
         assert db.execute(
             "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
@@ -1077,3 +1379,260 @@ def test_same_identity_ownership_race_calls_one_provider_and_emits_one_turn(
         "user",
         "assistant",
     ]
+
+
+def test_heartbeat_keeps_tiny_lease_alive_during_blocked_provider(tmp_path):
+    identity = _identity("run-heartbeat-provider")
+    store = ConversationStore(tmp_path)
+
+    class BlockedProvider:
+        model_id = "blocked-provider"
+
+        async def astream(self, *, messages, tools):
+            await asyncio.sleep(0.7)
+            yield StreamChunk(text_delta="Provider survived")
+
+    result = asyncio.run(
+        run_turn(
+            text="Wait for provider",
+            sid=identity.session_id,
+            store=store,
+            provider=BlockedProvider(),
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+            lease_seconds=0.3,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert store.get_agent_run(identity.run_id)["current_state"] == "complete"
+
+
+def test_heartbeat_keeps_tiny_lease_alive_during_blocked_tool(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-heartbeat-tool")
+    store = ConversationStore(tmp_path)
+    provider = FakeProvider(
+        steps=[
+            {"tool_calls": [ToolCall(id="call-slow", name="now", arguments={})]},
+            {"deltas": ("Tool survived",)},
+        ]
+    )
+    executions = []
+
+    def blocked_execute(name, arguments, **kwargs):
+        executions.append(name)
+        time.sleep(0.7)
+        return True, {"time": "noon"}
+
+    monkeypatch.setattr("coworker.turn.execute", blocked_execute)
+    result = asyncio.run(
+        run_turn(
+            text="Wait for tool",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+            lease_seconds=0.3,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert executions == ["now"]
+    assert store.get_agent_run(identity.run_id)["current_state"] == "complete"
+
+
+def test_model_heartbeat_renewal_loss_reconciles_retryable_boundary(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-heartbeat-model-loss")
+    store = ConversationStore(tmp_path)
+    renewals = []
+    original_renew = AgentRunExecution.renew
+
+    class BlockedProvider:
+        model_id = "blocked-provider"
+
+        async def astream(self, *, messages, tools):
+            await asyncio.sleep(0.12)
+            yield StreamChunk(text_delta="must not checkpoint")
+
+    def expire_on_heartbeat(self):
+        renewals.append(self.metadata["phase"])
+        if self.metadata["phase"] == "model_in_flight":
+            with sqlite3.connect(store.db_path) as db:
+                db.execute(
+                    "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
+                    ("2000-01-01T00:00:00+00:00", identity.run_id),
+                )
+        return original_renew(self)
+
+    monkeypatch.setattr(AgentRunExecution, "renew", expire_on_heartbeat)
+    result = asyncio.run(
+        run_turn(
+            text="Lose model lease",
+            sid=identity.session_id,
+            store=store,
+            provider=BlockedProvider(),
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+            lease_seconds=0.09,
+        )
+    )
+
+    assert result["status"] == "interrupted"
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["cursor"]["phase"] == "model_ready"
+    assert run["continuation"]["pending_model"]["status"] == "retry_ready"
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute(
+            "SELECT lease_owner, lease_expires_at FROM agent_runs WHERE run_id = ?",
+            (identity.run_id,),
+        ).fetchone() == (None, None)
+
+
+def test_heartbeat_owner_takeover_fences_stale_without_checkpointing(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-heartbeat-takeover")
+    store = ConversationStore(tmp_path)
+    original_renew = AgentRunExecution.renew
+    takeover = []
+
+    class BlockedProvider:
+        model_id = "blocked-provider"
+
+        async def astream(self, *, messages, tools):
+            await asyncio.sleep(0.12)
+            yield StreamChunk(text_delta="must not persist")
+
+    def take_over_on_heartbeat(self):
+        if self.metadata["phase"] == "model_in_flight" and not takeover:
+            with sqlite3.connect(store.db_path) as db:
+                db.execute(
+                    "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
+                    ("2000-01-01T00:00:00+00:00", identity.run_id),
+                )
+            run = store.get_agent_run(identity.run_id)
+            takeover.append(
+                store.agent_runs.acquire_lease(
+                    identity.run_id,
+                    "owner-takeover",
+                    run["version"],
+                    1,
+                )
+            )
+        return original_renew(self)
+
+    monkeypatch.setattr(AgentRunExecution, "renew", take_over_on_heartbeat)
+    result = asyncio.run(
+        run_turn(
+            text="Lose ownership",
+            sid=identity.session_id,
+            store=store,
+            provider=BlockedProvider(),
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=identity,
+            lease_seconds=0.09,
+        )
+    )
+
+    assert result["status"] == "conflict"
+    assert len(takeover) == 1 and takeover[0].owner_id == "owner-takeover"
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "running"
+    assert run["continuation"]["cursor"]["phase"] == "model_in_flight"
+    assert [
+        item["kind"] for item in store.list_agent_run_checkpoints(identity.run_id)
+    ][-1] == "model_pending"
+    assert "assistant_delta" not in {
+        event["type"] for event in store.load_events(identity.session_id)
+    }
+
+
+def test_approved_tool_heartbeat_loss_executes_once_and_classifies_unknown(
+    tmp_path, monkeypatch
+):
+    identity = _identity("run-heartbeat-approved-loss")
+    store = ConversationStore(tmp_path)
+    inbox = Inbox(store)
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="call-heartbeat-approved",
+                        name="gmail_draft",
+                        arguments={"body": "private body"},
+                    )
+                ]
+            }
+        ]
+    )
+    executions = []
+    original_renew = AgentRunExecution.renew
+
+    async def allow(_call_id):
+        return "allow"
+
+    def blocked_execute(name, arguments, **kwargs):
+        executions.append(name)
+        time.sleep(0.12)
+        return True, {"draft_id": "draft-heartbeat-unknown"}
+
+    def expire_approved_tool(self):
+        if self.metadata["phase"] == "tool_in_flight":
+            with sqlite3.connect(store.db_path) as db:
+                db.execute(
+                    "UPDATE agent_runs SET lease_expires_at = ? WHERE run_id = ?",
+                    ("2000-01-01T00:00:00+00:00", identity.run_id),
+                )
+        return original_renew(self)
+
+    monkeypatch.setattr("coworker.turn.execute", blocked_execute)
+    monkeypatch.setattr(AgentRunExecution, "renew", expire_approved_tool)
+    result = asyncio.run(
+        run_turn(
+            text="Lose approved tool lease",
+            sid=identity.session_id,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=inbox,
+            openai_tools=[],
+            execute_kwargs={},
+            wait_permission=allow,
+            identity=identity,
+            lease_seconds=0.09,
+        )
+    )
+
+    assert result["status"] == "interrupted"
+    assert executions == ["gmail_draft"]
+    run = store.get_agent_run(identity.run_id)
+    receipt = inbox.get("call-heartbeat-approved")
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["cursor"]["phase"] == "review_required"
+    assert run["continuation"]["pending_tool"]["status"] == "outcome_unknown"
+    assert receipt["execution_status"] == "interrupted"
+    assert receipt["execution_claimant"] is None

@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+from coworker.agent_run_approval import (
+    APPROVED_TOOL_OUTCOME_UNKNOWN_ERROR,
+    ApprovalParkRequest,
+    canonical_json,
+    project_inbox_row,
+)
 from coworker.agent_run_continuation import (
     merge_continuation,
     project_continuation,
@@ -535,6 +541,103 @@ def _checkpoint_row(row: sqlite3.Row) -> dict[str, Any]:
     item["sequence"] = int(item["sequence"])
     item["payload"] = json_object(item.get("payload"))
     return item
+
+
+def _inbox_matches_approval(
+    row: sqlite3.Row, approval: ApprovalParkRequest
+) -> bool:
+    try:
+        arguments = json.loads(str(row["arguments"] or "{}"))
+        resource = (
+            json.loads(str(row["resource"]))
+            if row["resource"] is not None
+            else None
+        )
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return (
+        str(row["kind"]) == approval.kind
+        and str(row["name"]) == approval.name
+        and arguments == approval.arguments
+        and str(row["state"]) == "pending"
+        and row["decision"] is None
+        and row["actor"] is None
+        and row["resolved_at"] is None
+        and str(row["requested_at"]) == approval.requested_at
+        and str(row["scope"] or "once") == approval.scope
+        and str(row["execution_status"] or "pending") == "pending"
+        and row["execution_claimant"] is None
+        and row["execution_error"] is None
+        and row["execution_result"] is None
+        and str(row["expires_at"]) == approval.expires_at
+        and row["reason"] == approval.reason
+        and row["session_id"] == approval.session_id
+        and row["run_id"] == approval.run_id
+        and row["message_id"] == approval.message_id
+        and row["part_id"] == approval.part_id
+        and row["recovery_command_id"] is None
+        and row["original_call_id"] is None
+        and resource == approval.resource
+    )
+
+
+def _owned_approved_inbox(
+    row: sqlite3.Row | None, run_id: str, claimant: str
+) -> bool:
+    return bool(
+        row is not None
+        and row["run_id"] == run_id
+        and str(row["state"]) == "resolved"
+        and str(row["decision"]) == "allow"
+        and str(row["execution_status"] or "pending") == "executing"
+        and row["execution_claimant"] == claimant
+    )
+
+
+def _validate_approved_run_boundary(
+    row: sqlite3.Row,
+    approval_id: str,
+    continuation: dict[str, Any],
+    *,
+    interrupted: bool,
+) -> None:
+    current = project_continuation(json_object(row["continuation"]))
+    incoming = project_continuation(continuation)
+    cursor = current.get("cursor", {})
+    pending = current.get("pending_tool")
+    next_cursor = incoming.get("cursor", {})
+    exact_pending = (
+        isinstance(pending, dict)
+        and pending.get("call_id") == approval_id
+        and pending.get("retry_class") == "consequential"
+        and pending.get("status") == "in_flight"
+        and pending.get("budget_reserved") is True
+    )
+    if cursor.get("phase") != "tool_in_flight" or not exact_pending:
+        raise ValueError("approved completion does not match the in-flight tool")
+    if interrupted:
+        incoming_pending = incoming.get("pending_tool")
+        legal = (
+            next_cursor.get("phase") == "review_required"
+            and isinstance(incoming_pending, dict)
+            and incoming_pending.get("call_id") == approval_id
+            and incoming_pending.get("status") == "outcome_unknown"
+            and incoming_pending.get("budget_reserved") is True
+        )
+    else:
+        legal = (
+            next_cursor.get("phase") == "tools_ready"
+            and "pending_tool" not in incoming
+            and int(next_cursor.get("next_tool_index", -1))
+            == int(cursor.get("next_tool_index", 0)) + 1
+            and any(
+                receipt.get("call_id") == approval_id
+                and receipt.get("outcome") == "executed"
+                for receipt in incoming.get("completed_tool_receipts", [])
+            )
+        )
+    if not legal:
+        raise ValueError("approved completion continuation is inconsistent")
 
 
 def _validate_checkpoint(kind: str, state: str | None) -> None:
@@ -1207,6 +1310,391 @@ class AgentRunRepository(_AgentRunRepositoryBase):
         next_lease = None if relinquish else _lease_from_row(run_row)
         return next_lease, _checkpoint_row(checkpoint_row)
 
+    def park_approval_and_wait(
+        self,
+        lease: AgentRunLease,
+        continuation: dict[str, Any],
+        approval: ApprovalParkRequest,
+        *,
+        payload: dict[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> tuple[None, dict[str, Any], dict[str, Any]]:
+        """Atomically park one approval and relinquish its Agent Run lease."""
+        _validate_checkpoint("waiting_approval", "waiting_approval")
+        stamp = _timestamp(now)
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._fenced_row(lease, stamp)
+                persisted = project_continuation(
+                    json_object(row["continuation"])
+                )
+                identity = persisted.get("identity", {})
+                waiting = project_continuation(continuation)
+                waiting_tool = waiting.get("pending_tool")
+                if (
+                    approval.run_id != lease.run_id
+                    or approval.session_id != str(row["session_id"])
+                    or approval.message_id != identity.get("message_id")
+                    or approval.part_id != identity.get("part_id")
+                    or waiting.get("cursor", {}).get("phase")
+                    != "waiting_approval"
+                    or waiting.get("pending_interaction")
+                    != {"kind": "approval", "id": approval.item_id}
+                    or not isinstance(waiting_tool, dict)
+                    or waiting_tool.get("call_id") != approval.call_id
+                    or waiting_tool.get("name") != approval.name
+                    or waiting_tool.get("status") != "not_started"
+                    or waiting_tool.get("budget_reserved") is not False
+                ):
+                    raise ValueError("approval identity does not match Agent Run")
+                inbox_row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (approval.item_id,)
+                ).fetchone()
+                if inbox_row is None:
+                    self._conn.execute(
+                        """
+                        INSERT INTO inbox
+                            (id, kind, name, arguments, state, requested_at,
+                             scope, execution_status, expires_at, reason,
+                             session_id, run_id, message_id, part_id,
+                             recovery_command_id, original_call_id, resource)
+                        VALUES (?, ?, ?, ?, 'pending', ?, ?, 'pending', ?, ?,
+                                ?, ?, ?, ?, NULL, NULL, ?)
+                        """,
+                        (
+                            approval.item_id,
+                            approval.kind,
+                            approval.name,
+                            canonical_json(approval.arguments),
+                            approval.requested_at,
+                            approval.scope,
+                            approval.expires_at,
+                            approval.reason,
+                            approval.session_id,
+                            approval.run_id,
+                            approval.message_id,
+                            approval.part_id,
+                            (
+                                canonical_json(approval.resource)
+                                if approval.resource is not None
+                                else None
+                            ),
+                        ),
+                    )
+                elif not _inbox_matches_approval(inbox_row, approval):
+                    raise ValueError("approval inbox identity conflicts with existing row")
+                sequence = int(row["checkpoint_sequence"]) + 1
+                next_continuation = merge_continuation(
+                    json_object(row["continuation"]), continuation
+                )
+                cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        current_state = 'waiting_approval',
+                        checkpoint_sequence = ?, continuation = ?,
+                        lease_owner = NULL, lease_expires_at = NULL,
+                        version = version + 1, updated_at = ?
+                    WHERE run_id = ? AND version = ? AND lease_owner = ?
+                      AND lease_expires_at > ? AND current_state = 'running'
+                    """,
+                    (
+                        sequence,
+                        _json(next_continuation),
+                        stamp,
+                        lease.run_id,
+                        lease.version,
+                        lease.owner_id,
+                        stamp,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    self._raise_fence_failure(lease, stamp)
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_run_checkpoints
+                        (run_id, sequence, kind, payload, created_at)
+                    VALUES (?, ?, 'waiting_approval', ?, ?)
+                    """,
+                    (
+                        lease.run_id,
+                        sequence,
+                        _json(bounded_checkpoint_payload(payload)),
+                        stamp,
+                    ),
+                )
+                checkpoint_row = self._conn.execute(
+                    """
+                    SELECT * FROM agent_run_checkpoints
+                    WHERE run_id = ? AND sequence = ?
+                    """,
+                    (lease.run_id, sequence),
+                ).fetchone()
+                inbox_row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (approval.item_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        if checkpoint_row is None or inbox_row is None:
+            raise RuntimeError("atomic approval boundary did not persist")
+        return None, _checkpoint_row(checkpoint_row), project_inbox_row(inbox_row)
+
+    def complete_approved_tool(
+        self,
+        lease: AgentRunLease,
+        continuation: dict[str, Any],
+        *,
+        approval_id: str,
+        claimant: str,
+        ok: bool,
+        result: dict[str, Any],
+        payload: dict[str, Any] | None = None,
+        skills_loaded: list[str] | None = None,
+        source_refs: list[dict[str, Any]] | None = None,
+        artifact_refs: list[dict[str, Any]] | None = None,
+        now: datetime | None = None,
+    ) -> tuple[AgentRunLease, dict[str, Any], dict[str, Any]]:
+        """Commit one approved tool result to inbox and Agent Run together."""
+        _validate_checkpoint("tool_completed", None)
+        stamp = _timestamp(now)
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._fenced_row(lease, stamp)
+                _validate_approved_run_boundary(
+                    row, approval_id, continuation, interrupted=False
+                )
+                inbox_row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (approval_id,)
+                ).fetchone()
+                if not _owned_approved_inbox(
+                    inbox_row, lease.run_id, claimant
+                ):
+                    raise AgentRunLeaseLost(
+                        "approved inbox execution is not owned by this claimant"
+                    )
+                execution_error = (
+                    str(result.get("error"))
+                    if not ok and result.get("error") is not None
+                    else None
+                )
+                inbox_cursor = self._conn.execute(
+                    """
+                    UPDATE inbox SET
+                        execution_status = ?, execution_error = ?,
+                        execution_result = ?
+                    WHERE id = ? AND state = 'resolved'
+                      AND decision = 'allow' AND execution_status = 'executing'
+                      AND execution_claimant = ? AND run_id = ?
+                    """,
+                    (
+                        "succeeded" if ok else "failed",
+                        execution_error,
+                        json.dumps(result, ensure_ascii=False),
+                        approval_id,
+                        claimant,
+                        lease.run_id,
+                    ),
+                )
+                if inbox_cursor.rowcount != 1:
+                    raise AgentRunLeaseLost(
+                        "approved inbox execution completion was fenced"
+                    )
+                values = _checkpoint_projection(
+                    row,
+                    state=None,
+                    skills_loaded=skills_loaded,
+                    source_refs=source_refs,
+                    artifact_refs=artifact_refs,
+                    usage_delta={"tool_calls": 1},
+                    terminal_result=None,
+                    kind="tool_completed",
+                    now=stamp,
+                )
+                sequence = int(row["checkpoint_sequence"]) + 1
+                next_continuation = merge_continuation(
+                    json_object(row["continuation"]), continuation
+                )
+                run_cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        current_state = ?, checkpoint_sequence = ?,
+                        skills_loaded = ?, source_refs = ?, artifact_refs = ?,
+                        usage = ?, continuation = ?, version = version + 1,
+                        updated_at = ?
+                    WHERE run_id = ? AND version = ? AND lease_owner = ?
+                      AND lease_expires_at > ? AND current_state = 'running'
+                    """,
+                    (
+                        values["state"],
+                        sequence,
+                        values["skills"],
+                        values["sources"],
+                        values["artifacts"],
+                        values["usage"],
+                        _json(next_continuation),
+                        stamp,
+                        lease.run_id,
+                        lease.version,
+                        lease.owner_id,
+                        stamp,
+                    ),
+                )
+                if run_cursor.rowcount != 1:
+                    self._raise_fence_failure(lease, stamp)
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_run_checkpoints
+                        (run_id, sequence, kind, payload, created_at)
+                    VALUES (?, ?, 'tool_completed', ?, ?)
+                    """,
+                    (
+                        lease.run_id,
+                        sequence,
+                        _json(bounded_checkpoint_payload(payload)),
+                        stamp,
+                    ),
+                )
+                checkpoint_row = self._conn.execute(
+                    """
+                    SELECT * FROM agent_run_checkpoints
+                    WHERE run_id = ? AND sequence = ?
+                    """,
+                    (lease.run_id, sequence),
+                ).fetchone()
+                run_row = self._conn.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ?", (lease.run_id,)
+                ).fetchone()
+                inbox_row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (approval_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        if checkpoint_row is None or inbox_row is None:
+            raise RuntimeError("atomic approved completion did not persist")
+        return (
+            _lease_from_row(run_row),
+            _checkpoint_row(checkpoint_row),
+            project_inbox_row(inbox_row),
+        )
+
+    def interrupt_approved_tool(
+        self,
+        lease: AgentRunLease,
+        continuation: dict[str, Any],
+        *,
+        approval_id: str,
+        claimant: str,
+        payload: dict[str, Any] | None = None,
+        now: datetime | None = None,
+    ) -> tuple[None, dict[str, Any], dict[str, Any]]:
+        """Atomically classify a lost approved tool outcome on both authorities."""
+        _validate_checkpoint("tool_outcome_unknown", "interrupted")
+        stamp = _timestamp(now)
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._fenced_row(lease, stamp)
+                _validate_approved_run_boundary(
+                    row, approval_id, continuation, interrupted=True
+                )
+                inbox_row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (approval_id,)
+                ).fetchone()
+                if not _owned_approved_inbox(
+                    inbox_row, lease.run_id, claimant
+                ):
+                    raise AgentRunLeaseLost(
+                        "approved inbox execution interruption was fenced"
+                    )
+                inbox_cursor = self._conn.execute(
+                    """
+                    UPDATE inbox SET
+                        execution_status = 'interrupted',
+                        execution_claimant = NULL,
+                        execution_error = ?, execution_result = ?
+                    WHERE id = ? AND state = 'resolved'
+                      AND decision = 'allow' AND execution_status = 'executing'
+                      AND execution_claimant = ? AND run_id = ?
+                    """,
+                    (
+                        APPROVED_TOOL_OUTCOME_UNKNOWN_ERROR,
+                        json.dumps(
+                            {
+                                "status": "interrupted",
+                                "error": APPROVED_TOOL_OUTCOME_UNKNOWN_ERROR,
+                            }
+                        ),
+                        approval_id,
+                        claimant,
+                        lease.run_id,
+                    ),
+                )
+                if inbox_cursor.rowcount != 1:
+                    raise AgentRunLeaseLost(
+                        "approved inbox execution interruption was fenced"
+                    )
+                sequence = int(row["checkpoint_sequence"]) + 1
+                next_continuation = merge_continuation(
+                    json_object(row["continuation"]), continuation
+                )
+                run_cursor = self._conn.execute(
+                    """
+                    UPDATE agent_runs SET
+                        current_state = 'interrupted', checkpoint_sequence = ?,
+                        continuation = ?, lease_owner = NULL,
+                        lease_expires_at = NULL, version = version + 1,
+                        updated_at = ?
+                    WHERE run_id = ? AND version = ? AND lease_owner = ?
+                      AND lease_expires_at > ? AND current_state = 'running'
+                    """,
+                    (
+                        sequence,
+                        _json(next_continuation),
+                        stamp,
+                        lease.run_id,
+                        lease.version,
+                        lease.owner_id,
+                        stamp,
+                    ),
+                )
+                if run_cursor.rowcount != 1:
+                    self._raise_fence_failure(lease, stamp)
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_run_checkpoints
+                        (run_id, sequence, kind, payload, created_at)
+                    VALUES (?, ?, 'tool_outcome_unknown', ?, ?)
+                    """,
+                    (
+                        lease.run_id,
+                        sequence,
+                        _json(bounded_checkpoint_payload(payload)),
+                        stamp,
+                    ),
+                )
+                checkpoint_row = self._conn.execute(
+                    """
+                    SELECT * FROM agent_run_checkpoints
+                    WHERE run_id = ? AND sequence = ?
+                    """,
+                    (lease.run_id, sequence),
+                ).fetchone()
+                inbox_row = self._conn.execute(
+                    "SELECT * FROM inbox WHERE id = ?", (approval_id,)
+                ).fetchone()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        if checkpoint_row is None or inbox_row is None:
+            raise RuntimeError("approved interruption did not persist")
+        return None, _checkpoint_row(checkpoint_row), project_inbox_row(inbox_row)
+
     def release_lease(
         self,
         lease: AgentRunLease,
@@ -1354,6 +1842,28 @@ class AgentRunRepository(_AgentRunRepositoryBase):
                         else:
                             cursor_data["phase"] = "review_required"
                             pending["status"] = "outcome_unknown"
+                            self._conn.execute(
+                                """
+                                UPDATE inbox SET
+                                    execution_status = 'interrupted',
+                                    execution_claimant = NULL,
+                                    execution_error = ?, execution_result = ?
+                                WHERE id = ? AND run_id = ?
+                                  AND state = 'resolved' AND decision = 'allow'
+                                  AND execution_status = 'executing'
+                                """,
+                                (
+                                    APPROVED_TOOL_OUTCOME_UNKNOWN_ERROR,
+                                    json.dumps(
+                                        {
+                                            "status": "interrupted",
+                                            "error": APPROVED_TOOL_OUTCOME_UNKNOWN_ERROR,
+                                        }
+                                    ),
+                                    pending.get("call_id"),
+                                    run_id,
+                                ),
+                            )
                     elif phase not in {"model_ready", "tools_ready"}:
                         cursor_data["phase"] = "review_required"
                     sequence = int(row["checkpoint_sequence"]) + 1

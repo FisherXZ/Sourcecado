@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from coworker.agent_run_approval import project_inbox_row
 from coworker.agent_run_repository import (
     AgentRunLease,
     AgentRunRepository,
@@ -1561,44 +1562,7 @@ class ConversationStore:
 
 
 def _inbox_row(row: sqlite3.Row) -> dict[str, Any]:
-    item = dict(row)
-    raw = item.get("arguments") or "{}"
-    try:
-        item["arguments"] = json.loads(raw)
-    except json.JSONDecodeError:
-        item["arguments"] = {}
-    item.setdefault("actor", None)
-    item["requested_at"] = item.get("requested_at") or item.get("created_at")
-    item.setdefault("resolved_at", None)
-    item["scope"] = item.get("scope") or "once"
-    item["execution_status"] = item.get("execution_status") or "pending"
-    item.setdefault("execution_error", None)
-    item.setdefault("execution_claimant", None)
-    raw_result = item.get("execution_result")
-    if isinstance(raw_result, str):
-        try:
-            item["execution_result"] = json.loads(raw_result)
-        except json.JSONDecodeError:
-            item["execution_result"] = None
-    else:
-        item["execution_result"] = None
-    item.setdefault("expires_at", None)
-    item.setdefault("reason", None)
-    item.setdefault("session_id", None)
-    item.setdefault("run_id", None)
-    item.setdefault("message_id", None)
-    item.setdefault("part_id", None)
-    item.setdefault("recovery_command_id", None)
-    item.setdefault("original_call_id", None)
-    raw_resource = item.get("resource")
-    if isinstance(raw_resource, str):
-        try:
-            item["resource"] = json.loads(raw_resource)
-        except json.JSONDecodeError:
-            item["resource"] = None
-    else:
-        item["resource"] = None
-    return item
+    return project_inbox_row(row)
 
 
 def _run_row(row: sqlite3.Row) -> dict[str, Any]:

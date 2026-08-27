@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
+from coworker.agent_run_approval import build_approval_park_request
 from coworker.agent_run_continuation import (
     MAX_SAFE_ID,
     merge_continuation,
@@ -64,6 +65,7 @@ class AgentRunExecution:
         snapshot: dict[str, Any],
         max_steps: int,
         now: datetime | None,
+        lease_seconds: float,
     ) -> None:
         self._store = store
         self._identity = identity
@@ -73,6 +75,7 @@ class AgentRunExecution:
         self._snapshot = project_continuation(snapshot)
         self._max_steps = max_steps
         self._now = now
+        self._lease_seconds = _execution_lease_seconds(lease_seconds)
         self._resolved_decision: str | None = None
 
     @classmethod
@@ -87,9 +90,11 @@ class AgentRunExecution:
         owner_id: str | None = None,
         now: datetime | None = None,
         parent_run_id: str | None = None,
+        lease_seconds: float = EXECUTION_LEASE_SECONDS,
     ) -> AgentRunExecution:
         if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
             raise ValueError("max_steps must be a positive integer")
+        duration = _execution_lease_seconds(lease_seconds)
         owner = owner_id or f"execution_{uuid.uuid4().hex}"
         initial = initial_continuation(
             {
@@ -106,7 +111,7 @@ class AgentRunExecution:
                 original_goal=goal,
                 provider_model_id=provider_model_id,
                 owner_id=owner,
-                lease_seconds=EXECUTION_LEASE_SECONDS,
+                lease_seconds=duration,
                 continuation=initial,
                 parent_run_id=parent_run_id,
                 now=now,
@@ -125,6 +130,7 @@ class AgentRunExecution:
             started.run["continuation"],
             max_steps,
             now,
+            duration,
         )
         phase = execution._snapshot.get("cursor", {}).get("phase")
         if phase == "review_required":
@@ -142,6 +148,7 @@ class AgentRunExecution:
         max_steps: int,
         owner_id: str | None = None,
         now: datetime | None = None,
+        lease_seconds: float = EXECUTION_LEASE_SECONDS,
     ) -> AgentRunExecution:
         if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
             raise ValueError("max_steps must be a positive integer")
@@ -156,12 +163,13 @@ class AgentRunExecution:
             raise AgentRunExecutionOwnershipError(
                 f"Agent Run {identity.run_id} is not an exact resumable continuation"
             )
+        duration = _execution_lease_seconds(lease_seconds)
         owner = owner_id or f"execution_{uuid.uuid4().hex}"
         lease = store.agent_runs.acquire_resumable_lease(
             identity.run_id,
             owner,
             run["version"],
-            EXECUTION_LEASE_SECONDS,
+            duration,
             now=now,
         )
         if lease is None:
@@ -169,7 +177,7 @@ class AgentRunExecution:
                 f"Agent Run {identity.run_id} resumable lease is unavailable"
             )
         execution = cls(
-            store, identity, owner, lease, snapshot, max_steps, now
+            store, identity, owner, lease, snapshot, max_steps, now, duration
         )
         execution._refresh_snapshot()
         return execution
@@ -199,6 +207,10 @@ class AgentRunExecution:
         return self._lease
 
     @property
+    def lease_seconds(self) -> float:
+        return self._lease_seconds
+
+    @property
     def metadata(self) -> dict[str, Any]:
         projected = project_continuation(self._snapshot)
         cursor = projected.get("cursor", {})
@@ -224,7 +236,7 @@ class AgentRunExecution:
         lease = self._require_lease()
         try:
             renewed = self._store.agent_runs.renew_lease(
-                lease, EXECUTION_LEASE_SECONDS, now=self._now
+                lease, self._lease_seconds, now=self._now
             )
         except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
             self._lease = None
@@ -232,6 +244,16 @@ class AgentRunExecution:
         self._lease = renewed
         self._version = renewed.version
         return renewed
+
+    def reconcile_expired_boundary(self) -> dict[str, Any]:
+        """Classify an expired lease without granting this execution authority."""
+        self._lease = None
+        self._store.agent_runs.reconcile_expired_leases(now=self._now)
+        self._refresh_snapshot()
+        run = self._store.get_agent_run(self.run_id)
+        if run is None:
+            raise KeyError(self.run_id)
+        return run
 
     def user_input(
         self,
@@ -434,6 +456,71 @@ class AgentRunExecution:
             usage_delta={"tool_calls": 1},
         )
 
+    def complete_approved_tool(
+        self,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        step_index: int,
+        tool_index: int,
+        call_id: str,
+        name: str,
+        ok: bool,
+        result_digest: str,
+        *,
+        claimant: str,
+        result: dict[str, Any],
+        skills_loaded: list[str] | None = None,
+        source_refs: list[dict[str, Any]] | None = None,
+        artifact_refs: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Commit an approved tool to its inbox claim and run atomically."""
+        lease = self._require_lease()
+        step = _nonnegative_index(step_index, "step_index")
+        tool = _nonnegative_index(tool_index, "tool_index")
+        next_snapshot = tool_completed_transition(
+            self._snapshot,
+            self.run_id,
+            history,
+            events,
+            step,
+            tool,
+            call_id,
+            name,
+            ok,
+            result_digest,
+        )
+        try:
+            next_lease, _checkpoint, receipt = (
+                self._store.agent_runs.complete_approved_tool(
+                    lease,
+                    {**next_snapshot, "pending_tool": None},
+                    approval_id=call_id,
+                    claimant=claimant,
+                    ok=ok,
+                    result=result,
+                    payload={
+                        "step_index": step,
+                        "tool_index": tool,
+                        "call_id": call_id,
+                        "name": name,
+                        "ok": bool(ok),
+                    },
+                    skills_loaded=skills_loaded,
+                    source_refs=source_refs,
+                    artifact_refs=artifact_refs,
+                    now=self._now,
+                )
+            )
+        except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
+            self._lease = None
+            raise self._ownership_error(
+                "approved tool completion lost its lease or claim"
+            ) from exc
+        self._lease = next_lease
+        self._version = next_lease.version
+        self._refresh_snapshot()
+        return receipt
+
     def waiting_approval(
         self,
         history: list[dict[str, Any]],
@@ -467,6 +554,73 @@ class AgentRunExecution:
             payload={"id": interaction},
             state="waiting_approval",
         )
+
+    def waiting_approval_atomic(
+        self,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        interaction_id: str,
+        step_index: int,
+        tool_index: int,
+        call_id: str,
+        name: str,
+        retry_safe: bool,
+        *,
+        arguments: dict[str, Any],
+        reason: str | None,
+        resource: dict[str, Any] | None,
+        approval_ttl_seconds: float,
+    ) -> dict[str, Any]:
+        """Atomically park an approval and relinquish execution authority."""
+        lease = self._require_lease()
+        interaction = _safe_boundary_text(
+            interaction_id, MAX_SAFE_ID, "interaction_id"
+        )
+        next_snapshot = waiting_approval_transition(
+            self._snapshot,
+            self.run_id,
+            history,
+            events,
+            interaction,
+            step_index,
+            tool_index,
+            call_id,
+            name,
+            retry_safe,
+        )
+        approval = build_approval_park_request(
+            item_id=interaction,
+            call_id=call_id,
+            name=name,
+            arguments=arguments,
+            reason=reason,
+            session_id=self._identity.session_id,
+            run_id=self.run_id,
+            message_id=self._identity.message_id,
+            part_id=self._identity.part_id,
+            resource=resource,
+            ttl_seconds=approval_ttl_seconds,
+            now=self._now,
+        )
+        try:
+            next_lease, _checkpoint, parked = (
+                self._store.agent_runs.park_approval_and_wait(
+                    lease,
+                    next_snapshot,
+                    approval,
+                    payload={"id": interaction, "name": name},
+                    now=self._now,
+                )
+            )
+        except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
+            self._lease = None
+            raise self._ownership_error(
+                "waiting_approval boundary lost its lease"
+            ) from exc
+        self._lease = next_lease
+        self._version = lease.version + 1
+        self._refresh_snapshot()
+        return parked
 
     def tool_skipped(
         self,
@@ -545,6 +699,54 @@ class AgentRunExecution:
             state="interrupted",
         )
 
+    def interrupt_approved_inflight_tool(
+        self,
+        history: list[dict[str, Any]],
+        events: list[dict[str, Any]],
+        *,
+        claimant: str,
+    ) -> dict[str, Any]:
+        """Atomically mark an approved external effect unknown on both records."""
+        lease = self._require_lease()
+        pending = self._snapshot.get("pending_tool")
+        cursor = self._snapshot.get("cursor", {})
+        if (
+            not isinstance(pending, dict)
+            or pending.get("retry_class") != "consequential"
+        ):
+            raise ValueError("approved interruption requires a consequential tool")
+        next_snapshot = interrupt_inflight_tool_transition(
+            self._snapshot, history, events
+        )
+        try:
+            next_lease, _checkpoint, receipt = (
+                self._store.agent_runs.interrupt_approved_tool(
+                    lease,
+                    next_snapshot,
+                    approval_id=str(pending["call_id"]),
+                    claimant=claimant,
+                    payload={
+                        "status": "interrupted",
+                        "phase": "review_required",
+                        "step_index": int(cursor.get("step_index", 0)),
+                        "tool_index": int(cursor.get("next_tool_index", 0)),
+                        "call_id": pending["call_id"],
+                        "name": pending["name"],
+                        "retry_class": "consequential",
+                    },
+                    now=self._now,
+                )
+            )
+        except (AgentRunLeaseLost, AgentRunVersionConflict) as exc:
+            self._lease = None
+            raise self._ownership_error(
+                "approved tool interruption lost its lease or claim"
+            ) from exc
+        self._lease = next_lease
+        self._version = lease.version + 1
+        self._refresh_snapshot()
+        return receipt
+
     @classmethod
     def resume_resolved_approval(
         cls,
@@ -554,6 +756,7 @@ class AgentRunExecution:
         max_steps: int,
         owner_id: str | None = None,
         now: datetime | None = None,
+        lease_seconds: float = EXECUTION_LEASE_SECONDS,
     ) -> AgentRunExecution:
         interaction = _safe_boundary_text(
             interaction_id, MAX_SAFE_ID, "interaction_id"
@@ -578,6 +781,7 @@ class AgentRunExecution:
             message_id=str(stored_identity["message_id"]),
             part_id=str(stored_identity["part_id"]),
         )
+        duration = _execution_lease_seconds(lease_seconds)
         owner = owner_id or f"execution_{uuid.uuid4().hex}"
         try:
             acquired = store.agent_runs.acquire_resolved_waiting_lease(
@@ -585,7 +789,7 @@ class AgentRunExecution:
                 owner,
                 int(run["version"]),
                 interaction,
-                EXECUTION_LEASE_SECONDS,
+                duration,
                 now=now,
             )
         except AgentRunVersionConflict as exc:
@@ -604,6 +808,7 @@ class AgentRunExecution:
             snapshot,
             max_steps,
             now,
+            duration,
         )
         execution._refresh_snapshot()
         persisted_decision = execution._snapshot.get("resolved_approval", {}).get(
@@ -627,6 +832,7 @@ class AgentRunExecution:
         max_steps: int,
         owner_id: str | None = None,
         now: datetime | None = None,
+        lease_seconds: float = EXECUTION_LEASE_SECONDS,
     ) -> AgentRunExecution:
         interaction = _safe_boundary_text(
             interaction_id, MAX_SAFE_ID, "interaction_id"
@@ -650,6 +856,7 @@ class AgentRunExecution:
             message_id=str(stored_identity["message_id"]),
             part_id=str(stored_identity["part_id"]),
         )
+        duration = _execution_lease_seconds(lease_seconds)
         owner = owner_id or f"execution_{uuid.uuid4().hex}"
         lease = store.agent_runs.acquire_closed_waiting_lease(
             run_id,
@@ -657,7 +864,7 @@ class AgentRunExecution:
             int(run["version"]),
             interaction,
             closed_state,
-            EXECUTION_LEASE_SECONDS,
+            duration,
             now=now,
         )
         if lease is None:
@@ -665,7 +872,7 @@ class AgentRunExecution:
                 f"Agent Run {run_id} closed approval is unavailable"
             )
         execution = cls(
-            store, identity, owner, lease, snapshot, max_steps, now
+            store, identity, owner, lease, snapshot, max_steps, now, duration
         )
         execution._refresh_snapshot()
         return execution
@@ -866,3 +1073,14 @@ def _safe_boundary_text(value: str, limit: int, field: str) -> str:
     ):
         raise ValueError(f"invalid {field}")
     return value
+
+
+def _execution_lease_seconds(value: int | float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("lease_seconds must be a positive number")
+    seconds = float(value)
+    if seconds <= 0 or seconds > MAX_LEASE_SECONDS:
+        raise ValueError(
+            f"lease_seconds must be between 0 and {MAX_LEASE_SECONDS}"
+        )
+    return seconds

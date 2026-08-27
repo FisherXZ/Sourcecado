@@ -7,6 +7,7 @@ from threading import Barrier, Event
 
 import pytest
 
+import coworker.agent_run_repository as agent_run_repository
 from coworker.agent_run_continuation import transcript_prefix_sha256
 from coworker.agent_run_execution import (
     AgentRunExecution,
@@ -116,6 +117,231 @@ def _seed_running_phase(store, identity, phase):
 def _prepare_one_tool(execution):
     execution.model_pending([], [], 0)
     execution.model_completed([], [], 0, 1, 0)
+
+
+def _prepare_approved_inflight(store, *, run_id):
+    identity, execution = _start(store, run_id=run_id)
+    _prepare_one_tool(execution)
+    execution.waiting_approval_atomic(
+        [],
+        [],
+        "call-approved",
+        0,
+        0,
+        "call-approved",
+        "gmail_draft",
+        False,
+        arguments={"body": "PRIVATE_APPROVAL_ARGUMENT"},
+        reason="review",
+        resource=None,
+        approval_ttl_seconds=7 * 24 * 60 * 60,
+    )
+    claimant = "turn:approved-test"
+    claim = Inbox(store).decide_and_claim(
+        "call-approved",
+        "allow",
+        actor=None,
+        scope="once",
+        claimant=claimant,
+    )
+    assert claim is not None and claim.owned
+    resumed = AgentRunExecution.resume_resolved_approval(
+        store,
+        identity.run_id,
+        "call-approved",
+        4,
+        owner_id="owner-approved",
+        now=NOW,
+    )
+    resumed.approval_resolved([], [], "call-approved")
+    resumed.tool_pending(
+        [], [], 0, 0, "call-approved", "gmail_draft", False
+    )
+    return identity, resumed, claimant
+
+
+def test_atomic_approval_checkpoint_failure_rolls_back_inbox_insert(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id="run-atomic-approval-rollback")
+    _prepare_one_tool(execution)
+    original_merge = agent_run_repository.merge_continuation
+
+    def fail_waiting_merge(existing, incoming):
+        if incoming.get("cursor", {}).get("phase") == "waiting_approval":
+            raise RuntimeError("forced waiting checkpoint failure")
+        return original_merge(existing, incoming)
+
+    monkeypatch.setattr(
+        agent_run_repository, "merge_continuation", fail_waiting_merge
+    )
+    with pytest.raises(RuntimeError, match="waiting checkpoint failure"):
+        execution.waiting_approval_atomic(
+            [],
+            [],
+            "approval-atomic",
+            0,
+            0,
+            "call-atomic",
+            "gmail_draft",
+            False,
+            arguments={"body": "PRIVATE_APPROVAL_ARGUMENT"},
+            reason="review",
+            resource=None,
+            approval_ttl_seconds=60,
+        )
+
+    assert Inbox(store).get("approval-atomic") is None
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "running"
+    assert run["continuation"]["cursor"]["phase"] == "tools_ready"
+    assert "waiting_approval" not in {
+        item["kind"] for item in store.list_agent_run_checkpoints(identity.run_id)
+    }
+    assert _lease_columns(store, identity.run_id)[0] == execution.owner_id
+
+
+def test_atomic_approval_conflict_changes_neither_inbox_nor_run(tmp_path):
+    store = ConversationStore(tmp_path)
+    identity, execution = _start(store, run_id="run-atomic-approval-conflict")
+    _prepare_one_tool(execution)
+    Inbox(store).park(
+        "gmail_draft",
+        {"body": "different body"},
+        item_id="approval-conflict",
+        session_id=identity.session_id,
+        run_id=identity.run_id,
+        message_id=identity.message_id,
+        part_id=identity.part_id,
+    )
+
+    with pytest.raises(ValueError, match="conflicts"):
+        execution.waiting_approval_atomic(
+            [],
+            [],
+            "approval-conflict",
+            0,
+            0,
+            "call-conflict",
+            "gmail_draft",
+            False,
+            arguments={"body": "expected body"},
+            reason="review",
+            resource=None,
+            approval_ttl_seconds=60,
+        )
+
+    assert Inbox(store).get("approval-conflict")["arguments"] == {
+        "body": "different body"
+    }
+    run = store.get_agent_run(identity.run_id)
+    assert run["current_state"] == "running"
+    assert run["continuation"]["cursor"]["phase"] == "tools_ready"
+    assert _lease_columns(store, identity.run_id)[0] == execution.owner_id
+
+
+def test_approved_completion_merge_failure_rolls_back_then_classifies_unknown(
+    tmp_path, monkeypatch
+):
+    store = ConversationStore(tmp_path)
+    identity, execution, claimant = _prepare_approved_inflight(
+        store, run_id="run-approved-merge-rollback"
+    )
+    original_merge = agent_run_repository.merge_continuation
+
+    def fail_completed_merge(existing, incoming):
+        if incoming.get("pending_tool") is None:
+            raise RuntimeError("forced completion merge failure")
+        return original_merge(existing, incoming)
+
+    monkeypatch.setattr(
+        agent_run_repository, "merge_continuation", fail_completed_merge
+    )
+    with pytest.raises(RuntimeError, match="completion merge failure"):
+        execution.complete_approved_tool(
+            [],
+            [],
+            0,
+            0,
+            "call-approved",
+            "gmail_draft",
+            True,
+            "a" * 64,
+            claimant=claimant,
+            result={"draft_id": "PRIVATE_RESULT"},
+        )
+
+    run = store.get_agent_run(identity.run_id)
+    receipt = Inbox(store).get("call-approved")
+    assert run["continuation"]["cursor"]["phase"] == "tool_in_flight"
+    assert run["usage"] == {"model_calls": 1}
+    assert receipt["execution_status"] == "executing"
+    assert receipt["execution_result"] is None
+    monkeypatch.setattr(
+        agent_run_repository, "merge_continuation", original_merge
+    )
+
+    execution.interrupt_approved_inflight_tool(
+        [], [], claimant=claimant
+    )
+
+    run = store.get_agent_run(identity.run_id)
+    receipt = Inbox(store).get("call-approved")
+    assert run["current_state"] == "interrupted"
+    assert run["continuation"]["cursor"]["phase"] == "review_required"
+    assert receipt["execution_status"] == "interrupted"
+    assert receipt["execution_claimant"] is None
+
+
+def test_approved_checkpoint_insert_failure_rolls_back_both_authorities(
+    tmp_path
+):
+    store = ConversationStore(tmp_path)
+    identity, execution, claimant = _prepare_approved_inflight(
+        store, run_id="run-approved-checkpoint-rollback"
+    )
+    with sqlite3.connect(store.db_path) as db:
+        db.executescript(
+            """
+            CREATE TRIGGER fail_approved_tool_checkpoint
+            BEFORE INSERT ON agent_run_checkpoints
+            WHEN NEW.kind = 'tool_completed'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced approved checkpoint failure');
+            END;
+            """
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="approved checkpoint failure"):
+        execution.complete_approved_tool(
+            [],
+            [],
+            0,
+            0,
+            "call-approved",
+            "gmail_draft",
+            True,
+            "b" * 64,
+            claimant=claimant,
+            result={"draft_id": "PRIVATE_RESULT"},
+        )
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TRIGGER fail_approved_tool_checkpoint")
+
+    run = store.get_agent_run(identity.run_id)
+    receipt = Inbox(store).get("call-approved")
+    assert run["continuation"]["cursor"]["phase"] == "tool_in_flight"
+    assert "tool_completed" not in {
+        item["kind"] for item in store.list_agent_run_checkpoints(identity.run_id)
+    }
+    assert receipt["execution_status"] == "executing"
+    assert receipt["execution_result"] is None
+
+    execution.interrupt_approved_inflight_tool(
+        [], [], claimant=claimant
+    )
+    assert store.get_agent_run(identity.run_id)["current_state"] == "interrupted"
+    assert Inbox(store).get("call-approved")["execution_status"] == "interrupted"
 
 
 def _wait_for_tool(

@@ -10,9 +10,11 @@ from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
 from coworker.agent_run_execution import (
+    EXECUTION_LEASE_SECONDS,
     AgentRunExecution,
     AgentRunExecutionOwnershipError,
 )
+from coworker.agent_run_heartbeat import AgentRunHeartbeat, AgentRunHeartbeatError
 from coworker.agent_runs import safe_error_summary
 from coworker.events import TurnEventStream, TurnIdentity, new_turn_identity
 from coworker.inbox import Inbox
@@ -456,7 +458,11 @@ async def run_turn(
     control: RunControl | None = None,
     trigger: str = "chat",
     parent_run_id: str | None = None,
+    lease_seconds: float | None = None,
 ) -> dict[str, Any]:
+    execution_lease_seconds = (
+        EXECUTION_LEASE_SECONDS if lease_seconds is None else lease_seconds
+    )
     turn_identity = identity or new_turn_identity(sid)
     events = TurnEventStream(
         identity=turn_identity,
@@ -478,6 +484,7 @@ async def run_turn(
             ),
             MAX_STEPS,
             parent_run_id=parent_run_id,
+            lease_seconds=execution_lease_seconds,
         )
     except AgentRunExecutionOwnershipError:
         return {"status": "conflict", "text": "", "run_id": turn_identity.run_id}
@@ -559,12 +566,9 @@ async def run_turn(
         step_index: int,
         tool_index: int,
     ) -> None:
-        sources, artifacts = _tool_provenance(call, result)
-        loaded_skills: list[str] = []
-        if call.name == "load_skill" and ok:
-            skill_name = str(result.get("name") or call.arguments.get("name") or "")
-            if skill_name:
-                loaded_skills.append(skill_name)
+        loaded_skills, sources, artifacts = _tool_checkpoint_aggregates(
+            call, ok, result
+        )
         execution.tool_completed(
             _durable_history(),
             _durable_events(),
@@ -574,6 +578,45 @@ async def run_turn(
             call.name,
             ok,
             _result_digest(result),
+            skills_loaded=loaded_skills,
+            source_refs=sources,
+            artifact_refs=artifacts,
+        )
+
+    def _tool_checkpoint_aggregates(
+        call: ToolCall, ok: bool, result: dict[str, Any]
+    ) -> tuple[list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+        sources, artifacts = _tool_provenance(call, result)
+        loaded_skills: list[str] = []
+        if call.name == "load_skill" and ok:
+            skill_name = str(result.get("name") or call.arguments.get("name") or "")
+            if skill_name:
+                loaded_skills.append(skill_name)
+        return loaded_skills, sources, artifacts
+
+    def _checkpoint_approved_tool(
+        call: ToolCall,
+        *,
+        ok: bool,
+        result: dict[str, Any],
+        step_index: int,
+        tool_index: int,
+        claimant: str,
+    ) -> dict[str, Any]:
+        loaded_skills, sources, artifacts = _tool_checkpoint_aggregates(
+            call, ok, result
+        )
+        return execution.complete_approved_tool(
+            _durable_history(),
+            _durable_events(),
+            step_index,
+            tool_index,
+            call.id,
+            call.name,
+            ok,
+            _result_digest(result),
+            claimant=claimant,
+            result=result,
             skills_loaded=loaded_skills,
             source_refs=sources,
             artifact_refs=artifacts,
@@ -667,22 +710,35 @@ async def run_turn(
     async def _interrupt_inflight_tool(text_so_far: str) -> dict[str, Any]:
         try:
             durable_history = _close_durable_transcript()
-            execution.interrupt_inflight_tool(
-                durable_history, _durable_events()
-            )
+            if approval_claimant is None:
+                execution.interrupt_inflight_tool(
+                    durable_history, _durable_events()
+                )
+            else:
+                execution.interrupt_approved_inflight_tool(
+                    durable_history,
+                    _durable_events(),
+                    claimant=approval_claimant,
+                )
         except Exception:
             return {
                 "status": "error",
                 "text": text_so_far,
                 "run_id": events.identity.run_id,
             }
+        return await _project_interrupted(
+            text_so_far,
+            "Run interrupted after a tool result could not be durably recorded.",
+        )
+
+    async def _project_interrupted(
+        text_so_far: str, message: str
+    ) -> dict[str, Any]:
         event = {
             "type": "turn_end",
             "state": "interrupted",
             "text": text_so_far,
-            "message": (
-                "Run interrupted after a tool result could not be durably recorded."
-            ),
+            "message": message,
         }
         try:
             if control is None:
@@ -749,16 +805,24 @@ async def run_turn(
                 {k: v for k, v in message.items() if k != "message_id"}
                 for message in history
             ]
-            async for chunk in provider.astream(
-                messages=model_messages, tools=openai_tools
-            ):
-                if control is not None and control.cancel_requested.is_set():
-                    return await _stopped(history, "".join(chunks) or last_text)
-                if chunk.text_delta:
-                    chunks.append(chunk.text_delta)
-                    await _emit({"type": "assistant_delta", "delta": chunk.text_delta})
-                if chunk.tool_calls:
-                    calls = chunk.tool_calls
+            cancelled_during_provider = False
+            async with AgentRunHeartbeat(execution) as heartbeat:
+                async for chunk in provider.astream(
+                    messages=model_messages, tools=openai_tools
+                ):
+                    heartbeat.raise_if_failed()
+                    if control is not None and control.cancel_requested.is_set():
+                        cancelled_during_provider = True
+                        break
+                    if chunk.text_delta:
+                        chunks.append(chunk.text_delta)
+                        await _emit(
+                            {"type": "assistant_delta", "delta": chunk.text_delta}
+                        )
+                    if chunk.tool_calls:
+                        calls = chunk.tool_calls
+            if cancelled_during_provider:
+                return await _stopped(history, "".join(chunks) or last_text)
             if control is not None and control.cancel_requested.is_set():
                 return await _stopped(history, "".join(chunks) or last_text)
             last_text = "".join(chunks)
@@ -816,16 +880,19 @@ async def run_turn(
                     resource = approval_resource(
                         call.name, call.arguments, execute_kwargs.get("gmail")
                     )
-                    parked = inbox.park(
+                    parked = execution.waiting_approval_atomic(
+                        _durable_history(),
+                        _durable_events(),
+                        call.id,
+                        step_index,
+                        tool_index,
+                        call.id,
                         call.name,
-                        call.arguments,
-                        item_id=call.id,
+                        call.name in _SAFE_RETRY_TOOLS,
+                        arguments=call.arguments,
                         reason=gate.reason,
-                        session_id=sid,
-                        run_id=events.identity.run_id,
-                        message_id=events.identity.message_id,
-                        part_id=events.identity.part_id,
                         resource=resource,
+                        approval_ttl_seconds=store.approval_ttl_seconds,
                     )
                     await _emit(
                         {
@@ -838,16 +905,6 @@ async def run_turn(
                             "scope": parked["scope"],
                             **({"resource": resource} if resource else {}),
                         }
-                    )
-                    execution.waiting_approval(
-                        _durable_history(),
-                        _durable_events(),
-                        call.id,
-                        step_index,
-                        tool_index,
-                        call.id,
-                        call.name,
-                        call.name in _SAFE_RETRY_TOOLS,
                     )
                     if wait_permission is None:
                         return {
@@ -865,6 +922,7 @@ async def run_turn(
                                 call.id,
                                 "cancelled",
                                 MAX_STEPS,
+                                lease_seconds=execution_lease_seconds,
                             )
                             await _approval_receipt(
                                 cancelled, resolution="cancelled"
@@ -881,6 +939,7 @@ async def run_turn(
                                     call.id,
                                     "expired",
                                     MAX_STEPS,
+                                    lease_seconds=execution_lease_seconds,
                                 )
                                 await _approval_receipt(
                                     expired, resolution="expired"
@@ -933,6 +992,7 @@ async def run_turn(
                         events.identity.run_id,
                         call.id,
                         MAX_STEPS,
+                        lease_seconds=execution_lease_seconds,
                     )
                     resolved_decision = str(claim.item.get("decision") or "")
                     if resolved_decision == "deny":
@@ -1021,9 +1081,12 @@ async def run_turn(
                 try:
                     kw = {k: v for k, v in execute_kwargs.items() if not k.startswith("_")}
                     kw["session_id"] = sid
-                    ok, result = await asyncio.to_thread(
-                        execute, call.name, call.arguments, **kw
-                    )
+                    async with AgentRunHeartbeat(execution):
+                        ok, result = await asyncio.to_thread(
+                            execute, call.name, call.arguments, **kw
+                        )
+                except AgentRunHeartbeatError:
+                    raise
                 except Exception as exc:
                     ok, result = False, {"error": str(exc)}
                 if call.name in {"remember", "memory_update", "memory_forget"} and system_prompt_fn:
@@ -1050,24 +1113,24 @@ async def run_turn(
                 history.append(tool_result)
                 store.append(sid, tool_result)
                 _record_person_file(sid, call, ok, result, execute_kwargs)
-                _checkpoint_tool(
-                    call,
-                    ok=ok,
-                    result=result,
-                    step_index=step_index,
-                    tool_index=tool_index,
-                )
                 if approval_claimant is not None:
-                    receipt = inbox.complete_execution(
-                        call.id,
-                        claimant=approval_claimant,
+                    receipt = _checkpoint_approved_tool(
+                        call,
                         ok=ok,
                         result=result,
+                        step_index=step_index,
+                        tool_index=tool_index,
+                        claimant=approval_claimant,
                     )
-                    if receipt is not None:
-                        await _approval_receipt(
-                            receipt, resolution="allowed"
-                        )
+                    await _approval_receipt(receipt, resolution="allowed")
+                else:
+                    _checkpoint_tool(
+                        call,
+                        ok=ok,
+                        result=result,
+                        step_index=step_index,
+                        tool_index=tool_index,
+                    )
                 if control is not None:
                     await asyncio.sleep(0)
                     if control.cancel_requested.is_set():
@@ -1090,13 +1153,28 @@ async def run_turn(
     except Exception as exc:
         if execution.metadata.get("phase") == "tool_in_flight":
             return await _interrupt_inflight_tool(last_text)
-        _persist_closed(store, sid, history)
         if execution.current_lease is None:
+            run = store.get_agent_run(events.identity.run_id)
+            if run is not None and run.get("current_state") == "interrupted":
+                return await _project_interrupted(
+                    last_text,
+                    "Run interrupted after execution authority was lost.",
+                )
+            if run is not None and run.get("current_state") in {
+                "waiting_approval",
+                "waiting_question",
+            }:
+                return {
+                    "status": "error",
+                    "text": last_text,
+                    "run_id": events.identity.run_id,
+                }
             return {
-                "status": "error",
+                "status": "conflict",
                 "text": last_text,
                 "run_id": events.identity.run_id,
             }
+        _persist_closed(store, sid, history)
         await _terminal(
             {
                 "type": "error",
