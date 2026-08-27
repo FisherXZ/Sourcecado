@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from coworker.workspace import WorkspaceGrantStore
+from coworker.workspace import GrantUnavailable, WorkspaceGrantStore
 from coworker.workspace_files import (
     StaleWorkspaceWrite,
     WorkspaceApprovalRequired,
@@ -463,6 +463,13 @@ class DockerSandbox:
         except (OSError, subprocess.SubprocessError):
             pass
 
+    def close_grant(self, grant_id: str) -> str | None:
+        with self._lock:
+            name = self._containers.pop(str(grant_id), None)
+        if name is not None:
+            self.remove_container(name)
+        return name
+
     def close(self) -> None:
         with self._lock:
             names = list(self._containers.values())
@@ -832,9 +839,13 @@ class ShellRuntime:
         process_marker = f"sourcecado-task-{task_id}"
         container = None
         if decision.execution_target == "docker":
-            mount_grants = [
-                self.grants.require(item["id"]) for item in self.grants.list_active()
-            ]
+            mount_grants = []
+            for item in self.grants.list_active():
+                try:
+                    mount_grants.append(self.grants.require(item["id"]))
+                except GrantUnavailable:
+                    if item["id"] == grant_id:
+                        raise
             container = self.docker.ensure_container(
                 grant,
                 mount_grants,
@@ -992,10 +1003,7 @@ class ShellRuntime:
             task_ids = [
                 task_id
                 for task_id, task in self._live.items()
-                if (
-                    task.metadata.get("grant_id") == grant_id
-                    or task.container is not None
-                )
+                if task.metadata.get("grant_id") == grant_id
                 and task.metadata.get("status") == "running"
             ]
         for task_id in task_ids:

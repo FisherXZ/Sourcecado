@@ -535,13 +535,13 @@ class WorkspaceRuntime:
     def update_grant(self, grant_id: str, **changes: Any) -> dict[str, Any]:
         grant = self.grants.update(grant_id, **changes)
         stopped = self.shell.stop_for_grant(grant_id)
-        self.shell.docker.close()
+        self.shell.docker.close_grant(grant_id)
         return {**grant, "stopped_task_ids": stopped}
 
     def revoke_grant(self, grant_id: str) -> dict[str, Any]:
         grant = self.grants.revoke(grant_id)
         stopped = self.shell.stop_for_grant(grant_id)
-        self.shell.docker.close()
+        self.shell.docker.close_grant(grant_id)
         return {**grant, "stopped_task_ids": stopped}
 
     @staticmethod

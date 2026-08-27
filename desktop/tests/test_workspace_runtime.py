@@ -173,6 +173,33 @@ def test_invalid_directory_request_cannot_leave_a_live_grant(tmp_path):
     assert runtime.grants.list_active() == []
 
 
+def test_revoking_one_grant_leaves_the_other_grants_docker_container(tmp_path):
+    state = tmp_path / "state"
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    runtime = WorkspaceRuntime(state, docker=DockerSandbox(docker_binary="docker"))
+    first = runtime.add_grant(
+        first_root, label="First", access="read_write", allow_shell=True
+    )
+    second = runtime.add_grant(
+        second_root, label="Second", access="read_write", allow_shell=True
+    )
+    runtime.shell.docker._containers = {
+        first["id"]: "sourcecado-first",
+        second["id"]: "sourcecado-second",
+    }
+    removed: list[str] = []
+    runtime.shell.docker.remove_container = removed.append
+
+    revoked = runtime.revoke_grant(second["id"])
+
+    assert revoked["id"] == second["id"]
+    assert removed == ["sourcecado-second"]
+    assert runtime.shell.docker._containers == {first["id"]: "sourcecado-first"}
+
+
 def test_workspace_runtime_records_sanitized_execution_receipts(tmp_path):
     _state, _root, grant, runtime = runtime_with_grant(tmp_path)
     args = {

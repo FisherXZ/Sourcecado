@@ -559,7 +559,10 @@ async def run_turn(
             workspace_runtime.record_permission_decision(item)
         if emit is not None:
             await emit(event if created else canonical)
-        if workspace_runtime is not None:
+        if workspace_runtime is not None and (
+            resolution != "allowed"
+            or str(item.get("execution_status") or "") == "succeeded"
+        ):
             workspace_runtime.discard_parked_arguments(str(item.get("id") or ""))
 
     async def _stopped(
@@ -653,6 +656,13 @@ async def run_turn(
                 approval_claimant: str | None = None
                 approval_scope = "once"
                 approval_fingerprint: str | None = None
+                workspace_runtime = execute_kwargs.get("workspace_runtime")
+                if workspace_runtime is not None and workspace_runtime.owns_tool(
+                    call.name
+                ):
+                    workspace_runtime.park_arguments(
+                        call.id, call.name, call.arguments
+                    )
                 gate = decide(
                     call.name,
                     call.arguments,

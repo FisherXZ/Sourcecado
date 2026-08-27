@@ -394,9 +394,12 @@ def create_app(
         )
         if created:
             app.state.workspace_runtime.record_permission_decision(item)
-        app.state.workspace_runtime.discard_parked_arguments(
-            str(item.get("id") or "")
-        )
+        if str(item.get("decision") or "") != "allow" or str(
+            item.get("execution_status") or ""
+        ) == "succeeded":
+            app.state.workspace_runtime.discard_parked_arguments(
+                str(item.get("id") or "")
+            )
         return persisted
 
     def _claimed_arguments(item: dict[str, Any]) -> dict[str, Any]:
@@ -1583,9 +1586,35 @@ def create_app(
             arguments = dict(started["arguments"])
             if not failure.get("retry_safe"):
                 approval_id = f"recovery_{secrets.token_hex(8)}"
+                raw_arguments = arguments
+                if app.state.workspace_runtime.owns_tool(name):
+                    try:
+                        raw_arguments = (
+                            app.state.workspace_runtime.restore_parked_arguments(
+                                call_id, arguments
+                            )
+                        )
+                        arguments = app.state.workspace_runtime.park_arguments(
+                            approval_id, name, raw_arguments
+                        )
+                    except WorkspacePathError as exc:
+                        recovery = build_event(
+                            identity,
+                            "tool_recovery",
+                            event_id=f"event_{secrets.token_hex(16)}",
+                            command_id=command_id,
+                            call_id=call_id,
+                            name=name,
+                            action="retry",
+                            status="failed",
+                            outcome=str(exc),
+                            failure=failure,
+                        )
+                        await _persist_and_send(recovery)
+                        return
                 resource = turn_runtime.approval_resource(
                     name,
-                    arguments,
+                    raw_arguments,
                     app.state.gmail,
                     app.state.workspace_runtime,
                 )
@@ -1601,7 +1630,11 @@ def create_app(
                     kind="recovery_approval",
                     recovery_command_id=command_id,
                     original_call_id=call_id,
-                    resource=resource,
+                    resource=(
+                        app.state.workspace_runtime.sanitize_resource(resource)
+                        if app.state.workspace_runtime.owns_tool(name)
+                        else resource
+                    ),
                 )
                 permission = build_event(
                     identity,

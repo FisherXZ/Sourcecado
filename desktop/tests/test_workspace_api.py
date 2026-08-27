@@ -1,3 +1,5 @@
+import time
+
 from fastapi.testclient import TestClient
 
 from coworker.provider import FakeProvider
@@ -246,3 +248,87 @@ def test_shell_approval_persistence_redacts_raw_command_environment_and_locks_st
             assert path.stat().st_mode & 0o077 == 0
         elif path.is_file():
             assert path.stat().st_mode & 0o077 == 0
+
+
+def test_workspace_retry_allow_executes_the_original_write(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    runtime = WorkspaceRuntime(
+        tmp_path / "state", docker=DockerSandbox(docker_binary=None)
+    )
+    grant = runtime.add_grant(
+        root, label="Workspace", access="read_write", allow_shell=False
+    )
+    original = runtime.execute_tool
+    calls: list[dict] = []
+
+    def fail_first_write(name, arguments, **kwargs):
+        payload = dict(arguments or {})
+        calls.append(payload)
+        if name == "fs_write" and payload.get("path") == "note.txt" and len(calls) == 1:
+            return False, {
+                "receipt_type": "denied",
+                "status": "failed",
+                "error": "disk full",
+            }
+        return original(name, arguments, **kwargs)
+
+    runtime.execute_tool = fail_first_write
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="fs-write-1",
+                        name="fs_write",
+                        arguments={
+                            "grant_id": grant["id"],
+                            "path": "note.txt",
+                            "content": "packet-body-secret",
+                        },
+                    )
+                ]
+            },
+            {"deltas": ("Could not write.",)},
+        ]
+    )
+    app = create_app(
+        token=TOKEN,
+        state=tmp_path / "state",
+        provider=provider,
+        workspace_runtime=runtime,
+    )
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "text": "write the note", "session_id": "main"})
+        events = []
+        while True:
+            event = ws.receive_json()
+            events.append(event)
+            if event["type"] in {"turn_end", "error"}:
+                break
+        run_id = next(event["run_id"] for event in events if event.get("run_id"))
+        ws.send_json(
+            {
+                "type": "retry_failed_step",
+                "session_id": "main",
+                "run_id": run_id,
+                "call_id": "fs-write-1",
+                "command_id": "retry-write-1",
+            }
+        )
+        time.sleep(0.08)
+        persisted = app.state.store.load_events("main")
+        fresh = next(
+            event
+            for event in persisted
+            if event["type"] == "permission_required"
+            and event.get("recovery_command_id") == "retry-write-1"
+        )
+        ws.send_json({"type": "permission", "id": fresh["id"], "decision": "allow"})
+        time.sleep(0.08)
+
+    assert len(calls) == 2
+    assert calls[-1]["content"] == "packet-body-secret"
+    assert (root / "note.txt").read_text() == "packet-body-secret"

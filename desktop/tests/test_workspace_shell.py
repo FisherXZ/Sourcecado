@@ -103,6 +103,54 @@ def test_docker_create_command_mounts_only_grants_with_hardening_and_full_networ
     assert "sourcecado-sandbox:test" in command
 
 
+def test_stale_secondary_grant_does_not_block_primary_docker_shell(tmp_path):
+    state = tmp_path / "state"
+    primary_root = tmp_path / "primary"
+    secondary_root = tmp_path / "secondary"
+    outside_root = tmp_path / "outside"
+    primary_root.mkdir()
+    secondary_root.mkdir()
+    outside_root.mkdir()
+    grants = WorkspaceGrantStore(state)
+    files = WorkspaceFilesystem(grants, state_root=state)
+    primary = grants.add(
+        primary_root, label="Primary", access="read_write", allow_shell=True
+    )
+    grants.add(secondary_root, label="Secondary", access="read_only")
+    secondary_root.rmdir()
+    secondary_root.symlink_to(outside_root, target_is_directory=True)
+    sandbox = DockerSandbox(docker_binary="docker")
+    sandbox.diagnostics = lambda: {
+        "available": True,
+        "cli_available": True,
+        "daemon_available": True,
+        "image_available": True,
+        "server_version": "28.0.4",
+    }
+    sandbox.ensure_container = lambda *args, **kwargs: "sourcecado-primary"
+    sandbox.exec_command = lambda **kwargs: ["/bin/pwd"]
+    runtime = ShellRuntime(
+        state_root=state,
+        grants=grants,
+        files=files,
+        docker=sandbox,
+    )
+
+    result = runtime.exec(
+        grant_id=primary["id"],
+        command="pwd",
+        cwd=".",
+        approved=True,
+        approval_fingerprint=runtime.decide(
+            grant_id=primary["id"], command="pwd", cwd=".", environment={}
+        ).fingerprint["digest"],
+    )
+
+    assert result["status"] in {"succeeded", "running"}
+    assert result["execution_target"] == "docker"
+    assert result.get("error") is None
+
+
 def test_docker_rejects_an_identity_changed_secondary_mount(tmp_path):
     state = tmp_path / "state"
     primary_root = tmp_path / "primary"
