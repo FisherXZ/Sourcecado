@@ -1953,7 +1953,7 @@ def test_heartbeat_keeps_tiny_lease_alive_during_blocked_provider(tmp_path):
         model_id = "blocked-provider"
 
         async def astream(self, *, messages, tools):
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(2.25)
             yield StreamChunk(text_delta="Provider survived")
 
     result = asyncio.run(
@@ -1968,7 +1968,7 @@ def test_heartbeat_keeps_tiny_lease_alive_during_blocked_provider(tmp_path):
             openai_tools=[],
             execute_kwargs={},
             identity=identity,
-            lease_seconds=0.3,
+            lease_seconds=1.5,
         )
     )
 
@@ -1991,7 +1991,7 @@ def test_heartbeat_keeps_tiny_lease_alive_during_blocked_tool(
 
     def blocked_execute(name, arguments, **kwargs):
         executions.append(name)
-        time.sleep(0.7)
+        time.sleep(2.25)
         return True, {"time": "noon"}
 
     monkeypatch.setattr("coworker.turn.execute", blocked_execute)
@@ -2007,7 +2007,7 @@ def test_heartbeat_keeps_tiny_lease_alive_during_blocked_tool(
             openai_tools=[],
             execute_kwargs={},
             identity=identity,
-            lease_seconds=0.3,
+            lease_seconds=1.5,
         )
     )
 
