@@ -235,6 +235,10 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
               setAnnouncement("Run started.");
             }
           }
+        } else if (applied.type === "provider_recovery") {
+          if (threadId === activeThreadRef.current) {
+            setAnnouncement(applied.message);
+          }
         } else if (applied.type === "turn_stopping") {
           if (threadId === activeThreadRef.current) {
             setAnnouncement(applied.message);

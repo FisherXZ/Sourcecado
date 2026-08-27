@@ -8,6 +8,8 @@ import re
 from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from enum import Enum
 from hashlib import sha256
 from time import monotonic
@@ -146,6 +148,7 @@ class ProviderStreamError(RuntimeError):
         message: str,
         retryable: bool,
         http_status: int | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(f"{provider} {message}")
         self.provider = provider
@@ -153,6 +156,7 @@ class ProviderStreamError(RuntimeError):
         self.error_kind = kind
         self.retryable = retryable
         self.http_status = http_status
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _http_error_kind(status_code: int) -> ProviderErrorKind:
@@ -168,7 +172,11 @@ def _http_error_kind(status_code: int) -> ProviderErrorKind:
 
 
 def _provider_http_error(
-    *, provider: str, model: str, status_code: int
+    *,
+    provider: str,
+    model: str,
+    status_code: int,
+    retry_after_seconds: float | None = None,
 ) -> ProviderStreamError:
     return ProviderStreamError(
         provider=provider,
@@ -177,7 +185,28 @@ def _provider_http_error(
         message=f"provider request failed with HTTP {status_code}",
         retryable=status_code in {408, 409, 429} or status_code >= 500,
         http_status=status_code,
+        retry_after_seconds=retry_after_seconds,
     )
+
+
+def _retry_after_seconds(
+    headers: Mapping[str, str],
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    raw = str(headers.get("retry-after") or "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        try:
+            target = parsedate_to_datetime(raw)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=UTC)
+        current = now or datetime.now(UTC)
+        return max(0.0, (target - current).total_seconds())
+    return value if value >= 0 else None
 
 
 @dataclass
@@ -689,6 +718,7 @@ class AnthropicProvider:
                         provider=self.provider_id,
                         model=self.model_id,
                         status_code=resp.status_code,
+                        retry_after_seconds=_retry_after_seconds(resp.headers),
                     )
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
@@ -905,12 +935,18 @@ class OpenAICompatProvider:
             body["tool_choice"] = "auto"
         return body
 
-    def _http_error(self, status_code: int, body: str) -> RuntimeError:
+    def _http_error(
+        self,
+        status_code: int,
+        body: str,
+        retry_after_seconds: float | None = None,
+    ) -> RuntimeError:
         del body
         return _provider_http_error(
             provider=self.provider_id,
             model=self.model_id,
             status_code=status_code,
+            retry_after_seconds=retry_after_seconds,
         )
 
     def _protocol_error(self, message: str) -> ProviderStreamError:
@@ -987,7 +1023,11 @@ class OpenAICompatProvider:
             ) as resp:
                 if resp.status_code >= 400:
                     err = (await resp.aread()).decode("utf-8", errors="replace")
-                    raise self._http_error(resp.status_code, err)
+                    raise self._http_error(
+                        resp.status_code,
+                        err,
+                        _retry_after_seconds(resp.headers),
+                    )
                 async for line in resp.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -1152,12 +1192,18 @@ class DeepSeekProvider(OpenAICompatProvider):
             str, OrderedDict[str, str]
         ] = OrderedDict()
 
-    def _http_error(self, status_code: int, body: str) -> RuntimeError:
+    def _http_error(
+        self,
+        status_code: int,
+        body: str,
+        retry_after_seconds: float | None = None,
+    ) -> RuntimeError:
         del body
         return _provider_http_error(
             provider=self.provider_id,
             model=self.model_id,
             status_code=status_code,
+            retry_after_seconds=retry_after_seconds,
         )
 
     def _prepare_messages(
@@ -1266,12 +1312,18 @@ class KimiProvider(DeepSeekProvider):
         {"stop", "tool_calls", "length", "content_filter"}
     )
 
-    def _http_error(self, status_code: int, body: str) -> RuntimeError:
+    def _http_error(
+        self,
+        status_code: int,
+        body: str,
+        retry_after_seconds: float | None = None,
+    ) -> RuntimeError:
         del body
         return _provider_http_error(
             provider=self.provider_id,
             model=self.model_id,
             status_code=status_code,
+            retry_after_seconds=retry_after_seconds,
         )
 
     def _prepare_messages(
@@ -1281,22 +1333,25 @@ class KimiProvider(DeepSeekProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
     ) -> list[dict[str, Any]]:
-        if context_id or not tools:
-            return super()._prepare_messages(
-                context_id=context_id,
-                messages=messages,
-                tools=tools,
-            )
-        prepared = deepcopy(messages)
-        for message in prepared:
-            if message.get("role") != "assistant" or not message.get("tool_calls"):
+        prepared: list[dict[str, Any]] = []
+        cache = self._context_cache(context_id, create=False) if context_id else None
+        for original in messages:
+            message = deepcopy(original)
+            if message.get("role") != "assistant":
+                prepared.append(message)
                 continue
-            if message.get("content") is None:
+            if message.get("tool_calls") and message.get("content") is None:
                 message["content"] = ""
-            if "reasoning_content" not in message:
-                raise self._protocol_error(
-                    "kimi tool continuation requires retained reasoning"
-                )
+            if tools and "reasoning_content" not in message:
+                key = _continuity_key(prepared, message)
+                reasoning = cache.get(key) if cache is not None else None
+                if reasoning is not None:
+                    message["reasoning_content"] = reasoning
+                elif message.get("tool_calls"):
+                    raise self._protocol_error(
+                        "kimi tool continuation requires retained reasoning"
+                    )
+            prepared.append(message)
         return prepared
 
     def _request_body(

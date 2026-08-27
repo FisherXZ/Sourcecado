@@ -396,6 +396,8 @@ def test_run_turn_maps_typed_provider_error_kind_without_raw_error_content(tmp_p
     assert [terminal.error_kind for terminal in terminals] == [
         ErrorKind.RATE_LIMIT,
         ErrorKind.RATE_LIMIT,
+        ErrorKind.RATE_LIMIT,
+        ErrorKind.RATE_LIMIT,
     ]
     assert planted not in json.dumps(
         [record_to_dict(record) for record in adapter.records]

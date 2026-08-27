@@ -890,6 +890,43 @@ describe("ChatPage Warm Operator thread", () => {
     );
   });
 
+  it("announces model-provider recovery outside the transcript", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        type: "provider_recovery",
+        session_id: "thread-alpha",
+        run_id: "run-1",
+        event_id: "provider-retry-1",
+        message_id: "assistant-1",
+        part_id: "assistant-part-1",
+        action: "retry",
+        provider: "openai",
+        model: "gpt-4o-mini",
+        attempt: 2,
+        reason: "rate_limit",
+        delay_ms: 250,
+        message: "Retrying the model provider after a temporary failure.",
+      });
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Retrying the model provider after a temporary failure.",
+    );
+    expect(screen.getByRole("log", { name: "Conversation" })).not.toHaveTextContent(
+      "gpt-4o-mini",
+    );
+  });
+
   it("keeps background deltas isolated and restores them when returning to the thread", async () => {
     api.getSession.mockImplementation(async (id: string) => ({
       id,

@@ -125,6 +125,29 @@ describe("parseChatEvent", () => {
 
     expect(events.map(parseChatEvent)).toEqual(events);
   });
+
+  it("keeps only the safe provider recovery contract", () => {
+    const event = {
+      version: 2,
+      type: "provider_recovery",
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      event_id: "event-provider-retry",
+      message_id: "message-1",
+      part_id: "part-1",
+      action: "retry",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      attempt: 2,
+      reason: "rate_limit",
+      delay_ms: 250,
+      message: "Retrying the model provider after a temporary failure.",
+    } as const;
+
+    expect(
+      parseChatEvent({ ...event, raw_provider_body: "PRIVATE_BODY" }),
+    ).toEqual(event);
+  });
 });
 
 describe("parseChatEvent additive fields", () => {
