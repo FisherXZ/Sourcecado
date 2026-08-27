@@ -37,6 +37,32 @@ The director's explicit instruction to send a reviewed Gmail message from Source
 **Outreach Outcome**
 What happened after outreach: no response, replied, interested, not a fit, needs follow-up, met, booked, or another recorded result. Outcomes update the person file and may move its sequence.
 
+## Agent work
+
+**Agent Job**
+A concrete outcome the director asks Sourcecado to produce. A job begins as instructions and does not require a skill.
+_Avoid_: Prompt, task, skill run
+
+**Agent Run**
+The durable execution of one Agent Job through clarification, approvals, tools, interruption, resume, and terminal delivery. A later revision to a completed result is a new linked Agent Run.
+_Avoid_: Skill run, message, model call
+
+**Skill**
+Optional instructions that teach the agent how to approach a kind of Agent Job. A Skill does not own persistence, permissions, scheduling, or execution.
+_Avoid_: Feature, workflow engine, agent runtime
+
+**Knowledge Workspace**
+The Drive folder selected as Sourcecado's bounded sourcing knowledge. Drive remains authoritative; Sourcecado may keep a local read-only searchable projection.
+_Avoid_: Entire Drive, memory dump, global search scope
+
+**Artifact Workspace**
+The private writable workspace belonging to one Agent Run where Sourcecado creates file deliverables. Files in this workspace can become Artifacts.
+_Avoid_: Repository, unrestricted filesystem, chat attachment folder
+
+**Semantic Agent Trace**
+The durable observable record of an Agent Run: instructions, model turns, tools, evidence, approvals, timing, usage, artifacts, outcomes, errors, and feedback. It excludes transport-level token chunks and hidden chain-of-thought.
+_Avoid_: Raw stream log, chain-of-thought, transcript dump
+
 ## Evidence and memory
 
 **Source Material**
@@ -49,10 +75,10 @@ A stable pointer from a claim or artifact to its underlying source record. It sh
 Important missing, stale, conflicting, or uncertain context. Sourcecado names gaps instead of hiding them behind confident prose.
 
 **Artifact**
-A durable, reviewable output from a run, such as an outreach draft, evidence set, living brief update, calendar result, or handoff summary. A transient chat message is not automatically an artifact.
+A durable, reviewable output from an Agent Run, such as a PPTX, DOCX, XLSX, PDF, Google document, campaign package, outreach draft, or handoff. A transient chat message is not automatically an Artifact.
 
 **Run Ledger**
-The local record of what Sourcecado did: run steps, tool calls, artifacts, sources, permission decisions, usage, failures, and rationale summaries. It is operational evidence, not hidden chain-of-thought.
+The local collection of Semantic Agent Traces. It is operational and evaluation evidence, not hidden chain-of-thought.
 
 **Sourcing Memory**
 The accumulated person files, outcomes, source-backed notes, and handoffs that prevent future officers from reconstructing relationships from scratch. The current runtime is local to one operator, but its records should remain intelligible to a successor.
@@ -69,7 +95,7 @@ The assistant's operating picture of sequences in Open, In conversation, and Don
 The full person file and handoff record. A compact version of the living brief may appear beside work in other surfaces.
 
 **Scheduled Job**
-A saved local task that can run on a schedule. Scheduling supports the assistant but is not the product's defining weekly-ranking loop.
+A saved prompt and schedule that starts an ordinary Agent Run through the same engine as Chat. Scheduling supports the assistant but is not the product's defining weekly-ranking loop.
 
 ## Safety and scope invariants
 

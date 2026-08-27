@@ -336,6 +336,7 @@ def create_app(
                 emit=None,
                 wait_permission=None,
                 system_prompt_fn=system_prompt,
+                trigger="schedule",
             )
         )
 
@@ -1653,6 +1654,7 @@ def create_app(
                     system_prompt_fn=system_prompt,
                     identity=control.identity,
                     control=control,
+                    trigger="chat_queue" if queue_item_id is not None else "chat",
                 )
                 status = str(result.get("status") or "error")
                 if queue_item_id is not None:

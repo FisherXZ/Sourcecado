@@ -30,3 +30,33 @@ def test_catalog_text_lists_builtin():
     text = catalog_text(SkillLoader([BUILTIN_SKILLS]))
     assert "weekly-sourcing" in text
     assert "load_skill" in text
+
+
+def test_product_validation_skills_are_discoverable_and_outcome_bound():
+    loader = SkillLoader([BUILTIN_SKILLS])
+
+    outreach = loader.get("outreach-campaign")
+    pitch = loader.get("company-pitch-package")
+
+    assert outreach is not None
+    assert pitch is not None
+    assert "sent" in outreach.instructions.lower()
+    assert "send receipt" in outreach.instructions.lower()
+    assert "editable" in pitch.instructions.lower()
+    assert "never claim the deck was edited" in pitch.instructions.lower()
+
+
+def test_product_validation_skills_declare_real_tool_boundaries():
+    loader = SkillLoader([BUILTIN_SKILLS])
+    outreach = loader.get("outreach-campaign")
+    pitch = loader.get("company-pitch-package")
+
+    assert outreach is not None
+    assert pitch is not None
+    assert {"apollo_search_people", "gmail_draft", "gmail_send"} <= set(
+        outreach.allowed_tools
+    )
+    assert {"drive_search", "drive_read", "web_search"} <= set(
+        pitch.allowed_tools
+    )
+    assert "gmail_send" not in pitch.allowed_tools
