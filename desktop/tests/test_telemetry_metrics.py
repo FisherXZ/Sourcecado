@@ -35,6 +35,7 @@ def test_current_run_metrics_aggregate_provider_usage_cost_context_and_elapsed_t
         total_tokens=15,
         cache_hit_input_tokens=4,
         cache_miss_input_tokens=6,
+        cache_write_input_tokens=2,
         reasoning_tokens=2,
         current_context_tokens=15,
         context_window_tokens=100,
@@ -57,6 +58,7 @@ def test_current_run_metrics_aggregate_provider_usage_cost_context_and_elapsed_t
         output_tokens=2,
         total_tokens=5,
         reasoning_tokens=1,
+        cache_write_input_tokens=1,
         current_context_tokens=8,
         context_window_tokens=100,
     )
@@ -73,6 +75,7 @@ def test_current_run_metrics_aggregate_provider_usage_cost_context_and_elapsed_t
         total_tokens=20,
         cache_hit_input_tokens=4,
         cache_miss_input_tokens=6,
+        cache_write_input_tokens=3,
         reasoning_tokens=3,
         current_context_tokens=8,
         context_window_tokens=100,
@@ -104,6 +107,7 @@ def test_current_run_metrics_preserve_missing_usage_as_unknown():
     assert metrics.input_tokens is None
     assert metrics.output_tokens is None
     assert metrics.total_tokens is None
+    assert metrics.cache_write_input_tokens is None
     assert metrics.current_context_tokens is None
     assert metrics.context_use_ratio is None
     assert metrics.estimated_cost_usd is None

@@ -133,6 +133,68 @@ def test_all_fully_configured_advertised_providers_are_eligible():
     ]
 
 
+def test_public_model_metadata_is_the_single_context_and_pricing_lookup():
+    usage = provider_module.ModelUsage(
+        input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        total_tokens=2_000_000,
+        cached_input_tokens=0,
+        uncached_input_tokens=1_000_000,
+        reasoning_tokens=0,
+    )
+
+    assert provider_module.provider_model_metadata(
+        "deepseek", "deepseek-v4-pro"
+    ).context_window_tokens == 1_000_000
+    assert provider_module.provider_model_metadata(
+        "kimi", "kimi-k3"
+    ).context_window_tokens == 1_000_000
+    assert provider_module.provider_model_metadata(
+        "anthropic", "claude-sonnet-4-6"
+    ).context_window_tokens == 1_000_000
+    assert provider_module.provider_model_metadata(
+        "openai", "gpt-4o-mini"
+    ).context_window_tokens == 128_000
+    assert provider_module.estimate_model_cost(
+        "kimi", "kimi-k3", usage
+    ) == pytest.approx(18.0)
+
+    unknown = provider_module.provider_model_metadata("openai", "custom-model")
+    assert unknown.context_window_tokens is None
+    assert unknown.pricing is None
+    assert provider_module.estimate_model_cost(
+        "openai", "custom-model", usage
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "unsafe_model",
+    (
+        "sk-settings-PLANTED",
+        "/private/operator/model",
+        "model with spaces",
+    ),
+)
+def test_provider_verification_rejects_and_redacts_unsafe_model_identifiers(
+    unsafe_model,
+):
+    report = next(
+        report
+        for report in provider_module.provider_verifications(
+            {
+                "OPENAI_API_KEY": "real-key",
+                "CLUB_MODEL": unsafe_model,
+            }
+        )
+        if report.provider == "openai"
+    )
+
+    assert report.eligible is False
+    assert report.model == "gpt-4o-mini"
+    assert report.failures == ("invalid_model_identifier",)
+    assert unsafe_model not in repr(report)
+
+
 def test_unsupported_configured_model_is_rejected_before_provider_creation(
     monkeypatch,
 ):
@@ -190,7 +252,7 @@ def test_partial_generic_provider_config_rejects_unsafe_base_url():
     assert report.failures == ("invalid_base_url",)
 
 
-def test_invalid_primary_provider_is_not_selected_over_verified_fallback(
+def test_invalid_explicit_primary_model_does_not_silently_select_a_fallback(
     monkeypatch,
 ):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
@@ -199,10 +261,7 @@ def test_invalid_primary_provider_is_not_selected_over_verified_fallback(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    provider = provider_module.provider_from_env()
-
-    assert isinstance(provider, provider_module.KimiProvider)
-    assert provider.model_id == "kimi-k3"
+    assert provider_module.provider_from_env() is None
 
 
 def test_deepseek_stream_starts_with_provider_and_model_identity(monkeypatch):
@@ -528,6 +587,52 @@ def test_generic_openai_usage_maps_cache_and_reasoning_token_details(monkeypatch
     )
 
 
+def test_inconsistent_stream_usage_is_a_typed_content_free_protocol_error(
+    monkeypatch,
+):
+    async def handler(request):
+        return httpx.Response(
+            200,
+            text=_sse(
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": "ignored"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 999,
+                    },
+                }
+            ),
+        )
+
+    _install_http(monkeypatch, handler)
+    provider = provider_module.OpenAICompatProvider(
+        api_key="secret",
+        model="gpt-4o-mini",
+    )
+
+    async def consume():
+        return [
+            event
+            async for event in provider.astream(
+                messages=[{"role": "user", "content": "hello"}]
+            )
+        ]
+
+    with pytest.raises(provider_module.ProviderStreamError) as captured:
+        asyncio.run(consume())
+
+    assert captured.value.error_kind is provider_module.ProviderErrorKind.PROTOCOL
+    assert captured.value.provider == "openai"
+    assert "999" not in str(captured.value)
+
+
 def test_generic_openai_requests_terminal_usage_explicitly(monkeypatch):
     requests = []
 
@@ -691,6 +796,74 @@ def test_kimi_replays_reasoning_for_tool_results_without_mutating_history(
     assert requests[1]["messages"][1]["content"] == ""
     assert continuation == original
     assert "reasoning_content" not in continuation[1]
+
+
+def test_kimi_accepts_complete_retained_tool_reasoning_without_context_id(
+    monkeypatch,
+):
+    requests = []
+
+    async def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=_sse(
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": "done"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                }
+            ),
+        )
+
+    _install_http(monkeypatch, handler)
+    provider = provider_module.KimiProvider(
+        api_key="secret",
+        model="kimi-k3",
+    )
+    messages = [
+        {"role": "user", "content": "find Ada"},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "retained provider reasoning",
+            "tool_calls": [
+                {
+                    "id": "call-kimi",
+                    "type": "function",
+                    "function": {
+                        "name": "search",
+                        "arguments": '{"query":"Ada"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-kimi",
+            "content": "Ada",
+        },
+    ]
+
+    async def consume():
+        return [
+            event
+            async for event in provider.astream(
+                messages=messages,
+                tools=[{"type": "function", "function": {"name": "search"}}],
+            )
+        ]
+
+    events = asyncio.run(consume())
+
+    assert events[-1].terminal is not None
+    assert requests[0]["messages"][1]["reasoning_content"] == (
+        "retained provider reasoning"
+    )
 
 
 def test_anthropic_transforms_tool_history_with_exact_call_identity(monkeypatch):

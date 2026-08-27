@@ -13,10 +13,19 @@ from coworker.events import TurnEventStream, TurnIdentity, build_event, new_turn
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
 from coworker.permissions import RETRY_SAFE, decide
-from coworker.provider import ModelUsage, ToolCall
+from coworker.provider import (
+    ModelUsage,
+    ProviderErrorKind,
+    ProviderStart,
+    ProviderStreamError,
+    StreamKind,
+    ToolCall,
+    provider_model_metadata,
+)
 from coworker.store import ConversationStore
 from coworker.telemetry import (
     AgentTurnSpan,
+    CostEstimate,
     ErrorKind,
     ProviderSpan,
     StopReason,
@@ -36,6 +45,9 @@ def _now_iso() -> str:
 
 
 def _telemetry_provider_name(provider: Any) -> str:
+    provider_id = str(getattr(provider, "provider_id", ""))
+    if provider_id:
+        return provider_id
     name = type(provider).__name__.lower()
     name = name.removesuffix("provider") or "unknown"
     if name != "openaicompat":
@@ -48,12 +60,21 @@ def _telemetry_provider_name(provider: Any) -> str:
     return "openai_compatible"
 
 
-def _telemetry_provider_span(provider: Any) -> ProviderSpan:
+def _telemetry_provider_span(
+    provider: Any,
+    start: ProviderStart | None = None,
+) -> ProviderSpan:
+    provider_name = start.provider if start is not None else _telemetry_provider_name(provider)
+    model = start.model if start is not None else str(
+        getattr(provider, "model_id", "unknown")
+    )
+    metadata = provider_model_metadata(provider_name, model)
     try:
         return ProviderSpan(
-            provider=_telemetry_provider_name(provider),
-            model=str(getattr(provider, "model_id", "unknown")),
+            provider=provider_name,
+            model=model,
             operation="provider.request",
+            context_window_tokens=metadata.context_window_tokens,
         )
     except ValueError:
         return ProviderSpan(
@@ -70,16 +91,28 @@ def _telemetry_tool_span(name: str) -> ToolSpan:
         return ToolSpan(tool_name="unknown", operation="tool.execute")
 
 
-def _telemetry_usage(usage: ModelUsage) -> UsageEvent:
-    return UsageEvent(
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        total_tokens=usage.total_tokens,
-        cache_hit_input_tokens=usage.cached_input_tokens,
-        cache_miss_input_tokens=usage.uncached_input_tokens,
-        reasoning_tokens=usage.reasoning_tokens,
-        current_context_tokens=usage.input_tokens,
-    )
+def _telemetry_usage(
+    usage: ModelUsage,
+    *,
+    context_window_tokens: int | None = None,
+) -> UsageEvent:
+    values = {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens,
+        "cache_hit_input_tokens": usage.cached_input_tokens,
+        "cache_miss_input_tokens": usage.uncached_input_tokens,
+        "cache_write_input_tokens": usage.cache_write_input_tokens,
+        "reasoning_tokens": usage.reasoning_tokens,
+        "current_context_tokens": usage.input_tokens,
+    }
+    try:
+        return UsageEvent(
+            **values,
+            context_window_tokens=context_window_tokens,
+        )
+    except ValueError:
+        return UsageEvent(**values)
 
 
 def _telemetry_stop_reason(reason: str | None, *, used_tools: bool) -> StopReason:
@@ -92,6 +125,25 @@ def _telemetry_stop_reason(reason: str | None, *, used_tools: bool) -> StopReaso
     if reason == "insufficient_system_resource":
         return StopReason.ERROR
     return StopReason.UNKNOWN
+
+
+def _telemetry_provider_error_kind(error: Exception) -> ErrorKind:
+    if isinstance(error, ProviderStreamError):
+        return {
+            ProviderErrorKind.AUTHENTICATION: ErrorKind.AUTHENTICATION,
+            ProviderErrorKind.RATE_LIMIT: ErrorKind.RATE_LIMIT,
+            ProviderErrorKind.TIMEOUT: ErrorKind.TIMEOUT,
+            ProviderErrorKind.CONNECTION: ErrorKind.CONNECTION,
+            ProviderErrorKind.INVALID_REQUEST: ErrorKind.INVALID_REQUEST,
+            ProviderErrorKind.CONFIGURATION: ErrorKind.INVALID_REQUEST,
+            ProviderErrorKind.PROTOCOL: ErrorKind.PROVIDER,
+            ProviderErrorKind.PROVIDER: ErrorKind.PROVIDER,
+        }[error.error_kind]
+    if isinstance(error, TimeoutError):
+        return ErrorKind.TIMEOUT
+    if isinstance(error, ConnectionError):
+        return ErrorKind.CONNECTION
+    return ErrorKind.PROVIDER
 
 
 _TOOL_SOURCES: dict[str, tuple[str | None, str]] = {
@@ -707,6 +759,9 @@ async def run_turn(
             calls: list[ToolCall] = []
             provider_usage: UsageEvent | None = None
             provider_finish_reason: str | None = None
+            provider_cost: CostEstimate | None = None
+            provider_span = None
+            provider_context_window: int | None = None
             _persist_closed(store, sid, history, workspace_runtime)
             model_messages = [
                 {k: v for k, v in message.items() if k != "message_id"}
@@ -718,13 +773,22 @@ async def run_turn(
             }
             if getattr(provider, "uses_transient_context", False):
                 stream_kwargs["context_id"] = sid
-            provider_span = turn_span.child(
-                _telemetry_provider_span(provider)
-            )
+            def _ensure_provider_span(start: ProviderStart | None = None):
+                nonlocal provider_span, provider_context_window
+                if provider_span is None:
+                    schema = _telemetry_provider_span(provider, start)
+                    provider_context_window = schema.context_window_tokens
+                    provider_span = turn_span.child(schema)
+                return provider_span
+
             try:
                 async for chunk in provider.astream(**stream_kwargs):
+                    if chunk.kind is StreamKind.START and chunk.start is not None:
+                        _ensure_provider_span(chunk.start)
+                        continue
+                    active_provider_span = _ensure_provider_span()
                     if control is not None and control.cancel_requested.is_set():
-                        provider_span.cancel(usage=provider_usage)
+                        active_provider_span.cancel(usage=provider_usage, cost=provider_cost)
                         return await _stopped(history, "".join(chunks) or last_text)
                     if chunk.text_delta:
                         chunks.append(chunk.text_delta)
@@ -732,24 +796,55 @@ async def run_turn(
                     if chunk.tool_calls:
                         calls = chunk.tool_calls
                     if chunk.usage is not None:
-                        provider_usage = _telemetry_usage(chunk.usage)
-                        provider_span.record(provider_usage)
+                        provider_usage = _telemetry_usage(
+                            chunk.usage,
+                            context_window_tokens=provider_context_window,
+                        )
+                        active_provider_span.record(provider_usage)
+                    if chunk.kind is StreamKind.TERMINAL and chunk.terminal is not None:
+                        provider_finish_reason = chunk.terminal.stop_reason
+                        if chunk.terminal.usage is not None:
+                            terminal_usage = _telemetry_usage(
+                                chunk.terminal.usage,
+                                context_window_tokens=provider_context_window,
+                            )
+                            if provider_usage is None:
+                                active_provider_span.record(terminal_usage)
+                            provider_usage = terminal_usage
+                        if chunk.terminal.estimated_cost_usd is not None:
+                            try:
+                                provider_cost = CostEstimate(
+                                    estimated_cost_usd=(
+                                        chunk.terminal.estimated_cost_usd
+                                    )
+                                )
+                            except ValueError:
+                                provider_cost = None
                     if chunk.finish_reason is not None:
                         provider_finish_reason = chunk.finish_reason
             except asyncio.CancelledError:
-                provider_span.cancel(usage=provider_usage)
+                _ensure_provider_span().cancel(
+                    usage=provider_usage,
+                    cost=provider_cost,
+                )
                 turn_span.cancel()
                 raise
-            except Exception:
-                provider_span.fail(ErrorKind.PROVIDER, usage=provider_usage)
-                turn_span.fail(ErrorKind.PROVIDER)
+            except Exception as exc:
+                error_kind = _telemetry_provider_error_kind(exc)
+                _ensure_provider_span().fail(
+                    error_kind,
+                    usage=provider_usage,
+                    cost=provider_cost,
+                )
+                turn_span.fail(error_kind)
                 raise
-            provider_span.finish(
+            _ensure_provider_span().finish(
                 stop_reason=_telemetry_stop_reason(
                     provider_finish_reason,
                     used_tools=bool(calls),
                 ),
                 usage=provider_usage,
+                cost=provider_cost,
             )
             if control is not None and control.cancel_requested.is_set():
                 return await _stopped(history, "".join(chunks) or last_text)

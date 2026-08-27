@@ -207,6 +207,75 @@ describe("SettingsPage", () => {
     expect(container).not.toHaveTextContent("apollo-secret-never-render");
   });
 
+  it("shows verified provider capabilities and safe setup failures", async () => {
+    api.getSettings.mockResolvedValue({
+      persona: { id: "sourcing", name: "Sourcecado Sourcing Agent" },
+      model: "deepseek-v4-pro",
+      gmail: { connected: false, email: null },
+      apollo: { configured: false },
+      providers: [
+        {
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+          selected: true,
+          eligible: true,
+          failures: [],
+          context_window_tokens: 1_000_000,
+          capabilities: {
+            text: true,
+            transient_reasoning: true,
+            tool_calling: true,
+            terminal_usage: true,
+            cache_usage: true,
+            reasoning_usage: true,
+          },
+          api_key: "sk-provider-never-render",
+        },
+        {
+          provider: "kimi",
+          model: "kimi-k3",
+          selected: false,
+          eligible: false,
+          failures: ["missing_credentials"],
+          context_window_tokens: 1_000_000,
+          capabilities: {
+            text: true,
+            transient_reasoning: true,
+            tool_calling: true,
+            terminal_usage: true,
+            cache_usage: true,
+            reasoning_usage: false,
+          },
+          raw_error: "/private/provider/path",
+        },
+      ],
+    });
+    api.getConnectors.mockResolvedValue({ connectors: [] });
+
+    const { container } = render(<SettingsPage />);
+
+    const providers = await screen.findByRole("list", {
+      name: "Provider verification",
+    });
+    const deepseek = within(providers).getByRole("listitem", {
+      name: "DeepSeek provider",
+    });
+    expect(deepseek).toHaveTextContent("Verified");
+    expect(deepseek).toHaveTextContent("Selected");
+    expect(deepseek).toHaveTextContent("deepseek-v4-pro");
+    expect(deepseek).toHaveTextContent("1M context");
+    expect(deepseek).toHaveTextContent("Tools");
+    expect(deepseek).toHaveTextContent("Cache usage");
+    expect(deepseek).toHaveTextContent("Reasoning usage");
+    const kimi = within(providers).getByRole("listitem", {
+      name: "Kimi provider",
+    });
+    expect(kimi).toHaveTextContent("Needs setup");
+    expect(kimi).toHaveTextContent("Credentials missing");
+    expect(container).not.toHaveTextContent("sk-provider-never-render");
+    expect(container).not.toHaveTextContent("/private/provider/path");
+  });
+
   it("makes an unconfigured model state explicit without exposing setup internals", async () => {
     api.getSettings.mockResolvedValue({
       persona: { id: "sourcing", name: "Sourcecado Sourcing Agent" },

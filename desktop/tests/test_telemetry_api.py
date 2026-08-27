@@ -3,7 +3,13 @@ import time
 
 from fastapi.testclient import TestClient
 
-from coworker.provider import FakeProvider, ModelUsage, StreamChunk, ToolCall
+from coworker.provider import (
+    FakeProvider,
+    ModelUsage,
+    ProviderTerminal,
+    StreamChunk,
+    ToolCall,
+)
 from coworker.server import TOKEN_HEADER, create_app
 from coworker.telemetry import InMemoryTelemetryAdapter, TelemetryRecorder
 from coworker.telemetry.schema import (
@@ -20,21 +26,31 @@ TOKEN = "test-token-telemetry"
 
 
 class UsageProvider:
-    model_id = "usage-model"
+    provider_id = "deepseek"
+    model_id = "deepseek-v4-pro"
 
     async def astream(self, *, messages, tools):
+        yield StreamChunk.started(provider=self.provider_id, model=self.model_id)
         yield StreamChunk(text_delta="safe response")
-        yield StreamChunk(
-            usage=ModelUsage(
-                input_tokens=80,
-                output_tokens=20,
-                total_tokens=100,
-                cached_input_tokens=30,
-                uncached_input_tokens=50,
-                reasoning_tokens=4,
-            )
+        usage = ModelUsage(
+            input_tokens=80,
+            output_tokens=20,
+            total_tokens=100,
+            cached_input_tokens=30,
+            uncached_input_tokens=50,
+            reasoning_tokens=4,
+            cache_write_input_tokens=5,
         )
-        yield StreamChunk(finish_reason="stop")
+        yield StreamChunk(usage=usage)
+        yield StreamChunk(
+            finish_reason="stop",
+            terminal=ProviderTerminal(
+                stop_reason="stop",
+                usage=usage,
+                latency_ms=12.5,
+                estimated_cost_usd=0.00003925875,
+            ),
+        )
 
 
 def test_create_app_owns_one_in_memory_telemetry_recorder(tmp_path):
@@ -99,12 +115,13 @@ def test_current_run_api_returns_only_allowlisted_measurements(tmp_path):
         "total_tokens": 100,
         "cache_hit_input_tokens": 30,
         "cache_miss_input_tokens": 50,
+        "cache_write_input_tokens": 5,
         "reasoning_tokens": 4,
         "current_context_tokens": 80,
-        "context_window_tokens": None,
-        "context_use_ratio": None,
+        "context_window_tokens": 1_000_000,
+        "context_use_ratio": 0.00008,
         "elapsed_ms": body["current_run"]["elapsed_ms"],
-        "estimated_cost_usd": None,
+        "estimated_cost_usd": 0.00003925875,
         "retry_count": 0,
         "compaction_count": 0,
     }

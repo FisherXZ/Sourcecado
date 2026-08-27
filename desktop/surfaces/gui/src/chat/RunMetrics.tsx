@@ -7,7 +7,8 @@ function tokenLabel(metrics: CurrentRunMetrics): string {
 
 function contextLabel(metrics: CurrentRunMetrics): string {
   if (metrics.context_use_ratio !== null) {
-    return `Context ${Math.round(metrics.context_use_ratio * 100)}%`;
+    const percent = metrics.context_use_ratio * 100;
+    return `Context ${percent > 0 && percent < 1 ? "<1" : Math.round(percent)}%`;
   }
   if (metrics.current_context_tokens !== null) {
     return `Context ${metrics.current_context_tokens.toLocaleString()} tokens`;
@@ -21,7 +22,8 @@ function elapsedLabel(elapsedMs: number | null): string {
 
 function costLabel(cost: number | null): string {
   if (cost === null) return "Cost —";
-  return `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)} est.`;
+  const digits = cost === 0 ? 2 : cost < 0.0001 ? 6 : cost < 0.01 ? 4 : 2;
+  return `$${cost.toFixed(digits)} est.`;
 }
 
 function countLabel(value: number, singular: string): string {
