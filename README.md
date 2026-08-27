@@ -62,6 +62,8 @@ make build
 
 `make test` runs the Python sidecar suite and the GUI Vitest suite. `make build` type-checks and bundles the GUI. CI runs the same active-stack checks; the archived hosted app is intentionally excluded.
 
+Run the deterministic baseline/candidate agent harness separately with `make eval`. It writes ignored, potentially sensitive local artifacts under `desktop/.eval-artifacts/`; see [the evaluation harness guide](desktop/docs/evaluations.md).
+
 ## Repository map
 
 - `desktop/coworker/` — local FastAPI sidecar, agent loop, tools, connectors, permissions, and persistence

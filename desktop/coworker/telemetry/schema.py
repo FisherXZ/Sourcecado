@@ -146,8 +146,8 @@ class CompactionEvent:
     event_type: str = field(init=False, default="compaction")
     operation: str
     reason: CompactionReason
-    input_tokens: int
-    output_tokens: int
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
     def __post_init__(self) -> None:
         _require_symbol(self.operation, "operation")

@@ -16,6 +16,7 @@ Sourcecado's dated documents record several product shapes. They are intentional
 - `superpowers/plans/2026-08-24-*` and `superpowers/plans/2026-08-25-*` — local runtime, sourcing spring, and desktop UI plans
 - `qa/` — current end-to-end and visual QA evidence
 - `desktop/docs/adr/` — ADRs scoped to the active local runtime
+- `desktop/docs/evaluations.md` — isolated fake/live agent evaluation workflow and artifact safety
 
 These are dated working records. Check their status and the current code before treating an unchecked item as outstanding.
 
