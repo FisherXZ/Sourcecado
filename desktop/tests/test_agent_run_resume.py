@@ -1808,8 +1808,8 @@ def test_resume_policy_denial_projects_person_file_failure(tmp_path, monkeypatch
     _seed_unstarted_tool_boundary(store, identity, [call], next_index=0)
     projected = []
 
-    def record(sid, tool_call, ok, result, execute_kwargs):
-        projected.append((sid, tool_call.id, ok, result))
+    def record(sid, run_id, tool_call, ok, result, execute_kwargs):
+        projected.append((sid, run_id, tool_call.id, ok, result))
 
     monkeypatch.setattr("coworker.turn._record_person_file", record)
     result = asyncio.run(
@@ -1825,6 +1825,7 @@ def test_resume_policy_denial_projects_person_file_failure(tmp_path, monkeypatch
     assert projected == [
         (
             identity.session_id,
+            identity.run_id,
             call.id,
             False,
             {"error": "unknown tool unknown_tool"},

@@ -797,7 +797,12 @@ class ConversationStore:
         return _run_row(row)
 
     def start_run(
-        self, job_id: int, *, session_id: str, started_at: str
+        self,
+        job_id: int,
+        *,
+        session_id: str,
+        started_at: str,
+        agent_run_id: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             cursor = self._conn.execute(
@@ -805,10 +810,10 @@ class ConversationStore:
                 INSERT INTO runs
                     (job_id, status, result, started_at, finished_at,
                      duration_ms, summary, artifacts, session_id,
-                     waiting_approval_count)
-                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0)
+                     waiting_approval_count, agent_run_id)
+                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0, ?)
                 """,
-                (job_id, started_at, session_id),
+                (job_id, started_at, session_id, agent_run_id),
             )
             self._conn.commit()
             row = self._conn.execute(
@@ -835,7 +840,8 @@ class ConversationStore:
                 UPDATE runs SET
                     status = ?, result = ?, summary = ?, artifacts = ?,
                     duration_ms = ?, finished_at = ?,
-                    waiting_approval_count = ?, agent_run_id = ?
+                    waiting_approval_count = ?,
+                    agent_run_id = COALESCE(agent_run_id, ?)
                 WHERE id = ?
                 """,
                 (
@@ -855,6 +861,21 @@ class ConversationStore:
                 "SELECT * FROM runs WHERE id = ?", (run_id,)
             ).fetchone()
         return _run_row(row)
+
+    def get_schedule_run_for_agent(
+        self, agent_run_id: str
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM runs
+                WHERE agent_run_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (agent_run_id,),
+            ).fetchone()
+        return _run_row(row) if row is not None else None
 
     def list_schedule(self) -> dict[str, list[dict[str, Any]]]:
         with self._lock:

@@ -359,6 +359,31 @@ def test_scheduler_due_job_runs_turn_on_sched_session(tmp_path):
     assert msgs[0]["role"] == "user"
     assert "weekly sourcing check-in" in msgs[0]["content"]
     assert any(m.get("role") == "assistant" for m in msgs)
+    assert ran[0]["agent_run_id"]
+    assert store.get_agent_run(ran[0]["agent_run_id"])["trigger"] == "schedule"
+
+
+def test_default_scheduler_links_agent_run_before_runner_starts(tmp_path):
+    from coworker.provider import FakeProvider
+
+    application = create_app(token=TOKEN, provider=FakeProvider(), state=tmp_path)
+    store = application.state.store
+    job = store.add_job("0 9 * * 1", "linked routine")
+
+    def inspect_runner(current_job):
+        running = store.list_schedule()["runs"][-1]
+        identity = current_job["_turn_identity"]
+        assert running["status"] == "running"
+        assert running["agent_run_id"] == identity.run_id
+        assert store.get_agent_run(identity.run_id)["trigger"] == "schedule"
+        return {"status": "ok", "text": "linked", "run_id": identity.run_id}
+
+    receipt = application.state.scheduler.run_job(
+        int(job["id"]), runner=inspect_runner
+    )
+
+    assert receipt["status"] == "success"
+    assert receipt["agent_run_id"]
 
 
 def test_opening_scheduled_thread_restores_events_without_replacing_normal_chat(tmp_path):

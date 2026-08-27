@@ -421,6 +421,7 @@ def _tool_result_message(call: ToolCall, payload: dict[str, Any]) -> dict[str, A
 
 def _record_person_file(
     sid: str,
+    run_id: str,
     call: ToolCall,
     ok: bool,
     result: dict[str, Any],
@@ -429,7 +430,9 @@ def _record_person_file(
     people = execute_kwargs.get("people")
     if people is None:
         return
-    record_tool_on_person(people, sid, call.name, call.arguments, result, ok=ok)
+    record_tool_on_person(
+        people, sid, run_id, call.name, call.arguments, result, ok=ok
+    )
 
 
 def _persist_closed(store: ConversationStore, sid: str, history: list[dict[str, Any]]) -> None:
@@ -892,7 +895,9 @@ async def run_turn(
                     denied = _stamp(_tool_result_message(call, result))
                     history.append(denied)
                     store.append(sid, denied)
-                    _record_person_file(sid, call, False, result, execute_kwargs)
+                    _record_person_file(
+                        sid, events.identity.run_id, call, False, result, execute_kwargs
+                    )
                     _checkpoint_skipped(
                         call,
                         result=result,
@@ -1018,7 +1023,14 @@ async def run_turn(
                         denied = _stamp(_tool_result_message(call, result))
                         history.append(denied)
                         store.append(sid, denied)
-                        _record_person_file(sid, call, False, result, execute_kwargs)
+                        _record_person_file(
+                            sid,
+                            events.identity.run_id,
+                            call,
+                            False,
+                            result,
+                            execute_kwargs,
+                        )
                         if receipt is not None:
                             await _approval_receipt(
                                 receipt, resolution="denied"
@@ -1045,7 +1057,12 @@ async def run_turn(
                         history.append(not_run)
                         store.append(sid, not_run)
                         _record_person_file(
-                            sid, call, False, result, execute_kwargs
+                            sid,
+                            events.identity.run_id,
+                            call,
+                            False,
+                            result,
+                            execute_kwargs,
                         )
                         _checkpoint_skipped(
                             call,
@@ -1101,7 +1118,14 @@ async def run_turn(
                         tool_result = _stamp(_tool_result_message(call, result))
                         history.append(tool_result)
                         store.append(sid, tool_result)
-                        _record_person_file(sid, call, ok, result, execute_kwargs)
+                        _record_person_file(
+                            sid,
+                            events.identity.run_id,
+                            call,
+                            ok,
+                            result,
+                            execute_kwargs,
+                        )
                         await _approval_receipt(receipt, resolution="allowed")
                         continue
                 if control is not None:
@@ -1159,7 +1183,14 @@ async def run_turn(
                 tool_result = _stamp(_tool_result_message(call, result))
                 history.append(tool_result)
                 store.append(sid, tool_result)
-                _record_person_file(sid, call, ok, result, execute_kwargs)
+                _record_person_file(
+                    sid,
+                    events.identity.run_id,
+                    call,
+                    ok,
+                    result,
+                    execute_kwargs,
+                )
                 if approval_claimant is not None:
                     receipt = _checkpoint_approved_tool(
                         call,

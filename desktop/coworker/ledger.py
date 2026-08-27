@@ -247,6 +247,7 @@ def event_from_tool(
 def record_tool_on_person(
     people: PersonStore,
     session_id: str,
+    run_id: str,
     name: str,
     arguments: dict[str, Any] | None,
     result: dict[str, Any],
@@ -269,7 +270,9 @@ def record_tool_on_person(
     event = event_from_tool(name, arguments or {}, result, ok=ok)
     if event is None:
         return
-    people.append_event(person_id, session_id=session_id, **event)
+    people.append_event(
+        person_id, session_id=session_id, run_id=run_id, **event
+    )
     if ok and event.get("kind") == "draft":
         person = people.get(person_id)
         if person is not None and person.get("sequence_state") is None:

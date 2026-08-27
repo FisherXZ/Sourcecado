@@ -639,7 +639,12 @@ async def resume_turn(
                 history.append(tool_result)
                 store.append(identity.session_id, tool_result)
                 live_turn._record_person_file(
-                    identity.session_id, call, ok, result, execute_kwargs
+                    identity.session_id,
+                    identity.run_id,
+                    call,
+                    ok,
+                    result,
+                    execute_kwargs,
                 )
                 execution.tool_skipped(
                     store.load(identity.session_id),
@@ -713,7 +718,12 @@ async def resume_turn(
             history.append(tool_result)
             store.append(identity.session_id, tool_result)
             live_turn._record_person_file(
-                identity.session_id, call, ok, result, execute_kwargs
+                identity.session_id,
+                identity.run_id,
+                call,
+                ok,
+                result,
+                execute_kwargs,
             )
             sources, artifacts = live_turn._tool_provenance(call, result)
             loaded_skills: list[str] = []

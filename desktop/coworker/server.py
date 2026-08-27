@@ -15,6 +15,7 @@ import re
 import secrets
 import threading
 import coworker.turn as turn_runtime
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -31,6 +32,7 @@ from coworker.automation.scheduler import (
     now_iso,
 )
 from coworker.calendar import calendar_from_secrets
+from coworker.agent_run_recovery import AgentRunRecoveryService
 from coworker.connectors.google_oauth import (
     CALENDAR_SCOPE,
     COMPOSE_SCOPE,
@@ -71,6 +73,14 @@ from coworker.turn import (
 )
 
 _UNSET = object()
+
+
+@asynccontextmanager
+async def _app_lifespan(app: FastAPI):
+    recovery = getattr(app.state, "agent_run_recovery", None)
+    if recovery is not None:
+        await recovery.start()
+    yield
 
 _ALLOWED_ORIGIN_RE = re.compile(
     r"^(tauri://localhost"
@@ -252,7 +262,7 @@ def create_app(
     if not token:
         raise ValueError("sidecar token must be non-empty")
 
-    app = FastAPI(title="Club sidecar", version="0.0.2")
+    app = FastAPI(title="Club sidecar", version="0.0.2", lifespan=_app_lifespan)
     app.state.token = token
     app.state.provider = provider_from_env() if provider is _UNSET else provider
     root = state if state is not None else state_dir()
@@ -267,6 +277,26 @@ def create_app(
             store.set_open_session(store.create_session()["session_id"])
     app.state.inbox = Inbox(app.state.store)
     app.state.scheduler = Scheduler(app.state.store, app.state.inbox)
+
+    def _new_schedule_identity(
+        job: dict[str, Any], session_id: str
+    ) -> TurnIdentity:
+        identity = new_turn_identity(session_id)
+        app.state.store.agent_runs.start_agent_run(
+            run_id=identity.run_id,
+            session_id=session_id,
+            trigger="schedule",
+            original_goal=str(job.get("prompt") or ""),
+            provider_model_id=(
+                str(app.state.provider.model_id)
+                if app.state.provider is not None
+                and getattr(app.state.provider, "model_id", None)
+                else None
+            ),
+        )
+        return identity
+
+    app.state.scheduler.identity_factory = _new_schedule_identity
     if persona_id:
         pid = persona_id
     elif os.environ.get("CLUB_PERSONA"):
@@ -337,6 +367,7 @@ def create_app(
                 wait_permission=None,
                 system_prompt_fn=system_prompt,
                 trigger="schedule",
+                identity=job.get("_turn_identity"),
             )
         )
 
@@ -410,6 +441,32 @@ def create_app(
                         await asyncio.wrap_future(future)
                 except Exception:
                     app.state.live_event_senders.discard(registration)
+
+    app.state.agent_run_recovery = AgentRunRecoveryService(
+        store=app.state.store,
+        provider=app.state.provider,
+        coordinator=app.state.run_coordinator,
+        dependencies={
+            "inbox": app.state.inbox,
+            "persona": app.state.persona,
+            "skills": app.state.skills,
+            "openai_tools": app.state.openai_tools,
+            "system_prompt_fn": system_prompt,
+            "execute_kwargs": {
+                "store": app.state.store,
+                "gmail": app.state.gmail,
+                "drive": app.state.drive,
+                "calendar": app.state.calendar,
+                "http": app.state.http,
+                "apollo_key": app.state.apollo_key,
+                "tavily_key": app.state.tavily_key,
+                "skills": app.state.skills,
+                "mcp": app.state.mcp,
+                "people": app.state.people,
+            },
+        },
+        emit=_publish_live_events,
+    )
 
     async def _execute_claimed_approval(
         item: dict[str, Any], *, claimant: str
