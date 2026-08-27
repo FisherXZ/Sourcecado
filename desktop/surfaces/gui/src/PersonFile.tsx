@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 
-import { getPerson, revertPerson, setPersonSequence, type PersonFile } from "./api";
+import {
+  getPerson,
+  openPersonSourcingChat,
+  revertPerson,
+  setPersonSequence,
+  type PersonFile,
+} from "./api";
 
 const STATES = [
   { id: "open", label: "Open" },
@@ -14,6 +20,8 @@ export function PersonFileView({ personId }: { personId: string }) {
   const [attempt, setAttempt] = useState(0);
   const [moving, setMoving] = useState<string | null>(null);
   const [moveFailed, setMoveFailed] = useState(false);
+  const [openingChat, setOpeningChat] = useState(false);
+  const [chatFailed, setChatFailed] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -52,6 +60,28 @@ export function PersonFileView({ personId }: { personId: string }) {
     }
   }
 
+  async function openSourcingChat() {
+    if (openingChat || !file) return;
+    const version = file.person.version;
+    if (typeof version !== "number" || !Number.isInteger(version)) {
+      setChatFailed(true);
+      return;
+    }
+    setOpeningChat(true);
+    setChatFailed(false);
+    try {
+      const result = await openPersonSourcingChat(personId, version);
+      if (result.active_person.person_id !== personId) {
+        throw new Error("person binding mismatch");
+      }
+      window.location.hash = `#/chat/${encodeURIComponent(result.session.id)}/person/${encodeURIComponent(personId)}`;
+    } catch {
+      setChatFailed(true);
+    } finally {
+      setOpeningChat(false);
+    }
+  }
+
   if (failed) {
     return (
       <main className="route-page person-page">
@@ -83,6 +113,24 @@ export function PersonFileView({ personId }: { personId: string }) {
         <p className="eyebrow">Person file</p>
         <h1>{file.brief.who || "Person"}</h1>
         {file.brief.why ? <p>{file.brief.why}</p> : null}
+        <div className="person-chat-action">
+          <button
+            type="button"
+            disabled={openingChat}
+            onClick={() => void openSourcingChat()}
+          >
+            {openingChat
+              ? "Opening sourcing chat…"
+              : file.sourcing_chat
+                ? "Open sourcing chat"
+                : "Create sourcing chat"}
+          </button>
+          {chatFailed ? (
+            <p role="alert">
+              Couldn’t open this person’s sourcing chat. Refresh the person file and try again.
+            </p>
+          ) : null}
+        </div>
       </header>
 
       <section className="person-sequence" aria-labelledby="person-sequence-heading">

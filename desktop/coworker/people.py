@@ -640,22 +640,48 @@ class PersonStore:
             ).fetchall()
         return [self._event_dict(row) for row in rows]
 
-    def bind_session(self, session_id: str, person_id: str) -> None:
+    def bind_session(
+        self,
+        session_id: str,
+        person_id: str,
+        *,
+        expected_person_version: int | None = None,
+    ) -> None:
         sid = (session_id or "").strip()
         if not sid or not _SID_RE.fullmatch(sid) or ".." in sid:
             raise ValueError("invalid session id")
         with self._lock:
             exists = self._conn.execute(
-                "SELECT 1 FROM people WHERE person_id = ?",
+                "SELECT version FROM people WHERE person_id = ? AND deleted_at IS NULL",
                 (person_id,),
             ).fetchone()
             if exists is None:
                 raise ValueError("unknown person")
+            current_version = int(exists["version"])
+            if (
+                expected_person_version is not None
+                and current_version != expected_person_version
+            ):
+                raise ValueError(
+                    "stale record version: "
+                    f"expected {expected_person_version}, current {current_version}"
+                )
+            bound = self._conn.execute(
+                "SELECT person_id FROM session_people WHERE session_id = ?",
+                (sid,),
+            ).fetchone()
+            if bound is not None:
+                if str(bound["person_id"]) != person_id:
+                    raise ValueError("session is already bound to another person")
+                return
+            person_session = self._conn.execute(
+                "SELECT session_id FROM session_people WHERE person_id = ?",
+                (person_id,),
+            ).fetchone()
+            if person_session is not None:
+                raise ValueError("person already has a bound sourcing session")
             self._conn.execute(
-                """
-                INSERT INTO session_people (session_id, person_id) VALUES (?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET person_id = excluded.person_id
-                """,
+                "INSERT INTO session_people (session_id, person_id) VALUES (?, ?)",
                 (sid, person_id),
             )
             self._conn.commit()
@@ -669,6 +695,18 @@ class PersonStore:
         if row is None:
             return None
         return str(row["person_id"])
+
+    def session_for_person(self, person_id: str) -> str | None:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT session_id FROM session_people WHERE person_id = ?",
+                (person_id,),
+            ).fetchall()
+        if not rows:
+            return None
+        if len(rows) > 1:
+            raise ValueError("person has multiple bound sourcing sessions")
+        return str(rows[0]["session_id"])
 
     def set_handoff(
         self,
