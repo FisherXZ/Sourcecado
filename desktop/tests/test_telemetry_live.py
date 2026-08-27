@@ -5,6 +5,7 @@ import pytest
 
 from coworker.events import TurnIdentity
 from coworker.inbox import Inbox
+from coworker.permissions import decide
 from coworker.provider import ModelUsage, StreamChunk, ToolCall
 from coworker.store import ConversationStore
 from coworker.telemetry import InMemoryTelemetryAdapter, TelemetryRecorder
@@ -355,6 +356,55 @@ def test_unsafe_provider_model_identifier_cannot_change_the_turn_outcome(tmp_pat
     assert "PLANTED" not in json.dumps(
         [record_to_dict(record) for record in adapter.records]
     )
+
+
+def test_invalid_auto_allowed_tool_name_cannot_change_the_turn_outcome(tmp_path):
+    name = "mcp__granola__list meetings"
+    assert decide(name).allowed is True
+
+    def make_provider():
+        return StepProvider(
+            [
+                [
+                    StreamChunk(
+                        tool_calls=[
+                            ToolCall(id="call-1", name=name, arguments={})
+                        ]
+                    ),
+                    StreamChunk(finish_reason="tool_calls"),
+                ],
+                [
+                    StreamChunk(text_delta="recovered"),
+                    StreamChunk(finish_reason="stop"),
+                ],
+            ]
+        )
+
+    recorded, _adapter = run_with_telemetry(tmp_path / "recorded", make_provider())
+    store = ConversationStore(tmp_path / "noop")
+    store.create_session("session-1")
+    noop = asyncio.run(
+        run_turn(
+            text="find private candidates",
+            sid="session-1",
+            store=store,
+            provider=make_provider(),
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=[],
+            execute_kwargs={},
+            identity=TurnIdentity(
+                session_id="session-1",
+                run_id="run-1",
+                message_id="message-1",
+                part_id="part-1",
+            ),
+        )
+    )
+
+    assert recorded == {"status": "partial", "text": "recovered"}
+    assert noop == {"status": "partial", "text": "recovered"}
 
 
 def test_task_cancellation_settles_the_active_tool_and_agent_spans(

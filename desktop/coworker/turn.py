@@ -63,6 +63,13 @@ def _telemetry_provider_span(provider: Any) -> ProviderSpan:
         )
 
 
+def _telemetry_tool_span(name: str) -> ToolSpan:
+    try:
+        return ToolSpan(tool_name=name, operation="tool.execute")
+    except ValueError:
+        return ToolSpan(tool_name="unknown", operation="tool.execute")
+
+
 def _telemetry_usage(usage: ModelUsage) -> UsageEvent:
     return UsageEvent(
         input_tokens=usage.input_tokens,
@@ -934,9 +941,7 @@ async def run_turn(
                         "started_at": _now_iso(),
                     }
                 )
-                tool_span = turn_span.child(
-                    ToolSpan(tool_name=call.name, operation="tool.execute")
-                )
+                tool_span = turn_span.child(_telemetry_tool_span(call.name))
                 try:
                     kw = {
                         k: v for k, v in execute_kwargs.items() if not k.startswith("_")
