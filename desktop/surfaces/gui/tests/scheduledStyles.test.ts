@@ -20,10 +20,11 @@ describe("Scheduled route styles", () => {
     );
   });
 
-  it("visually distinguishes waiting, partial, and failed receipts", () => {
+  it("visually distinguishes waiting, partial, failed, and unknown receipts", () => {
     expect(css).toMatch(/\.schedule-receipt\.receipt-waiting_approval\s*\{[^}]*border-color:\s*var\(--warn\);/);
     expect(css).toMatch(/\.schedule-receipt\.receipt-partial\s*\{[^}]*border-color:\s*var\(--warn\);/);
     expect(css).toMatch(/\.schedule-receipt\.receipt-failed\s*\{[^}]*border-color:\s*var\(--error\);/);
+    expect(css).toMatch(/\.schedule-receipt\.receipt-unknown\s*\{[^}]*border-color:\s*var\(--warn\);/);
   });
 
   it("disables schedule skeleton animation for reduced motion and styles the rail Inbox badge", () => {

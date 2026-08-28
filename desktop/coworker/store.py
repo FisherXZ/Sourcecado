@@ -237,6 +237,12 @@ class ConversationStore:
                 waiting_approval_count = COALESCE(waiting_approval_count, 0)
             """
         )
+        # Pre-S4 scheduler writes stored run_turn's raw "ok" status directly;
+        # RECEIPT_STATUSES has mapped it to "success" ever since, but rows
+        # written before that mapping existed are still on disk with the old
+        # text. Normalize them once so every consumer -- API, UI, future
+        # exports -- agrees on the shared status contract.
+        self._conn.execute("UPDATE runs SET status = 'success' WHERE status = 'ok'")
         try:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
@@ -369,27 +375,66 @@ class ConversationStore:
                 raise
 
     def _reconcile_orphaned_runs(self) -> None:
-        """Close runs the prior process left mid-flight without inventing an outcome."""
+        """Close runs the prior process left mid-flight without inventing an outcome.
+
+        A crash can land between the scheduled transcript's terminal event
+        and the matching runs-table update, so the outcome isn't always
+        unknown: check the transcript first and only fall back to
+        'interrupted' when it has nothing to say.
+        """
         now = datetime.now(UTC).isoformat()
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                self._conn.execute(
-                    """
-                    UPDATE runs SET
-                        status = 'interrupted',
-                        result = ?,
-                        summary = ?,
-                        finished_at = ?,
-                        duration_ms = COALESCE(duration_ms, 0)
-                    WHERE status = 'running'
-                    """,
-                    (_INTERRUPTED_RUN_SUMMARY, _INTERRUPTED_RUN_SUMMARY, now),
-                )
+                running = self._conn.execute(
+                    "SELECT id, session_id FROM runs WHERE status = 'running'"
+                ).fetchall()
+                for row in running:
+                    status, result, summary = self._terminal_transcript_outcome(
+                        str(row["session_id"])
+                    )
+                    self._conn.execute(
+                        """
+                        UPDATE runs SET
+                            status = ?,
+                            result = ?,
+                            summary = ?,
+                            finished_at = ?,
+                            duration_ms = COALESCE(duration_ms, 0)
+                        WHERE id = ?
+                        """,
+                        (status, result, summary, now, row["id"]),
+                    )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
+
+    # Mirrors scheduler.RECEIPT_STATUSES' run_turn -> receipt mapping, keyed
+    # by the transcript's turn_end "state" instead of run_turn's return
+    # value. Duplicated rather than imported: store.py cannot import
+    # coworker.automation.scheduler without a circular import (scheduler.py
+    # imports ConversationStore).
+    _TRANSCRIPT_TERMINAL_STATES = {
+        "complete": "success",
+        "partial": "partial",
+        "stopped": "partial",
+    }
+
+    def _terminal_transcript_outcome(self, session_id: str) -> tuple[str, str, str]:
+        """Derive (status, result, summary) from a session's last event, if terminal."""
+        events = self.load_events(session_id)
+        last = events[-1] if events else None
+        if last is not None and last.get("type") == "error":
+            message = str(last.get("message") or _INTERRUPTED_RUN_SUMMARY)
+            return "failed", message, message
+        if last is not None and last.get("type") == "turn_end":
+            status = self._TRANSCRIPT_TERMINAL_STATES.get(str(last.get("state")))
+            if status is not None:
+                text = str(last.get("text") or "")
+                summary = text or _INTERRUPTED_RUN_SUMMARY
+                return status, text, summary
+        return "interrupted", _INTERRUPTED_RUN_SUMMARY, _INTERRUPTED_RUN_SUMMARY
 
     def _file(self, sid: str) -> Path:
         if not valid_session_id(sid):

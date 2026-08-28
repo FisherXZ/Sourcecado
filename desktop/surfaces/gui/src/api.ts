@@ -45,7 +45,11 @@ export type ScheduleRunStatus =
   | "failed"
   | "waiting_approval"
   | "partial"
-  | "interrupted";
+  | "interrupted"
+  // Client-only: a status this build does not recognize (a future status,
+  // corrupted data). Never written by the sidecar, so it stays out of
+  // SCHEDULE_RUN_STATUSES below -- it is not part of the shared contract.
+  | "unknown";
 
 export type ScheduleJob = {
   id: number;
@@ -471,7 +475,11 @@ function normalizeScheduleArtifact(value: unknown): ScheduleArtifact {
 function normalizeScheduleRun(value: unknown): ScheduleRun {
   const raw = record(value);
   const rawStatus = text(raw.status) as ScheduleRunStatus;
-  const status = SCHEDULE_RUN_STATUSES.has(rawStatus) ? rawStatus : "failed";
+  // A status this client has never seen is not the same as a failure: it is
+  // an indeterminate outcome, and must read as such instead of falsely
+  // "Failed". (Legacy "ok" rows are normalized to "success" on disk, so they
+  // never reach this fallback.)
+  const status = SCHEDULE_RUN_STATUSES.has(rawStatus) ? rawStatus : "unknown";
   return {
     id: numberValue(raw.id),
     jobId: numberValue(raw.job_id),
