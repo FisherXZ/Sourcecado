@@ -38,7 +38,6 @@ from typing import Any
 
 from coworker import migrations
 from coworker.agent_run_owner import OWNERS_DIR_NAME, Liveness, OwnerRegistry
-from coworker.agent_run_repository import DB_NAME as AGENT_RUNS_DB
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_VERSION
 from coworker.agent_run_state import (
     AgentRunTransitionError,
@@ -51,7 +50,6 @@ from coworker.migrations import (
     BackupFailed,
     StoreKind,
     StoreStatus,
-    VersionChannel,
     open_readonly,
     state_root,
     store_path,
@@ -77,27 +75,12 @@ KNOWN_RUN_STATUSES = frozenset(
     {"running", "success", "failed", "waiting_approval", "partial", "interrupted"}
 )
 
-# A read-only descriptor for the Agent Run store, so the integrity and JSON
-# column checks already written here cover it too. It is not a registry entry:
-# `agent_runs.db` has one schema version and no upgrade path yet, and adding it
-# to the registry belongs in `coworker/migrations.py`, which this does not touch.
+# The Agent Run store is a registry entry now, so its version, integrity, JSON
+# columns, permissions, and upgrade path are handled by the same machinery as
+# every other store. What stays here is the part only this file knows how to
+# ask: who owns a run, whether its history could have happened, and whether its
+# references still resolve.
 AGENT_RUNS_STORE_ID = "agent_runs_db"
-_AGENT_RUNS = migrations.StoreSpec(
-    store_id=AGENT_RUNS_STORE_ID,
-    kind=StoreKind.SQLITE,
-    relative_path=AGENT_RUNS_DB,
-    current_version=AGENT_RUNS_VERSION,
-    version_channel=VersionChannel.SQLITE_USER_VERSION,
-    description="Durable Agent Run identity, leases, and checkpoints",
-    json_columns=(
-        ("agent_runs", "approval_ids"),
-        ("agent_runs", "source_refs"),
-        ("agent_runs", "artifact_refs"),
-        ("agent_runs", "usage"),
-        ("agent_runs", "terminal_result"),
-        ("agent_run_checkpoints", "payload"),
-    ),
-)
 
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)(?P<key>(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token"
@@ -754,13 +737,18 @@ def _check_run_ownership(collector: _Collector, root: Path, *, cross_store: bool
     it. An unknown owner needs no rescue: its lease still expires, and expiry
     reclaim is fenced by version.
     """
-    if not store_present(root, _AGENT_RUNS):
+    spec = migrations.spec_for(AGENT_RUNS_STORE_ID)
+    if not store_present(root, spec):
         return
     try:
-        version = migrations.read_version(root, _AGENT_RUNS)
+        version = migrations.read_version(root, spec)
     except migrations.StoreUnreadable:
         version = None
     if version is not None and version > AGENT_RUNS_VERSION:
+        # `_check_versions` already reported that the registry will not migrate
+        # this store. This says the separate thing an operator needs: the runs
+        # themselves are not being read, so every check below is absent rather
+        # than clean.
         collector.add(
             "agent_run.version_ahead",
             AGENT_RUNS_STORE_ID,
@@ -772,11 +760,8 @@ def _check_run_ownership(collector: _Collector, root: Path, *, cross_store: bool
             blocking=True,
         )
         return
-    if not _check_sqlite_integrity(collector, root, _AGENT_RUNS):
-        return
-    _check_json_columns(collector, root, _AGENT_RUNS)
-
-    conn = open_readonly(store_path(root, _AGENT_RUNS))
+    # Integrity and JSON columns are covered by the registry loop in `_scan`.
+    conn = open_readonly(store_path(root, spec))
     try:
         if not {"agent_runs", "agent_run_checkpoints"} <= migrations.table_names(conn):
             return
