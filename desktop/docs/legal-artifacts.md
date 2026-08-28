@@ -17,7 +17,7 @@ Four facets are checked per `classify()` call, each landing on one word from a s
 - **parties** -- extracted from the body's own "between X and Y" language, not the filename. The expected party missing entirely is `absent`; an extra unplaceholdered party alongside the expected one is `partial`; no party language at all is `missing`.
 - **dates** -- a real date or an explicit placeholder token (`[EFFECTIVE DATE]`) in the body; otherwise `missing`.
 - **terms** -- a term/duration marker or placeholder in the body; otherwise `missing`.
-- **approval** -- a caller-supplied record (`approved_by`, `approved_at`, `authorized`). Missing entirely is `missing`; recorded by someone not marked `authorized` is `absent`; recorded before the artifact's last body revision is `expired` (stale approval).
+- **approval** -- a caller-supplied record (`approved_by`, `approved_at`, `authorized`). Missing entirely is `missing`; `authorized` must be the boolean `true` (the string `"false"` is `absent`, not authorized); `approved_at` and the artifact's `modified_time` must both be real ISO-8601 timestamps so freshness can be compared (unparseable `approved_at` or omitted `modified_time` is `missing`); recorded before the artifact's last body revision is `expired` (stale approval).
 
 Any facet short of `present` blocks `ready_to_use` and produces a reason like `parties:expected_party_not_named:...` or `approval:approval_superseded_by_later_revision`.
 

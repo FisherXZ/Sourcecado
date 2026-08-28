@@ -282,6 +282,92 @@ def test_classify_verifies_a_valid_reviewed_template():
     assert knowledge_gap_fields(assessment) is None
 
 
+def test_classify_does_not_treat_unparseable_approval_timestamp_as_verified():
+    """A ready-to-use label requires a real, comparable approval time.
+
+    The stale-approval check only works if `approved_at` is an actual
+    timestamp. A nonempty fake string is not an approval.
+    """
+    assessment = classify(
+        artifact_id="drive:nda-valid",
+        title="Codeology NDA Template (reviewed)",
+        body=_valid_body(),
+        status="approved_template",
+        expected_party=EXPECTED_PARTY,
+        approval={
+            "approved_by": "counsel@bcodeology.example",
+            "approved_at": "not-a-timestamp",
+            "authorized": True,
+        },
+        modified_time="2026-08-01T00:00:00Z",
+    )
+
+    assert assessment["facets"]["parties"]["evidence"] == "present"
+    assert assessment["facets"]["dates"]["evidence"] == "present"
+    assert assessment["facets"]["terms"]["evidence"] == "present"
+    approval = assessment["facets"]["approval"]
+    assert approval["evidence"] == "missing"
+    assert approval["reason"] == "approval_unparseable_date"
+    assert assessment["ready_to_use"] is False
+    assert "approval:approval_unparseable_date" in assessment["reasons"]
+
+
+def test_classify_does_not_treat_approval_as_fresh_without_artifact_modified_time():
+    """Without a comparable artifact revision time, staleness cannot be checked.
+
+    Omitting `modified_time` is not evidence that the body is still the
+    one that was approved.
+    """
+    assessment = classify(
+        artifact_id="drive:nda-valid",
+        title="Codeology NDA Template (reviewed)",
+        body=_valid_body(),
+        status="approved_template",
+        expected_party=EXPECTED_PARTY,
+        approval=_FRESH_APPROVAL,
+        modified_time=None,
+    )
+
+    assert assessment["facets"]["parties"]["evidence"] == "present"
+    assert assessment["facets"]["dates"]["evidence"] == "present"
+    assert assessment["facets"]["terms"]["evidence"] == "present"
+    approval = assessment["facets"]["approval"]
+    assert approval["evidence"] == "missing"
+    assert approval["reason"] == "approval_missing_modified_time"
+    assert assessment["ready_to_use"] is False
+    assert "approval:approval_missing_modified_time" in assessment["reasons"]
+
+
+def test_classify_does_not_treat_string_false_as_authorized():
+    """Authorization is a boolean fact, not a nonempty string.
+
+    The string "false" is truthy in Python, but it is not an authorized
+    review. Only an actual True mark may clear this facet.
+    """
+    assessment = classify(
+        artifact_id="drive:nda-valid",
+        title="Codeology NDA Template (reviewed)",
+        body=_valid_body(),
+        status="approved_template",
+        expected_party=EXPECTED_PARTY,
+        approval={
+            "approved_by": "counsel@bcodeology.example",
+            "approved_at": "2026-08-15T00:00:00Z",
+            "authorized": "false",
+        },
+        modified_time="2026-08-01T00:00:00Z",
+    )
+
+    assert assessment["facets"]["parties"]["evidence"] == "present"
+    assert assessment["facets"]["dates"]["evidence"] == "present"
+    assert assessment["facets"]["terms"]["evidence"] == "present"
+    approval = assessment["facets"]["approval"]
+    assert approval["evidence"] == "absent"
+    assert approval["reason"] == "approval_not_by_authorized_reviewer"
+    assert assessment["ready_to_use"] is False
+    assert "approval:approval_not_by_authorized_reviewer" in assessment["reasons"]
+
+
 # --- status gates readiness independent of facet verification -------------
 
 

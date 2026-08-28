@@ -27,6 +27,7 @@ knowledge gaps (see `PersonStore.record_reply_gap`).
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -130,6 +131,17 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _parse_timestamp(value: Any) -> datetime | None:
+    text = _clean(value)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 def _is_placeholder(name: str) -> bool:
     return bool(_PLACEHOLDER_RE.match(name.strip()))
 
@@ -173,16 +185,20 @@ def _verify_approval(
 ) -> tuple[Evidence, str]:
     if not approval:
         return Evidence.MISSING, "no_approval_recorded"
-    if not approval.get("authorized"):
+    if approval.get("authorized") is not True:
         return Evidence.ABSENT, "approval_not_by_authorized_reviewer"
-    approved_at = _clean(approval.get("approved_at"))
-    if not approved_at:
+    approved_at_raw = _clean(approval.get("approved_at"))
+    if not approved_at_raw:
         return Evidence.MISSING, "approval_missing_date"
-    modified = _clean(modified_time)
-    # ISO-8601 UTC timestamps sort lexicographically; a body revised after
-    # its approval date means the approval no longer covers what is
-    # actually in the file.
-    if modified and modified > approved_at:
+    approved_at = _parse_timestamp(approved_at_raw)
+    if approved_at is None:
+        return Evidence.MISSING, "approval_unparseable_date"
+    modified = _parse_timestamp(modified_time)
+    if modified is None:
+        return Evidence.MISSING, "approval_missing_modified_time"
+    # A body revised after its approval date means the approval no longer
+    # covers what is actually in the file.
+    if modified > approved_at:
         return Evidence.EXPIRED, "approval_superseded_by_later_revision"
     return Evidence.PRESENT, "approval_verified"
 
@@ -204,8 +220,9 @@ def classify(
     hide behind a confident-sounding name. `status` and `approval` are
     facts a body cannot self-attest, so they come from the caller as
     declared; this function only checks whether that declaration still
-    holds (an approval dated before the last body revision is stale,
-    whoever recorded it).
+    holds. `authorized` must be boolean `True`; `approved_at` and
+    `modified_time` must both parse as ISO-8601 timestamps; an approval
+    dated before the last body revision is stale, whoever recorded it.
 
     `ready_to_use` is True only when `status` is `approved_template` and
     every facet verifies `present`. Any other status -- draft, executed,
