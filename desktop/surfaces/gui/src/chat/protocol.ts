@@ -156,6 +156,7 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly text: string;
         readonly state: "complete" | "partial" | "stopped" | "interrupted";
         readonly message?: string;
+        readonly compaction?: CompactionNotice;
       }
     | {
         readonly type: "error";
@@ -163,6 +164,72 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly state: "failed";
       }
   );
+
+/**
+ * What the operator is told about compaction: counts, never content.
+ *
+ * The sidecar builds the compacted context for the model, and part of that
+ * context is a model-written summary of earlier turns. That summary is one
+ * model's account of the session, not Sourcecado's record of it, so it must
+ * never reach the thread where the operator would read it as Sourcecado
+ * explaining itself. The allowlist below is what keeps it out: fields are
+ * copied one at a time, so a sidecar that starts sending summary text has it
+ * dropped here rather than rendered.
+ */
+export type CompactionNotice = {
+  readonly generation: number;
+  readonly summarized: boolean;
+  readonly compacted_messages: number;
+  readonly retained_director_messages: number;
+  readonly omitted_director_messages: number;
+  readonly measurement: string | null;
+  readonly rejected_summaries: number;
+};
+
+function countOf(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : 0;
+}
+
+export function compactionNotice(value: unknown): CompactionNotice | undefined {
+  if (!isRecord(value)) return undefined;
+  return {
+    generation: countOf(value.generation),
+    summarized: value.summarized === true,
+    compacted_messages: countOf(value.compacted_messages),
+    retained_director_messages: countOf(value.retained_director_messages),
+    omitted_director_messages: countOf(value.omitted_director_messages),
+    measurement:
+      typeof value.measurement === "string" ? value.measurement : null,
+    rejected_summaries: countOf(value.rejected_summaries),
+  };
+}
+
+/** One plain sentence. Says what happened to the conversation, not what the
+ * model thinks happened in it. */
+export function compactionNoticeText(value: unknown): string {
+  const notice = compactionNotice(value);
+  if (!notice) return "";
+  const parts = [
+    `Older parts of this conversation were compacted to fit the model's ` +
+      `context. The ${notice.compacted_messages} earliest messages are no ` +
+      `longer sent to the model.`,
+  ];
+  if (!notice.summarized) {
+    parts.push(
+      "They were dropped mechanically and no summary of them was available.",
+    );
+  }
+  if (notice.omitted_director_messages > 0) {
+    parts.push(
+      `${notice.omitted_director_messages} of your earlier messages are no ` +
+        `longer quoted in full.`,
+    );
+  }
+  parts.push("The full conversation is still saved on this machine.");
+  return parts.join(" ");
+}
 
 export type RecoverableChatNotice = {
   readonly type: "error";
@@ -461,6 +528,13 @@ export function parseChatEvent(value: unknown): ChatEvent {
           delay_ms: value.delay_ms as number,
           message: value.message as string,
         };
+      }
+      if (value.type === "turn_end" && "compaction" in value) {
+        const notice = compactionNotice(value.compaction);
+        const sanitized: Record<string, unknown> = { ...value };
+        delete sanitized.compaction;
+        if (notice) sanitized.compaction = notice;
+        return sanitized as ProtocolChatEvent;
       }
       if (value.type === "permission_required" && "resource" in value) {
         const resource = approvalResource(value.resource);

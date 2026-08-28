@@ -10,6 +10,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
+from coworker.compaction import (
+    CompactionContext,
+    SessionCompactor,
+    is_context_overflow,
+)
 from coworker.events import TurnEventStream, TurnIdentity, build_event, new_turn_identity
 from coworker.evidence_envelope import (
     ContextAuthority,
@@ -27,6 +32,7 @@ from coworker.provider import (
     ProviderStreamError,
     StreamKind,
     ToolCall,
+    context_budget,
     provider_model_metadata,
 )
 from coworker.provider_retry import (
@@ -662,6 +668,9 @@ async def run_turn(
     retry_policy: RetryPolicy | None = None,
     retry_sleep: Callable[[float], Awaitable[None]] | None = None,
     retry_random: Callable[[], float] = random.random,
+    compactor: SessionCompactor | None = None,
+    context_projection: Any = None,
+    projection_identity: Any = None,
 ) -> dict[str, Any]:
     workspace_runtime = execute_kwargs.get("workspace_runtime")
     events = TurnEventStream(
@@ -795,6 +804,30 @@ async def run_turn(
             )
         return {"status": "stopped", "text": text_so_far}
 
+    def _compaction_context() -> CompactionContext:
+        """Read live. The record region must describe the session as it is at
+        the moment of compaction, not as it was when the turn began."""
+        people_store = execute_kwargs.get("people")
+        person = None
+        if people_store is not None:
+            bound = people_store.person_for_session(sid)
+            if bound is not None:
+                person = people_store.get(bound)
+        pending = tuple(
+            item
+            for item in inbox.pending()
+            if str(item.get("session_id") or sid) == sid
+        )
+        return CompactionContext(
+            person=person,
+            pending_approvals=pending,
+            projection=context_projection,
+            identity=projection_identity,
+        )
+
+    active_compactor = compactor or SessionCompactor(store=store, session_id=sid)
+    active_compactor.bind_context(_compaction_context)
+
     people = execute_kwargs.get("people")
     if people is not None:
         bound_person_id = people.person_for_session(sid)
@@ -830,6 +863,7 @@ async def run_turn(
     retry_count = 0
 
     last_text = ""
+    last_input_tokens: int | None = None
     had_tool_failure = False
     turn_error_kind = ErrorKind.INTERNAL
     turn_error_message: str | None = None
@@ -860,12 +894,33 @@ async def run_turn(
             user_msg = {"role": "user", "content": text}
             history.append(user_msg)
             _persist_message(user_msg)
-        for _ in range(MAX_STEPS):
-            _persist_closed(store, sid, history, workspace_runtime)
-            model_messages = [
+        # Restore against the same list shape the boundary was computed over:
+        # the system message at index 0, then the transcript. The user message
+        # appended above sits past every stored boundary, so it cannot shift it.
+        active_compactor.restore(
+            [
                 {k: v for k, v in message.items() if k != "message_id"}
                 for message in history
             ]
+        )
+        for _ in range(MAX_STEPS):
+            _persist_closed(store, sid, history, workspace_runtime)
+            # The canonical view. Compaction reads it and never writes it; the
+            # transcript on disk stays the record of what actually happened.
+            canonical_messages = [
+                {k: v for k, v in message.items() if k != "message_id"}
+                for message in history
+            ]
+            step_budget = context_budget(
+                _telemetry_provider_name(selected_provider),
+                str(getattr(selected_provider, "model_id", "") or "unknown"),
+            )
+            model_messages = await active_compactor.prepare(
+                canonical_messages,
+                budget=step_budget,
+                reported_input_tokens=last_input_tokens,
+                provider=selected_provider,
+            )
             selected_index = provider_chain.index(selected_provider)
             attempt_chain = compatible_failover_chain(
                 provider_chain[selected_index:],
@@ -986,6 +1041,18 @@ async def run_turn(
                         usage=provider_usage,
                         cost=provider_cost,
                     )
+                    # A request rejected for size is not a transient failure.
+                    # Retrying the same view reproduces it, so compact harder
+                    # and retry the same provider with a smaller one.
+                    if is_context_overflow(
+                        exc
+                    ) and await active_compactor.recover_from_overflow(
+                        canonical_messages,
+                        budget=step_budget,
+                        provider=attempt_provider,
+                    ):
+                        model_messages = active_compactor.view(canonical_messages)
+                        continue
                     directive = await controller.recover(
                         exc,
                         partial_stream=meaningful_stream,
@@ -1057,6 +1124,10 @@ async def run_turn(
                     usage=provider_usage,
                     cost=provider_cost,
                 )
+                if provider_usage is not None:
+                    # Criterion 2: the provider's own count of the prompt it
+                    # just read, preferred over the estimate on the next step.
+                    last_input_tokens = provider_usage.input_tokens
                 selected_provider = attempt_provider
                 break
             if control is not None and control.cancel_requested.is_set():
@@ -1379,7 +1450,18 @@ async def run_turn(
         )
         return {"status": "error", "text": last_text}
     final_state = "partial" if had_tool_failure else "complete"
-    await _terminal({"type": "turn_end", "text": last_text, "state": final_state})
+    # Criterion 9: counts only. The summary text stays in the provider view, so
+    # the operator is told that older context was compacted without being shown
+    # a model's account of the session as if it were Sourcecado's own reasoning.
+    compaction_notice = active_compactor.notice()
+    await _terminal(
+        {
+            "type": "turn_end",
+            "text": last_text,
+            "state": final_state,
+            **({"compaction": compaction_notice} if compaction_notice else {}),
+        }
+    )
     if had_tool_failure:
         turn_span.partial(ErrorKind.TOOL)
     else:

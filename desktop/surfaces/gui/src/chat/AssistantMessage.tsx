@@ -71,8 +71,9 @@ export function AssistantMessage() {
   const message = useAuiState((state) => state.message);
   const sourcecadoState = message.metadata.custom?.sourcecadoState;
   const notice = message.metadata.custom?.sourcecadoNotice === true;
-  const transportNotice =
-    message.metadata.custom?.sourcecadoNoticeCode === "transport";
+  const noticeCode = message.metadata.custom?.sourcecadoNoticeCode;
+  const transportNotice = noticeCode === "transport";
+  const compactedNotice = noticeCode === "compacted";
   const prose = message.content
     .filter((part) => part.type === "text")
     .map((part) => (part.type === "text" ? part.text : ""))
@@ -99,7 +100,9 @@ export function AssistantMessage() {
         <p className="sourcecado-notice-title">
           {transportNotice
             ? "Connection problem."
-            : "Some conversation history is unavailable."}
+            : compactedNotice
+              ? "Older context was compacted."
+              : "Some conversation history is unavailable."}
         </p>
       ) : null}
       <MessagePrimitive.Parts
