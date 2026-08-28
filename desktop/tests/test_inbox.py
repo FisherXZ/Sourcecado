@@ -358,7 +358,9 @@ def test_inbox_http_allow_during_ws_executes_once(tmp_path, monkeypatch):
             {"deltas": ("drafted",)},
         ]
     )
-    app = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    app = create_app(
+        token=TOKEN, provider=fake, state=tmp_path, gmail=FakeGmail()
+    )
     client = TestClient(app)
     http_response = {}
 
@@ -457,7 +459,9 @@ def test_ws_allow_claim_makes_overlapping_http_wait_for_terminal_result(
             {"deltas": ("drafted",)},
         ]
     )
-    app = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    app = create_app(
+        token=TOKEN, provider=fake, state=tmp_path, gmail=FakeGmail()
+    )
     client = TestClient(app)
     http_response = {}
 
@@ -699,7 +703,9 @@ def test_ws_approval_that_expires_while_waiting_stops_without_denial(
             {"deltas": ("drafted",)},
         ]
     )
-    app = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    app = create_app(
+        token=TOKEN, provider=fake, state=tmp_path, gmail=FakeGmail()
+    )
     client = TestClient(app)
 
     with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:

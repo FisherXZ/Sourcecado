@@ -60,6 +60,21 @@ RETRY_SAFE = frozenset(
 )
 _MCP_WRITE = re.compile(r"write|create|delete|update", re.I)
 
+_WORKSPACE_AUTO = frozenset(
+    {
+        "fs_stat",
+        "fs_list",
+        "fs_find",
+        "fs_search",
+        "fs_read",
+        "request_directory",
+        "shell_poll",
+        "shell_kill",
+    }
+)
+_WORKSPACE_APPROVAL = frozenset({"fs_trash", "shell_write_stdin"})
+_WORKSPACE_CONDITIONAL = WORKSPACE_TOOL_NAMES - _WORKSPACE_AUTO - _WORKSPACE_APPROVAL
+
 
 @dataclass
 class Decision:
@@ -69,6 +84,32 @@ class Decision:
     risk_class: str | None = None
     execution_target: str | None = None
     command_fingerprint: str | None = None
+
+
+def model_approval_class(name: str) -> str | None:
+    """Content-free schema-level guidance derived from runtime policy.
+
+    ``conditional`` means the concrete arguments, grant, or target determine
+    whether the call is automatic or approval-gated.
+    """
+    if name in AUTO:
+        return "auto"
+    if name in ASK:
+        return "approval_required"
+    if name in _WORKSPACE_AUTO:
+        return "auto"
+    if name in _WORKSPACE_APPROVAL:
+        return "approval_required"
+    if name in _WORKSPACE_CONDITIONAL:
+        return "conditional"
+    if name.startswith("mcp__"):
+        decision = decide(name)
+        if decision.allowed:
+            return "auto"
+        if decision.needs_user:
+            return "approval_required"
+        return None
+    return None
 
 
 def decide(
