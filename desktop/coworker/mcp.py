@@ -17,6 +17,28 @@ GRANOLA_URL = "https://mcp.granola.ai/mcp"
 _WRITE = re.compile(r"write|create|delete|update", re.I)
 
 
+def tool_result_payload(result: Any) -> dict[str, Any]:
+    if isinstance(result, dict):
+        return dict(result)
+    for attribute in ("structuredContent", "structured_content"):
+        structured = getattr(result, attribute, None)
+        if isinstance(structured, dict):
+            return dict(structured)
+    content = getattr(result, "content", None)
+    if isinstance(content, list):
+        for item in content:
+            text = getattr(item, "text", None)
+            if not isinstance(text, str):
+                continue
+            try:
+                decoded = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(decoded, dict):
+                return decoded
+    return {"result": str(result)}
+
+
 def _import_mcp_sdk() -> tuple[Any, Any]:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
@@ -166,5 +188,5 @@ class LiveMcp:
             ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
-                    out = await session.call_tool(tool, arguments)
-                    return {"ok": True, "result": str(out)}
+                out = await session.call_tool(tool, arguments)
+                return {"ok": True, **tool_result_payload(out)}

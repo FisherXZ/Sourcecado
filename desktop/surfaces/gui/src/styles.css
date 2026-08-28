@@ -239,6 +239,38 @@
   padding-left: 20px;
 }
 
+.person-section-heading-row,
+.person-meeting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.person-section-heading-row button,
+.person-meeting-actions button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.person-section-heading-row button:disabled,
+.person-meeting-actions button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.person-meeting-proposals {
+  margin-top: 18px;
+}
+
 .person-timeline {
   display: grid;
   gap: 0;

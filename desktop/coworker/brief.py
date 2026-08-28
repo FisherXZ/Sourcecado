@@ -23,8 +23,22 @@ def build_brief(person: dict[str, Any], events: list[dict[str, Any]]) -> dict[st
     present = {str(event.get("source")) for event in events}
     if "gmail" not in present:
         missing.append("mail")
+    if any(
+        event.get("kind") == "meeting"
+        and isinstance(event.get("payload"), dict)
+        and event["payload"].get("notes_present") is False
+        for event in events
+    ):
+        missing.append("meeting notes")
     sources = [source for source in SOURCES if source in present]
     learned = [str(event.get("summary")) for event in events if event.get("summary")]
+    learned.extend(
+        f"Meeting notes (untrusted): {event['payload']['notes_excerpt']}"
+        for event in events
+        if event.get("kind") == "meeting"
+        and isinstance(event.get("payload"), dict)
+        and event["payload"].get("notes_excerpt")
+    )
     return {
         "who": who,
         "why": person.get("target") or "",

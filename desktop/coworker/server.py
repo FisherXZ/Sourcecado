@@ -58,6 +58,7 @@ from coworker.gmail import MissingGmail, gmail_from_secrets
 from coworker.inbox import Inbox
 from coworker.mcp import LiveMcp, write_default_mcp_json
 from coworker.mcp_oauth import McpOAuth
+from coworker.meeting_evidence import MeetingEvidenceStore
 from coworker.brief import build_brief
 from coworker.people import PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
@@ -333,6 +334,7 @@ def create_app(
     root = state if state is not None else state_dir()
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
+    app.state.meeting_evidence = MeetingEvidenceStore(root, people=app.state.people)
     app.state.workspace_runtime = workspace_runtime or WorkspaceRuntime(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
     store = app.state.store
@@ -1647,12 +1649,80 @@ def create_app(
             "brief": build_brief(person, timeline),
             "timeline": timeline,
             "versions": app.state.people.versions(person_id),
+            "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
             "sourcing_chat": (
                 {"session_id": session_id, "person_id": person_id}
                 if session_id is not None
                 else None
             ),
         }
+
+    def _granola_meetings() -> dict[str, Any]:
+        if app.state.mcp is None or not app.state.mcp.has(
+            "mcp__granola__list_meetings"
+        ):
+            raise RuntimeError("Granola is unavailable")
+        result = app.state.mcp.call("mcp__granola__list_meetings", {})
+        if not isinstance(result, dict) or result.get("error"):
+            raise RuntimeError("Granola is unavailable")
+        if isinstance(result.get("meetings"), list):
+            return {"meetings": result["meetings"]}
+        nested = result.get("result")
+        if isinstance(nested, dict) and isinstance(nested.get("meetings"), list):
+            return {"meetings": nested["meetings"]}
+        if isinstance(nested, str):
+            try:
+                decoded = json.loads(nested)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("Granola returned malformed meetings") from exc
+            if isinstance(decoded, dict) and isinstance(decoded.get("meetings"), list):
+                return {"meetings": decoded["meetings"]}
+        raise RuntimeError("Granola returned malformed meetings")
+
+    def _meeting_view(person_id: str) -> dict[str, Any]:
+        person = app.state.people.get(person_id)
+        assert person is not None
+        timeline = app.state.people.timeline(person_id)
+        return {
+            "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
+            "brief": build_brief(person, timeline),
+        }
+
+    @app.post("/v1/people/{person_id}/meetings/refresh")
+    def people_meetings_refresh(person_id: str):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+
+        def calendar_fetch():
+            if app.state.calendar is None:
+                raise RuntimeError("Calendar is unavailable")
+            return app.state.calendar.list_events(max_results=100)
+
+        result = app.state.meeting_evidence.refresh(
+            calendar_fetch=calendar_fetch,
+            granola_fetch=_granola_meetings,
+        )
+        return {**result, **_meeting_view(person_id)}
+
+    @app.post("/v1/people/{person_id}/meetings/{evidence_id}/attach")
+    def people_meetings_attach(person_id: str, evidence_id: str):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            meeting = app.state.meeting_evidence.attach(evidence_id, person_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"meeting": meeting, **_meeting_view(person_id)}
+
+    @app.post("/v1/people/{person_id}/meetings/{evidence_id}/reject")
+    def people_meetings_reject(person_id: str, evidence_id: str):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            meeting = app.state.meeting_evidence.reject(evidence_id, person_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"meeting": meeting, **_meeting_view(person_id)}
 
     @app.post("/v1/people/{person_id}/sourcing-chat")
     async def people_sourcing_chat(person_id: str, request: Request):
