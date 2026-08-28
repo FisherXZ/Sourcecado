@@ -83,6 +83,20 @@ process and fails if the model or connector modules appear in `sys.modules`, and
 | `workspace_trash` | `workspace_trash/` | Directory | not versioned |
 | `dotenv` | `.env` | Opaque file | not versioned |
 
+One more SQLite database is checked but is **not** in the registry:
+
+| Store id | Path | Kind | Where its version lives |
+| --- | --- | --- | --- |
+| `agent_runs_db` | `agent_runs.db` | SQLite | `PRAGMA user_version` |
+
+The Agent Run store has one schema version and no upgrade path yet, so there is
+nothing for the registry to migrate. Doctor reads its version directly from
+`coworker/agent_run_repository.SCHEMA_VERSION` and fails closed the same way: a
+run store from a newer build is reported, blocks every repair, and is not read.
+Because it is not registered, it does not appear in the `stores` table of the
+report and its permissions are not covered by the drift check. Registering it
+belongs in `coworker/migrations.py`.
+
 The version lives with the data wherever the format can carry it. SQLite has
 `PRAGMA user_version`, which needs no table of ours and commits inside the same
 transaction as the migration. The workspace JSON documents already write a
@@ -132,6 +146,14 @@ the contract. Removing those blocks is a follow-up, not part of this change.
   in a final status with no finish time.
 - **Orphaned links** — queued messages, approvals, retry chains, person session
   bindings, and ledger events pointing at something that no longer exists.
+- **Agent Run owners and leases** — leases that have expired, owners the kernel
+  confirms have exited, and owners whose liveness cannot be proven. See below.
+- **Agent Run history** — checkpoints recording a transition the state machine
+  forbids, a run that checkpointed after it finished, a hole in a sequence that
+  is dense by construction, a run row that disagrees with its own last
+  checkpoint, and a lease held in a state that holds no lease.
+- **Agent Run links** — the approvals, sessions, person files, and parent runs a
+  run names, and checkpoints naming a run the store does not hold.
 - **Interrupted approvals** — approvals that were authorised but never reported
   an outcome.
 - **Permission drift** — anything under the state directory that group or other
@@ -291,10 +313,132 @@ rerun sees it as still pending and tries again. Stores that already migrated in
 that run keep their new version and a rerun treats them as current. Migrations
 are idempotent: running Doctor twice does the work once.
 
-## Not covered yet
+## Agent Runs
 
-Doctor does not detect a stale run owner, a dead lease, or an impossible
-checkpoint transition. All three need the canonical Agent Run identity that
-issue #63 introduces; nothing on disk today can tell an abandoned owner from a
-live one. The place they belong is `_check_run_ownership` in
-`coworker/doctor.py`, which deliberately reports nothing rather than guessing.
+An **Agent Run** is one durable unit of assistant work with one identity, stored
+in `agent_runs.db`. A **lease** names the one process allowed to write to a run
+and the moment that right runs out. An **owner** is that process.
+`desktop/docs/agent-runs.md` is the design record.
+
+### How Doctor decides an owner is dead
+
+Only when the kernel says so. Nothing else counts.
+
+Every owner process holds an exclusive `flock` on its own marker file under
+`agent_run_owners/` for as long as it runs. The kernel releases that lock when
+the process exits, by any means, and never a moment sooner. Doctor asks
+`OwnerRegistry.liveness_of` — the same function the run store's own startup
+recovery asks — and gets one of three answers:
+
+| Answer | What Doctor reports |
+| --- | --- |
+| The marker locks against Doctor | `agent_run.owned_by_live_process`, severity info |
+| The marker is free | `agent_run.dead_owner`, severity warn |
+| Anything else | `agent_run.unknown_owner`, severity info |
+
+"Anything else" means the lease belongs to another host, the marker file is
+gone, the marker directory is gone, or the platform has no file locking. All of
+those are **unknown**, and unknown is reported as unknown.
+
+This distinction is the whole point. Reporting an unknown owner as dead would
+invite an operator to take a run away from a process that is still working it,
+which is exactly what the `flock` design exists to prevent. An unknown owner
+does not need rescuing: its lease still expires, and reclaiming an expired lease
+is fenced by version, so a superseded owner writes nothing rather than writing
+second.
+
+An **expired lease is a separate finding** and is decided before liveness is
+consulted at all. Once a lease has run out, whether its owner is alive changes
+nothing — that owner cannot renew and cannot commit. So a live process holding
+an expired lease is reported as `agent_run.expired_lease` and never as a dead
+owner.
+
+`test_a_live_run_owner_is_never_reported_as_stale` is the test that holds this
+line. It starts a real second process that takes a real lease and holds its
+marker, then asserts Doctor reports it alive, reports no dead owner, no expired
+lease, and no stale run, and calls the install healthy. Two more tests cover the
+unknown cases: a deleted marker file and a lease recorded against another host.
+
+Doctor also never touches the marker directory. It will not create one, and it
+will not read markers through a directory whose permissions have been loosened,
+because `OwnerRegistry`'s constructor would restore the mode and a check may not
+change state. A loosened directory is reported as
+`agent_run.owner_markers_permissive` and its owners stay unknown. Losing a proof
+of death is the safe direction to lose one in.
+
+### Which transitions are impossible
+
+Doctor does not carry its own copy of the rules. `coworker/agent_run_state.py`
+holds one table naming, for each checkpoint kind, the states it may be appended
+from and the states it may leave behind. The run store validates every write
+against that table, and Doctor walks the stored checkpoints back through the
+same `validate_transition`. A check cannot drift away from the rule it checks.
+
+What is reported:
+
+| Finding | What it means |
+| --- | --- |
+| `agent_run.checkpoint_after_terminal` | A run checkpointed after it finished. A terminal run releases its lease and never moves again. |
+| `agent_run.impossible_transition` | An edge the table forbids, or a run that opens with something other than `run_started`. |
+| `agent_run.checkpoint_gap` | The sequence has a hole. See below. |
+| `agent_run.state_mismatch` | The run row and its own last checkpoint disagree, though both are written in one transaction. |
+| `agent_run.lease_on_unleasable_state` | A lease is held on a waiting or terminal run. Parking or finishing releases the lease in the same transaction as the state change. |
+| `agent_run.unsupported_record` | A state, trigger, or checkpoint kind this build does not know. |
+
+`agent_run.unsupported_record` fails closed and stops there. A record Doctor
+cannot read is not a record Doctor may call wrong, so no transition verdict is
+reached for that run. "This build cannot express it" and "this is broken" are
+different reports and one must not decay into the other.
+
+### Orphaned is not pruned
+
+Retention drops step detail for long-finished runs on purpose
+(`RunLedger.prune_checkpoints`, 30 days). Pruned is not orphaned, and Doctor
+tells them apart three ways.
+
+**By shape.** A checkpoint sequence is dense from 1 to the run's
+`checkpoint_sequence`, and retention only ever removes a leading run of it. So a
+dense tail that reaches the expected sequence is pruned evidence, and anything
+else is damage. Doctor does not reimplement that rule: it uses
+`run_evidence.analyze_record`, the same function the run receipt uses, and reads
+its `pruned_through` and `damaged` fields. A fully pruned run reports nothing.
+
+**By direction.** Pruning deletes checkpoint rows and never touches the run row.
+It can leave a run with no steps; it can never leave a step with no run. So
+`agent_run.orphaned_checkpoint` is always damage.
+
+**By store.** Approvals are never deleted by anything in Sourcecado, so an
+approval id a run names that the inbox does not hold is genuinely dangling and
+not aged out.
+
+A fourth rule keeps the check honest in the other direction: **no answer is not
+an orphan.** If `club.db` or `people.db` is missing or unreadable, Doctor cannot
+tell whether a session, approval, or person file still exists, so it reports
+nothing for those links rather than calling them broken.
+
+### What Doctor will not do to a run
+
+Nothing. Every Agent Run finding is report-only. There is no repair, no proposed
+repair, and no write of any kind to `agent_runs.db`.
+
+That is deliberate. The two repairs an "obvious" fix would reach for — releasing
+a stale lease and marking an abandoned run interrupted — are exactly the two the
+run store already does correctly at startup, under a lease, fenced by version,
+in one transaction with the checkpoint that records it. Doctor holds no lease
+and cannot acquire one. A Doctor that wrote the same rows would be a second
+writer racing an owner it may not be able to prove is gone, which is the failure
+the whole design exists to prevent. Starting the sidecar is the repair.
+
+### Not covered yet
+
+- **Queue items are not linked to runs.** `chat_queue` carries no run id and a
+  run row carries no queue item id, so there is no link to check. The only queue
+  link a run has is the session it belongs to, which is checked.
+- **`inbox.run_id` is not checked against the run store.** That column holds
+  turn-loop identities (`run_<hex>`), which are a different namespace from Agent
+  Run identities (`run-<hex>`), and nothing writes the latter into it yet.
+  Checking it today would report every approval on every install as orphaned.
+- **`agent_runs.db` is not in the migration registry**, so it is absent from the
+  report's store table and from the permission drift check.
+- **The scan is unbounded in memory.** Every run row and every checkpoint is
+  read at once. Output is bounded; the read is not.

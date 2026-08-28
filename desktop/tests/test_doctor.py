@@ -28,7 +28,9 @@ def _tree_digest(root: Path) -> dict[str, tuple[str, str]]:
             oct(path.stat().st_mode & 0o777),
         )
         for path in sorted(root.rglob("*"))
-        if path.is_file()
+        # SQLite creates a -wal/-shm pair for any open of a WAL database, a
+        # read-only open included. They hold no Sourcecado state of their own.
+        if path.is_file() and path.suffix not in (".db-wal", ".db-shm")
     }
 
 
@@ -1054,3 +1056,589 @@ def test_cli_uses_the_same_state_directory_as_the_sidecar(monkeypatch, tmp_path)
     assert doctor.state_root() == state_dir()
     monkeypatch.delenv("CLUB_STATE_DIR")
     assert doctor.state_root() == state_dir()
+
+
+# --- Agent Run ownership, history, and links ----------------------------
+
+# A second process that takes a real lease and either holds its kernel marker
+# or dies. Only a process that genuinely holds an exclusive `flock` can prove
+# it is alive, so liveness cannot be faked from inside the test process.
+AGENT_RUN_CHILD = """
+import json, os, sys, time
+sys.path.insert(0, sys.argv[1])
+from coworker.agent_run_repository import AgentRunRepository
+
+repo = AgentRunRepository(sys.argv[2])
+owner = repo.registry.register()
+started = repo.create_run(
+    session_id="main", trigger="chat", goal="find leads at Rippling",
+    owner=owner, lease_seconds=3600,
+)
+print(json.dumps({"run_id": started.run["run_id"], "owner_id": owner.owner_id}))
+sys.stdout.flush()
+if sys.argv[3] == "hold":
+    time.sleep(300)
+os._exit(0)
+"""
+
+
+def _spawn_run_owner(root: Path, mode: str):
+    proc = subprocess.Popen(
+        [sys.executable, "-c", AGENT_RUN_CHILD, str(DESKTOP), str(root), mode],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    line = proc.stdout.readline()
+    assert line, "child never created an Agent Run"
+    return proc, json.loads(line)
+
+
+def _run_store(root: Path):
+    from coworker.agent_run_repository import AgentRunRepository
+
+    return AgentRunRepository(root)
+
+
+def _seed_run(root: Path, *, session_id: str = "main", **kwargs):
+    """One real run created through the store, then handed back unowned."""
+    repo = _run_store(root)
+    owner = repo.registry.register()
+    started = repo.create_run(
+        session_id=session_id, trigger="chat", goal="find leads", owner=owner, **kwargs
+    )
+    return repo, owner, started
+
+
+def _write_checkpoints(root: Path, run_id: str, rows):
+    """Plant checkpoint history the store itself would refuse to write."""
+    conn = _connect(root, "agent_runs.db")
+    conn.execute("DELETE FROM agent_run_checkpoints WHERE run_id = ?", (run_id,))
+    for sequence, kind, state in rows:
+        conn.execute(
+            "INSERT INTO agent_run_checkpoints "
+            "(run_id, sequence, kind, state, payload, created_at) "
+            "VALUES (?, ?, ?, ?, '{}', '2026-08-27T10:00:00.000000+00:00')",
+            (run_id, sequence, kind, state),
+        )
+    conn.execute(
+        "UPDATE agent_runs SET checkpoint_sequence = ?, current_state = ? "
+        "WHERE run_id = ?",
+        (rows[-1][0], rows[-1][2], run_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# --- check 1: stale run owner and lease ---------------------------------
+
+
+def test_a_live_run_owner_is_never_reported_as_stale(tmp_path):
+    """The regression that would matter most: Doctor calling a live owner dead.
+
+    The child process holds an exclusive flock on its owner marker for as long
+    as it runs. The kernel is the only thing that can release it.
+    """
+    root = build_current_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    proc, claim = _spawn_run_owner(root, "hold")
+    try:
+        report = doctor.diagnose(root)
+    finally:
+        proc.kill()
+        proc.wait()
+
+    live = _finding(report, "agent_run.owned_by_live_process")
+    assert live.record_count == 1
+    assert live.severity is Severity.INFO
+    assert live.repair is Repair.NONE
+    assert "agent_run.dead_owner" not in _checks(report)
+    assert "agent_run.expired_lease" not in _checks(report)
+    assert "agent_run.unowned_running" not in _checks(report)
+    assert claim["run_id"] in " ".join(live.detail)
+    # A live owner is not a defect, so it must not make the install unhealthy.
+    assert report.healthy is True
+    assert all(item.store_id != "agent_runs_db" for item in report.proposed_repairs)
+
+
+def test_a_dead_owner_is_reported_only_on_kernel_proof(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    proc, claim = _spawn_run_owner(root, "exit")
+    assert proc.wait(timeout=30) == 0
+
+    report = doctor.diagnose(root)
+
+    dead = _finding(report, "agent_run.dead_owner")
+    assert dead.record_count == 1
+    assert dead.repair is Repair.REVIEW_REQUIRED
+    assert claim["run_id"] in " ".join(dead.detail)
+    assert "agent_run.owned_by_live_process" not in _checks(report)
+    assert all(item.store_id != "agent_runs_db" for item in report.proposed_repairs)
+
+
+def test_a_missing_owner_marker_is_unknown_and_never_dead(tmp_path):
+    from coworker.agent_run_owner import OWNERS_DIR_NAME
+
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root, lease_seconds=3600)
+    repo.close()
+    (root / OWNERS_DIR_NAME / f"{owner.owner_id}.owner").unlink()
+
+    report = doctor.diagnose(root)
+
+    unknown = _finding(report, "agent_run.unknown_owner")
+    assert unknown.record_count == 1
+    assert unknown.severity is Severity.INFO
+    assert unknown.repair is Repair.NONE
+    assert "Unknown is not dead" in unknown.summary
+    assert "agent_run.dead_owner" not in _checks(report)
+
+
+def test_an_owner_on_another_host_is_unknown_and_never_dead(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root, lease_seconds=3600)
+    repo.close()
+    conn = _connect(root, "agent_runs.db")
+    conn.execute("UPDATE agent_runs SET lease_owner_host = 'another-laptop'")
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+
+    assert _finding(report, "agent_run.unknown_owner").record_count == 1
+    assert "agent_run.dead_owner" not in _checks(report)
+
+
+def test_a_run_store_with_no_owner_directory_reports_unknown_not_dead(tmp_path):
+    """A restored database without its markers proves nothing about liveness."""
+    import shutil
+
+    from coworker.agent_run_owner import OWNERS_DIR_NAME
+
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root, lease_seconds=3600)
+    repo.close()
+    shutil.rmtree(root / OWNERS_DIR_NAME)
+
+    report = doctor.diagnose(root)
+
+    assert _finding(report, "agent_run.unknown_owner").record_count == 1
+    assert "agent_run.dead_owner" not in _checks(report)
+    # Doctor must not put the marker directory back while only diagnosing.
+    assert not (root / OWNERS_DIR_NAME).exists()
+
+
+def test_an_expired_lease_is_reported_apart_from_a_dead_owner(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    proc, claim = _spawn_run_owner(root, "hold")
+    try:
+        conn = _connect(root, "agent_runs.db")
+        conn.execute(
+            "UPDATE agent_runs SET lease_expires_at = '2020-01-01T00:00:00.000000+00:00'"
+        )
+        conn.commit()
+        conn.close()
+        report = doctor.diagnose(root)
+    finally:
+        proc.kill()
+        proc.wait()
+
+    expired = _finding(report, "agent_run.expired_lease")
+    assert expired.record_count == 1
+    assert expired.repair is Repair.REVIEW_REQUIRED
+    # The owner is genuinely alive. An expired lease is a separate fact and
+    # must never be reported as a dead owner.
+    assert "agent_run.dead_owner" not in _checks(report)
+
+
+def test_a_running_run_with_no_lease_is_reported(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root)
+    repo.release_lease(started.lease)
+    repo.close()
+
+    report = doctor.diagnose(root)
+
+    unowned = _finding(report, "agent_run.unowned_running")
+    assert unowned.record_count == 1
+    assert unowned.repair is Repair.REVIEW_REQUIRED
+
+
+# --- check 2: impossible checkpoint transitions -------------------------
+
+
+def test_a_checkpoint_after_a_terminal_state_is_impossible(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root)
+    repo.release_lease(started.lease)
+    repo.close()
+    _write_checkpoints(
+        root,
+        started.run["run_id"],
+        [(1, "run_started", "running"), (2, "terminal", "complete"), (3, "model_completed", "running")],
+    )
+
+    report = doctor.diagnose(root)
+
+    finding = _finding(report, "agent_run.checkpoint_after_terminal")
+    assert finding.record_count == 1
+    assert finding.severity is Severity.ERROR
+    assert finding.repair is Repair.REVIEW_REQUIRED
+
+
+def test_a_transition_the_state_machine_forbids_is_detected(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root)
+    repo.release_lease(started.lease)
+    repo.close()
+    # `model_completed` may only be appended from `running`.
+    _write_checkpoints(
+        root,
+        started.run["run_id"],
+        [
+            (1, "run_started", "running"),
+            (2, "waiting_approval", "waiting_approval"),
+            (3, "model_completed", "running"),
+        ],
+    )
+
+    report = doctor.diagnose(root)
+
+    assert _finding(report, "agent_run.impossible_transition").record_count == 1
+
+
+def test_a_first_checkpoint_that_is_not_run_started_is_impossible(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root)
+    repo.release_lease(started.lease)
+    repo.close()
+    _write_checkpoints(
+        root,
+        started.run["run_id"],
+        [(1, "model_pending", "running"), (2, "model_completed", "running")],
+    )
+
+    report = doctor.diagnose(root)
+
+    assert _finding(report, "agent_run.impossible_transition").record_count == 1
+
+
+def test_a_gap_in_the_checkpoint_sequence_is_detected(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root)
+    repo.release_lease(started.lease)
+    repo.close()
+    _write_checkpoints(
+        root,
+        started.run["run_id"],
+        [(1, "run_started", "running"), (4, "model_completed", "running")],
+    )
+
+    report = doctor.diagnose(root)
+
+    gap = _finding(report, "agent_run.checkpoint_gap")
+    assert gap.record_count == 1
+    assert gap.severity is Severity.ERROR
+
+
+def test_checkpoints_removed_by_retention_are_not_reported_as_a_gap(tmp_path):
+    """Retention drops step detail on purpose. Pruned is not orphaned."""
+    from datetime import UTC, datetime, timedelta
+
+    root = build_current_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    repo, owner, started = _seed_run(root)
+    run_id = started.run["run_id"]
+    repo.checkpoint(started.lease, kind="terminal", state="complete")
+    pruned = repo.prune_checkpoints(finished_before=datetime.now(UTC) + timedelta(days=1))
+    assert pruned == [run_id]
+    assert repo.list_checkpoints(run_id) == []
+    repo.close()
+
+    report = doctor.diagnose(root)
+
+    assert "agent_run.checkpoint_gap" not in _checks(report)
+    assert "agent_run.impossible_transition" not in _checks(report)
+    assert "agent_run.state_mismatch" not in _checks(report)
+    assert report.healthy is True
+
+
+def test_a_lease_held_in_a_state_that_holds_no_lease_is_detected(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root, lease_seconds=3600)
+    repo.close()
+    conn = _connect(root, "agent_runs.db")
+    conn.execute("UPDATE agent_runs SET current_state = 'waiting_approval'")
+    conn.execute(
+        "UPDATE agent_run_checkpoints SET state = 'waiting_approval', "
+        "kind = 'waiting_approval' WHERE sequence = 1"
+    )
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+
+    finding = _finding(report, "agent_run.lease_on_unleasable_state")
+    assert finding.record_count == 1
+    assert finding.repair is Repair.REVIEW_REQUIRED
+
+
+def test_a_row_that_disagrees_with_its_last_checkpoint_is_detected(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root)
+    repo.release_lease(started.lease)
+    repo.close()
+    conn = _connect(root, "agent_runs.db")
+    conn.execute("UPDATE agent_runs SET current_state = 'complete', finished_at = '2026-08-27'")
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+
+    assert _finding(report, "agent_run.state_mismatch").record_count == 1
+
+
+def test_a_record_this_build_cannot_read_is_unsupported_not_a_bad_transition(tmp_path):
+    """Fail closed. "Doctor cannot read this" must never render as "this is wrong"."""
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root)
+    repo.release_lease(started.lease)
+    repo.close()
+    conn = _connect(root, "agent_runs.db")
+    conn.execute("UPDATE agent_run_checkpoints SET kind = 'future_kind_from_a_newer_build'")
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+
+    finding = _finding(report, "agent_run.unsupported_record")
+    assert finding.record_count == 1
+    assert finding.repair is Repair.REVIEW_REQUIRED
+    assert "agent_run.impossible_transition" not in _checks(report)
+    assert "agent_run.checkpoint_after_terminal" not in _checks(report)
+
+
+def test_a_run_store_from_a_newer_build_fails_closed(tmp_path):
+    from coworker.agent_run_repository import SCHEMA_VERSION
+
+    root = build_legacy_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root)
+    repo.close()
+    conn = _connect(root, "agent_runs.db")
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 5}")
+    conn.commit()
+    conn.close()
+    before = _tree_digest(root)
+
+    report = doctor.diagnose(root)
+
+    finding = _finding(report, "agent_run.version_ahead")
+    assert finding.blocking is True
+    assert report.blocked is True
+    assert report.proposed_repairs == ()
+    assert doctor.repair(root).blocked is True
+    assert _tree_digest(root) == before
+
+
+# --- check 3: orphaned links keyed by run identity ----------------------
+
+
+def test_orphaned_run_links_are_detected(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    repo, owner, started = _seed_run(root, session_id="ghost")
+    run_id = started.run["run_id"]
+    repo.checkpoint(
+        started.lease,
+        kind="waiting_approval",
+        state="waiting_approval",
+        approval_ids=["call_that_never_existed"],
+        person_id="per_missing_from_the_person_store",
+    )
+    repo.close()
+    conn = _connect(root, "agent_runs.db")
+    conn.execute("UPDATE agent_runs SET parent_run_id = 'run-gone' WHERE run_id = ?", (run_id,))
+    conn.execute(
+        "INSERT INTO agent_run_checkpoints "
+        "(run_id, sequence, kind, state, payload, created_at) "
+        "VALUES ('run-not-in-this-store', 1, 'run_started', 'running', '{}', '2026-08-27')"
+    )
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+
+    assert _finding(report, "agent_run.orphaned_approval").record_count == 1
+    assert _finding(report, "agent_run.orphaned_parent").record_count == 1
+    assert _finding(report, "agent_run.orphaned_session").record_count == 1
+    assert _finding(report, "agent_run.orphaned_person").record_count == 1
+    assert _finding(report, "agent_run.orphaned_checkpoint").record_count == 1
+    assert all(
+        item.repair is Repair.REVIEW_REQUIRED
+        for item in report.findings
+        if item.check.startswith("agent_run.orphaned_")
+    )
+    assert all(item.store_id != "agent_runs_db" for item in report.proposed_repairs)
+
+
+def test_links_that_resolve_are_not_reported_as_orphans(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    people = _connect(root, "people.db")
+    person_id = str(people.execute("SELECT person_id FROM people LIMIT 1").fetchone()[0])
+    people.close()
+    repo, owner, started = _seed_run(root, session_id="main")
+    repo.checkpoint(
+        started.lease,
+        kind="waiting_approval",
+        state="waiting_approval",
+        approval_ids=["call_gmail_send_1"],
+        person_id=person_id,
+    )
+    repo.close()
+
+    report = doctor.diagnose(root)
+
+    assert not [item for item in report.findings if item.check.startswith("agent_run.orphaned_")]
+    assert report.healthy is True
+
+
+def test_a_run_link_is_unverifiable_rather_than_orphaned_without_its_store(tmp_path):
+    """No conversation store means no answer, and no answer is not an orphan."""
+    root = tmp_path / "state"
+    root.mkdir(parents=True)
+    repo, owner, started = _seed_run(root, session_id="main")
+    repo.checkpoint(
+        started.lease,
+        kind="waiting_approval",
+        state="waiting_approval",
+        approval_ids=["call_gmail_send_1"],
+    )
+    repo.close()
+    conn = _connect(root, "agent_runs.db")
+    conn.execute("UPDATE agent_runs SET parent_run_id = 'run-gone'")
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+
+    # Non-vacuous: the link check ran and found the one gap it could verify.
+    assert _finding(report, "agent_run.orphaned_parent").record_count == 1
+    assert "agent_run.orphaned_approval" not in _checks(report)
+    assert "agent_run.orphaned_session" not in _checks(report)
+
+
+# --- redaction of the new checks ----------------------------------------
+
+
+def test_no_planted_secret_survives_the_agent_run_checks(tmp_path):
+    """A credential in a run identifier field must not reach the report.
+
+    The run store redacts on write, so this plants the canary the only way it
+    could arrive: a row written by something other than the store.
+    """
+    root = build_current_state(tmp_path / "state", plant_secrets=True)
+    repo, owner, started = _seed_run(root, lease_seconds=3600)
+    run_id = started.run["run_id"]
+    repo.close()
+    conn = _connect(root, "agent_runs.db")
+    conn.execute(
+        "UPDATE agent_runs SET session_id = ?, lease_owner = ?, person_id = ?, "
+        "parent_run_id = ?, approval_ids = ? WHERE run_id = ?",
+        (
+            f"session-{PLANTED_API_KEY}",
+            f"owner-{PLANTED_BEARER}",
+            f"per_{PLANTED_API_KEY}",
+            f"run-{PLANTED_BEARER}",
+            json.dumps([f"call_{PLANTED_API_KEY}"]),
+            run_id,
+        ),
+    )
+    conn.execute(
+        "UPDATE agent_run_checkpoints SET kind = ? WHERE run_id = ?",
+        (f"kind_{PLANTED_API_KEY}", run_id),
+    )
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+    rendered = report.render()
+    serialized = json.dumps(report.to_dict())
+
+    # Non-vacuous: every field carrying a canary drove a real finding first.
+    for check in (
+        "agent_run.unsupported_record",
+        "agent_run.orphaned_approval",
+        "agent_run.orphaned_parent",
+        "agent_run.orphaned_session",
+        "agent_run.orphaned_person",
+        "agent_run.unknown_owner",
+    ):
+        finding = _finding(report, check)
+        assert finding.store_id == "agent_runs_db"
+        assert finding.record_count >= 1
+    _assert_no_canary([rendered, serialized], "agent runs")
+    assert str(root) not in rendered and str(root) not in serialized
+
+
+def test_agent_run_output_stays_bounded_with_many_broken_runs(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    _run_store(root).close()
+    conn = _connect(root, "agent_runs.db")
+    for index in range(300):
+        conn.execute(
+            "INSERT INTO agent_runs (run_id, session_id, trigger, goal_fingerprint, "
+            "current_state, version, checkpoint_sequence, created_at, updated_at) "
+            "VALUES (?, 'ghost', 'chat', 'f', 'running', 1, 4, 'x', 'x')",
+            (f"run-broken-{index:04d}",),
+        )
+        conn.execute(
+            "INSERT INTO agent_run_checkpoints "
+            "(run_id, sequence, kind, state, payload, created_at) "
+            "VALUES (?, 1, 'run_started', 'running', '{}', 'x')",
+            (f"run-broken-{index:04d}",),
+        )
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+    rendered = report.render()
+
+    gap = _finding(report, "agent_run.checkpoint_gap")
+    assert gap.record_count == 300
+    assert len(gap.detail) <= doctor.MAX_DETAIL_ROWS
+    assert _finding(report, "agent_run.unowned_running").record_count == 300
+    assert len(report.findings) <= doctor.MAX_FINDINGS
+    for finding in report.findings:
+        assert len(finding.detail) <= doctor.MAX_DETAIL_ROWS
+        for line in finding.detail:
+            assert len(line) <= doctor.MAX_DETAIL_CHARS
+    assert len(rendered) <= doctor.MAX_REPORT_CHARS
+    assert "300" in rendered
+
+
+def test_diagnose_never_changes_the_owner_marker_permissions(tmp_path):
+    """Reading the markers through OwnerRegistry would restore their mode.
+
+    Doctor reports the drift instead. Losing a proof of death is safe; a check
+    that quietly writes during a dry run is not.
+    """
+    from coworker.agent_run_owner import OWNERS_DIR_NAME
+
+    root = build_current_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    proc, claim = _spawn_run_owner(root, "hold")
+    try:
+        markers = root / OWNERS_DIR_NAME
+        os.chmod(markers, 0o755)
+        report = doctor.diagnose(root)
+    finally:
+        proc.kill()
+        proc.wait()
+
+    assert markers.stat().st_mode & 0o777 == 0o755
+    finding = _finding(report, "agent_run.owner_markers_permissive")
+    assert finding.repair is Repair.REVIEW_REQUIRED
+    # The owner really is alive, and Doctor still refuses to call it dead.
+    assert _finding(report, "agent_run.unknown_owner").record_count == 1
+    assert "agent_run.dead_owner" not in _checks(report)
+    assert "agent_run.owned_by_live_process" not in _checks(report)
