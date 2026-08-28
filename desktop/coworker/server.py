@@ -47,6 +47,7 @@ from coworker.connectors.google_oauth import (
     save_google,
 )
 from coworker.drive import drive_from_secrets
+from coworker.drive_evidence import attach as attach_drive_evidence
 from coworker.drive_ingestion import DriveIngestionCoordinator, DriveIngestionStore
 from coworker.drive_ingestion_api import drive_ingestion_router
 from coworker.effective_tools import (
@@ -1739,6 +1740,57 @@ def create_app(
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return {"meeting": meeting, **_meeting_view(person_id)}
+
+    @app.post("/v1/people/{person_id}/drive-evidence/search")
+    async def people_drive_evidence_search(person_id: str, request: Request):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if app.state.drive is None:
+            return JSONResponse({"error": "Drive is not connected"}, status_code=400)
+        body = await request.json()
+        query = str(body.get("query") or "").strip()
+        if not query:
+            return JSONResponse({"error": "query is required"}, status_code=400)
+        try:
+            result = app.state.drive.search(
+                query, max_results=int(body.get("max_results") or 10)
+            )
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return result
+
+    @app.post("/v1/people/{person_id}/drive-evidence/attach")
+    async def people_drive_evidence_attach(person_id: str, request: Request):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if app.state.drive is None:
+            return JSONResponse({"error": "Drive is not connected"}, status_code=400)
+        body = await request.json()
+        kind = str(body.get("kind") or "")
+        file_id = str(body.get("file_id") or "").strip()
+        folder_id = str(body.get("folder_id") or "").strip() or None
+        if not file_id:
+            return JSONResponse({"error": "file_id is required"}, status_code=400)
+        try:
+            raw = app.state.drive.read(file_id)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        try:
+            source = attach_drive_evidence(
+                app.state.people,
+                person_id,
+                kind=kind,
+                raw=raw,
+                folder_id=folder_id,
+                actor="director",
+                rationale_summary="Director attached Drive evidence.",
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {
+            "source": source,
+            "person": app.state.people.get(person_id, expand_sources=True),
+        }
 
     @app.post("/v1/people/{person_id}/sourcing-chat")
     async def people_sourcing_chat(person_id: str, request: Request):

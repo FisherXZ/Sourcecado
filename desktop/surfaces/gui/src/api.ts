@@ -363,8 +363,18 @@ export type Board = {
   done: BoardPerson[];
 };
 
+export type PersonSourceRef = {
+  id: string;
+  person_id: string;
+  type: "source_ref";
+  restricted: boolean;
+  created_at?: string;
+  updated_at?: string;
+  fields?: Record<string, unknown>;
+};
+
 export type PersonFile = {
-  person: BoardPerson & Record<string, unknown>;
+  person: BoardPerson & Record<string, unknown> & { sources?: PersonSourceRef[] };
   brief: {
     who: string;
     why: string;
@@ -413,6 +423,18 @@ export type MeetingRefreshResult = {
   sources: Record<string, { status: "ok"; records: number } | { status: "failed"; error: string }>;
   meeting_evidence?: MeetingEvidenceView;
 };
+
+export type DriveEvidenceCandidate = {
+  id: string;
+  name: string | null;
+  mimeType: string | null;
+  modifiedTime: string | null;
+  parents: string[];
+  webViewLink: string | null;
+  status: string;
+};
+
+export type DriveEvidenceKind = "search_result" | "folder_child" | "read_source";
 
 export type ActivePerson = {
   person_id: string;
@@ -495,6 +517,44 @@ export function attachPersonMeeting(id: string, evidenceId: string) {
 
 export function rejectPersonMeeting(id: string, evidenceId: string) {
   return reviewPersonMeeting(id, evidenceId, "reject");
+}
+
+export async function searchPersonDriveEvidence(
+  id: string,
+  query: string,
+): Promise<{ files: DriveEvidenceCandidate[] }> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(id)}/drive-evidence/search`,
+    {
+      method: "POST",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    },
+  );
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `drive evidence search ${res.status}`);
+  return body;
+}
+
+export async function attachPersonDriveEvidence(
+  id: string,
+  params: { kind: DriveEvidenceKind; fileId: string; folderId?: string },
+): Promise<{ source: PersonSourceRef; person: PersonFile["person"] }> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(id)}/drive-evidence/attach`,
+    {
+      method: "POST",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: params.kind,
+        file_id: params.fileId,
+        folder_id: params.folderId,
+      }),
+    },
+  );
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `drive evidence attach ${res.status}`);
+  return body;
 }
 
 export async function openPersonSourcingChat(

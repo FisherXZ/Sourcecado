@@ -6,23 +6,27 @@ import { PersonFileView } from "../src/PersonFile";
 
 const api = vi.hoisted(() => ({
   attachPersonMeeting: vi.fn(),
+  attachPersonDriveEvidence: vi.fn(),
   getBoard: vi.fn(),
   getPerson: vi.fn(),
   openPersonSourcingChat: vi.fn(),
   refreshPersonMeetings: vi.fn(),
   rejectPersonMeeting: vi.fn(),
   revertPerson: vi.fn(),
+  searchPersonDriveEvidence: vi.fn(),
   setPersonSequence: vi.fn(),
 }));
 
 vi.mock("../src/api", () => ({
   attachPersonMeeting: api.attachPersonMeeting,
+  attachPersonDriveEvidence: api.attachPersonDriveEvidence,
   getBoard: api.getBoard,
   getPerson: api.getPerson,
   openPersonSourcingChat: api.openPersonSourcingChat,
   refreshPersonMeetings: api.refreshPersonMeetings,
   rejectPersonMeeting: api.rejectPersonMeeting,
   revertPerson: api.revertPerson,
+  searchPersonDriveEvidence: api.searchPersonDriveEvidence,
   setPersonSequence: api.setPersonSequence,
 }));
 
@@ -46,7 +50,26 @@ describe("Board and person-file routes", () => {
       person: { person_id: "person one", sequence_state: "open", version: 3, title: "Founder" },
     });
     api.getPerson.mockResolvedValue({
-      person: { person_id: "person one", sequence_state: "open", version: 2 },
+      person: {
+        person_id: "person one",
+        sequence_state: "open",
+        version: 2,
+        sources: [
+          {
+            id: "source_ref_drive1",
+            person_id: "person one",
+            type: "source_ref",
+            restricted: false,
+            fields: {
+              provider: "Google Drive",
+              title: "Fall sourcing masterdoc",
+              extraction_status: "metadata_only",
+              sensitivity: "standard",
+              out_of_scope: false,
+            },
+          },
+        ],
+      },
       brief: {
         who: "Alyssa Lee",
         why: "Strong sourcing fit.",
@@ -127,6 +150,23 @@ describe("Board and person-file routes", () => {
     });
     api.setPersonSequence.mockResolvedValue({
       person: { person_id: "person one", sequence_state: "in_conversation" },
+    });
+    api.searchPersonDriveEvidence.mockResolvedValue({
+      files: [
+        {
+          id: "drive-1",
+          name: "Q3 sourcing notes",
+          mimeType: "application/vnd.google-apps.document",
+          modifiedTime: "2026-08-01T10:00:00Z",
+          parents: [],
+          webViewLink: "https://drive.google.com/open?id=drive-1",
+          status: "metadata_only",
+        },
+      ],
+    });
+    api.attachPersonDriveEvidence.mockResolvedValue({
+      source: { id: "source_ref_drive2", restricted: false },
+      person: { person_id: "person one" },
     });
   });
 
@@ -291,6 +331,62 @@ describe("Board and person-file routes", () => {
 
     expect(
       await screen.findByText("Granola refreshed; Calendar is unavailable."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows meeting evidence and Drive evidence as sibling sections on one person file", async () => {
+    render(<PersonFileView personId="person one" />);
+
+    const meetings = await screen.findByRole("region", { name: "Meeting evidence" });
+    const drive = screen.getByRole("region", { name: "Drive evidence" });
+
+    expect(within(meetings).getByText("Calendar review")).toBeInTheDocument();
+    expect(within(meetings).getByText("Granola review")).toBeInTheDocument();
+    expect(
+      within(meetings).getByRole("button", { name: "Refresh meeting evidence" }),
+    ).toBeInTheDocument();
+    expect(within(meetings).queryByText("Fall sourcing masterdoc")).not.toBeInTheDocument();
+    expect(within(meetings).queryByLabelText("Search Drive")).not.toBeInTheDocument();
+
+    expect(within(drive).getByText("Fall sourcing masterdoc")).toBeInTheDocument();
+    expect(within(drive).getByLabelText("Search Drive")).toBeInTheDocument();
+    expect(within(drive).queryByText("Calendar review")).not.toBeInTheDocument();
+    expect(
+      within(drive).queryByRole("button", { name: "Refresh meeting evidence" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders attached Drive evidence on the person file", async () => {
+    render(<PersonFileView personId="person one" />);
+
+    expect(await screen.findByRole("heading", { name: "Drive evidence" })).toBeInTheDocument();
+    expect(screen.getByText("Fall sourcing masterdoc")).toBeInTheDocument();
+  });
+
+  it("searches Drive and attaches a result with an explicit action", async () => {
+    render(<PersonFileView personId="person one" />);
+    await screen.findByRole("heading", { name: "Drive evidence" });
+
+    fireEvent.change(screen.getByLabelText("Search Drive"), {
+      target: { value: "sourcing" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Search Drive" }));
+
+    await waitFor(() =>
+      expect(api.searchPersonDriveEvidence).toHaveBeenCalledWith("person one", "sourcing"),
+    );
+    expect(await screen.findByText("Q3 sourcing notes")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach Q3 sourcing notes" }));
+
+    await waitFor(() =>
+      expect(api.attachPersonDriveEvidence).toHaveBeenCalledWith("person one", {
+        kind: "search_result",
+        fileId: "drive-1",
+      }),
+    );
+    expect(
+      await screen.findByText("Attached “Q3 sourcing notes” to this person."),
     ).toBeInTheDocument();
   });
 });
