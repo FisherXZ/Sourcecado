@@ -175,9 +175,11 @@ export function AppShell() {
       if (restored) {
         cachedRestoreHashRef.current = restored;
         window.location.hash = restored;
+        setRoute(parseHash(restored));
       } else if (cachedListing.sessions.length > 0) {
         cachedRestoreHashRef.current = "#/chat";
         window.location.hash = "#/chat";
+        setRoute({ kind: "chat" });
       }
     }
     getSessions()
@@ -194,10 +196,12 @@ export function AppShell() {
             (listing.open_id ? `#/chat/${encodeURIComponent(listing.open_id)}` : "");
           if (restored) {
             window.location.hash = restored;
+            setRoute(parseHash(restored));
           } else if (listing.sessions.length > 0) {
             // Sessions exist but neither open_id nor last_destination named one:
             // escape the root "Restoring workspace" skeleton instead of hanging on it.
             window.location.hash = "#/chat";
+            setRoute({ kind: "chat" });
           }
         }
         cachedRestoreHashRef.current = null;
@@ -243,13 +247,14 @@ export function AppShell() {
     outlet = <SettingsPage />;
   } else if (
     route.sessionId &&
+    !route.personId &&
     !route.sessionId.startsWith("sched-") &&
     sessions !== null &&
     !sessions.some((session) => session.session_id === route.sessionId)
   ) {
     outlet = <UnavailableThreadPage recentSessionId={openSessionId} />;
   } else {
-    outlet = <ChatPage sessionId={route.sessionId} />;
+    outlet = <ChatPage sessionId={route.sessionId} personId={route.personId} />;
   }
   return (
     <div className="app-shell">

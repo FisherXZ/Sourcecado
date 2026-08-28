@@ -16,9 +16,14 @@ def test_buddy_body_is_generic_not_sourcing():
 def test_sourcing_manifest_routes_to_versioned_runtime_definition():
     persona = load_persona("sourcing")
     assert persona.id == "sourcing"
+    assert persona.tools == []
     assert "sourcing-director-v1" in persona.body
     assert "Person File" in persona.body
     assert "Sourcing Lead" not in persona.body
+
+
+def test_buddy_manifest_does_not_declare_capabilities():
+    assert load_persona("buddy").tools == []
 
 
 def test_system_prompt_uses_on_duty_body(tmp_path):

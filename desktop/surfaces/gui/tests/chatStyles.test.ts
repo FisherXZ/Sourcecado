@@ -60,6 +60,12 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
+  it("keeps the bound person visible as a compact header link", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-active-person\s*\{[^}]*display:\s*inline-flex;[^}]*color:\s*var\(--accent-deep\);/,
+    );
+  });
+
   it("distinguishes pending approval cards from collapsed audit receipts", () => {
     expect(styles).toMatch(
       /\.sourcecado-approval-card\s*\{[^}]*border:\s*1px solid var\(--warn\);/,

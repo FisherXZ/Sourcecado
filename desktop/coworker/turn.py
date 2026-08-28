@@ -646,6 +646,11 @@ async def run_turn(
         session_id=events.identity.session_id,
         run_id=events.identity.run_id,
     )
+    effective_tool_names = {
+        str((schema.get("function") or {}).get("name") or "")
+        for schema in openai_tools
+        if isinstance(schema, dict)
+    }
     turn_span = recorder.start_span(
         AgentTurnSpan(operation="agent.turn"), trace_context
     )
@@ -728,6 +733,20 @@ async def run_turn(
                 }
             )
         return {"status": "stopped", "text": text_so_far}
+
+    people = execute_kwargs.get("people")
+    if people is not None:
+        bound_person_id = people.person_for_session(sid)
+        if bound_person_id is not None and people.get(bound_person_id) is None:
+            turn_span.fail(ErrorKind.POLICY)
+            await _terminal(
+                {
+                    "type": "error",
+                    "state": "failed",
+                    "message": "This conversation's bound person file is unavailable.",
+                }
+            )
+            return {"status": "error", "text": ""}
 
     await _emit({"type": "turn_start", "state": "running"})
     if provider is None:
@@ -995,6 +1014,24 @@ async def run_turn(
                 approval_claimant: str | None = None
                 approval_scope = "once"
                 approval_fingerprint: str | None = None
+                if call.name not in effective_tool_names:
+                    result = {
+                        "error": f"tool {call.name} is not available in this run"
+                    }
+                    had_tool_failure = True
+                    await _emit(
+                        _tool_finished_event(
+                            call,
+                            ok=False,
+                            result=result,
+                            identity=events.identity,
+                        )
+                    )
+                    unavailable = _stamp(_tool_result_message(call, result))
+                    history.append(unavailable)
+                    _persist_message(unavailable)
+                    _record_person_file(sid, call, False, result, execute_kwargs)
+                    continue
                 workspace_runtime = execute_kwargs.get("workspace_runtime")
                 if workspace_runtime is not None and workspace_runtime.owns_tool(
                     call.name

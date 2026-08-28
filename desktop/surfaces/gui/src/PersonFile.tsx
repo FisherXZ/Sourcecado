@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 
-import { getPerson, revertPerson, setPersonSequence, type PersonFile } from "./api";
+import {
+  attachPersonMeeting,
+  getPerson,
+  openPersonSourcingChat,
+  refreshPersonMeetings,
+  rejectPersonMeeting,
+  revertPerson,
+  setPersonSequence,
+  type PersonFile,
+} from "./api";
 
 const STATES = [
   { id: "open", label: "Open" },
@@ -14,6 +23,10 @@ export function PersonFileView({ personId }: { personId: string }) {
   const [attempt, setAttempt] = useState(0);
   const [moving, setMoving] = useState<string | null>(null);
   const [moveFailed, setMoveFailed] = useState(false);
+  const [openingChat, setOpeningChat] = useState(false);
+  const [chatFailed, setChatFailed] = useState(false);
+  const [meetingBusy, setMeetingBusy] = useState<string | null>(null);
+  const [meetingStatus, setMeetingStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -52,6 +65,71 @@ export function PersonFileView({ personId }: { personId: string }) {
     }
   }
 
+  async function openSourcingChat() {
+    if (openingChat || !file) return;
+    const version = file.person.version;
+    if (typeof version !== "number" || !Number.isInteger(version)) {
+      setChatFailed(true);
+      return;
+    }
+    setOpeningChat(true);
+    setChatFailed(false);
+    try {
+      const result = await openPersonSourcingChat(personId, version);
+      if (result.active_person.person_id !== personId) {
+        throw new Error("person binding mismatch");
+      }
+      window.location.hash = `#/chat/${encodeURIComponent(result.session.id)}/person/${encodeURIComponent(personId)}`;
+    } catch {
+      setChatFailed(true);
+    } finally {
+      setOpeningChat(false);
+    }
+  }
+
+  async function refreshMeetings() {
+    if (meetingBusy) return;
+    setMeetingBusy("refresh");
+    setMeetingStatus(null);
+    try {
+      const result = await refreshPersonMeetings(personId);
+      const calendar = result.sources.calendar?.status;
+      const granola = result.sources.granola?.status;
+      if (calendar === "ok" && granola === "ok") {
+        setMeetingStatus("Calendar and Granola refreshed.");
+      } else if (calendar === "failed" && granola === "ok") {
+        setMeetingStatus("Granola refreshed; Calendar is unavailable.");
+      } else if (calendar === "ok" && granola === "failed") {
+        setMeetingStatus("Calendar refreshed; Granola is unavailable.");
+      } else {
+        setMeetingStatus("Meeting evidence is unavailable from both sources.");
+      }
+      setFile(await getPerson(personId));
+    } catch {
+      setMeetingStatus("Couldn’t refresh meeting evidence. Try again.");
+    } finally {
+      setMeetingBusy(null);
+    }
+  }
+
+  async function reviewMeeting(evidenceId: string, action: "attach" | "reject") {
+    if (meetingBusy) return;
+    setMeetingBusy(`${action}:${evidenceId}`);
+    setMeetingStatus(null);
+    try {
+      if (action === "attach") {
+        await attachPersonMeeting(personId, evidenceId);
+      } else {
+        await rejectPersonMeeting(personId, evidenceId);
+      }
+      setFile(await getPerson(personId));
+    } catch {
+      setMeetingStatus(`Couldn’t ${action} this meeting. Refresh and try again.`);
+    } finally {
+      setMeetingBusy(null);
+    }
+  }
+
   if (failed) {
     return (
       <main className="route-page person-page">
@@ -83,6 +161,24 @@ export function PersonFileView({ personId }: { personId: string }) {
         <p className="eyebrow">Person file</p>
         <h1>{file.brief.who || "Person"}</h1>
         {file.brief.why ? <p>{file.brief.why}</p> : null}
+        <div className="person-chat-action">
+          <button
+            type="button"
+            disabled={openingChat}
+            onClick={() => void openSourcingChat()}
+          >
+            {openingChat
+              ? "Opening sourcing chat…"
+              : file.sourcing_chat
+                ? "Open sourcing chat"
+                : "Create sourcing chat"}
+          </button>
+          {chatFailed ? (
+            <p role="alert">
+              Couldn’t open this person’s sourcing chat. Refresh the person file and try again.
+            </p>
+          ) : null}
+        </div>
       </header>
 
       <section className="person-sequence" aria-labelledby="person-sequence-heading">
@@ -131,6 +227,70 @@ export function PersonFileView({ personId }: { personId: string }) {
             {file.brief.learned.map((line) => <li key={line}>{line}</li>)}
           </ul>
         )}
+      </section>
+
+      <section className="person-section" aria-labelledby="person-meetings-heading">
+        <div className="person-section-heading-row">
+          <h2 id="person-meetings-heading">Meeting evidence</h2>
+          <button
+            type="button"
+            disabled={meetingBusy !== null}
+            onClick={() => void refreshMeetings()}
+          >
+            {meetingBusy === "refresh" ? "Refreshing…" : "Refresh meeting evidence"}
+          </button>
+        </div>
+        {meetingStatus ? <p role="status">{meetingStatus}</p> : null}
+        {(file.meeting_evidence?.attached ?? []).length === 0 ? (
+          <p className="person-empty">No attached meetings yet.</p>
+        ) : (
+          <div className="person-timeline">
+            {(file.meeting_evidence?.attached ?? []).map((meeting) => (
+              <article key={meeting.evidence_id} className="person-timeline-entry">
+                <p className="person-timeline-meta">
+                  {meeting.source_ref.provider} · attached evidence
+                </p>
+                <p>{meeting.title}</p>
+                {meeting.starts_at ? <p>{meeting.starts_at}</p> : null}
+                <p>{meeting.notes ? "Notes attached (untrusted evidence)." : "Meeting notes missing."}</p>
+              </article>
+            ))}
+          </div>
+        )}
+        {(file.meeting_evidence?.proposed ?? []).length > 0 ? (
+          <div className="person-meeting-proposals">
+            <h3>Needs review</h3>
+            {(file.meeting_evidence?.proposed ?? []).map((meeting) => (
+              <article key={meeting.evidence_id} className="person-timeline-entry">
+                <p className="person-timeline-meta">{meeting.source_ref.provider}</p>
+                <p>{meeting.title}</p>
+                <p>
+                  {meeting.match_reason === "name_only"
+                    ? "Name-only match — review required"
+                    : "Multiple or conflicting matches — review required"}
+                </p>
+                <div className="person-meeting-actions">
+                  <button
+                    type="button"
+                    disabled={meetingBusy !== null}
+                    aria-label={`Attach ${meeting.title}`}
+                    onClick={() => void reviewMeeting(meeting.evidence_id, "attach")}
+                  >
+                    Attach
+                  </button>
+                  <button
+                    type="button"
+                    disabled={meetingBusy !== null}
+                    aria-label={`Reject ${meeting.title}`}
+                    onClick={() => void reviewMeeting(meeting.evidence_id, "reject")}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       {file.versions && file.versions.length > 0 ? (

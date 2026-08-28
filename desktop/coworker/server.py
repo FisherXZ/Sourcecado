@@ -28,6 +28,7 @@ from coworker.automation.scheduler import (
     next_monday_0900,
     now_iso,
 )
+from coworker.apollo_curation import curate_apollo_candidates
 from coworker.calendar import calendar_from_secrets
 from coworker.connectors.google_oauth import (
     CALENDAR_SCOPE,
@@ -46,11 +47,20 @@ from coworker.connectors.google_oauth import (
     save_google,
 )
 from coworker.drive import drive_from_secrets
+from coworker.drive_ingestion import DriveIngestionCoordinator, DriveIngestionStore
+from coworker.drive_ingestion_api import drive_ingestion_router
+from coworker.effective_tools import (
+    EffectiveToolCatalog,
+    ToolAvailability,
+    ToolCatalogError,
+    effective_tool_catalog,
+)
 from coworker.events import build_event, new_turn_identity, TurnIdentity
-from coworker.gmail import gmail_from_secrets
+from coworker.gmail import MissingGmail, gmail_from_secrets
 from coworker.inbox import Inbox
 from coworker.mcp import LiveMcp, write_default_mcp_json
 from coworker.mcp_oauth import McpOAuth
+from coworker.meeting_evidence import MeetingEvidenceStore
 from coworker.brief import build_brief
 from coworker.people import PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
@@ -164,9 +174,14 @@ def system_prompt_assembly(
             brief = build_brief(person, events)
             recent = events[-_PERSON_FILE_EVENT_CAP:]
             learned_lines = [
-                str(event.get("summary") or "")
+                (
+                    f"[{event.get('source')}:{event.get('event_id')}] "
+                    f"{event.get('summary')}"
+                )
                 for event in recent
                 if event.get("summary")
+                and event.get("source")
+                and event.get("event_id")
             ]
             person_context = (
                 "Person file:\n"
@@ -321,6 +336,7 @@ def create_app(
     root = state if state is not None else state_dir()
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
+    app.state.meeting_evidence = MeetingEvidenceStore(root, people=app.state.people)
     app.state.workspace_runtime = workspace_runtime or WorkspaceRuntime(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
     store = app.state.store
@@ -343,6 +359,18 @@ def create_app(
         gmail if gmail is not None else gmail_from_secrets(app.state.secrets, http=http)
     )
     app.state.drive = drive_from_secrets(app.state.secrets, http=http)
+    app.state.drive_ingestions = DriveIngestionStore(root)
+    app.state.drive_ingestion_coordinator = DriveIngestionCoordinator(
+        app.state.drive_ingestions,
+        lambda: app.state.drive,
+    )
+    app.include_router(
+        drive_ingestion_router(
+            store=app.state.drive_ingestions,
+            coordinator=app.state.drive_ingestion_coordinator,
+            people=app.state.people,
+        )
+    )
     app.state.calendar = calendar_from_secrets(app.state.secrets, http=http)
     app.state.apollo_key = apollo_key if apollo_key is not None else os.environ.get("APOLLO_API_KEY")
     app.state.tavily_key = os.environ.get("TAVILY_API_KEY")
@@ -366,7 +394,25 @@ def create_app(
             oauth=app.state.mcp_oauth,
         )
     )
-    app.state.openai_tools = list(OPENAI_TOOLS) + app.state.mcp.schemas()
+
+    def _effective_tool_catalog(
+        persona: Persona | None = None,
+    ) -> EffectiveToolCatalog:
+        return effective_tool_catalog(
+            persona=persona or app.state.persona,
+            registered_schemas=(*OPENAI_TOOLS, *app.state.mcp.schemas()),
+            workspace_runtime=app.state.workspace_runtime,
+            availability=ToolAvailability(
+                gmail=not isinstance(app.state.gmail, MissingGmail),
+                drive=app.state.drive is not None,
+                calendar=app.state.calendar is not None,
+                apollo=bool(app.state.apollo_key),
+                web=bool(app.state.tavily_key),
+            ),
+        )
+
+    app.state.effective_tool_catalog = _effective_tool_catalog
+    _effective_tool_catalog()  # Fail startup on invalid persona/registry contracts.
 
     def _default_job_runner(job: dict[str, Any]) -> dict[str, Any]:
         import asyncio
@@ -385,11 +431,12 @@ def create_app(
                 persona=app.state.persona,
                 skills=app.state.skills,
                 inbox=app.state.inbox,
-                openai_tools=app.state.openai_tools,
+                openai_tools=list(_effective_tool_catalog().schemas),
                 execute_kwargs={
                     "store": app.state.store,
                     "gmail": app.state.gmail,
                     "drive": app.state.drive,
+                    "drive_ingestions": app.state.drive_ingestions,
                     "calendar": app.state.calendar,
                     "http": app.state.http,
                     "apollo_key": app.state.apollo_key,
@@ -781,6 +828,7 @@ def create_app(
                     store=store,
                     gmail=app.state.gmail,
                     drive=app.state.drive,
+                    drive_ingestions=app.state.drive_ingestions,
                     calendar=app.state.calendar,
                     http=app.state.http,
                     apollo_key=app.state.apollo_key,
@@ -891,7 +939,11 @@ def create_app(
     @app.get("/v1/persona")
     def persona():
         p = app.state.persona
-        return {"id": p.id, "name": p.name, "tools": p.tools}
+        return {
+            "id": p.id,
+            "name": p.name,
+            "tools": list(_effective_tool_catalog().names),
+        }
 
     @app.get("/v1/skills")
     def skills():
@@ -956,7 +1008,8 @@ def create_app(
         pid = str(payload.get("id") or "").strip()
         try:
             nxt = load_persona(pid)
-        except ManifestError as exc:
+            _effective_tool_catalog(nxt)
+        except (ManifestError, ToolCatalogError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         app.state.store.set_setting("persona", nxt.id)
         app.state.persona = nxt
@@ -1400,7 +1453,6 @@ def create_app(
     @app.post("/v1/connectors/granola/disconnect")
     def granola_disconnect():
         app.state.secrets.delete("mcp-oauth:granola")
-        app.state.openai_tools = list(OPENAI_TOOLS) + app.state.mcp.schemas()
         return {"connected": False, "disconnected": ["granola"]}
 
     @app.get("/v1/mcp/oauth/callback")
@@ -1413,7 +1465,6 @@ def create_app(
             return HTMLResponse("<p>Granola connect failed: missing code.</p>", status_code=400)
         try:
             app.state.mcp_oauth.finish(code=code, state=state)
-            app.state.openai_tools = list(OPENAI_TOOLS) + app.state.mcp.schemas()
         except Exception as exc:
             return HTMLResponse(
                 f"<p>Granola connect failed: {html.escape(str(exc))}</p>", status_code=400
@@ -1517,6 +1568,69 @@ def create_app(
     def board_get():
         return app.state.people.list_board()
 
+    @app.post("/v1/apollo/curate")
+    async def apollo_curate(request: Request):
+        payload = await request.json()
+        session_id = str(payload.get("session_id") or "").strip()
+        if not valid_session_id(session_id) or app.state.store.index(session_id) is None:
+            return JSONResponse({"error": "session not found"}, status_code=404)
+        rows = payload.get("people")
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            return JSONResponse({"error": "people must be a list of rows"}, status_code=400)
+        try:
+            result = curate_apollo_candidates(
+                app.state.people,
+                rows,
+                target=str(payload.get("target") or ""),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        binding_reason = (
+            "multiple_selection"
+            if result["selected_row_count"] > 1
+            else "unbound"
+        )
+        if (
+            payload.get("bind_original") is True
+            and result["selected_row_count"] == 1
+            and len(result["kept"]) == 1
+        ):
+            person_id = str(result["kept"][0]["person_id"])
+            try:
+                app.state.people.bind_session(session_id, person_id)
+            except ValueError:
+                binding_reason = "existing_person_chat"
+            else:
+                binding_reason = "single_selection"
+
+        kept = []
+        for item in result["kept"]:
+            person_session = app.state.people.session_for_person(item["person_id"])
+            kept.append(
+                {
+                    **item,
+                    "sourcing_chat": (
+                        {"session_id": person_session}
+                        if person_session is not None
+                        else None
+                    ),
+                }
+            )
+        bound_person_id = app.state.people.person_for_session(session_id)
+        if bound_person_id is not None and binding_reason in {
+            "multiple_selection",
+            "unbound",
+        }:
+            binding_reason = "already_bound"
+        result["kept"] = kept
+        result["original_session"] = {
+            "session_id": session_id,
+            "bound_person_id": bound_person_id,
+            "reason": binding_reason,
+        }
+        return result
+
     @app.post("/v1/people/{person_id}/sequence")
     async def people_sequence(person_id: str, request: Request):
         payload = await request.json()
@@ -1536,12 +1650,184 @@ def create_app(
         if person is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         timeline = [_public_event(event) for event in app.state.people.timeline(person_id)]
+        try:
+            session_id = app.state.people.session_for_person(person_id)
+        except ValueError:
+            return JSONResponse(
+                {
+                    "error": "person has multiple bound sourcing sessions",
+                    "code": "person_chat_conflict",
+                },
+                status_code=409,
+            )
         return {
             "person": person,
             "brief": build_brief(person, timeline),
             "timeline": timeline,
             "versions": app.state.people.versions(person_id),
+            "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
+            "sourcing_chat": (
+                {"session_id": session_id, "person_id": person_id}
+                if session_id is not None
+                else None
+            ),
         }
+
+    def _granola_meetings() -> dict[str, Any]:
+        if app.state.mcp is None or not app.state.mcp.has(
+            "mcp__granola__list_meetings"
+        ):
+            raise RuntimeError("Granola is unavailable")
+        result = app.state.mcp.call("mcp__granola__list_meetings", {})
+        if not isinstance(result, dict) or result.get("error"):
+            raise RuntimeError("Granola is unavailable")
+        if isinstance(result.get("meetings"), list):
+            return {"meetings": result["meetings"]}
+        nested = result.get("result")
+        if isinstance(nested, dict) and isinstance(nested.get("meetings"), list):
+            return {"meetings": nested["meetings"]}
+        if isinstance(nested, str):
+            try:
+                decoded = json.loads(nested)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("Granola returned malformed meetings") from exc
+            if isinstance(decoded, dict) and isinstance(decoded.get("meetings"), list):
+                return {"meetings": decoded["meetings"]}
+        raise RuntimeError("Granola returned malformed meetings")
+
+    def _meeting_view(person_id: str) -> dict[str, Any]:
+        person = app.state.people.get(person_id)
+        assert person is not None
+        timeline = app.state.people.timeline(person_id)
+        return {
+            "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
+            "brief": build_brief(person, timeline),
+        }
+
+    @app.post("/v1/people/{person_id}/meetings/refresh")
+    def people_meetings_refresh(person_id: str):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+
+        def calendar_fetch():
+            if app.state.calendar is None:
+                raise RuntimeError("Calendar is unavailable")
+            return app.state.calendar.list_events(max_results=100)
+
+        result = app.state.meeting_evidence.refresh(
+            calendar_fetch=calendar_fetch,
+            granola_fetch=_granola_meetings,
+        )
+        return {**result, **_meeting_view(person_id)}
+
+    @app.post("/v1/people/{person_id}/meetings/{evidence_id}/attach")
+    def people_meetings_attach(person_id: str, evidence_id: str):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            meeting = app.state.meeting_evidence.attach(evidence_id, person_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"meeting": meeting, **_meeting_view(person_id)}
+
+    @app.post("/v1/people/{person_id}/meetings/{evidence_id}/reject")
+    def people_meetings_reject(person_id: str, evidence_id: str):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            meeting = app.state.meeting_evidence.reject(evidence_id, person_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"meeting": meeting, **_meeting_view(person_id)}
+
+    @app.post("/v1/people/{person_id}/sourcing-chat")
+    async def people_sourcing_chat(person_id: str, request: Request):
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        expected_version = payload.get("expected_person_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_person_version is required"}, status_code=400
+            )
+        if int(person["version"]) != expected_version:
+            return JSONResponse({"error": "stale person version"}, status_code=409)
+        requested_session_id = str(payload.get("session_id") or "").strip()
+        if requested_session_id:
+            owner = app.state.people.person_for_session(requested_session_id)
+            if owner != person_id:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "session is already bound to another person"
+                            if owner is not None
+                            else "session is not bound to this person"
+                        )
+                    },
+                    status_code=409,
+                )
+        brief = build_brief(person, app.state.people.timeline(person_id))
+        label = str(brief["who"] or "Person")
+        try:
+            existing_session_id = app.state.people.session_for_person(person_id)
+        except ValueError:
+            return JSONResponse(
+                {
+                    "error": "person has multiple bound sourcing sessions",
+                    "code": "person_chat_conflict",
+                },
+                status_code=409,
+            )
+        if existing_session_id is not None:
+            existing = app.state.store.index(existing_session_id)
+            if existing is None:
+                return JSONResponse(
+                    {"error": "bound sourcing session is unavailable"},
+                    status_code=409,
+                )
+            app.state.store.set_open_session(existing_session_id)
+            return {
+                "created": False,
+                "session": {
+                    "id": existing_session_id,
+                    "title": existing["title"],
+                    "n_msgs": existing["n_msgs"],
+                },
+                "active_person": {
+                    "person_id": person_id,
+                    "version": int(person["version"]),
+                    "label": label,
+                },
+            }
+        row = app.state.store.create_session()
+        session_id = str(row["session_id"])
+        try:
+            app.state.people.bind_session(
+                session_id,
+                person_id,
+                expected_person_version=expected_version,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        titled = app.state.store.rename_session(session_id, f"Sourcing · {label}")
+        app.state.store.set_open_session(session_id)
+        return JSONResponse(
+            {
+                "created": True,
+                "session": {
+                    "id": session_id,
+                    "title": titled["title"] if titled is not None else None,
+                    "n_msgs": 0,
+                },
+                "active_person": {
+                    "person_id": person_id,
+                    "version": int(person["version"]),
+                    "label": label,
+                },
+            },
+            status_code=201,
+        )
 
     @app.post("/v1/people/{person_id}/revert")
     async def people_revert(person_id: str, request: Request):
@@ -1583,16 +1869,49 @@ def create_app(
         return {"id": row["session_id"], "title": row["title"], "n_msgs": row["n_msgs"]}
 
     @app.get("/v1/sessions/{sid}")
-    async def sessions_get(sid: str):
+    async def sessions_get(sid: str, request: Request):
         store = app.state.store
         row = store.index(sid)
         if row is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        bound_person_id = app.state.people.person_for_session(sid)
+        expected_person_id = str(
+            request.query_params.get("expected_person_id") or ""
+        ).strip()
+        if expected_person_id and bound_person_id != expected_person_id:
+            return JSONResponse(
+                {
+                    "error": "conversation is bound to a different person",
+                    "code": "person_binding_mismatch",
+                },
+                status_code=409,
+            )
+        bound_person = (
+            app.state.people.get(bound_person_id) if bound_person_id is not None else None
+        )
+        if bound_person_id is not None and bound_person is None:
+            return JSONResponse(
+                {
+                    "error": "bound person file is unavailable",
+                    "code": "bound_person_unavailable",
+                },
+                status_code=409,
+            )
         # A restored thread must not show a live-looking card for an
         # already-expired approval: reap and persist receipts first.
         await _reap_and_publish_expired()
         if not sid.startswith("sched-"):
             store.set_open_session(sid)
+        active_person = None
+        if bound_person is not None:
+            bound_brief = build_brief(
+                bound_person, app.state.people.timeline(bound_person_id)
+            )
+            active_person = {
+                "person_id": bound_person_id,
+                "version": int(bound_person["version"]),
+                "label": str(bound_brief["who"] or "Person"),
+            }
         return {
             "id": sid,
             "title": row["title"],
@@ -1600,6 +1919,7 @@ def create_app(
             "events": store.load_events(sid),
             "queue": store.list_queue(sid),
             "queue_paused": store.queue_paused(sid),
+            "active_person": active_person,
         }
 
     @app.get("/v1/sessions/{sid}/telemetry/current")
@@ -1653,6 +1973,7 @@ def create_app(
             "version": 1,
             "session_id": sid,
             **asdict(assembled.diagnostics),
+            "effective_tools": list(_effective_tool_catalog().diagnostics()),
         }
 
     @app.patch("/v1/sessions/{sid}")
@@ -1918,6 +2239,7 @@ def create_app(
                     store=store,
                     gmail=app.state.gmail,
                     drive=app.state.drive,
+                    drive_ingestions=app.state.drive_ingestions,
                     calendar=app.state.calendar,
                     http=app.state.http,
                     apollo_key=app.state.apollo_key,
@@ -2059,11 +2381,12 @@ def create_app(
                     persona=app.state.persona,
                     skills=app.state.skills,
                     inbox=app.state.inbox,
-                    openai_tools=app.state.openai_tools,
+                    openai_tools=list(_effective_tool_catalog().schemas),
                     execute_kwargs={
                         "store": store,
                         "gmail": app.state.gmail,
                         "drive": app.state.drive,
+                        "drive_ingestions": app.state.drive_ingestions,
                         "calendar": app.state.calendar,
                         "http": app.state.http,
                         "apollo_key": app.state.apollo_key,
@@ -2471,6 +2794,20 @@ def create_app(
                     continue
                 if not sid:
                     sid = store.create_session()["session_id"]
+                bound_person_id = app.state.people.person_for_session(sid)
+                if (
+                    bound_person_id is not None
+                    and app.state.people.get(bound_person_id) is None
+                ):
+                    await _send(
+                        {
+                            "type": "error",
+                            "message": (
+                                "This conversation's bound person file is unavailable."
+                            ),
+                        }
+                    )
+                    continue
                 store.set_open_session(sid)
                 queue_busy = not store.queue_paused(sid) and any(
                     item["state"] in ("waiting", "retrying", "reconnecting")

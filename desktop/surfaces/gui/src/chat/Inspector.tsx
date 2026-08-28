@@ -25,12 +25,14 @@ export type InspectorTarget = {
 };
 
 type InspectorContextValue = {
+  readonly threadId: string;
   readonly selected: InspectorTarget | null;
   readonly select: (target: InspectorTarget, trigger: HTMLElement) => void;
   readonly close: () => void;
 };
 
 const InspectorContext = createContext<InspectorContextValue>({
+  threadId: "",
   selected: null,
   select: () => {},
   close: () => {},
@@ -82,6 +84,7 @@ export function InspectorProvider({
   return (
     <InspectorContext.Provider
       value={{
+        threadId,
         selected,
         select(target, trigger) {
           triggerRef.current = trigger;

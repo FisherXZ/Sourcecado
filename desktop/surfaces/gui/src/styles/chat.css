@@ -272,6 +272,19 @@
   white-space: nowrap;
 }
 
+.sourcecado-active-person {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sourcecado-run-metrics {
   display: flex;
   flex-wrap: wrap;
@@ -982,6 +995,89 @@
   font-size: 13px;
   font-weight: 650;
   text-align: left;
+}
+
+.sourcecado-apollo-select {
+  display: flex;
+  min-height: 44px;
+  width: fit-content;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sourcecado-apollo-select input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.sourcecado-apollo-curation {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-apollo-curation > label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sourcecado-apollo-curation > label > input {
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.sourcecado-apollo-review,
+.sourcecado-apollo-curation-receipt {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.sourcecado-apollo-review h4 {
+  margin: 0 0 7px;
+  font-size: 13px;
+}
+
+.sourcecado-apollo-review ul,
+.sourcecado-apollo-curation-receipt ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.sourcecado-apollo-curation-receipt li {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sourcecado-apollo-curation-receipt a {
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.sourcecado-apollo-curation-failures {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--error);
+  color: var(--error);
 }
 
 .sourcecado-apollo-credit-note {
