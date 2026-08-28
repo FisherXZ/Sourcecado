@@ -10,6 +10,30 @@
   align-items: flex-start;
 }
 
+.route-page.welcome-page {
+  min-height: 100%;
+  padding: 48px 40px;
+  background-color: var(--canvas);
+  background-image: url("/brand/marketing/landing-hero.jpg");
+  background-position: right center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.welcome-copy {
+  max-width: 28rem;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.welcome-copy > p:not(.eyebrow) {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .welcome-actions {
   display: flex;
   gap: 8px;
@@ -563,6 +587,15 @@
   background: var(--surface);
 }
 
+.sourcecado-empty-mascot {
+  display: block;
+  width: 96px;
+  height: 96px;
+  margin: 0 0 12px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
 .sourcecado-empty-thread > p:not(.eyebrow),
 .sourcecado-load-error p {
   margin: 7px 0 0;
@@ -737,6 +770,12 @@
     min-height: 44px;
     min-width: 44px;
   }
+
+  .route-page.welcome-page {
+    padding: 32px 20px;
+    background-position: 72% center;
+  }
+
 }
 
 @media (max-height: 520px) {

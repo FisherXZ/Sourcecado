@@ -124,6 +124,13 @@ export function ThreadView({
           <>
             <ThreadPrimitive.Empty>
               <section className="sourcecado-empty-thread">
+                <img
+                  className="sourcecado-empty-mascot"
+                  src="/brand/mascot/owl-mapping.jpg"
+                  alt=""
+                  width={96}
+                  height={96}
+                />
                 <p className="eyebrow">Start with a sourcing outcome</p>
                 <p>Build a shortlist, find a why-now signal, or prepare outreach for review.</p>
                 <div className="sourcecado-starters">

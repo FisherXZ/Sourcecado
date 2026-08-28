@@ -15,7 +15,7 @@
 - **Direction:** Industrial/Utilitarian × Organic — "Warm Operator."
 - **Decoration level:** Intentional. The dense table stays quiet and legible. Warmth and avocado character live in empty states, onboarding, the nav header, and run-ledger "win" moments. **Never decorate the table.**
 - **Mood:** Calm, dense, fast, trustworthy — but warm and human. Confidence through restraint, not chrome.
-- **Memorable thing:** "Warm, approachable, friendly, on-theme with avocado/Codeology." Every decision serves this. The painted owl with the avocado satchel is the mascot and intended dock icon. Masters live in `brand/`. The owl belongs in the dock, the rail mark, first-run welcome, and empty states — never on the board or other dense tables. The geometric avocado-pit motif remains a color/shape language. Desktop icon wiring is a separate change.
+- **Memorable thing:** "Warm, approachable, friendly, on-theme with avocado/Codeology." Every decision serves this. The painted owl with the avocado satchel is the mascot and dock icon. Masters live in `brand/`. The owl belongs in the dock, the rail mark, first-run welcome, and empty states — never on the board or other dense tables. The geometric avocado-pit motif remains a color/shape language, not the app icon.
 - **Reference sites:** attio.com (density), linear.app (chrome restraint), clay.com (warmth concentrated in low-density zones).
 
 ## Typography
@@ -84,4 +84,4 @@
 | 2026-06-18 | Initial design system created ("Warm Operator") | Created by /design-consultation. Direction chosen: data-dense operator tool with warm/avocado character. Research-backed (Attio/Linear density + Clay warmth split). Approved after live HTML preview. |
 | 2026-08-25 | Chat became the home surface | The sourcing-director job begins with a target and a conversation; the board reports work and the person file preserves it. |
 | 2026-08-26 | Local desktop became the active product | The React/Vite/Tauri shell and Python sidecar replaced the hosted web app as the implementation target. |
-| 2026-08-28 | Owl mascot selected to replace the geometric avocado dock icon | New painted brand set: flight pose intended for the app icon, mapping pose for empty threads, meadow pose stored, landing-hero for first-run welcome, light social card on the README. Desktop icon wiring remains separate. |
+| 2026-08-28 | Owl mascot replaced the geometric avocado dock icon | New painted brand set: flight pose as the app icon, mapping pose on empty threads, meadow pose stored, landing-hero on first-run welcome, light social card on the README. |

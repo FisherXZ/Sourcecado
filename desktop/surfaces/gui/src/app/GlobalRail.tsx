@@ -107,7 +107,7 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
           <span aria-hidden="true">×</span>
         </button>
         <div className="app-identity" aria-label="Sourcecado home">
-          <span className="app-mark" aria-hidden="true">S</span>
+          <img className="app-mark" src="/favicon.png" alt="" width={28} height={28} />
           <span>Sourcecado</span>
         </div>
         <button type="button" className="new-chat-button" onClick={onNewChat}>

@@ -5,6 +5,7 @@ All notable changes to Sourcecado will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Painted owl mascot as the dock icon, rail mark, first-run welcome, empty-thread illustration, and README social card
 - Local Python/FastAPI sidecar with a provider-independent tool loop, permissions, schedules, connector support, person files, and a durable run ledger
 - React/Vite desktop workspace with chat, board, person, connections, schedules, skills, settings, recovery, and structured sourcing results
 - Tauri macOS shell that owns the sidecar lifecycle and local API token
