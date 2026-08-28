@@ -21,6 +21,12 @@ from email.message import EmailMessage
 from typing import Any, Protocol
 
 from coworker.apollo import HttpError, LiveHttp
+from coworker.evidence_envelope import (
+    EvidenceParts,
+    combine,
+    external,
+    opaque,
+)
 from coworker.connectors.google_oauth import (
     google_client_credentials,
     load_google,
@@ -899,3 +905,74 @@ def gmail_from_secrets(secrets: SecretStore, *, http: Any | None = None) -> Fake
         client_id=client_id,
         client_secret=client_secret,
     )
+
+
+def gmail_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
+    """Adapt a Gmail read or search into evidence envelopes.
+
+    Everything a correspondent controls - sender, subject, snippet, body -
+    goes inside the envelope. What is left is Gmail's own identifiers, which
+    Sourcecado needs to cite the message and to re-fetch it.
+    """
+    if not isinstance(payload, dict):
+        return opaque("gmail", tool_name, payload)
+    if tool_name == "gmail_read":
+        message_id = str(payload.get("id") or "")
+        body = str(payload.get("body") or "")
+        header = "\n".join(
+            f"{label}: {payload.get(key) or ''}"
+            for label, key in (
+                ("From", "from"),
+                ("To", "to"),
+                ("Subject", "subject"),
+                ("Date", "date"),
+            )
+        )
+        snippet = str(payload.get("snippet") or "")
+        return external(
+            "gmail",
+            identity=("message", message_id, payload.get("date")),
+            title=str(payload.get("subject") or "Gmail message"),
+            body="\n\n".join(part for part in (header, snippet, body) if part),
+            metadata={"id": message_id, "sent": bool(payload.get("sent", False))},
+            # Gmail caps the extracted body at 8000 characters in `read`.
+            truncated=len(body) >= 8000,
+            sensitivity="sensitive",
+            source_time=str(payload.get("date") or "") or None,
+        )
+    if tool_name == "gmail_search":
+        rows = payload.get("messages")
+        rows = rows if isinstance(rows, list) else []
+        parts = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            message_id = str(row.get("id") or "")
+            parts.append(
+                external(
+                    "gmail",
+                    identity=("message", message_id, row.get("date")),
+                    title=str(row.get("subject") or "Gmail message"),
+                    body="\n".join(
+                        f"{label}: {row.get(key) or ''}"
+                        for label, key in (
+                            ("From", "from"),
+                            ("Subject", "subject"),
+                            ("Date", "date"),
+                        )
+                    ),
+                    sensitivity="sensitive",
+                    source_time=str(row.get("date") or "") or None,
+                )
+            )
+        combined = combine(parts)
+        return EvidenceParts(
+            metadata={
+                "message_ids": [
+                    str(row.get("id") or "") for row in rows if isinstance(row, dict)
+                ],
+                "count": len(rows),
+            },
+            envelopes=combined.envelopes,
+        )
+    return opaque("gmail", tool_name, payload)

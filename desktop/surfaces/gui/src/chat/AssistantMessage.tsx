@@ -9,10 +9,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ActivityGroup } from "./ActivityGroup";
 import { ApprovalCard } from "./ApprovalCard";
+import { RunBudgetView } from "./RunBudget";
 import { useLastApprovalDelivery } from "./approvalDelivery";
 import { SourceCitation } from "./SourceCitation";
 import { useInspector } from "./Inspector";
 import { resolveInbox } from "../api";
+import type { RunBudgetStatus } from "./protocol";
 
 function AssistantText({ text }: TextMessagePartProps) {
   return (
@@ -70,9 +72,13 @@ function SafeToolFallback(part: ToolCallMessagePartProps) {
 export function AssistantMessage() {
   const message = useAuiState((state) => state.message);
   const sourcecadoState = message.metadata.custom?.sourcecadoState;
+  const runBudget = message.metadata.custom?.sourcecadoRunBudget as
+    | RunBudgetStatus
+    | undefined;
   const notice = message.metadata.custom?.sourcecadoNotice === true;
-  const transportNotice =
-    message.metadata.custom?.sourcecadoNoticeCode === "transport";
+  const noticeCode = message.metadata.custom?.sourcecadoNoticeCode;
+  const transportNotice = noticeCode === "transport";
+  const compactedNotice = noticeCode === "compacted";
   const prose = message.content
     .filter((part) => part.type === "text")
     .map((part) => (part.type === "text" ? part.text : ""))
@@ -99,7 +105,9 @@ export function AssistantMessage() {
         <p className="sourcecado-notice-title">
           {transportNotice
             ? "Connection problem."
-            : "Some conversation history is unavailable."}
+            : compactedNotice
+              ? "Older context was compacted."
+              : "Some conversation history is unavailable."}
         </p>
       ) : null}
       <MessagePrimitive.Parts
@@ -110,6 +118,7 @@ export function AssistantMessage() {
         }}
       />
       <ActivityGroup tools={tools} messageState={sourcecadoState} />
+      <RunBudgetView status={runBudget} messageState={sourcecadoState} />
       {artifacts.length > 0 ? <ArtifactControls artifacts={artifacts} /> : null}
       {sourcecadoState === "cancelled" ? (
         <p className="sourcecado-terminal-receipt">Run cancelled.</p>

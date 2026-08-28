@@ -10,8 +10,11 @@ import {
   refreshPersonMeetings,
   rejectPersonMeeting,
   revertPerson,
+  savePersonHandoff,
   searchPersonDriveEvidence,
   setPersonSequence,
+  type BriefClaim,
+  type BriefSourceRef,
   type DriveEvidenceCandidate,
   type PersonFile,
   type PersonKnowledgeGap,
@@ -22,6 +25,70 @@ const STATES = [
   { id: "in_conversation", label: "In conversation" },
   { id: "done", label: "Done" },
 ] as const;
+
+const CLAIM_STATE_LABEL: Record<string, string> = {
+  current: "Current",
+  stale: "Stale",
+  conflicting: "Conflicting",
+  missing: "Missing",
+};
+
+const EVIDENCE_LABEL: Record<string, string> = {
+  present: "Read",
+  partial: "Partly read",
+  unsupported: "Body unavailable",
+  missing: "Not reachable",
+  ambiguous: "Unattributed",
+  expired: "Aged out",
+  absent: "Not present",
+};
+
+const HANDOFF_FIELDS = [
+  { key: "who", label: "Who this is" },
+  { key: "wanted", label: "What we wanted" },
+  { key: "happened", label: "What happened" },
+  { key: "theyWant", label: "What they want" },
+] as const;
+
+type HandoffDraft = Record<(typeof HANDOFF_FIELDS)[number]["key"], string>;
+
+/** One brief claim: what it says, how far it holds, and what backs it. */
+function Claim({ claim }: { claim: BriefClaim }) {
+  return (
+    <li className="person-claim">
+      <p className="person-claim-line">
+        <span className={`person-claim-state is-${claim.state}`}>
+          {CLAIM_STATE_LABEL[claim.state] ?? claim.state}
+        </span>
+        <span>{claim.text}</span>
+        {claim.truncated ? <span className="person-claim-flag">Truncated</span> : null}
+      </p>
+      <p className="person-claim-refs">
+        {claim.source_refs.length > 0
+          ? claim.source_refs.join(" · ")
+          : "No source reference"}
+      </p>
+    </li>
+  );
+}
+
+function ClaimList({ claims, empty }: { claims: BriefClaim[]; empty: string }) {
+  if (claims.length === 0) return <p className="person-empty">{empty}</p>;
+  return (
+    <ul className="person-claims">
+      {claims.map((claim) => (
+        <Claim key={claim.id} claim={claim} />
+      ))}
+    </ul>
+  );
+}
+
+function sourceNote(source: BriefSourceRef): string {
+  const parts = [EVIDENCE_LABEL[source.evidence] ?? source.evidence];
+  parts.push(source.fresh ? "fresh" : "stale");
+  if (source.truncated) parts.push("truncated");
+  return parts.join(" · ");
+}
 
 const FOLLOW_UP_LINE: Record<string, string> = {
   reply_unanswered: "They replied and are waiting on a response.",
@@ -80,6 +147,9 @@ export function PersonFileView({ personId }: { personId: string }) {
   const [driveSearching, setDriveSearching] = useState(false);
   const [driveBusy, setDriveBusy] = useState<string | null>(null);
   const [driveStatus, setDriveStatus] = useState<string | null>(null);
+  const [handoff, setHandoff] = useState<HandoffDraft | null>(null);
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffStatus, setHandoffStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -97,6 +167,19 @@ export function PersonFileView({ personId }: { personId: string }) {
       active = false;
     };
   }, [attempt, personId]);
+
+  // The form starts from what the brief already says: a saved handoff when
+  // the director wrote one, otherwise the draft generated from the claims.
+  useEffect(() => {
+    if (!file) return;
+    const stored = file.brief.handoff;
+    setHandoff({
+      who: stored.who,
+      wanted: stored.wanted,
+      happened: stored.happened,
+      theyWant: stored.they_want,
+    });
+  }, [file]);
 
   useEffect(() => {
     const refresh = () => setAttempt((value) => value + 1);
@@ -217,6 +300,27 @@ export function PersonFileView({ personId }: { personId: string }) {
     }
   }
 
+  async function saveHandoff(event: FormEvent) {
+    event.preventDefault();
+    if (!file || !handoff || handoffBusy) return;
+    setHandoffBusy(true);
+    setHandoffStatus(null);
+    try {
+      await savePersonHandoff(personId, {
+        ...handoff,
+        expectedVersion: file.brief.person_version,
+      });
+      setFile(await getPerson(personId));
+      setHandoffStatus("Saved as a new person-file version.");
+    } catch {
+      setHandoffStatus(
+        "Couldn\u2019t save the handoff. Refresh the person file and try again.",
+      );
+    } finally {
+      setHandoffBusy(false);
+    }
+  }
+
   if (failed) {
     return (
       <main className="route-page person-page">
@@ -274,6 +378,13 @@ export function PersonFileView({ personId }: { personId: string }) {
         </div>
       </header>
 
+      {file.brief.partial ? (
+        <p className="person-partial" role="status">
+          Partial brief. {file.brief.partial_sources.join(", ")} could not be
+          refreshed, so everything below is what we already had.
+        </p>
+      ) : null}
+
       <section className="person-sequence" aria-labelledby="person-sequence-heading">
         <h2 id="person-sequence-heading">Sequence state</h2>
         <div className="person-sequence-actions">
@@ -301,25 +412,95 @@ export function PersonFileView({ personId }: { personId: string }) {
       </section>
 
       <div className="person-summary-grid">
-        <section className="person-summary-card">
-          <h2>Knowledge gaps</h2>
-          <p>{file.brief.missing.join(", ") || "None recorded"}</p>
+        <section className="person-summary-card" aria-labelledby="person-outcome-heading">
+          <h2 id="person-outcome-heading">Outcome</h2>
+          <p>{file.brief.outcome?.text ?? "None recorded"}</p>
         </section>
-        <section className="person-summary-card">
-          <h2>Sources</h2>
+        <section className="person-summary-card" aria-labelledby="person-contact-heading">
+          <h2 id="person-contact-heading">Last contact</h2>
+          <p>
+            {file.brief.last_contact.direction
+              ? `${file.brief.last_contact.direction} · ${file.brief.last_contact.at ?? "date not recorded"}`
+              : "No outreach sent and no reply received"}
+          </p>
+          {file.brief.last_contact.follow_up.needed ? (
+            <p className="person-attention">Needs follow-up.</p>
+          ) : null}
+        </section>
+        <section className="person-summary-card" aria-labelledby="person-wants-heading">
+          <h2 id="person-wants-heading">What they want</h2>
+          <p>{file.brief.wants.text || "Not recorded"}</p>
+        </section>
+        <section className="person-summary-card" aria-labelledby="person-sources-heading">
+          <h2 id="person-sources-heading">Sources</h2>
           <p>{file.brief.sources.join(", ") || "None recorded"}</p>
+          {file.brief.restricted_source_count > 0 ? (
+            <p className="person-attention">
+              {file.brief.restricted_source_count} restricted source withheld from
+              this brief.
+            </p>
+          ) : null}
         </section>
       </div>
 
+      <section className="person-section" aria-labelledby="person-handoff-heading">
+        <h2 id="person-handoff-heading">Successor handoff</h2>
+        <p>
+          {file.brief.handoff.generated
+            ? "Drafted from the claims below. Review each field, then save it as a version."
+            : `Saved at version ${file.brief.handoff.version}.`}
+        </p>
+        <form className="person-handoff" onSubmit={(event) => void saveHandoff(event)}>
+          {HANDOFF_FIELDS.map((field) => (
+            <p key={field.key}>
+              <label htmlFor={`person-handoff-${field.key}`}>{field.label}</label>
+              <textarea
+                id={`person-handoff-${field.key}`}
+                rows={2}
+                value={handoff?.[field.key] ?? ""}
+                onChange={(event) =>
+                  setHandoff((current) =>
+                    current === null
+                      ? current
+                      : { ...current, [field.key]: event.target.value },
+                  )
+                }
+              />
+            </p>
+          ))}
+          <button type="submit" disabled={handoffBusy}>
+            {handoffBusy ? "Saving\u2026" : "Save handoff version"}
+          </button>
+        </form>
+        {handoffStatus ? <p role="status">{handoffStatus}</p> : null}
+      </section>
+
       <section className="person-section" aria-labelledby="person-learned-heading">
         <h2 id="person-learned-heading">Learned</h2>
-        {file.brief.learned.length === 0 ? (
-          <p className="person-empty">Nothing filed yet.</p>
-        ) : (
-          <ul>
-            {file.brief.learned.map((line) => <li key={line}>{line}</li>)}
-          </ul>
-        )}
+        <ClaimList claims={file.brief.evidence} empty="Nothing filed yet." />
+        {file.brief.omitted > 0 ? (
+          <p className="person-empty">
+            {file.brief.omitted} older record(s) are not in this brief. The full
+            timeline is below.
+          </p>
+        ) : null}
+      </section>
+
+      {file.brief.conflicts.length > 0 ? (
+        <section className="person-section" aria-labelledby="person-conflicts-heading">
+          <h2 id="person-conflicts-heading">Conflicts</h2>
+          <ClaimList claims={file.brief.conflicts} empty="None." />
+        </section>
+      ) : null}
+
+      <section className="person-section" aria-labelledby="person-gaps-heading">
+        <h2 id="person-gaps-heading">Knowledge gaps</h2>
+        <ClaimList claims={file.brief.gaps} empty="Nothing is open." />
+      </section>
+
+      <section className="person-section" aria-labelledby="person-artifacts-heading">
+        <h2 id="person-artifacts-heading">Artifacts</h2>
+        <ClaimList claims={file.brief.artifacts} empty="Nothing filed yet." />
       </section>
 
       <OutreachPanel
@@ -511,6 +692,31 @@ export function PersonFileView({ personId }: { personId: string }) {
             ))}
           </div>
         ) : null}
+      </section>
+
+      <section className="person-section" aria-labelledby="person-source-refs-heading">
+        <h2 id="person-source-refs-heading">Source references</h2>
+        {file.brief.source_refs.length === 0 ? (
+          <p className="person-empty">No sources recorded.</p>
+        ) : (
+          <ul className="person-claims">
+            {file.brief.source_refs.map((source) => (
+              <li key={source.id} className="person-claim">
+                <p className="person-claim-line">
+                  <span
+                    className={`person-claim-state is-${source.fresh ? "current" : "stale"}`}
+                  >
+                    {source.provider}
+                  </span>
+                  <span>{source.title ?? source.locator ?? source.id}</span>
+                </p>
+                <p className="person-claim-refs">
+                  {source.id} · {sourceNote(source)} · seen {source.observed_at}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       {file.versions && file.versions.length > 0 ? (

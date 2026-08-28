@@ -10,7 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from hashlib import sha256
 from time import monotonic
 from typing import Any, AsyncIterator, Mapping, Optional, Protocol
@@ -400,6 +400,57 @@ def provider_model_metadata(provider: str, model: str) -> ProviderModelMetadata:
         model=model,
         context_window_tokens=known[0] if known is not None else None,
         pricing=known[1] if known is not None else None,
+    )
+
+
+class BudgetConfidence(StrEnum):
+    """How the context budget for a model was established."""
+
+    #: An entry in `_MODEL_METADATA`, the Sourcecado-owned table checked against
+    #: provider catalogs on the date recorded above it.
+    VERIFIED = "verified"
+    #: No entry. The window below is assumed rather than known.
+    CONSERVATIVE = "conservative"
+
+
+# Assumed for any model without a verified entry. Deliberately smaller than
+# every window in the table: an unknown model compacts early and loses some
+# fidelity, which is recoverable, rather than overflowing the request, which
+# costs the turn. Adding the model to `_MODEL_METADATA` is the documented way
+# out — see `desktop/docs/compaction.md`.
+CONSERVATIVE_CONTEXT_WINDOW_TOKENS = 32_768
+
+
+@dataclass(frozen=True)
+class ContextBudget:
+    provider: str
+    model: str
+    window_tokens: int
+    confidence: BudgetConfidence
+
+
+def context_budget(provider: str, model: str) -> ContextBudget:
+    """The context window Sourcecado will plan against for this model."""
+    window = provider_model_metadata(provider, model).context_window_tokens
+    if window is None:
+        return ContextBudget(
+            provider=provider,
+            model=model,
+            window_tokens=CONSERVATIVE_CONTEXT_WINDOW_TOKENS,
+            confidence=BudgetConfidence.CONSERVATIVE,
+        )
+    return ContextBudget(
+        provider=provider,
+        model=model,
+        window_tokens=window,
+        confidence=BudgetConfidence.VERIFIED,
+    )
+
+
+def supported_model_budgets() -> tuple[ContextBudget, ...]:
+    """Every model with a verified budget, for docs and conformance checks."""
+    return tuple(
+        context_budget(provider, model) for provider, model in sorted(_MODEL_METADATA)
     )
 
 

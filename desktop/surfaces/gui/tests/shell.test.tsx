@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/App";
+import { livingBrief } from "./livingBrief";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -89,7 +90,7 @@ describe("App shell routing", () => {
     api.getPersona.mockResolvedValue({ id: "sourcing", name: "Sourcing Director", tools: [] });
     api.getPerson.mockResolvedValue({
       person: { person_id: "person-1", sequence_state: "open" },
-      brief: { who: "Alyssa", why: "Strong fit", learned: [], missing: [], sources: [] },
+      brief: livingBrief({ who: "Alyssa", why: "Strong fit", learned: [], missing: [], sources: [] }),
       timeline: [],
     });
     api.getSchedule.mockResolvedValue({ jobs: [], runs: [] });
@@ -148,7 +149,7 @@ describe("App shell routing", () => {
     window.location.hash = "#/people/person-1";
     api.getPerson.mockResolvedValue({
       person: { person_id: "person-1", sequence_state: "open", version: 1 },
-      brief: { who: "Alyssa", why: "Strong fit", learned: [], missing: [], sources: [] },
+      brief: livingBrief({ who: "Alyssa", why: "Strong fit", learned: [], missing: [], sources: [] }),
       timeline: [],
       sourcing_chat: null,
     });

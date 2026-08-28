@@ -10,7 +10,18 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
+from coworker.compaction import (
+    CompactionContext,
+    SessionCompactor,
+    is_context_overflow,
+)
 from coworker.events import TurnEventStream, TurnIdentity, build_event, new_turn_identity
+from coworker.evidence_envelope import (
+    ContextAuthority,
+    EvidenceParts,
+    director_directive,
+    model_payload,
+)
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
 from coworker.permissions import RETRY_SAFE, decide
@@ -21,6 +32,7 @@ from coworker.provider import (
     ProviderStreamError,
     StreamKind,
     ToolCall,
+    context_budget,
     provider_model_metadata,
 )
 from coworker.provider_retry import (
@@ -32,6 +44,7 @@ from coworker.provider_retry import (
     compatible_failover_chain,
     safe_provider_failure_message,
 )
+from coworker.run_budget import BudgetStop, RunBudgetMeter, RunBudgetPolicy
 from coworker.store import ConversationStore
 from coworker.telemetry import (
     AgentTurnSpan,
@@ -46,9 +59,8 @@ from coworker.telemetry import (
     ToolSpan,
     UsageEvent,
 )
-from coworker.tools import execute
+from coworker.tools import evidence_for, execute
 
-MAX_STEPS = 8
 INTERRUPTED_TOOL = '{"error": "tool call interrupted"}'
 
 
@@ -383,8 +395,13 @@ def _tool_finished_event(
     ok: bool,
     result: dict[str, Any],
     identity: TurnIdentity,
+    parts: EvidenceParts | None = None,
 ) -> dict[str, Any]:
     sources, artifacts = _tool_provenance(call, result)
+    # `EvidenceParts.references` is an allowlist projection with no field for
+    # a body, so a receipt, a log line, and the window can all say where a
+    # claim came from without reproducing what it said.
+    evidence = parts.references() if parts is not None else []
     return {
         "type": "tool_finished",
         "id": call.id,
@@ -395,6 +412,7 @@ def _tool_finished_event(
         **({"failure": _tool_failure(call, result, identity)} if not ok else {}),
         **({"sources": sources} if sources else {}),
         **({"artifacts": artifacts} if artifacts else {}),
+        **({"evidence": evidence} if evidence else {}),
     }
 
 
@@ -571,11 +589,32 @@ def _assistant_tool_message(text: str, calls: list[ToolCall]) -> dict[str, Any]:
 
 
 def _tool_result_message(call: ToolCall, payload: dict[str, Any]) -> dict[str, Any]:
+    """A result Sourcecado itself wrote: a gate refusal, a denied approval.
+
+    These never carry a connector's text, so they go to the model as they
+    are. Anything a connector produced goes through `_evidence_message`.
+    """
     return {
         "role": "tool",
         "name": call.name,
         "tool_call_id": call.id,
         "content": json.dumps(payload),
+    }
+
+
+def _evidence_message(call: ToolCall, parts: EvidenceParts) -> dict[str, Any]:
+    """The one place external text becomes model context.
+
+    `model_payload` keeps Sourcecado's own metadata structured and puts
+    everything somebody else wrote inside a fence, under a policy line
+    stating what it may not do. A tool result with no external content
+    renders exactly as it did before this boundary existed.
+    """
+    return {
+        "role": "tool",
+        "name": call.name,
+        "tool_call_id": call.id,
+        "content": json.dumps(model_payload(parts)),
     }
 
 
@@ -629,6 +668,10 @@ async def run_turn(
     retry_policy: RetryPolicy | None = None,
     retry_sleep: Callable[[float], Awaitable[None]] | None = None,
     retry_random: Callable[[], float] = random.random,
+    compactor: SessionCompactor | None = None,
+    run_budget_policy: RunBudgetPolicy | None = None,
+    context_projection: Any = None,
+    projection_identity: Any = None,
 ) -> dict[str, Any]:
     workspace_runtime = execute_kwargs.get("workspace_runtime")
     events = TurnEventStream(
@@ -642,6 +685,9 @@ async def run_turn(
     if control is not None:
         await control.attach(events)
     recorder = telemetry or TelemetryRecorder()
+    # One meter per run. Nothing carries over from a previous run, and
+    # nothing it measures reaches a permission decision.
+    budget = RunBudgetMeter(run_budget_policy)
     trace_context = TraceContext(
         session_id=events.identity.session_id,
         run_id=events.identity.run_id,
@@ -651,6 +697,15 @@ async def run_turn(
         for schema in openai_tools
         if isinstance(schema, dict)
     }
+    # One turn, one ledger of who put what into context. The director channel
+    # mints a directive; connectors mint envelopes. Nothing converts one into
+    # the other, so identical text arriving on the two channels never carries
+    # the same authority. The ledger is per turn: evidence read now cannot
+    # justify an effect later.
+    authority = ContextAuthority()
+    authority.admit_directive(
+        director_directive(text, session_id=sid, turn=events.identity.run_id)
+    )
     turn_span = recorder.start_span(
         AgentTurnSpan(operation="agent.turn"), trace_context
     )
@@ -670,6 +725,44 @@ async def run_turn(
             if workspace_runtime is not None
             else message,
         )
+
+    def _persist_tool_result(
+        call: ToolCall, result: dict[str, Any], ok: bool, message: dict[str, Any]
+    ) -> None:
+        """Persist a tool result with the workspace runtime's own redaction.
+
+        `sanitize_message` strips a workspace body from the field it used to
+        live in. Fencing moves that body into the evidence block, so the
+        redaction has to happen before the block is built, not after. The
+        model still sees the full text this turn; the disk still does not.
+        """
+        runtime = execute_kwargs.get("workspace_runtime")
+        if runtime is None or not runtime.owns_tool(call.name):
+            _persist_message(message)
+            return
+        redacted = runtime.sanitize_result(call.name, result)
+        _persist_message(
+            _stamp(_evidence_message(call, evidence_for(call.name, redacted, ok=ok)))
+        )
+
+    def _record_call_outcome(
+        call: ToolCall, ok: bool, result: dict[str, Any]
+    ) -> None:
+        """One place every finished call is written down.
+
+        The person file gets the record it always got; the meter gets the
+        reading the loop detector needs. A call that returns what an earlier
+        identical call already returned is not progress, and a refusal counts
+        the same as a result: asking for a denied tool ten times is a loop.
+        """
+        budget.record_tool_outcome(
+            call_id=call.id,
+            name=call.name,
+            arguments=call.arguments,
+            result=result,
+            ok=ok,
+        )
+        _record_person_file(sid, call, ok, result, execute_kwargs)
 
     async def _terminal(event: dict[str, Any]) -> None:
         if control is None:
@@ -734,6 +827,30 @@ async def run_turn(
             )
         return {"status": "stopped", "text": text_so_far}
 
+    def _compaction_context() -> CompactionContext:
+        """Read live. The record region must describe the session as it is at
+        the moment of compaction, not as it was when the turn began."""
+        people_store = execute_kwargs.get("people")
+        person = None
+        if people_store is not None:
+            bound = people_store.person_for_session(sid)
+            if bound is not None:
+                person = people_store.get(bound)
+        pending = tuple(
+            item
+            for item in inbox.pending()
+            if str(item.get("session_id") or sid) == sid
+        )
+        return CompactionContext(
+            person=person,
+            pending_approvals=pending,
+            projection=context_projection,
+            identity=projection_identity,
+        )
+
+    active_compactor = compactor or SessionCompactor(store=store, session_id=sid)
+    active_compactor.bind_context(_compaction_context)
+
     people = execute_kwargs.get("people")
     if people is not None:
         bound_person_id = people.person_for_session(sid)
@@ -769,6 +886,7 @@ async def run_turn(
     retry_count = 0
 
     last_text = ""
+    last_input_tokens: int | None = None
     had_tool_failure = False
     turn_error_kind = ErrorKind.INTERNAL
     turn_error_message: str | None = None
@@ -799,12 +917,42 @@ async def run_turn(
             user_msg = {"role": "user", "content": text}
             history.append(user_msg)
             _persist_message(user_msg)
-        for _ in range(MAX_STEPS):
-            _persist_closed(store, sid, history, workspace_runtime)
-            model_messages = [
+        # Restore against the same list shape the boundary was computed over:
+        # the system message at index 0, then the transcript. The user message
+        # appended above sits past every stored boundary, so it cannot shift it.
+        active_compactor.restore(
+            [
                 {k: v for k, v in message.items() if k != "message_id"}
                 for message in history
             ]
+        )
+        budget_stop: BudgetStop | None = None
+        pending_calls: tuple[tuple[str, str], ...] = ()
+        while True:
+            # The stop decision, before any spend. `check` puts the loop
+            # detector ahead of the absolute budgets on purpose: a run that
+            # is repeating itself is reported as stuck, not as expensive.
+            budget_stop = budget.check()
+            if budget_stop is not None:
+                break
+            budget.start_model_turn()
+            _persist_closed(store, sid, history, workspace_runtime)
+            # The canonical view. Compaction reads it and never writes it; the
+            # transcript on disk stays the record of what actually happened.
+            canonical_messages = [
+                {k: v for k, v in message.items() if k != "message_id"}
+                for message in history
+            ]
+            step_budget = context_budget(
+                _telemetry_provider_name(selected_provider),
+                str(getattr(selected_provider, "model_id", "") or "unknown"),
+            )
+            model_messages = await active_compactor.prepare(
+                canonical_messages,
+                budget=step_budget,
+                reported_input_tokens=last_input_tokens,
+                provider=selected_provider,
+            )
             selected_index = provider_chain.index(selected_provider)
             attempt_chain = compatible_failover_chain(
                 provider_chain[selected_index:],
@@ -925,6 +1073,18 @@ async def run_turn(
                         usage=provider_usage,
                         cost=provider_cost,
                     )
+                    # A request rejected for size is not a transient failure.
+                    # Retrying the same view reproduces it, so compact harder
+                    # and retry the same provider with a smaller one.
+                    if is_context_overflow(exc):
+                        compacted = await active_compactor.recover_from_overflow(
+                            canonical_messages,
+                            budget=step_budget,
+                            provider=attempt_provider,
+                        )
+                        if compacted:
+                            model_messages = active_compactor.view(canonical_messages)
+                            continue
                     directive = await controller.recover(
                         exc,
                         partial_stream=meaningful_stream,
@@ -996,6 +1156,13 @@ async def run_turn(
                     usage=provider_usage,
                     cost=provider_cost,
                 )
+                # The same typed values the provider span just recorded, so
+                # the budget is measured from telemetry rather than re-derived.
+                budget.record_request(provider_usage, provider_cost)
+                if provider_usage is not None:
+                    # The provider's own count of the prompt it just read.
+                    # Preferred over the estimate when sizing the next step.
+                    last_input_tokens = provider_usage.input_tokens
                 selected_provider = attempt_provider
                 break
             if control is not None and control.cancel_requested.is_set():
@@ -1010,7 +1177,15 @@ async def run_turn(
             tool_msg = _stamp(_assistant_tool_message(last_text, calls))
             history.append(tool_msg)
             _persist_message(tool_msg)
-            for call in calls:
+            for index, call in enumerate(calls):
+                if index:
+                    budget_stop = budget.check()
+                    if budget_stop is not None:
+                        pending_calls = tuple(
+                            (pending.id, pending.name) for pending in calls[index:]
+                        )
+                        break
+                budget.charge_tool_call()
                 approval_claimant: str | None = None
                 approval_scope = "once"
                 approval_fingerprint: str | None = None
@@ -1030,7 +1205,7 @@ async def run_turn(
                     unavailable = _stamp(_tool_result_message(call, result))
                     history.append(unavailable)
                     _persist_message(unavailable)
-                    _record_person_file(sid, call, False, result, execute_kwargs)
+                    _record_call_outcome(call, False, result)
                     continue
                 workspace_runtime = execute_kwargs.get("workspace_runtime")
                 if workspace_runtime is not None and workspace_runtime.owns_tool(
@@ -1061,7 +1236,7 @@ async def run_turn(
                     denied = _stamp(_tool_result_message(call, result))
                     history.append(denied)
                     _persist_message(denied)
-                    _record_person_file(sid, call, False, result, execute_kwargs)
+                    _record_call_outcome(call, False, result)
                     continue
                 if gate.needs_user:
                     resource = approval_resource(
@@ -1070,6 +1245,17 @@ async def run_turn(
                         execute_kwargs.get("gmail"),
                         execute_kwargs.get("workspace_runtime"),
                     )
+                    # What the operator is about to approve may have been
+                    # copied out of something a stranger wrote. Say so on the
+                    # request, by reference and never by body, and refuse to
+                    # let that request become standing authority.
+                    derived_refs = authority.derived_from_evidence(call.arguments)
+                    if derived_refs:
+                        resource = {
+                            **(resource or {}),
+                            "evidence_origin": "external",
+                            "evidence_refs": list(derived_refs),
+                        }
                     persisted_arguments = call.arguments
                     if workspace_runtime is not None and workspace_runtime.owns_tool(
                         call.name
@@ -1100,7 +1286,9 @@ async def run_turn(
                             "arguments": call.arguments,
                             "reason": gate.reason,
                             "requested_at": parked["requested_at"],
-                            "scope": parked["scope"],
+                            "scope": authority.clamp_scope(
+                                parked["scope"], call.arguments
+                            )[0],
                             **({"resource": resource} if resource else {}),
                         }
                     )
@@ -1141,9 +1329,11 @@ async def run_turn(
                         failed = _stamp(_tool_result_message(call, result))
                         history.append(failed)
                         _persist_message(failed)
-                        _record_person_file(sid, call, False, result, execute_kwargs)
+                        _record_call_outcome(call, False, result)
                         continue
-                    approval_scope = str(claim.item.get("scope") or "once")
+                    approval_scope = authority.clamp_scope(
+                        str(claim.item.get("scope") or "once"), call.arguments
+                    )[0]
                     approval_resource_payload = claim.item.get("resource")
                     if isinstance(approval_resource_payload, dict):
                         raw_fingerprint = approval_resource_payload.get("fingerprint")
@@ -1164,7 +1354,7 @@ async def run_turn(
                         denied = _stamp(_tool_result_message(call, result))
                         history.append(denied)
                         _persist_message(denied)
-                        _record_person_file(sid, call, False, result, execute_kwargs)
+                        _record_call_outcome(call, False, result)
                         if receipt is not None:
                             await _approval_receipt(receipt, resolution="denied")
                         continue
@@ -1178,18 +1368,22 @@ async def run_turn(
                         else:
                             ok, result = inbox.execution_outcome(receipt)
                         had_tool_failure = had_tool_failure or not ok
+                        parts = authority.admit(
+                            evidence_for(call.name, result, ok=ok)
+                        )
                         await _emit(
                             _tool_finished_event(
                                 call,
                                 ok=ok,
                                 result=result,
                                 identity=events.identity,
+                                parts=parts,
                             )
                         )
-                        tool_result = _stamp(_tool_result_message(call, result))
+                        tool_result = _stamp(_evidence_message(call, parts))
                         history.append(tool_result)
-                        _persist_message(tool_result)
-                        _record_person_file(sid, call, ok, result, execute_kwargs)
+                        _persist_tool_result(call, result, ok, tool_result)
+                        _record_call_outcome(call, ok, result)
                         if receipt is not None and receipt.get(
                             "execution_status"
                         ) not in ("executing", "pending"):
@@ -1204,6 +1398,9 @@ async def run_turn(
                         "name": call.name,
                         "arguments": call.arguments,
                         "started_at": _now_iso(),
+                        # Counts only, and the one warning per budget that
+                        # says the run is approaching a stop.
+                        "run_budget": budget.live_payload(),
                     }
                 )
                 tool_span = turn_span.child(_telemetry_tool_span(call.name))
@@ -1245,18 +1442,20 @@ async def run_turn(
                         ),
                     }
                 had_tool_failure = had_tool_failure or not ok
+                parts = authority.admit(evidence_for(call.name, result, ok=ok))
                 await _emit(
                     _tool_finished_event(
                         call,
                         ok=ok,
                         result=result,
                         identity=events.identity,
+                        parts=parts,
                     )
                 )
-                tool_result = _stamp(_tool_result_message(call, result))
+                tool_result = _stamp(_evidence_message(call, parts))
                 history.append(tool_result)
-                _persist_message(tool_result)
-                _record_person_file(sid, call, ok, result, execute_kwargs)
+                _persist_tool_result(call, result, ok, tool_result)
+                _record_call_outcome(call, ok, result)
                 if approval_claimant is not None:
                     receipt = inbox.complete_execution(
                         call.id,
@@ -1271,14 +1470,25 @@ async def run_turn(
                     if control.cancel_requested.is_set():
                         return await _stopped(history, last_text)
                     control.current_action = None
-        else:
-            turn_span.cancel()
+        if budget_stop is not None:
+            # A run that ran out of budget did not finish. It says so, lists
+            # what it actually completed, names what it had queued and did
+            # not run, and leaves continuing to the director.
+            _persist_closed(store, sid, history, workspace_runtime)
+            turn_span.partial(ErrorKind.POLICY)
+            stop_notice = active_compactor.notice()
             await _terminal(
                 {
                     "type": "turn_end",
                     "state": "stopped",
                     "text": last_text,
-                    "message": f"Stopped after {MAX_STEPS} tool steps.",
+                    "message": budget_stop.message(),
+                    "run_budget": budget.terminal_payload(
+                        stop=budget_stop,
+                        pending_calls=pending_calls,
+                        final_answer=False,
+                    ),
+                    **({"compaction": stop_notice} if stop_notice else {}),
                 }
             )
             return {"status": "stopped", "text": last_text}
@@ -1297,7 +1507,19 @@ async def run_turn(
         )
         return {"status": "error", "text": last_text}
     final_state = "partial" if had_tool_failure else "complete"
-    await _terminal({"type": "turn_end", "text": last_text, "state": final_state})
+    # Counts only. The summary text stays in the provider view, so the operator
+    # is told that older context was compacted without being shown a model's
+    # account of the session as if it were Sourcecado's own reasoning.
+    compaction_notice = active_compactor.notice()
+    await _terminal(
+        {
+            "type": "turn_end",
+            "text": last_text,
+            "state": final_state,
+            "run_budget": budget.terminal_payload(stop=None, final_answer=True),
+            **({"compaction": compaction_notice} if compaction_notice else {}),
+        }
+    )
     if had_tool_failure:
         turn_span.partial(ErrorKind.TOOL)
     else:

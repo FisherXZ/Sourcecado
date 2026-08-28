@@ -461,6 +461,8 @@ class WorkspaceRuntime:
             safe.pop("output", None)
         if name == "fs_read":
             safe.pop("content", None)
+            # Fenced workspace bodies live here, not in `content`.
+            safe.pop("evidence", None)
         return safe
 
     def sanitize_message(self, message: dict[str, Any]) -> dict[str, Any]:

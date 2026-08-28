@@ -253,6 +253,15 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
             f"# 99\n\nApollo key is {PLANTED_API_KEY}. {PLANTED_REASONING}\n",
         )
 
+    # The Agent Run store, created by the real repository. A fresh database is
+    # born at the current version, so the registry has nothing to migrate.
+    # Deliberately empty: a healthy state directory must contribute nothing to
+    # any ownership or history finding, so a test that plants a stale owner, a
+    # dead one, or an unreadable checkpoint measures exactly what it planted.
+    from coworker.agent_run_repository import AgentRunRepository
+
+    AgentRunRepository(root).close()
+
     return root
 
 
@@ -499,6 +508,52 @@ MEETING_EVIDENCE_DDL = """
 """
 
 
+# The Agent Run store as version 1 shipped it: identity, leases, and
+# checkpoints, and no external-effect fence. Written out in full rather than
+# imported so that a change to today's schema shows up as a migration to test,
+# not as a fixture that quietly moved with it.
+LEGACY_AGENT_RUNS_DDL = """
+    CREATE TABLE agent_runs (
+        run_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        person_id TEXT,
+        parent_run_id TEXT,
+        trigger TEXT NOT NULL,
+        goal_fingerprint TEXT NOT NULL,
+        provider_model_id TEXT,
+        current_state TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0,
+        checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
+        approval_ids TEXT NOT NULL DEFAULT '[]',
+        source_refs TEXT NOT NULL DEFAULT '[]',
+        artifact_refs TEXT NOT NULL DEFAULT '[]',
+        usage TEXT NOT NULL DEFAULT '{}',
+        terminal_result TEXT,
+        lease_owner TEXT,
+        lease_owner_host TEXT,
+        lease_owner_pid INTEGER,
+        lease_expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE TABLE agent_run_checkpoints (
+        run_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        state TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, sequence),
+        FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
+    );
+    CREATE INDEX agent_runs_session_created
+        ON agent_runs(session_id, created_at);
+    CREATE INDEX agent_runs_live_lease
+        ON agent_runs(lease_expires_at) WHERE lease_owner IS NOT NULL;
+"""
+
+
 def build_legacy_state(root: Path, *, plant_secrets: bool = False) -> Path:
     """Write the pre-registry state directory, populated the way an install is."""
     root = Path(root)
@@ -694,6 +749,75 @@ def build_legacy_state(root: Path, *, plant_secrets: bool = False) -> Path:
             }
         ],
     )
+    # The Agent Run store as the build before the external-effect fence left it:
+    # version 1 tables, real rows, no `agent_run_effects`. This is the
+    # production-shaped fixture the 1 -> 2 migration is exercised against, so it
+    # goes through backup, apply, rollback, rerun, and restart with every other
+    # store in this directory.
+    runs_conn = sqlite3.connect(root / "agent_runs.db")
+    runs_conn.executescript(LEGACY_AGENT_RUNS_DDL)
+    # Both runs hold no lease: one parked on an operator, one finished. A
+    # migration fixture is about rows surviving an upgrade, and ownership states
+    # are planted by the tests that are about ownership.
+    runs_conn.execute(
+        "INSERT INTO agent_runs (run_id, session_id, trigger, goal_fingerprint, "
+        "current_state, version, checkpoint_sequence, approval_ids, created_at, "
+        "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "run-legacy-1",
+            "main",
+            "chat",
+            "b" * 64,
+            "waiting_approval",
+            2,
+            2,
+            json.dumps(["call_gmail_send_1"]),
+            "2026-08-01T09:12:00.000000+00:00",
+            "2026-08-01T09:12:30.000000+00:00",
+        ),
+    )
+    runs_conn.execute(
+        "INSERT INTO agent_runs (run_id, session_id, trigger, goal_fingerprint, "
+        "current_state, version, checkpoint_sequence, terminal_result, "
+        "created_at, updated_at, finished_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "run-legacy-2",
+            "sched-1",
+            "scheduled",
+            "c" * 64,
+            "complete",
+            3,
+            2,
+            json.dumps({"status": "ok", "text_length": 214}),
+            "2026-08-03T16:00:00.000000+00:00",
+            "2026-08-03T16:04:00.000000+00:00",
+            "2026-08-03T16:04:00.000000+00:00",
+        ),
+    )
+    for legacy_run, sequence, kind, state in (
+        ("run-legacy-1", 1, "run_started", "running"),
+        ("run-legacy-1", 2, "waiting_approval", "waiting_approval"),
+        ("run-legacy-2", 1, "run_started", "running"),
+        ("run-legacy-2", 2, "terminal", "complete"),
+    ):
+        runs_conn.execute(
+            "INSERT INTO agent_run_checkpoints (run_id, sequence, kind, state, "
+            "payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                legacy_run,
+                sequence,
+                kind,
+                state,
+                "{}",
+                "2026-08-01T09:12:00.000000+00:00",
+            ),
+        )
+    runs_conn.execute("PRAGMA user_version = 1")
+    runs_conn.commit()
+    runs_conn.close()
+    os.chmod(root / "agent_runs.db", 0o600)
+
     return root
 
 

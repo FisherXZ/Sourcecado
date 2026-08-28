@@ -1,4 +1,5 @@
 import {
+  compactionNoticeText,
   parseChatEvent,
   type ChatEvent,
   type ConnectionChangeEvent,
@@ -11,6 +12,7 @@ import type {
   ApprovalResource,
   ProvenanceArtifact,
   ProvenanceSource,
+  RunBudgetStatus,
   ToolFailure,
 } from "./protocol";
 
@@ -163,6 +165,12 @@ export type SourcecadoEvent =
         | "failed"
         | "stopped"
         | "interrupted";
+    }
+  | {
+      readonly type: "run_budget_changed";
+      readonly threadId: string;
+      readonly messageId: string;
+      readonly status: RunBudgetStatus;
     }
   | {
       readonly type: "message_finished";
@@ -420,6 +428,14 @@ export class SourcecadoChatStore {
       const startedAt = event.started_at
         ? Date.parse(event.started_at)
         : undefined;
+      if (event.run_budget) {
+        this.apply({
+          type: "run_budget_changed",
+          threadId: event.session_id,
+          messageId: event.message_id,
+          status: event.run_budget,
+        });
+      }
       this.apply({
         type: "tool_started",
         threadId: event.session_id,
@@ -467,6 +483,21 @@ export class SourcecadoChatStore {
       return;
     }
     if (event.type === "turn_end") {
+      if (event.run_budget) {
+        this.apply({
+          type: "run_budget_changed",
+          threadId: event.session_id,
+          messageId: event.message_id,
+          status: event.run_budget,
+        });
+      }
+      if (event.compaction) {
+        this.addNotice(
+          event.session_id,
+          "compacted",
+          compactionNoticeText(event.compaction),
+        );
+      }
       if (event.state === "complete") {
         this.apply({
           type: "message_finished",
@@ -506,6 +537,18 @@ export class SourcecadoChatStore {
           parts: [],
         },
       ]);
+      return;
+    }
+
+    if (event.type === "run_budget_changed") {
+      this.threads.set(
+        event.threadId,
+        messages.map((message) =>
+          message.id === event.messageId
+            ? { ...message, runBudget: event.status }
+            : message,
+        ),
+      );
       return;
     }
 

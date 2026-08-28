@@ -1,5 +1,5 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { ApprovalResource, ToolFailure } from "./protocol";
+import type { ApprovalResource, RunBudgetStatus, ToolFailure } from "./protocol";
 import type { ProvenanceArtifact, ProvenanceSource } from "./protocol";
 
 export type LegacyStoredMessage = {
@@ -96,6 +96,8 @@ export type SourcecadoPart =
 export type SourcecadoStructuredMessage = {
   readonly id: string;
   readonly role: "assistant" | "user" | "system";
+  /** The run's spend against its budget, as of the last event for it. */
+  readonly runBudget?: RunBudgetStatus;
   readonly state:
     | "running"
     | "stopping"
@@ -342,6 +344,7 @@ export function convertStructuredMessage(
     metadata: {
       custom: {
         sourcecadoState: message.state,
+        ...(message.runBudget ? { sourcecadoRunBudget: message.runBudget } : {}),
         sourcecadoPartIds: message.parts.map((part) => part.id),
         ...(() => {
           const notice = message.parts.find(
