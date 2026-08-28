@@ -1,4 +1,5 @@
 import {
+  compactionNoticeText,
   parseChatEvent,
   type ChatEvent,
   type ConnectionChangeEvent,
@@ -467,6 +468,13 @@ export class SourcecadoChatStore {
       return;
     }
     if (event.type === "turn_end") {
+      if (event.compaction) {
+        this.addNotice(
+          event.session_id,
+          "compacted",
+          compactionNoticeText(event.compaction),
+        );
+      }
       if (event.state === "complete") {
         this.apply({
           type: "message_finished",
