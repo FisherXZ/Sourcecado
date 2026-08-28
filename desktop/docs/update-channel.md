@@ -280,9 +280,41 @@ own environment, so pasting the signing key into a commit message is caught as
 ## Signing and notarization: what is authored and what is unrun
 
 The CI steps are written in `.github/workflows/ci.yml` in the `macos-preview`
-job. **None of them have run.** They are guarded on the signing secret being
-present and are skipped with an explicit notice when it is not, so a run without
+job. **None of them have run.** They are guarded on credentials being present
+and are skipped with an explicit notice when they are not, so a run without
 credentials cannot be mistaken for a signed one.
+
+The guard is **two independent gates**, not one:
+
+| Gate | Needs | Turns on |
+| --- | --- | --- |
+| `steps.signing.outputs.apple` | `MACOS_CERTIFICATE_P12` | signing, notarization, stapling, and the independent signature check |
+| `steps.signing.outputs.update` | `SOURCECADO_UPDATE_SIGNING_KEY` | artifact packaging, manifest generation, and the independent manifest check |
+
+They were one gate requiring both, which meant that having no Apple certificate
+also blocked update-manifest generation. Apple has nothing to do with the update
+key, so that conflation made the whole update, migration, and rollback path
+untestable without paying for a Developer Program membership.
+
+`provenance.txt` records `signed:` and `update_manifest:` for every build, so an
+unsigned artifact is self-describing and cannot be mistaken for a signed one
+later.
+
+## Exercising updates without an Apple identity
+
+The update signing key is generated offline and is not an Apple credential.
+Supply `SOURCECADO_UPDATE_SIGNING_KEY` alone and CI produces an unsigned
+`Sourcecado.app`, a packaged zip, and a fully signed and verified update
+manifest. That is enough to exercise clean install, the packaged journey,
+migration and backup, the authenticated update, every failure path, and
+rollback.
+
+What stays unavailable without the Apple identity: code signing, notarization,
+stapling, `spctl` acceptance, and a Gatekeeper-clean first launch. Gatekeeper
+requires right-click then Open until the app is signed and notarized.
+
+Locally none of this needs CI at all. `make update-manifest` and
+`make update-verify` read the key from the environment.
 
 To turn them on, supply these as protected repository secrets and variables:
 
