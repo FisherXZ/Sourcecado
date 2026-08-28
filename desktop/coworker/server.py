@@ -164,9 +164,14 @@ def system_prompt_assembly(
             brief = build_brief(person, events)
             recent = events[-_PERSON_FILE_EVENT_CAP:]
             learned_lines = [
-                str(event.get("summary") or "")
+                (
+                    f"[{event.get('source')}:{event.get('event_id')}] "
+                    f"{event.get('summary')}"
+                )
                 for event in recent
                 if event.get("summary")
+                and event.get("source")
+                and event.get("event_id")
             ]
             person_context = (
                 "Person file:\n"
@@ -1536,12 +1541,116 @@ def create_app(
         if person is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         timeline = [_public_event(event) for event in app.state.people.timeline(person_id)]
+        try:
+            session_id = app.state.people.session_for_person(person_id)
+        except ValueError:
+            return JSONResponse(
+                {
+                    "error": "person has multiple bound sourcing sessions",
+                    "code": "person_chat_conflict",
+                },
+                status_code=409,
+            )
         return {
             "person": person,
             "brief": build_brief(person, timeline),
             "timeline": timeline,
             "versions": app.state.people.versions(person_id),
+            "sourcing_chat": (
+                {"session_id": session_id, "person_id": person_id}
+                if session_id is not None
+                else None
+            ),
         }
+
+    @app.post("/v1/people/{person_id}/sourcing-chat")
+    async def people_sourcing_chat(person_id: str, request: Request):
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        expected_version = payload.get("expected_person_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_person_version is required"}, status_code=400
+            )
+        if int(person["version"]) != expected_version:
+            return JSONResponse({"error": "stale person version"}, status_code=409)
+        requested_session_id = str(payload.get("session_id") or "").strip()
+        if requested_session_id:
+            owner = app.state.people.person_for_session(requested_session_id)
+            if owner != person_id:
+                return JSONResponse(
+                    {
+                        "error": (
+                            "session is already bound to another person"
+                            if owner is not None
+                            else "session is not bound to this person"
+                        )
+                    },
+                    status_code=409,
+                )
+        brief = build_brief(person, app.state.people.timeline(person_id))
+        label = str(brief["who"] or "Person")
+        try:
+            existing_session_id = app.state.people.session_for_person(person_id)
+        except ValueError:
+            return JSONResponse(
+                {
+                    "error": "person has multiple bound sourcing sessions",
+                    "code": "person_chat_conflict",
+                },
+                status_code=409,
+            )
+        if existing_session_id is not None:
+            existing = app.state.store.index(existing_session_id)
+            if existing is None:
+                return JSONResponse(
+                    {"error": "bound sourcing session is unavailable"},
+                    status_code=409,
+                )
+            app.state.store.set_open_session(existing_session_id)
+            return {
+                "created": False,
+                "session": {
+                    "id": existing_session_id,
+                    "title": existing["title"],
+                    "n_msgs": existing["n_msgs"],
+                },
+                "active_person": {
+                    "person_id": person_id,
+                    "version": int(person["version"]),
+                    "label": label,
+                },
+            }
+        row = app.state.store.create_session()
+        session_id = str(row["session_id"])
+        try:
+            app.state.people.bind_session(
+                session_id,
+                person_id,
+                expected_person_version=expected_version,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        titled = app.state.store.rename_session(session_id, f"Sourcing · {label}")
+        app.state.store.set_open_session(session_id)
+        return JSONResponse(
+            {
+                "created": True,
+                "session": {
+                    "id": session_id,
+                    "title": titled["title"] if titled is not None else None,
+                    "n_msgs": 0,
+                },
+                "active_person": {
+                    "person_id": person_id,
+                    "version": int(person["version"]),
+                    "label": label,
+                },
+            },
+            status_code=201,
+        )
 
     @app.post("/v1/people/{person_id}/revert")
     async def people_revert(person_id: str, request: Request):
@@ -1583,16 +1692,49 @@ def create_app(
         return {"id": row["session_id"], "title": row["title"], "n_msgs": row["n_msgs"]}
 
     @app.get("/v1/sessions/{sid}")
-    async def sessions_get(sid: str):
+    async def sessions_get(sid: str, request: Request):
         store = app.state.store
         row = store.index(sid)
         if row is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        bound_person_id = app.state.people.person_for_session(sid)
+        expected_person_id = str(
+            request.query_params.get("expected_person_id") or ""
+        ).strip()
+        if expected_person_id and bound_person_id != expected_person_id:
+            return JSONResponse(
+                {
+                    "error": "conversation is bound to a different person",
+                    "code": "person_binding_mismatch",
+                },
+                status_code=409,
+            )
+        bound_person = (
+            app.state.people.get(bound_person_id) if bound_person_id is not None else None
+        )
+        if bound_person_id is not None and bound_person is None:
+            return JSONResponse(
+                {
+                    "error": "bound person file is unavailable",
+                    "code": "bound_person_unavailable",
+                },
+                status_code=409,
+            )
         # A restored thread must not show a live-looking card for an
         # already-expired approval: reap and persist receipts first.
         await _reap_and_publish_expired()
         if not sid.startswith("sched-"):
             store.set_open_session(sid)
+        active_person = None
+        if bound_person is not None:
+            bound_brief = build_brief(
+                bound_person, app.state.people.timeline(bound_person_id)
+            )
+            active_person = {
+                "person_id": bound_person_id,
+                "version": int(bound_person["version"]),
+                "label": str(bound_brief["who"] or "Person"),
+            }
         return {
             "id": sid,
             "title": row["title"],
@@ -1600,6 +1742,7 @@ def create_app(
             "events": store.load_events(sid),
             "queue": store.list_queue(sid),
             "queue_paused": store.queue_paused(sid),
+            "active_person": active_person,
         }
 
     @app.get("/v1/sessions/{sid}/telemetry/current")
@@ -2471,6 +2614,20 @@ def create_app(
                     continue
                 if not sid:
                     sid = store.create_session()["session_id"]
+                bound_person_id = app.state.people.person_for_session(sid)
+                if (
+                    bound_person_id is not None
+                    and app.state.people.get(bound_person_id) is None
+                ):
+                    await _send(
+                        {
+                            "type": "error",
+                            "message": (
+                                "This conversation's bound person file is unavailable."
+                            ),
+                        }
+                    )
+                    continue
                 store.set_open_session(sid)
                 queue_busy = not store.queue_paused(sid) and any(
                     item["state"] in ("waiting", "retrying", "reconnecting")

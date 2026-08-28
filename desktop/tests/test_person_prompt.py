@@ -100,3 +100,27 @@ def test_prompt_does_not_include_access_token(tmp_path):
     prompt = system_prompt(conv, people=people, session_id="sess-ada")
     assert "ya29.secret" not in prompt
     assert "access_token" not in prompt
+
+
+def test_bound_prompt_keeps_recent_source_references_with_the_brief(tmp_path):
+    conv = ConversationStore(tmp_path)
+    people = PersonStore(tmp_path)
+    ada = people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="L",
+        title="Founder",
+        company="Analytic",
+    )
+    people.bind_session("sess-ada", ada["person_id"])
+    evidence = people.append_event(
+        ada["person_id"],
+        source="gmail",
+        kind="mail",
+        summary="Ada confirmed the dinner timing.",
+    )
+
+    prompt = system_prompt(conv, people=people, session_id="sess-ada")
+
+    assert f"gmail:{evidence['event_id']}" in prompt
+    assert "Ada confirmed the dinner timing." in prompt

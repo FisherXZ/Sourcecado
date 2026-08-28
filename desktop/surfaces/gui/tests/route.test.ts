@@ -14,4 +14,12 @@ describe("app route parser", () => {
   it("falls back safely when a person id is malformed", () => {
     expect(parseHash("#/people/%E0%A4%A")).toEqual({ kind: "board" });
   });
+
+  it("parses a person-bound chat route with both stable identities", () => {
+    expect(parseHash("#/chat/thread%20one/person/person%20one")).toEqual({
+      kind: "chat",
+      sessionId: "thread one",
+      personId: "person one",
+    });
+  });
 });

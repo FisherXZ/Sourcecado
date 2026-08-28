@@ -7,6 +7,7 @@ import { PersonFileView } from "../src/PersonFile";
 const api = vi.hoisted(() => ({
   getBoard: vi.fn(),
   getPerson: vi.fn(),
+  openPersonSourcingChat: vi.fn(),
   revertPerson: vi.fn(),
   setPersonSequence: vi.fn(),
 }));
@@ -14,6 +15,7 @@ const api = vi.hoisted(() => ({
 vi.mock("../src/api", () => ({
   getBoard: api.getBoard,
   getPerson: api.getPerson,
+  openPersonSourcingChat: api.openPersonSourcingChat,
   revertPerson: api.revertPerson,
   setPersonSequence: api.setPersonSequence,
 }));
@@ -59,6 +61,12 @@ describe("Board and person-file routes", () => {
         { version: 1, created_at: "2026-08-26T10:00:00Z" },
         { version: 2, created_at: "2026-08-26T11:00:00Z" },
       ],
+      sourcing_chat: null,
+    });
+    api.openPersonSourcingChat.mockResolvedValue({
+      created: true,
+      session: { id: "thread one", title: "Sourcing · Alyssa Lee", n_msgs: 0 },
+      active_person: { person_id: "person one", version: 2, label: "Alyssa Lee" },
     });
     api.setPersonSequence.mockResolvedValue({
       person: { person_id: "person one", sequence_state: "in_conversation" },
@@ -111,6 +119,68 @@ describe("Board and person-file routes", () => {
         expectedVersion: 2,
         rationaleSummary: "Restore version 1 from person history.",
       }),
+    );
+  });
+
+  it("creates the person's sourcing chat and navigates with both identities", async () => {
+    window.location.hash = "#/people/person%20one";
+    render(<PersonFileView personId="person one" />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create sourcing chat" }),
+    );
+
+    await waitFor(() =>
+      expect(api.openPersonSourcingChat).toHaveBeenCalledWith("person one", 2),
+    );
+    await waitFor(() =>
+      expect(window.location.hash).toBe(
+        "#/chat/thread%20one/person/person%20one",
+      ),
+    );
+  });
+
+  it("offers the same single action as Open when the person is already bound", async () => {
+    api.getPerson.mockResolvedValueOnce({
+      ...(await api.getPerson()),
+      sourcing_chat: { session_id: "thread one", person_id: "person one" },
+    });
+    render(<PersonFileView personId="person one" />);
+
+    expect(
+      await screen.findByRole("button", { name: "Open sourcing chat" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Create sourcing chat" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a stale person-chat failure visible without navigating", async () => {
+    window.location.hash = "#/people/person%20one";
+    api.openPersonSourcingChat.mockRejectedValueOnce(new Error("stale version"));
+    render(<PersonFileView personId="person one" />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create sourcing chat" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Refresh the person file",
+    );
+    expect(window.location.hash).toBe("#/people/person%20one");
+  });
+
+  it("shows missing person recovery without offering a chat action", async () => {
+    api.getPerson.mockRejectedValueOnce(new Error("not found"));
+    render(<PersonFileView personId="missing-person" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn’t load this person file",
+    );
+    expect(
+      screen.queryByRole("button", { name: /sourcing chat/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Board" })).toHaveAttribute(
+      "href",
+      "#/board",
     );
   });
 });

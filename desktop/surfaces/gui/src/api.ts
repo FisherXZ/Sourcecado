@@ -113,6 +113,7 @@ export type Conversation = {
   title: string | null;
   messages: StoredMessage[];
   events: ChatEvent[];
+  active_person?: ActivePerson | null;
   queue?: QueueItem[];
   queue_paused?: boolean;
 };
@@ -222,15 +223,44 @@ export async function createSession(): Promise<{ id: string; title: string | nul
   return res.json();
 }
 
-export async function getSession(id: string): Promise<Conversation> {
-  const res = await get(`/v1/sessions/${encodeURIComponent(id)}`);
+export async function getSession(
+  id: string,
+  expectedPersonId?: string,
+): Promise<Conversation> {
+  const expected = expectedPersonId
+    ? `?expected_person_id=${encodeURIComponent(expectedPersonId)}`
+    : "";
+  const res = await get(`/v1/sessions/${encodeURIComponent(id)}${expected}`);
   if (!res.ok) throw new Error(`session ${res.status}`);
   const body = await res.json();
+  const activePerson = body.active_person as Record<string, unknown> | null | undefined;
+  if (
+    activePerson !== null &&
+    activePerson !== undefined &&
+    (typeof activePerson.person_id !== "string" ||
+      !activePerson.person_id ||
+      typeof activePerson.version !== "number" ||
+      !Number.isInteger(activePerson.version) ||
+      activePerson.version < 1 ||
+      typeof activePerson.label !== "string" ||
+      !activePerson.label)
+  ) {
+    throw new Error("session person binding malformed");
+  }
   return {
     id: body.id,
     title: body.title,
     messages: body.messages,
     events: Array.isArray(body.events) ? body.events.map(parseChatEvent) : [],
+    ...(activePerson
+      ? {
+          active_person: {
+            person_id: activePerson.person_id as string,
+            version: activePerson.version as number,
+            label: activePerson.label as string,
+          },
+        }
+      : {}),
     ...(Array.isArray(body.queue) ? { queue: body.queue } : {}),
     ...(typeof body.queue_paused === "boolean"
       ? { queue_paused: body.queue_paused }
@@ -346,6 +376,19 @@ export type PersonFile = {
     payload: Record<string, unknown>;
   }>;
   versions?: Array<{ version: number; created_at: string }>;
+  sourcing_chat: { session_id: string; person_id: string } | null;
+};
+
+export type ActivePerson = {
+  person_id: string;
+  version: number;
+  label: string;
+};
+
+export type PersonSourcingChatResult = {
+  created: boolean;
+  session: { id: string; title: string | null; n_msgs: number };
+  active_person: ActivePerson;
 };
 
 export async function getBoard(): Promise<Board> {
@@ -358,6 +401,60 @@ export async function getPerson(id: string): Promise<PersonFile> {
   const res = await get(`/v1/people/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`person ${res.status}`);
   return res.json();
+}
+
+export async function openPersonSourcingChat(
+  id: string,
+  expectedPersonVersion: number,
+): Promise<PersonSourcingChatResult> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(id)}/sourcing-chat`,
+    {
+      method: "POST",
+      headers: {
+        "X-Club-Token": apiToken(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ expected_person_version: expectedPersonVersion }),
+    },
+  );
+  const raw = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) throw new Error(`person sourcing chat ${res.status}`);
+  const session = raw.session as Record<string, unknown> | undefined;
+  const activePerson = raw.active_person as Record<string, unknown> | undefined;
+  if (
+    typeof raw.created !== "boolean" ||
+    !session ||
+    typeof session.id !== "string" ||
+    !session.id ||
+    (session.title !== null && typeof session.title !== "string") ||
+    typeof session.n_msgs !== "number" ||
+    !Number.isInteger(session.n_msgs) ||
+    session.n_msgs < 0 ||
+    !activePerson ||
+    typeof activePerson.person_id !== "string" ||
+    !activePerson.person_id ||
+    typeof activePerson.version !== "number" ||
+    !Number.isInteger(activePerson.version) ||
+    activePerson.version < 1 ||
+    typeof activePerson.label !== "string" ||
+    !activePerson.label
+  ) {
+    throw new Error("person sourcing chat payload malformed");
+  }
+  return {
+    created: raw.created,
+    session: {
+      id: session.id,
+      title: session.title as string | null,
+      n_msgs: session.n_msgs,
+    },
+    active_person: {
+      person_id: activePerson.person_id,
+      version: activePerson.version,
+      label: activePerson.label,
+    },
+  };
 }
 
 export async function setPersonSequence(

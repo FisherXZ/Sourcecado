@@ -272,6 +272,19 @@
   white-space: nowrap;
 }
 
+.sourcecado-active-person {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sourcecado-run-metrics {
   display: flex;
   flex-wrap: wrap;

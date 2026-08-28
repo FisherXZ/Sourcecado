@@ -213,19 +213,48 @@ def test_hubspot_is_not_a_source(tmp_path):
     assert store.timeline(person["person_id"]) == []
 
 
-def test_session_can_be_rebound_to_a_different_person(tmp_path):
+def test_session_binding_is_idempotent_and_cannot_be_rebound(tmp_path):
     store = PersonStore(tmp_path)
     ada = _ada(store)
     alonzo = _alonzo(store)
     store.bind_session("chat-1", ada["person_id"])
     assert store.person_for_session("chat-1") == ada["person_id"]
-    store.bind_session("chat-1", alonzo["person_id"])
-    assert store.person_for_session("chat-1") == alonzo["person_id"]
+    store.bind_session("chat-1", ada["person_id"])
+    with pytest.raises(ValueError, match="already bound"):
+        store.bind_session("chat-1", alonzo["person_id"])
+    assert store.person_for_session("chat-1") == ada["person_id"]
     assert store.person_for_session("chat-2") is None
     with pytest.raises(ValueError, match="unknown person"):
         store.bind_session("chat-1", "per_" + "0" * 32)
     restarted = PersonStore(tmp_path)
-    assert restarted.person_for_session("chat-1") == alonzo["person_id"]
+    assert restarted.person_for_session("chat-1") == ada["person_id"]
+
+
+def test_session_binding_rejects_a_stale_person_version(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+
+    with pytest.raises(ValueError, match="stale record version"):
+        store.bind_session(
+            "chat-1",
+            ada["person_id"],
+            expected_person_version=ada["version"] + 1,
+        )
+
+    assert store.person_for_session("chat-1") is None
+
+
+def test_person_has_one_durable_bound_sourcing_session(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    store.bind_session("chat-1", ada["person_id"])
+
+    with pytest.raises(ValueError, match="already has a bound sourcing session"):
+        store.bind_session("chat-2", ada["person_id"])
+
+    assert store.session_for_person(ada["person_id"]) == "chat-1"
+    restarted = PersonStore(tmp_path)
+    assert restarted.session_for_person(ada["person_id"]) == "chat-1"
 
 
 def test_handoff_four_fields_survive_get(tmp_path):
