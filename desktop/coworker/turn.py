@@ -1044,15 +1044,15 @@ async def run_turn(
                     # A request rejected for size is not a transient failure.
                     # Retrying the same view reproduces it, so compact harder
                     # and retry the same provider with a smaller one.
-                    if is_context_overflow(
-                        exc
-                    ) and await active_compactor.recover_from_overflow(
-                        canonical_messages,
-                        budget=step_budget,
-                        provider=attempt_provider,
-                    ):
-                        model_messages = active_compactor.view(canonical_messages)
-                        continue
+                    if is_context_overflow(exc):
+                        compacted = await active_compactor.recover_from_overflow(
+                            canonical_messages,
+                            budget=step_budget,
+                            provider=attempt_provider,
+                        )
+                        if compacted:
+                            model_messages = active_compactor.view(canonical_messages)
+                            continue
                     directive = await controller.recover(
                         exc,
                         partial_stream=meaningful_stream,
@@ -1125,8 +1125,8 @@ async def run_turn(
                     cost=provider_cost,
                 )
                 if provider_usage is not None:
-                    # Criterion 2: the provider's own count of the prompt it
-                    # just read, preferred over the estimate on the next step.
+                    # The provider's own count of the prompt it just read.
+                    # Preferred over the estimate when sizing the next step.
                     last_input_tokens = provider_usage.input_tokens
                 selected_provider = attempt_provider
                 break
@@ -1450,9 +1450,9 @@ async def run_turn(
         )
         return {"status": "error", "text": last_text}
     final_state = "partial" if had_tool_failure else "complete"
-    # Criterion 9: counts only. The summary text stays in the provider view, so
-    # the operator is told that older context was compacted without being shown
-    # a model's account of the session as if it were Sourcecado's own reasoning.
+    # Counts only. The summary text stays in the provider view, so the operator
+    # is told that older context was compacted without being shown a model's
+    # account of the session as if it were Sourcecado's own reasoning.
     compaction_notice = active_compactor.notice()
     await _terminal(
         {

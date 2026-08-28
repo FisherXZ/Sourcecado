@@ -102,8 +102,8 @@ class CompactionPolicy:
 
 
 class SignalSource(StrEnum):
-    """Where the context measurement came from. Criterion 2 is about this
-    distinction being visible, not about the number being exact."""
+    """Where the context measurement came from. What matters is that the
+    distinction stays visible, not that the number is exact."""
 
     #: The provider reported prompt tokens for the previous request.
     PROVIDER = "provider"
@@ -1369,7 +1369,7 @@ class SessionCompactor:
         self._persist()
         return True
 
-    # -- what the operator is told (criterion 9)
+    # -- what the operator is told
 
     def notice(self) -> dict[str, Any] | None:
         """Counts only. The summary text never leaves the provider view, so a
