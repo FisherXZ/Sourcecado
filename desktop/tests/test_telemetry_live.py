@@ -31,6 +31,7 @@ from coworker.telemetry.schema import (
     record_to_dict,
 )
 from coworker.turn import RunControl, _telemetry_provider_name, run_turn
+from coworker.tools import OPENAI_TOOLS
 
 
 class ContractProvider:
@@ -88,7 +89,7 @@ def run_with_telemetry(tmp_path, provider, *, control=None, text="find private c
             persona=None,
             skills=None,
             inbox=Inbox(store),
-            openai_tools=[],
+            openai_tools=OPENAI_TOOLS,
             execute_kwargs={},
             identity=TurnIdentity(
                 session_id="session-1",
@@ -605,7 +606,7 @@ def test_task_cancellation_settles_the_active_tool_and_agent_spans(
                 persona=None,
                 skills=None,
                 inbox=Inbox(store),
-                openai_tools=[],
+                openai_tools=OPENAI_TOOLS,
                 execute_kwargs={},
                 identity=TurnIdentity(
                     session_id="session-1",

@@ -648,6 +648,7 @@ def test_failed_tool_emits_structured_recovery_metadata_and_partial_terminal(
 
     monkeypatch.setattr("coworker.turn.execute", fake_execute)
     built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    built.state.drive = object()
     sid = built.state.store.open_session_id()
     with TestClient(built).websocket_connect(
         "/ws/chat", subprotocols=["club", TOKEN]
@@ -714,6 +715,7 @@ def test_safe_failed_step_retry_is_addressed_idempotent_and_reruns_only_failure(
 
     monkeypatch.setattr("coworker.turn.execute", flaky_execute)
     built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    built.state.drive = object()
     sid = built.state.store.open_session_id()
     with TestClient(built).websocket_connect(
         "/ws/chat", subprotocols=["club", TOKEN]
@@ -774,6 +776,7 @@ def test_unsafe_failed_step_retry_creates_fresh_approval_before_execution(
 
     monkeypatch.setattr("coworker.turn.execute", failing_execute)
     built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    built.state.gmail = FakeGmail()
     sid = built.state.store.open_session_id()
     with TestClient(built).websocket_connect(
         "/ws/chat", subprotocols=["club", TOKEN]
@@ -867,6 +870,7 @@ def test_unsafe_retry_http_allow_closes_recovery_and_replays_terminal_result(
     monkeypatch.setattr("coworker.turn.execute", retry_execute)
     monkeypatch.setattr("coworker.server.execute", retry_execute)
     built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    built.state.gmail = FakeGmail()
     client = TestClient(built)
     sid = built.state.store.open_session_id()
 
@@ -1025,6 +1029,7 @@ def test_unsafe_retry_http_deny_closes_recovery_without_executing(
     monkeypatch.setattr("coworker.turn.execute", failing_execute)
     monkeypatch.setattr("coworker.server.execute", failing_execute)
     built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    built.state.gmail = FakeGmail()
     client = TestClient(built)
     sid = built.state.store.open_session_id()
 
@@ -1267,6 +1272,7 @@ def test_repair_and_continue_without_source_are_durable_idempotent_choices(
         ),
     )
     built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    built.state.drive = object()
     sid = built.state.store.open_session_id()
     with TestClient(built).websocket_connect(
         "/ws/chat", subprotocols=["club", TOKEN]
@@ -1352,6 +1358,7 @@ def test_tool_result_normalizes_stable_source_and_artifact_provenance(
         ),
     )
     built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    built.state.drive = object()
     sid = built.state.store.open_session_id()
     with TestClient(built).websocket_connect(
         "/ws/chat", subprotocols=["club", TOKEN]

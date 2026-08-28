@@ -163,6 +163,7 @@ def test_manual_safe_retry_records_one_typed_retry_and_nested_tool_span(
 
     monkeypatch.setattr("coworker.turn.execute", flaky_execute)
     app = create_app(token=TOKEN, provider=provider, state=tmp_path)
+    app.state.drive = object()
     sid = app.state.store.open_session_id()
     with TestClient(app).websocket_connect(
         "/ws/chat", subprotocols=["club", TOKEN]
