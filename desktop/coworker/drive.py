@@ -16,7 +16,19 @@ from coworker.connectors.google_oauth import (
 )
 from coworker.gmail import GmailError
 from coworker.secrets import SecretStore
-from coworker.drive_extract import DriveExtractionError, EXTRACTABLE_MIMES, extract_drive_text
+from coworker.drive_extract import (
+    DriveExtractionError,
+    EXTRACTABLE_MIMES,
+    evidence_for_status,
+    extract_drive_text,
+)
+from coworker.evidence_envelope import (
+    EvidenceParts,
+    combine,
+    external,
+    opaque,
+)
+from coworker.run_evidence import Evidence
 
 FILES_URL = "https://www.googleapis.com/drive/v3/files"
 FORMS_URL = "https://forms.googleapis.com/v1/forms"
@@ -458,3 +470,78 @@ def drive_from_secrets(secrets: SecretStore, *, http: Any | None = None) -> Driv
         client_id=client_id,
         client_secret=client_secret,
     )
+
+
+def drive_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
+    """Adapt a Drive read, search, or folder listing into evidence envelopes.
+
+    Drive file names are author-controlled, so they belong inside the fence
+    alongside the body. The sensitivity rule is the one `drive_evidence.normalize`
+    already applies to a person file, so a Drive source reads the same way in
+    both places.
+    """
+    if not isinstance(payload, dict):
+        return opaque("drive", tool_name, payload)
+    sensitivity = "standard"
+    if payload.get("sensitive_content_redacted"):
+        sensitivity = "restricted"
+    elif payload.get("source_safety"):
+        sensitivity = "sensitive"
+    if tool_name == "drive_read":
+        file_id = str(payload.get("id") or "")
+        status = str(payload.get("status") or "metadata_only")
+        name = str(payload.get("name") or "")
+        text = str(payload.get("text") or "")
+        return external(
+            "drive",
+            identity=("file", file_id, payload.get("modifiedTime")),
+            title=name or "Drive file",
+            body="\n\n".join(part for part in (f"Name: {name}", text) if part.strip()),
+            metadata={
+                "id": file_id,
+                "mimeType": payload.get("mimeType"),
+                "status": status,
+                "reason": payload.get("reason"),
+                "sensitive_content_redacted": bool(
+                    payload.get("sensitive_content_redacted")
+                ),
+                "source_safety": payload.get("source_safety"),
+            },
+            url=payload.get("webViewLink"),
+            sensitivity=sensitivity,
+            content=evidence_for_status(status),
+            truncated=bool(payload.get("truncated")),
+            source_time=str(payload.get("modifiedTime") or "") or None,
+        )
+    if tool_name in {"drive_search", "drive_list_folder"}:
+        rows = payload.get("files")
+        rows = rows if isinstance(rows, list) else []
+        parts = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parts.append(
+                external(
+                    "drive",
+                    identity=("file", row.get("id"), row.get("modifiedTime")),
+                    title=str(row.get("name") or "Drive file"),
+                    body=f"Name: {row.get('name') or ''}",
+                    url=row.get("webViewLink"),
+                    sensitivity=sensitivity,
+                    content=Evidence.ABSENT,
+                    source_time=str(row.get("modifiedTime") or "") or None,
+                )
+            )
+        combined = combine(parts)
+        return EvidenceParts(
+            metadata={
+                "file_ids": [
+                    str(row.get("id") or "") for row in rows if isinstance(row, dict)
+                ],
+                "count": len(rows),
+                "status": payload.get("status"),
+                "nextPageToken": payload.get("nextPageToken"),
+            },
+            envelopes=combined.envelopes,
+        )
+    return opaque("drive", tool_name, payload)
