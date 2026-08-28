@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from io import BytesIO
 from xml.etree import ElementTree
+from typing import Any
 from zipfile import BadZipFile, ZipFile
+
+from coworker.run_evidence import Evidence
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -61,3 +64,20 @@ def extract_drive_text(mime_type: str, payload: bytes) -> str:
     if mime_type == PDF_MIME:
         return _pdf_text(payload)
     raise DriveExtractionError("unsupported_mime_type")
+
+
+# How Drive's own extraction outcome reads as evidence. `unsupported` is the
+# reason this map is here rather than inlined: "this build cannot read a .pages
+# file" must never render as "the document said nothing".
+_STATUS_EVIDENCE = {
+    "read": Evidence.PRESENT,
+    "truncated": Evidence.PARTIAL,
+    "metadata_only": Evidence.ABSENT,
+    "unsupported": Evidence.UNSUPPORTED,
+    "failed": Evidence.MISSING,
+}
+
+
+def evidence_for_status(status: Any) -> Evidence:
+    """Read an extraction status as one value from the run evidence vocabulary."""
+    return _STATUS_EVIDENCE.get(str(status or ""), Evidence.AMBIGUOUS)

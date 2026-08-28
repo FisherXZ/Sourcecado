@@ -7,15 +7,31 @@ from typing import Any
 
 from zoneinfo import ZoneInfo
 
-from coworker.apollo import MISSING_KEY, enrich_contact, search_people
+from coworker.apollo import (
+    MISSING_KEY,
+    apollo_evidence,
+    enrich_contact,
+    search_people,
+)
 from coworker.apollo_curation import curate_apollo_candidates
-from coworker.web import MISSING_KEY as TAVILY_MISSING, search_web
-from coworker.gmail import GmailError, MissingGmail
+from coworker.calendar import calendar_evidence
+from coworker.drive import drive_evidence
+from coworker.evidence_envelope import (
+    TRUST_BY_ORIGIN,
+    EvidenceParts,
+    opaque,
+    origin_of_ref,
+    owned,
+)
+from coworker.mcp import mcp_evidence
+from coworker.web import MISSING_KEY as TAVILY_MISSING, search_web, web_evidence
+from coworker.gmail import GmailError, MissingGmail, gmail_evidence
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
 from coworker.drive_ingestion import DRIVE_INDEX_QUERY_SCHEMA, DriveIngestionStore
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
 from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES, WORKSPACE_TOOL_SCHEMAS
+from coworker.workspace_shell import shell_evidence, workspace_file_evidence
 
 TZ = ZoneInfo("America/Los_Angeles")
 
@@ -419,6 +435,139 @@ OPENAI_TOOLS = [
 ]
 
 
+# Tools whose result Sourcecado itself wrote: the clock, the skills catalog,
+# the Board's own write receipts, and the echo of a draft the model composed.
+# Every other tool result is somebody else's text until proven otherwise, and
+# `evidence_for` proves nothing - it classifies, and unknown means external.
+SOURCECADO_OWNED = frozenset(
+    {
+        "now",
+        "load_skill",
+        "remember",
+        "memory_update",
+        "memory_forget",
+        "people_keep",
+        "gmail_draft",
+        "gmail_send",
+        "board_get",
+        "board_query",
+        "board_upsert",
+        "board_mutate",
+        "board_delete",
+        "request_directory",
+        "fs_stat",
+        "fs_list",
+        "fs_find",
+        "fs_write",
+        "fs_edit",
+        "fs_move",
+        "fs_trash",
+        "shell_kill",
+        "shell_write_stdin",
+    }
+)
+
+# The connector each tool speaks to, used when a call fails and the only text
+# available is an error string somebody else may have written.
+_FAILURE_CONNECTORS = {
+    "gmail": "gmail",
+    "drive": "drive",
+    "calendar": "calendar",
+    "apollo": "apollo",
+    "web": "web",
+    "fs": "workspace",
+    "shell": "shell",
+}
+
+_EVIDENCE_ADAPTERS = {
+    "gmail_read": gmail_evidence,
+    "gmail_search": gmail_evidence,
+    "drive_read": drive_evidence,
+    "drive_search": drive_evidence,
+    "drive_list_folder": drive_evidence,
+    "calendar_list": calendar_evidence,
+    "calendar_create": calendar_evidence,
+    "calendar_update": calendar_evidence,
+    "apollo_search_people": apollo_evidence,
+    "apollo_enrich_contact": apollo_evidence,
+    "web_search": web_evidence,
+    "shell_exec": shell_evidence,
+    "shell_poll": shell_evidence,
+    "fs_read": workspace_file_evidence,
+    "fs_search": workspace_file_evidence,
+    "drive_index_query": workspace_file_evidence,
+}
+
+
+def _failure_connector(name: str) -> str | None:
+    if name.startswith("mcp__"):
+        return "granola" if name.startswith("mcp__granola__") else "mcp"
+    return _FAILURE_CONNECTORS.get(str(name).split("_", 1)[0])
+
+
+def board_origin_conflict(name: str, args: dict[str, Any]) -> str | None:
+    """Refuse a Board write that files evidence under an origin it does not have.
+
+    Board writes are automatic, so nothing pauses to ask whether a claim came
+    from the director or from a stranger's document. The reference id answers
+    that on its own. A write may state the origin it believes, and a write may
+    say nothing; what it may not do is disagree with the id. That is the
+    durable half of the same rule `Envelope` enforces in memory: origin is
+    derived, never asserted.
+    """
+    if name != "board_upsert" or str(args.get("record_type") or "") != "source_ref":
+        return None
+    fields = args.get("fields")
+    if not isinstance(fields, dict):
+        return None
+    derived = origin_of_ref(fields.get("id"))
+    claimed_origin = str(fields.get("origin") or "").strip().lower()
+    if claimed_origin and claimed_origin != str(derived):
+        return (
+            f"source reference {str(fields.get('id') or '')!r} is {derived} "
+            f"evidence and cannot be filed as {claimed_origin}"
+        )
+    claimed_trust = str(fields.get("trust") or "").strip().lower()
+    if claimed_trust and claimed_trust != str(TRUST_BY_ORIGIN[derived]):
+        return (
+            f"source reference {str(fields.get('id') or '')!r} is "
+            f"{TRUST_BY_ORIGIN[derived]} and cannot be filed as {claimed_trust}"
+        )
+    return None
+
+
+def evidence_for(name: str, payload: Any, *, ok: bool = True) -> EvidenceParts:
+    """Classify one tool result before anything downstream reads it.
+
+    This is the tool boundary's half of the contract: every connector result
+    leaves here already carrying an origin, a trust class, and a stable
+    source reference. `turn.py` owns the other half, which is delimiting.
+    """
+    if not isinstance(payload, dict):
+        return opaque("unknown", str(name), payload)
+    if name in SOURCECADO_OWNED:
+        # Sourcecado composed this call and the result is its receipt. A
+        # failure here is a short status the runtime shapes for the operator,
+        # not a document. The known gap is a connector error string on one of
+        # these tools: Gmail wrote it, and it renders unfenced.
+        return owned(payload)
+    if not ok:
+        connector = _failure_connector(str(name))
+        if connector is None:
+            return owned(payload)
+        # A connector's own failure message is written by the connector.
+        # Sourcecado cannot tell one apart from a server that answers an
+        # error with an instruction, so it does not try.
+        return opaque(connector, str(name), payload)
+    adapter = _EVIDENCE_ADAPTERS.get(str(name))
+    if adapter is not None:
+        return adapter(str(name), payload)
+    if str(name).startswith("mcp__"):
+        return mcp_evidence(str(name), payload)
+    # A tool this build does not model. Fence the whole thing.
+    return opaque("unknown", str(name), payload)
+
+
 def now() -> dict[str, str]:
     dt = datetime.now(TZ)
     return {
@@ -476,6 +625,9 @@ def execute(
     if name in BOARD_TOOL_NAMES:
         if people is None:
             return False, {"status": "failed", "error": "people store missing"}
+        conflict = board_origin_conflict(name, args)
+        if conflict is not None:
+            return False, {"status": "failed", "error": conflict}
         return execute_board_tool(
             name,
             args,
