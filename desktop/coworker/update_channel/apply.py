@@ -683,9 +683,27 @@ def _install(
         healthy = False
         failure = f" ({exc})"
     if not healthy:
-        restore_bundle(installation)
+        previous_restored = restore_bundle(installation)
+        if not previous_restored:
+            _clear(installation.bundle_path)
         restored = _restore_state(state_root, backup_id)
         _clear(installation.staging_root)
+        if not previous_restored:
+            return _outcome(
+                UpdateStatus.FAILED,
+                UpdateStage.HEALTH,
+                "health_check_failed",
+                installation,
+                guidance=(
+                    f"Version {bound.version} did not start correctly, and there "
+                    "was no previous version to put back. Sourcecado is not "
+                    "installed. Download it again and try a different build."
+                    f"{_detail(failure, installation) if failure else ''}"
+                ),
+                to_version=bound.version,
+                backup_id=backup_id,
+                restored=restored,
+            )
         return _outcome(
             UpdateStatus.ROLLED_BACK,
             UpdateStage.HEALTH,

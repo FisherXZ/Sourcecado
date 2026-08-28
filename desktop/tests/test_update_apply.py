@@ -356,6 +356,41 @@ def test_a_failed_health_check_restores_the_previous_bundle(tmp_path):
     assert "0.0.1" in outcome.guidance
 
 
+def test_a_failed_health_check_on_a_clean_install_does_not_claim_a_rollback(
+    tmp_path,
+):
+    """Last usable version on a machine with no app is nothing installed.
+
+    Issue #77 criterion 6: a failed launch keeps or restores that last usable
+    version and says so. There is no previous bundle to put back, so the
+    outcome is FAILED rather than a rollback that did not happen.
+    """
+    seed, public = fx.keypair()
+    artifact = fx.artifact(tmp_path, version="0.0.2")
+    install = fx.installation(tmp_path, version="0.0.0")
+    assert not install.bundle_path.exists()
+
+    outcome = _apply(
+        fx.document(artifact, seed, minimum_upgradable_version="0.0.0"),
+        install,
+        artifact,
+        public,
+        health_check=_unhealthy,
+    )
+
+    assert outcome.stage is UpdateStage.HEALTH
+    assert outcome.status is UpdateStatus.FAILED
+    assert fx.bundle_version(install.bundle_path) is None
+    assert not install.bundle_path.exists()
+    assert not install.previous_path.exists()
+    assert "0.0.2" in outcome.guidance
+    assert "0.0.0" not in outcome.guidance
+    assert "put version" not in outcome.guidance
+    reverted = rollback(install)
+    assert reverted.status is UpdateStatus.REFUSED
+    assert reverted.reason == "no_previous_version"
+
+
 def test_a_health_check_that_raises_is_a_failed_health_check(tmp_path):
     seed, public, artifact, install = _prepare(tmp_path)
 

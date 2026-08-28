@@ -219,7 +219,8 @@ in plain words.
 | Backup cannot be written | `refused`. Nothing touched. |
 | Migration fails | `rolled_back`. State restored from the backup, old bundle never moved. |
 | Bundle cannot be swapped | `rolled_back`. Both restored. |
-| New version does not start | `rolled_back`. Both restored. |
+| New version does not start, previous version exists | `rolled_back`. Both restored. |
+| New version does not start, nothing was installed | `failed`. Failed bundle removed. There is no previous version to put back. |
 
 The launch check runs the sidecar inside the newly installed application on
 loopback with its own token and a **throwaway** state directory, and waits for
