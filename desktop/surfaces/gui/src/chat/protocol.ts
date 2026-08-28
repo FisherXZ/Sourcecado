@@ -164,6 +164,11 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly type: "error";
         readonly message: string;
         readonly state: "failed";
+        /**
+         * What kind of failure it was, so the interface can say whether
+         * retrying is worth it. Optional: an older sidecar omits it.
+         */
+        readonly error_kind?: string;
       }
     /**
      * A consequential call was dispatched and never reported back.

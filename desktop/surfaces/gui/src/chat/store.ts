@@ -306,7 +306,12 @@ export class SourcecadoChatStore {
     );
   }
 
-  private addNotice(threadId: string, code: string, message: string): void {
+  private addNotice(
+    threadId: string,
+    code: string,
+    message: string,
+    recoverable = true,
+  ): void {
     const messageId = `${threadId}:notice:${++this.noticeNumber}`;
     this.threads.set(threadId, [
       ...this.messagesFor(threadId),
@@ -320,7 +325,7 @@ export class SourcecadoChatStore {
             id: `${messageId}:part`,
             code,
             message,
-            recoverable: true,
+            recoverable,
           },
         ],
       },
@@ -525,6 +530,20 @@ export class SourcecadoChatStore {
         // would undo the whole point of the sidecar sending it.
         state: event.state === "held" ? "held" : "failed",
       });
+      if (event.state !== "held") {
+        // The sidecar already sends operator-safe text explaining the
+        // failure. Dropping it left a dead turn indistinguishable from a
+        // slow one (#136). `held` is excluded: it has its own surface and
+        // is not a failure.
+        this.addNotice(
+          event.session_id,
+          typeof event.error_kind === "string" && event.error_kind
+            ? event.error_kind
+            : "error",
+          event.message,
+          false,
+        );
+      }
     }
   }
 
