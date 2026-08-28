@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from coworker.evidence_envelope import EvidenceParts, opaque
 from coworker.secrets import SecretStore
 
 # Declared data version for mcp.json, read by coworker.migrations.
@@ -192,3 +193,15 @@ class LiveMcp:
                     await session.initialize()
                     out = await session.call_tool(tool, arguments)
                     return {"ok": True, **tool_result_payload(out)}
+
+
+def mcp_evidence(tool_name: str, payload: Any) -> EvidenceParts:
+    """Adapt any MCP tool result into one envelope.
+
+    MCP server shapes are declared by the server, not by Sourcecado, so there
+    is nothing here to allowlist. The whole payload goes inside the fence and
+    only the tool name stays outside. A Granola note that renames itself
+    `sourcecado` or claims a director origin is text in the body either way.
+    """
+    connector = "granola" if str(tool_name).startswith("mcp__granola__") else "mcp"
+    return opaque(connector, str(tool_name), payload)

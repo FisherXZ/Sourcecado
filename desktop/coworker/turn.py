@@ -11,6 +11,12 @@ from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
 from coworker.events import TurnEventStream, TurnIdentity, build_event, new_turn_identity
+from coworker.evidence_envelope import (
+    ContextAuthority,
+    EvidenceParts,
+    director_directive,
+    model_payload,
+)
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
 from coworker.permissions import RETRY_SAFE, decide
@@ -46,7 +52,7 @@ from coworker.telemetry import (
     ToolSpan,
     UsageEvent,
 )
-from coworker.tools import execute
+from coworker.tools import evidence_for, execute
 
 MAX_STEPS = 8
 INTERRUPTED_TOOL = '{"error": "tool call interrupted"}'
@@ -383,8 +389,13 @@ def _tool_finished_event(
     ok: bool,
     result: dict[str, Any],
     identity: TurnIdentity,
+    parts: EvidenceParts | None = None,
 ) -> dict[str, Any]:
     sources, artifacts = _tool_provenance(call, result)
+    # `EvidenceParts.references` is an allowlist projection with no field for
+    # a body, so a receipt, a log line, and the window can all say where a
+    # claim came from without reproducing what it said.
+    evidence = parts.references() if parts is not None else []
     return {
         "type": "tool_finished",
         "id": call.id,
@@ -395,6 +406,7 @@ def _tool_finished_event(
         **({"failure": _tool_failure(call, result, identity)} if not ok else {}),
         **({"sources": sources} if sources else {}),
         **({"artifacts": artifacts} if artifacts else {}),
+        **({"evidence": evidence} if evidence else {}),
     }
 
 
@@ -571,11 +583,32 @@ def _assistant_tool_message(text: str, calls: list[ToolCall]) -> dict[str, Any]:
 
 
 def _tool_result_message(call: ToolCall, payload: dict[str, Any]) -> dict[str, Any]:
+    """A result Sourcecado itself wrote: a gate refusal, a denied approval.
+
+    These never carry a connector's text, so they go to the model as they
+    are. Anything a connector produced goes through `_evidence_message`.
+    """
     return {
         "role": "tool",
         "name": call.name,
         "tool_call_id": call.id,
         "content": json.dumps(payload),
+    }
+
+
+def _evidence_message(call: ToolCall, parts: EvidenceParts) -> dict[str, Any]:
+    """The one place external text becomes model context.
+
+    `model_payload` keeps Sourcecado's own metadata structured and puts
+    everything somebody else wrote inside a fence, under a policy line
+    stating what it may not do. A tool result with no external content
+    renders exactly as it did before this boundary existed.
+    """
+    return {
+        "role": "tool",
+        "name": call.name,
+        "tool_call_id": call.id,
+        "content": json.dumps(model_payload(parts)),
     }
 
 
@@ -651,6 +684,15 @@ async def run_turn(
         for schema in openai_tools
         if isinstance(schema, dict)
     }
+    # One turn, one ledger of who put what into context. The director channel
+    # mints a directive; connectors mint envelopes. Nothing converts one into
+    # the other, so identical text arriving on the two channels never carries
+    # the same authority. The ledger is per turn: evidence read now cannot
+    # justify an effect later.
+    authority = ContextAuthority()
+    authority.admit_directive(
+        director_directive(text, session_id=sid, turn=events.identity.run_id)
+    )
     turn_span = recorder.start_span(
         AgentTurnSpan(operation="agent.turn"), trace_context
     )
@@ -669,6 +711,25 @@ async def run_turn(
             workspace_runtime.sanitize_message(message)
             if workspace_runtime is not None
             else message,
+        )
+
+    def _persist_tool_result(
+        call: ToolCall, result: dict[str, Any], ok: bool, message: dict[str, Any]
+    ) -> None:
+        """Persist a tool result with the workspace runtime's own redaction.
+
+        `sanitize_message` strips a workspace body from the field it used to
+        live in. Fencing moves that body into the evidence block, so the
+        redaction has to happen before the block is built, not after. The
+        model still sees the full text this turn; the disk still does not.
+        """
+        runtime = execute_kwargs.get("workspace_runtime")
+        if runtime is None or not runtime.owns_tool(call.name):
+            _persist_message(message)
+            return
+        redacted = runtime.sanitize_result(call.name, result)
+        _persist_message(
+            _stamp(_evidence_message(call, evidence_for(call.name, redacted, ok=ok)))
         )
 
     async def _terminal(event: dict[str, Any]) -> None:
@@ -1070,6 +1131,17 @@ async def run_turn(
                         execute_kwargs.get("gmail"),
                         execute_kwargs.get("workspace_runtime"),
                     )
+                    # What the operator is about to approve may have been
+                    # copied out of something a stranger wrote. Say so on the
+                    # request, by reference and never by body, and refuse to
+                    # let that request become standing authority.
+                    derived_refs = authority.derived_from_evidence(call.arguments)
+                    if derived_refs:
+                        resource = {
+                            **(resource or {}),
+                            "evidence_origin": "external",
+                            "evidence_refs": list(derived_refs),
+                        }
                     persisted_arguments = call.arguments
                     if workspace_runtime is not None and workspace_runtime.owns_tool(
                         call.name
@@ -1100,7 +1172,9 @@ async def run_turn(
                             "arguments": call.arguments,
                             "reason": gate.reason,
                             "requested_at": parked["requested_at"],
-                            "scope": parked["scope"],
+                            "scope": authority.clamp_scope(
+                                parked["scope"], call.arguments
+                            )[0],
                             **({"resource": resource} if resource else {}),
                         }
                     )
@@ -1143,7 +1217,9 @@ async def run_turn(
                         _persist_message(failed)
                         _record_person_file(sid, call, False, result, execute_kwargs)
                         continue
-                    approval_scope = str(claim.item.get("scope") or "once")
+                    approval_scope = authority.clamp_scope(
+                        str(claim.item.get("scope") or "once"), call.arguments
+                    )[0]
                     approval_resource_payload = claim.item.get("resource")
                     if isinstance(approval_resource_payload, dict):
                         raw_fingerprint = approval_resource_payload.get("fingerprint")
@@ -1178,17 +1254,21 @@ async def run_turn(
                         else:
                             ok, result = inbox.execution_outcome(receipt)
                         had_tool_failure = had_tool_failure or not ok
+                        parts = authority.admit(
+                            evidence_for(call.name, result, ok=ok)
+                        )
                         await _emit(
                             _tool_finished_event(
                                 call,
                                 ok=ok,
                                 result=result,
                                 identity=events.identity,
+                                parts=parts,
                             )
                         )
-                        tool_result = _stamp(_tool_result_message(call, result))
+                        tool_result = _stamp(_evidence_message(call, parts))
                         history.append(tool_result)
-                        _persist_message(tool_result)
+                        _persist_tool_result(call, result, ok, tool_result)
                         _record_person_file(sid, call, ok, result, execute_kwargs)
                         if receipt is not None and receipt.get(
                             "execution_status"
@@ -1245,17 +1325,19 @@ async def run_turn(
                         ),
                     }
                 had_tool_failure = had_tool_failure or not ok
+                parts = authority.admit(evidence_for(call.name, result, ok=ok))
                 await _emit(
                     _tool_finished_event(
                         call,
                         ok=ok,
                         result=result,
                         identity=events.identity,
+                        parts=parts,
                     )
                 )
-                tool_result = _stamp(_tool_result_message(call, result))
+                tool_result = _stamp(_evidence_message(call, parts))
                 history.append(tool_result)
-                _persist_message(tool_result)
+                _persist_tool_result(call, result, ok, tool_result)
                 _record_person_file(sid, call, ok, result, execute_kwargs)
                 if approval_claimant is not None:
                     receipt = inbox.complete_execution(
