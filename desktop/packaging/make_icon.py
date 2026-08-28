@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +17,35 @@ SOURCE = ROOT / "brand" / "app-icon.png"
 GUI = ROOT / "desktop" / "surfaces" / "gui"
 ICONS = GUI / "src-tauri" / "icons"
 FAVICON = GUI / "public" / "favicon.png"
+TAURI_ICON_ARGS = ["npx", "tauri", "icon", "src-tauri/icons/icon-source.png"]
+
+
+def tauri_icon_command(
+    *,
+    gui: Path = GUI,
+    node_arch: str | None = None,
+    platform_name: str = sys.platform,
+) -> list[str]:
+    """Use the architecture of the Tauri binding npm installed on macOS."""
+    if platform_name != "darwin":
+        return TAURI_ICON_ARGS.copy()
+    if node_arch is None:
+        node_arch = subprocess.run(
+            ["node", "-p", "process.arch"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    installed = {
+        arch
+        for arch in ("arm64", "x64")
+        if (gui / "node_modules" / "@tauri-apps" / f"cli-darwin-{arch}").is_dir()
+    }
+    if node_arch in installed or len(installed) != 1:
+        return TAURI_ICON_ARGS.copy()
+    target = installed.pop()
+    arch_flag = "-x86_64" if target == "x64" else f"-{target}"
+    return ["/usr/bin/arch", arch_flag, *TAURI_ICON_ARGS]
 
 
 def main() -> None:
@@ -24,7 +54,7 @@ def main() -> None:
     ICONS.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(SOURCE, ICONS / "icon-source.png")
     subprocess.run(
-        ["npx", "tauri", "icon", "src-tauri/icons/icon-source.png"],
+        tauri_icon_command(),
         cwd=GUI,
         check=True,
     )

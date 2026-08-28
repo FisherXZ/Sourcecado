@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { styles } from "./cssBundle";
 
 describe("Warm Operator thread styles", () => {
+  it("keeps first-run copy readable on the active theme surface", () => {
+    const baseWelcome = styles.match(
+      /\.route-page\.welcome-page\s*\{[^}]*\}\s*\.welcome-copy\s*\{([^}]*)\}/,
+    );
+
+    expect(baseWelcome?.[1]).toMatch(/background:\s*var\(--surface\);/);
+    expect(styles).not.toContain("rgb(254 253 251 / 0.92)");
+  });
+
   it("keeps the thread and Markdown content inside the available width", () => {
     expect(styles).toMatch(
       /\.sourcecado-thread\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;/,

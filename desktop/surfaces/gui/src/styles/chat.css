@@ -22,6 +22,10 @@
 
 .welcome-copy {
   max-width: 28rem;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
 }
 
 .welcome-copy > p:not(.eyebrow) {
@@ -772,12 +776,6 @@
     background-position: 72% center;
   }
 
-  .welcome-copy {
-    padding: 16px 18px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: rgb(254 253 251 / 0.92);
-  }
 }
 
 @media (max-height: 520px) {
