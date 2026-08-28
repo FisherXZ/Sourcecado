@@ -216,6 +216,10 @@ class ConversationStore:
             "artifacts": "TEXT",
             "session_id": "TEXT",
             "waiting_approval_count": "INTEGER DEFAULT 0",
+            # Count of events already in the reused sched-{job_id} file
+            # when this run started. The restart reconciler must ignore
+            # those; they belong to earlier attempts.
+            "event_offset": "INTEGER NOT NULL DEFAULT 0",
         }
         for column, definition in run_migrations.items():
             try:
@@ -377,21 +381,25 @@ class ConversationStore:
     def _reconcile_orphaned_runs(self) -> None:
         """Close runs the prior process left mid-flight without inventing an outcome.
 
-        A crash can land between the scheduled transcript's terminal event
-        and the matching runs-table update, so the outcome isn't always
-        unknown: check the transcript first and only fall back to
-        'interrupted' when it has nothing to say.
+        A crash can land between this attempt's terminal event and the
+        matching runs-table update. Trust only events written after this
+        run started: sched-{job_id} files are reused, so last week's
+        terminal event is still in the file.
         """
         now = datetime.now(UTC).isoformat()
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 running = self._conn.execute(
-                    "SELECT id, session_id FROM runs WHERE status = 'running'"
+                    """
+                    SELECT id, session_id, event_offset
+                    FROM runs WHERE status = 'running'
+                    """
                 ).fetchall()
                 for row in running:
                     status, result, summary = self._terminal_transcript_outcome(
-                        str(row["session_id"])
+                        str(row["session_id"]),
+                        int(row["event_offset"] or 0),
                     )
                     self._conn.execute(
                         """
@@ -421,9 +429,11 @@ class ConversationStore:
         "stopped": "partial",
     }
 
-    def _terminal_transcript_outcome(self, session_id: str) -> tuple[str, str, str]:
-        """Derive (status, result, summary) from a session's last event, if terminal."""
-        events = self.load_events(session_id)
+    def _terminal_transcript_outcome(
+        self, session_id: str, event_offset: int = 0
+    ) -> tuple[str, str, str]:
+        """Derive (status, result, summary) from this attempt's last event, if terminal."""
+        events = self.load_events(session_id)[max(0, event_offset) :]
         last = events[-1] if events else None
         if last is not None and last.get("type") == "error":
             message = str(last.get("message") or _INTERRUPTED_RUN_SUMMARY)
@@ -718,15 +728,16 @@ class ConversationStore:
         self, job_id: int, *, session_id: str, started_at: str
     ) -> dict[str, Any]:
         with self._lock:
+            event_offset = len(self.load_events(session_id))
             cursor = self._conn.execute(
                 """
                 INSERT INTO runs
                     (job_id, status, result, started_at, finished_at,
                      duration_ms, summary, artifacts, session_id,
-                     waiting_approval_count)
-                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0)
+                     waiting_approval_count, event_offset)
+                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0, ?)
                 """,
-                (job_id, started_at, session_id),
+                (job_id, started_at, session_id, event_offset),
             )
             self._conn.commit()
             row = self._conn.execute(
@@ -1602,6 +1613,7 @@ def _inbox_row(row: sqlite3.Row) -> dict[str, Any]:
 
 def _run_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
+    item.pop("event_offset", None)
     raw = item.get("artifacts") or "[]"
     try:
         parsed = json.loads(raw)
