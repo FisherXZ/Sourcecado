@@ -589,6 +589,16 @@ def _count_drive_ingestion_db(context: MigrationContext) -> int:
     return _sqlite_adoption_count(context, _DRIVE_INGESTION_ADDED_COLUMNS, {})
 
 
+def _count_meeting_evidence_db(context: MigrationContext) -> int:
+    conn = context.connection
+    assert conn is not None
+    return _row_count(conn, "meeting_evidence") + _row_count(conn, "meeting_candidates")
+
+
+def _adopt_meeting_evidence_db(context: MigrationContext) -> int:
+    return _count_meeting_evidence_db(context)
+
+
 def _count_json_records(context: MigrationContext) -> int:
     spec = context.spec
     if spec.container_key is None:
@@ -712,6 +722,23 @@ REGISTRY: tuple[StoreSpec, ...] = (
             ("drive_ingestion_proposals", "fields_json"),
             ("drive_ingestion_proposals", "diff_json"),
             ("drive_ingestion_proposals", "source_refs_json"),
+        ),
+    ),
+    StoreSpec(
+        store_id="meeting_evidence",
+        kind=StoreKind.SQLITE,
+        relative_path="meeting_evidence.db",
+        current_version=1,
+        version_channel=VersionChannel.SQLITE_USER_VERSION,
+        description="Calendar and Granola meeting evidence attached to person files.",
+        migrations=_adopt(
+            "Adopt the meeting evidence schema shipped before the registry existed.",
+            _count_meeting_evidence_db,
+            _adopt_meeting_evidence_db,
+        ),
+        json_columns=(
+            ("meeting_evidence", "participants_json"),
+            ("meeting_evidence", "source_ref_json"),
         ),
     ),
     StoreSpec(

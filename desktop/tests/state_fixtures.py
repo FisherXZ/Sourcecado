@@ -227,6 +227,7 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
         f"APOLLO_API_KEY={PLANTED_API_KEY}\n" if plant_secrets else "CLUB_PERSONA=sourcing\n",
     )
     _write_drive_ingestion_db(root, CURRENT_DRIVE_INGESTION_DDL)
+    _write_meeting_evidence_db(root)
 
     if plant_secrets:
         store.append(
@@ -468,6 +469,35 @@ CURRENT_DRIVE_INGESTION_DDL = """
     );
 """
 
+# MeetingEvidenceStore as it shipped on main. user_version stays 0 until adopted.
+MEETING_EVIDENCE_DDL = """
+    CREATE TABLE meeting_evidence (
+        evidence_id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        starts_at TEXT,
+        ends_at TEXT,
+        participants_json TEXT NOT NULL,
+        source_ref_json TEXT NOT NULL,
+        notes TEXT,
+        status TEXT NOT NULL,
+        person_id TEXT,
+        match_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(provider, provider_id)
+    );
+    CREATE TABLE meeting_candidates (
+        evidence_id TEXT NOT NULL,
+        person_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        match_reason TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(evidence_id, person_id)
+    );
+"""
+
 
 def build_legacy_state(root: Path, *, plant_secrets: bool = False) -> Path:
     """Write the pre-registry state directory, populated the way an install is."""
@@ -583,6 +613,7 @@ def build_legacy_state(root: Path, *, plant_secrets: bool = False) -> Path:
     conn.close()
     os.chmod(root / "people.db", 0o600)
     _write_drive_ingestion_db(root, LEGACY_DRIVE_INGESTION_DDL)
+    _write_meeting_evidence_db(root)
 
     conv_dir = root / "conversations"
     conv_dir.mkdir(exist_ok=True)
@@ -713,6 +744,46 @@ def _write_drive_ingestion_db(root: Path, ddl: str) -> None:
                 1,
                 "2026-08-01T09:00:00+00:00",
                 "2026-08-01T09:00:00+00:00",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    os.chmod(path, 0o600)
+
+
+def _write_meeting_evidence_db(root: Path) -> None:
+    path = root / "meeting_evidence.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(MEETING_EVIDENCE_DDL)
+        conn.execute(
+            """
+            INSERT INTO meeting_evidence (
+                evidence_id, provider, provider_id, title, starts_at, ends_at,
+                participants_json, source_ref_json, notes, status, person_id,
+                match_reason, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unmatched', NULL, NULL, ?, ?)
+            """,
+            (
+                "meeting_abc123abc123abc123abcd",
+                "calendar",
+                "evt_1",
+                "Rippling intro",
+                "2026-08-20T16:00:00+00:00",
+                "2026-08-20T16:30:00+00:00",
+                json.dumps([{"name": "Dana Ruiz", "email": "dana@example.com"}]),
+                json.dumps(
+                    {
+                        "id": "calendar:evt_1",
+                        "title": "Rippling intro",
+                        "url": None,
+                        "provider": "Google Calendar",
+                    }
+                ),
+                None,
+                "2026-08-20T16:00:00+00:00",
+                "2026-08-20T16:00:00+00:00",
             ),
         )
         conn.commit()
