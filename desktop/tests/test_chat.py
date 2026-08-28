@@ -558,7 +558,10 @@ def test_ws_persists_a_failed_terminal_event_with_the_turn_identity(tmp_path):
     assert built.state.store.load_events(sid) == events
 
 
-def test_ws_persists_a_stopped_terminal_event_at_the_step_limit(tmp_path):
+def test_ws_persists_a_stopped_terminal_event_when_a_run_repeats_itself(tmp_path):
+    """These eight identical calls used to hit the fixed step ceiling. They now
+    trip the loop detector, which reports the run as stuck rather than as
+    having reached an arbitrary limit."""
     fake = FakeProvider(
         steps=[
             {
@@ -580,7 +583,9 @@ def test_ws_persists_a_stopped_terminal_event_at_the_step_limit(tmp_path):
     stopped = events[-1]
     assert stopped["type"] == "turn_end"
     assert stopped["state"] == "stopped"
-    assert "8 tool steps" in stopped["message"]
+    assert "returned nothing new" in stopped["message"]
+    assert stopped["run_budget"]["stopped_by"] == "loop"
+    assert stopped["run_budget"]["continue_available"] is True
     assert stopped["run_id"] == events[0]["run_id"]
     assert built.state.store.load_events(sid) == events
 

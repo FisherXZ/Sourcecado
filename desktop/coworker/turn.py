@@ -44,6 +44,7 @@ from coworker.provider_retry import (
     compatible_failover_chain,
     safe_provider_failure_message,
 )
+from coworker.run_budget import BudgetStop, RunBudgetMeter, RunBudgetPolicy
 from coworker.store import ConversationStore
 from coworker.telemetry import (
     AgentTurnSpan,
@@ -60,7 +61,6 @@ from coworker.telemetry import (
 )
 from coworker.tools import evidence_for, execute
 
-MAX_STEPS = 8
 INTERRUPTED_TOOL = '{"error": "tool call interrupted"}'
 
 
@@ -669,6 +669,7 @@ async def run_turn(
     retry_sleep: Callable[[float], Awaitable[None]] | None = None,
     retry_random: Callable[[], float] = random.random,
     compactor: SessionCompactor | None = None,
+    run_budget_policy: RunBudgetPolicy | None = None,
     context_projection: Any = None,
     projection_identity: Any = None,
 ) -> dict[str, Any]:
@@ -684,6 +685,9 @@ async def run_turn(
     if control is not None:
         await control.attach(events)
     recorder = telemetry or TelemetryRecorder()
+    # One meter per run. Nothing carries over from a previous run, and
+    # nothing it measures reaches a permission decision.
+    budget = RunBudgetMeter(run_budget_policy)
     trace_context = TraceContext(
         session_id=events.identity.session_id,
         run_id=events.identity.run_id,
@@ -740,6 +744,25 @@ async def run_turn(
         _persist_message(
             _stamp(_evidence_message(call, evidence_for(call.name, redacted, ok=ok)))
         )
+
+    def _record_call_outcome(
+        call: ToolCall, ok: bool, result: dict[str, Any]
+    ) -> None:
+        """One place every finished call is written down.
+
+        The person file gets the record it always got; the meter gets the
+        reading the loop detector needs. A call that returns what an earlier
+        identical call already returned is not progress, and a refusal counts
+        the same as a result: asking for a denied tool ten times is a loop.
+        """
+        budget.record_tool_outcome(
+            call_id=call.id,
+            name=call.name,
+            arguments=call.arguments,
+            result=result,
+            ok=ok,
+        )
+        _record_person_file(sid, call, ok, result, execute_kwargs)
 
     async def _terminal(event: dict[str, Any]) -> None:
         if control is None:
@@ -903,7 +926,16 @@ async def run_turn(
                 for message in history
             ]
         )
-        for _ in range(MAX_STEPS):
+        budget_stop: BudgetStop | None = None
+        pending_calls: tuple[tuple[str, str], ...] = ()
+        while True:
+            # The stop decision, before any spend. `check` puts the loop
+            # detector ahead of the absolute budgets on purpose: a run that
+            # is repeating itself is reported as stuck, not as expensive.
+            budget_stop = budget.check()
+            if budget_stop is not None:
+                break
+            budget.start_model_turn()
             _persist_closed(store, sid, history, workspace_runtime)
             # The canonical view. Compaction reads it and never writes it; the
             # transcript on disk stays the record of what actually happened.
@@ -1124,6 +1156,9 @@ async def run_turn(
                     usage=provider_usage,
                     cost=provider_cost,
                 )
+                # The same typed values the provider span just recorded, so
+                # the budget is measured from telemetry rather than re-derived.
+                budget.record_request(provider_usage, provider_cost)
                 if provider_usage is not None:
                     # The provider's own count of the prompt it just read.
                     # Preferred over the estimate when sizing the next step.
@@ -1142,7 +1177,15 @@ async def run_turn(
             tool_msg = _stamp(_assistant_tool_message(last_text, calls))
             history.append(tool_msg)
             _persist_message(tool_msg)
-            for call in calls:
+            for index, call in enumerate(calls):
+                if index:
+                    budget_stop = budget.check()
+                    if budget_stop is not None:
+                        pending_calls = tuple(
+                            (pending.id, pending.name) for pending in calls[index:]
+                        )
+                        break
+                budget.charge_tool_call()
                 approval_claimant: str | None = None
                 approval_scope = "once"
                 approval_fingerprint: str | None = None
@@ -1162,7 +1205,7 @@ async def run_turn(
                     unavailable = _stamp(_tool_result_message(call, result))
                     history.append(unavailable)
                     _persist_message(unavailable)
-                    _record_person_file(sid, call, False, result, execute_kwargs)
+                    _record_call_outcome(call, False, result)
                     continue
                 workspace_runtime = execute_kwargs.get("workspace_runtime")
                 if workspace_runtime is not None and workspace_runtime.owns_tool(
@@ -1193,7 +1236,7 @@ async def run_turn(
                     denied = _stamp(_tool_result_message(call, result))
                     history.append(denied)
                     _persist_message(denied)
-                    _record_person_file(sid, call, False, result, execute_kwargs)
+                    _record_call_outcome(call, False, result)
                     continue
                 if gate.needs_user:
                     resource = approval_resource(
@@ -1286,7 +1329,7 @@ async def run_turn(
                         failed = _stamp(_tool_result_message(call, result))
                         history.append(failed)
                         _persist_message(failed)
-                        _record_person_file(sid, call, False, result, execute_kwargs)
+                        _record_call_outcome(call, False, result)
                         continue
                     approval_scope = authority.clamp_scope(
                         str(claim.item.get("scope") or "once"), call.arguments
@@ -1311,7 +1354,7 @@ async def run_turn(
                         denied = _stamp(_tool_result_message(call, result))
                         history.append(denied)
                         _persist_message(denied)
-                        _record_person_file(sid, call, False, result, execute_kwargs)
+                        _record_call_outcome(call, False, result)
                         if receipt is not None:
                             await _approval_receipt(receipt, resolution="denied")
                         continue
@@ -1340,7 +1383,7 @@ async def run_turn(
                         tool_result = _stamp(_evidence_message(call, parts))
                         history.append(tool_result)
                         _persist_tool_result(call, result, ok, tool_result)
-                        _record_person_file(sid, call, ok, result, execute_kwargs)
+                        _record_call_outcome(call, ok, result)
                         if receipt is not None and receipt.get(
                             "execution_status"
                         ) not in ("executing", "pending"):
@@ -1355,6 +1398,9 @@ async def run_turn(
                         "name": call.name,
                         "arguments": call.arguments,
                         "started_at": _now_iso(),
+                        # Counts only, and the one warning per budget that
+                        # says the run is approaching a stop.
+                        "run_budget": budget.live_payload(),
                     }
                 )
                 tool_span = turn_span.child(_telemetry_tool_span(call.name))
@@ -1409,7 +1455,7 @@ async def run_turn(
                 tool_result = _stamp(_evidence_message(call, parts))
                 history.append(tool_result)
                 _persist_tool_result(call, result, ok, tool_result)
-                _record_person_file(sid, call, ok, result, execute_kwargs)
+                _record_call_outcome(call, ok, result)
                 if approval_claimant is not None:
                     receipt = inbox.complete_execution(
                         call.id,
@@ -1424,14 +1470,25 @@ async def run_turn(
                     if control.cancel_requested.is_set():
                         return await _stopped(history, last_text)
                     control.current_action = None
-        else:
-            turn_span.cancel()
+        if budget_stop is not None:
+            # A run that ran out of budget did not finish. It says so, lists
+            # what it actually completed, names what it had queued and did
+            # not run, and leaves continuing to the director.
+            _persist_closed(store, sid, history, workspace_runtime)
+            turn_span.partial(ErrorKind.POLICY)
+            stop_notice = active_compactor.notice()
             await _terminal(
                 {
                     "type": "turn_end",
                     "state": "stopped",
                     "text": last_text,
-                    "message": f"Stopped after {MAX_STEPS} tool steps.",
+                    "message": budget_stop.message(),
+                    "run_budget": budget.terminal_payload(
+                        stop=budget_stop,
+                        pending_calls=pending_calls,
+                        final_answer=False,
+                    ),
+                    **({"compaction": stop_notice} if stop_notice else {}),
                 }
             )
             return {"status": "stopped", "text": last_text}
@@ -1459,6 +1516,7 @@ async def run_turn(
             "type": "turn_end",
             "text": last_text,
             "state": final_state,
+            "run_budget": budget.terminal_payload(stop=None, final_answer=True),
             **({"compaction": compaction_notice} if compaction_notice else {}),
         }
     )
