@@ -11,6 +11,8 @@ from coworker.apollo import (
     MISSING_KEY,
     apollo_evidence,
     enrich_contact,
+    enrichment_match,
+    masked_name,
     search_people,
 )
 from coworker.apollo_curation import curate_apollo_candidates
@@ -821,15 +823,29 @@ def execute(
                 person_id = people.person_for_session(session_id)
             if not person_id:
                 return False, {"error": "Bind a person before enriching."}
-            if people is not None and people.get(person_id) is None:
+            person = people.get(person_id) if people is not None else None
+            if people is not None and person is None:
                 return False, {"error": "unknown person"}
+            match = {
+                "email": str(args.get("email") or "") or None,
+                "first_name": str(args.get("firstName") or "") or None,
+                "last_name": str(args.get("lastName") or "") or None,
+                "organization_name": str(args.get("organizationName") or "") or None,
+            }
+            usable = bool(match["email"]) or bool(
+                match["first_name"]
+                and match["last_name"]
+                and not masked_name(match["last_name"])
+            )
+            if not usable and person is not None:
+                # The shortlist hands the model an obfuscated surname. The
+                # person file knows its own Apollo ID, so take the match key
+                # from the file rather than letting the model guess a name.
+                match = enrichment_match(person) or match
             result = enrich_contact(
                 http=client,
                 api_key=apollo_key,
-                email=str(args.get("email") or "") or None,
-                first_name=str(args.get("firstName") or "") or None,
-                last_name=str(args.get("lastName") or "") or None,
-                organization_name=str(args.get("organizationName") or "") or None,
+                **match,
             )
             if people is not None:
                 people.apply_enrichment(

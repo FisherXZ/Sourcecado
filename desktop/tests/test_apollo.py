@@ -101,3 +101,77 @@ def test_live_apollo_search_returns_no_emails():
     assert "people" in out
     for person in out["people"]:
         assert "email" not in person or person.get("email") in (None, "")
+
+
+def test_a_masked_surname_falls_back_to_the_person_files_apollo_id(tmp_path):
+    """Issue #126: the shortlist hands the model an obfuscated surname.
+
+    The model must not spend a credit guessing at it, and must not be
+    stranded either. The person file already stores the exact Apollo ID.
+    """
+    http = FakeHttp(
+        {
+            MATCH_URL: {
+                "person": {
+                    "id": "679c7e37",
+                    "name": "Fisher Zhang",
+                    "title": "Building GTM AI",
+                    "organization": {"name": "The Hog"},
+                    "email": "fisher@thehog.example",
+                    "phone_numbers": [],
+                }
+            }
+        }
+    )
+    people = PersonStore(tmp_path)
+    person = people.keep_from_apollo(
+        apollo_id="679c7e37",
+        first_name="Fisher",
+        last_name_obfuscated="Zh***g",
+        title="Building GTM AI",
+        company="The Hog",
+    )
+    people.bind_session("sess-hog", person["person_id"])
+
+    ok, result = execute(
+        "apollo_enrich_contact",
+        # Exactly what the shortlist gives the model.
+        {"firstName": "Fisher", "lastName": "Zh***g", "organizationName": "The Hog"},
+        http=http,
+        apollo_key="test-key",
+        people=people,
+        session_id="sess-hog",
+    )
+
+    assert ok is True, result
+    body = [c for c in http.calls if c["url"] == MATCH_URL][0]["json"]
+    assert body["id"] == "679c7e37"
+    # The mask must never travel to Apollo.
+    assert body["last_name"] is None
+    assert people.get(person["person_id"])["email"] == "fisher@thehog.example"
+
+
+def test_a_masked_surname_with_no_apollo_id_refuses_rather_than_spending(tmp_path):
+    http = FakeHttp({MATCH_URL: {"person": {"id": "x", "name": "Nobody"}}})
+    people = PersonStore(tmp_path)
+    person = people.keep_from_apollo(
+        apollo_id=None,
+        first_name="Fisher",
+        last_name_obfuscated="Zh***g",
+        title=None,
+        company=None,
+    )
+    people.bind_session("sess-none", person["person_id"])
+
+    ok, result = execute(
+        "apollo_enrich_contact",
+        {"firstName": "Fisher", "lastName": "Zh***g"},
+        http=http,
+        apollo_key="test-key",
+        people=people,
+        session_id="sess-none",
+    )
+
+    assert ok is False
+    assert "obfuscated" in result["error"]
+    assert [c for c in http.calls if c["url"] == MATCH_URL] == []
