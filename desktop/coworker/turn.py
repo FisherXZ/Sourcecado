@@ -926,6 +926,7 @@ async def run_turn(
                 {
                     "type": "error",
                     "state": "failed",
+                    "error_kind": ErrorKind.POLICY.value,
                     "message": "This conversation's bound person file is unavailable.",
                 }
             )
@@ -938,6 +939,7 @@ async def run_turn(
             {
                 "type": "error",
                 "state": "failed",
+                "error_kind": ErrorKind.PROVIDER.value,
                 "message": "No model key. Set DEEPSEEK_API_KEY (deepseek-v4-pro) or MOONSHOT_API_KEY (kimi-k3) in ~/.config/club/.env.",
             }
         )
@@ -1712,6 +1714,7 @@ async def run_turn(
             {
                 "type": "error",
                 "state": "failed",
+                "error_kind": turn_error_kind.value,
                 "message": turn_error_message or str(exc),
             }
         )

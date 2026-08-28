@@ -417,3 +417,69 @@ def test_new_socket_replays_live_turn_start_and_authoritative_queue_snapshot(
     assert str(snapshot["command_id"]).startswith("connection-")
     assert [item["id"] for item in snapshot["items"]] == ["replay-item"]
     assert [item["state"] for item in snapshot["items"]] == ["waiting"]
+
+
+# --------------------------------------------------------------------------
+# Issue #136 — a failed turn must tell the operator what kind of failure it
+# was, not only that something broke. The kind was already computed for
+# telemetry and thrown away before it reached the client.
+# --------------------------------------------------------------------------
+
+
+def test_a_failed_turn_reports_a_machine_readable_error_kind(tmp_path):
+    """Without a kind the interface cannot say whether retrying is worth it."""
+    store = ConversationStore(tmp_path)
+    store.create_session("thread-kind-boom")
+    control = RunControl(new_turn_identity("thread-kind-boom"))
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    def broken_prompt(*args, **kwargs):
+        raise RuntimeError("prompt assembly failed")
+
+    result = _run_turn(
+        store,
+        "thread-kind-boom",
+        provider=FakeProvider(),
+        control=control,
+        emit=emit,
+        system_prompt_fn=broken_prompt,
+    )
+
+    assert result["status"] == "error"
+    error = next(e for e in emitted if e["type"] == "error")
+    assert error["state"] == "failed"
+    assert error["error_kind"] == "internal"
+    # The operator-facing text is unchanged and still carries no internals.
+    assert isinstance(error["message"], str) and error["message"]
+    # The kind survives into the durable log, so a later reader sees it too.
+    persisted = next(
+        e for e in store.load_events("thread-kind-boom") if e["type"] == "error"
+    )
+    assert persisted["error_kind"] == "internal"
+
+
+def test_a_missing_provider_reports_a_provider_error_kind(tmp_path):
+    """A configuration problem must not look like a transient blip."""
+    store = ConversationStore(tmp_path)
+    store.create_session("thread-no-provider")
+    control = RunControl(new_turn_identity("thread-no-provider"))
+    emitted = []
+
+    async def emit(event):
+        emitted.append(event)
+
+    result = _run_turn(
+        store,
+        "thread-no-provider",
+        provider=None,
+        control=control,
+        emit=emit,
+    )
+
+    assert result["status"] == "error"
+    error = next(e for e in emitted if e["type"] == "error")
+    assert error["error_kind"] == "provider"
+    assert "DEEPSEEK_API_KEY" in error["message"]

@@ -864,7 +864,10 @@ class ShellRuntime:
             process_cwd = None
             new_session = False
         else:
+            # macOS bash 3.2 prints "Terminated: 15" into the command
+            # output when the watchdog is reaped. Monitor mode off stops that.
             supervised_command = (
+                "set +m\n"
                 "_sourcecado_parent=$PPID\n"
                 "_sourcecado_group=$(/bin/ps -p $$ -o pgid= | tr -d ' ')\n"
                 "(while kill -0 $_sourcecado_parent 2>/dev/null; do sleep 0.2; done; "

@@ -384,40 +384,65 @@ def sidecar_health_check(
     if not binary.is_file() or not os.access(binary, os.X_OK):
         return False
     token = secrets_module.token_hex(16)
-    port = _free_port()
     scratch = tempfile.mkdtemp(prefix="sourcecado-update-health-")
     environment = dict(os.environ)
     environment["CLUB_STATE_DIR"] = scratch
     environment["CLUB_API_TOKEN"] = token
     environment.pop("CLUB_EXIT_WITH_PARENT", None)
-    process = subprocess.Popen(
-        [str(binary), "--host", "127.0.0.1", "--port", str(port)],
-        cwd=tempfile.gettempdir(),
-        env=environment,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    process = None
+    port = 0
     try:
         deadline = time.monotonic() + timeout
+        starts = 0
         while time.monotonic() < deadline:
+            if process is None:
+                if starts >= 3:
+                    return False
+                starts += 1
+                port = _free_port()
+                process = subprocess.Popen(
+                    [str(binary), "--host", "127.0.0.1", "--port", str(port)],
+                    cwd=tempfile.gettempdir(),
+                    env=environment,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             if process.poll() is not None:
-                return False
+                process.wait(timeout=1)
+                process = None
+                continue
+            connection = None
             try:
-                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
-                connection.request("GET", "/v1/health", headers={"X-Club-Token": token})
+                connection = http.client.HTTPConnection(
+                    "127.0.0.1", port, timeout=2
+                )
+                connection.request(
+                    "GET", "/v1/health", headers={"X-Club-Token": token}
+                )
                 response = connection.getresponse()
                 if response.status != 200:
-                    return False
+                    # The port we reserved was taken by something else.
+                    process.kill()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    process = None
+                    continue
                 return json.loads(response.read()).get("status") == "ok"
             except (OSError, ValueError):
                 time.sleep(0.25)
+            finally:
+                if connection is not None:
+                    connection.close()
         return False
     finally:
-        process.kill()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
+        if process is not None:
+            process.kill()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
         shutil.rmtree(scratch, ignore_errors=True)
 
 

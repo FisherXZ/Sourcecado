@@ -948,3 +948,90 @@ describe("live wire-to-part approval resource path", () => {
     });
   });
 });
+
+describe("issue #136 - a failed turn must say why", () => {
+  const failureEvent = (overrides: Record<string, unknown> = {}) => ({
+    version: 2,
+    type: "error",
+    session_id: "thread-alpha",
+    run_id: "run-1",
+    event_id: "event-terminal",
+    message_id: "message-answer-1",
+    part_id: "part-answer-1",
+    state: "failed",
+    error_kind: "rate_limit",
+    message: "The model provider remained rate limited after bounded retries.",
+    ...overrides,
+  });
+
+  it("surfaces the failure text instead of discarding it", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+
+    store.replayChatEvents([...textTurnEvents().slice(0, 2), failureEvent()]);
+
+    const notices = store
+      .messagesFor("thread-alpha")
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "notice");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      type: "notice",
+      code: "rate_limit",
+      message: "The model provider remained rate limited after bounded retries.",
+      // A terminal provider failure is not something the client can recover.
+      recoverable: false,
+    });
+  });
+
+  it("renders that text so the operator can actually read it", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+
+    store.replayChatEvents([...textTurnEvents().slice(0, 2), failureEvent()]);
+
+    const rendered = JSON.stringify(adapted(store, "thread-alpha"));
+    expect(rendered).toContain("rate limited after bounded retries");
+  });
+
+  it("falls back to a generic code when the sidecar sends no kind", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+
+    store.replayChatEvents([
+      ...textTurnEvents().slice(0, 2),
+      failureEvent({ error_kind: undefined }),
+    ]);
+
+    const notice = store
+      .messagesFor("thread-alpha")
+      .flatMap((message) => message.parts)
+      .find((part) => part.type === "notice");
+    expect(notice).toMatchObject({ code: "error", recoverable: false });
+  });
+
+  it("leaves a held turn alone, since held is not a failure", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+
+    store.replayChatEvents([
+      ...textTurnEvents().slice(0, 2),
+      failureEvent({
+        state: "held",
+        code: "outcome_unknown",
+        effect_id: "effect-1",
+      }),
+    ]);
+
+    const held = store.messagesFor("thread-alpha")[0];
+    expect(held?.state).toBe("held");
+  });
+});
