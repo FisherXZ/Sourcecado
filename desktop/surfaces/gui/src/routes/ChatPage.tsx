@@ -11,6 +11,7 @@ import {
   getSessions,
   hasToken,
   openChat,
+  type ActivePerson,
   type CommandDelivery,
   type ConnectionStatus,
   type CurrentRunMetrics,
@@ -64,7 +65,13 @@ function writeDraft(threadId: string, draft: string): void {
   }
 }
 
-export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string }) {
+export function ChatPage({
+  sessionId: requestedSessionId,
+  personId,
+}: {
+  sessionId?: string;
+  personId?: string;
+}) {
   const initialThreadId = requestedSessionId ?? "";
   const storeRef = useRef(
     new SourcecadoChatStore(
@@ -77,6 +84,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
   const loadVersionRef = useRef(0);
   const loadedThreadsRef = useRef(new Set<string>());
   const threadTitlesRef = useRef(new Map<string, string | null>());
+  const threadPeopleRef = useRef(new Map<string, ActivePerson | null>());
   const threadQueuesRef = useRef(
     new Map<string, { items: readonly QueueItem[]; paused: boolean }>(),
   );
@@ -93,6 +101,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const [personaName, setPersonaName] = useState<string | null>(null);
+  const [activePerson, setActivePerson] = useState<ActivePerson | null>(null);
   const [runMetrics, setRunMetrics] = useState<CurrentRunMetrics | null>(null);
   const [, setRevision] = useState(0);
 
@@ -145,6 +154,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
     let active = true;
     setLoadError(false);
     setTitle(null);
+    setActivePerson(null);
 
     async function loadThread() {
       if (!hasToken()) throw new Error("missing launch token");
@@ -159,19 +169,29 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
         return;
       }
       if (loadedThreadsRef.current.has(threadId)) {
-        setTitle(threadTitlesRef.current.get(threadId) ?? null);
-        setLoading(false);
-        refresh();
-        return;
+        const cachedPerson = threadPeopleRef.current.get(threadId) ?? null;
+        if (!personId || cachedPerson?.person_id === personId) {
+          setTitle(threadTitlesRef.current.get(threadId) ?? null);
+          setActivePerson(cachedPerson);
+          setLoading(false);
+          refresh();
+          return;
+        }
       }
       setLoading(true);
-      const conversation = await getSession(threadId);
+      const conversation = personId
+        ? await getSession(threadId, personId)
+        : await getSession(threadId);
       if (
         !active ||
         loadVersion !== loadVersionRef.current ||
         activeThreadRef.current !== threadId
       ) {
         return;
+      }
+      const loadedPerson = conversation.active_person ?? null;
+      if (personId && loadedPerson?.person_id !== personId) {
+        throw new Error("conversation person binding mismatch");
       }
       storeRef.current.replaceThread(threadId, restoreConversation(conversation));
       threadQueuesRef.current.set(threadId, {
@@ -180,8 +200,17 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
       });
       loadedThreadsRef.current.add(threadId);
       threadTitlesRef.current.set(threadId, conversation.title);
+      threadPeopleRef.current.set(threadId, loadedPerson);
       nextLegacyIndexRef.current.set(threadId, conversation.messages.length);
       setTitle(conversation.title);
+      setActivePerson(loadedPerson);
+      if (
+        !personId &&
+        loadedPerson &&
+        window.location.hash === `#/chat/${encodeURIComponent(threadId)}`
+      ) {
+        window.location.hash = `#/chat/${encodeURIComponent(threadId)}/person/${encodeURIComponent(loadedPerson.person_id)}`;
+      }
       setLoading(false);
       setLoadError(false);
       refresh();
@@ -195,7 +224,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
     return () => {
       active = false;
     };
-  }, [loadAttempt, refresh, requestedSessionId]);
+  }, [loadAttempt, personId, refresh, requestedSessionId]);
 
   useEffect(() => {
     if (!hasToken()) return;
@@ -461,6 +490,7 @@ export function ChatPage({ sessionId: requestedSessionId }: { sessionId?: string
       >
         <ThreadView
           title={title}
+          activePerson={activePerson}
           personaName={personaName}
           runMetrics={runMetrics}
           loading={loading}

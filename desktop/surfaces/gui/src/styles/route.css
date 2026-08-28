@@ -1369,6 +1369,10 @@
   border-color: var(--error);
 }
 
+.schedule-receipt.receipt-unknown {
+  border-color: var(--warn);
+}
+
 .schedule-receipt > header {
   color: var(--muted);
   font-size: 11px;

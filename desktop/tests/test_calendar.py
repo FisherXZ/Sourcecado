@@ -64,6 +64,13 @@ def test_calendar_list_fake_http(tmp_path):
                         "summary": "standup",
                         "start": {"dateTime": "2026-08-24T09:00:00-07:00"},
                         "end": {"dateTime": "2026-08-24T09:30:00-07:00"},
+                        "attendees": [
+                            {
+                                "email": "ada@example.test",
+                                "displayName": "Ada Lovelace",
+                            }
+                        ],
+                        "htmlLink": "https://calendar.test/e1",
                     }
                 ]
             }
@@ -71,6 +78,10 @@ def test_calendar_list_fake_http(tmp_path):
     )
     out = CalendarApi(secrets, http=http, client_id="cid", client_secret="sec").list_events()
     assert out["events"][0]["summary"] == "standup"
+    assert out["events"][0]["attendees"] == [
+        {"email": "ada@example.test", "displayName": "Ada Lovelace"}
+    ]
+    assert out["events"][0]["htmlLink"] == "https://calendar.test/e1"
     assert "delete" not in str(http.calls)
 
 

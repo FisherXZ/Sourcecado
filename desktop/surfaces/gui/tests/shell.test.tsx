@@ -31,6 +31,7 @@ const api = vi.hoisted(() => ({
   getSkills: vi.fn(),
   hasToken: vi.fn(),
   openChat: vi.fn(),
+  openPersonSourcingChat: vi.fn(),
   pinSession: vi.fn(),
   renameSession: vi.fn(),
   setLastDestination: vi.fn(),
@@ -60,6 +61,7 @@ vi.mock("../src/api", () => ({
   getSkills: api.getSkills,
   hasToken: api.hasToken,
   openChat: api.openChat,
+  openPersonSourcingChat: api.openPersonSourcingChat,
   pinSession: api.pinSession,
   renameSession: api.renameSession,
   resolveInbox: vi.fn(),
@@ -102,6 +104,11 @@ describe("App shell routing", () => {
     api.getSkills.mockResolvedValue({ skills: [] });
     api.hasToken.mockReturnValue(true);
     api.openChat.mockReturnValue({ send: vi.fn(), approve: vi.fn(), close: vi.fn() });
+    api.openPersonSourcingChat.mockResolvedValue({
+      created: true,
+      session: { id: "thread-person", title: "Sourcing · Alyssa", n_msgs: 0 },
+      active_person: { person_id: "person-1", version: 1, label: "Alyssa" },
+    });
     api.pinSession.mockResolvedValue({ id: "alpha", title: "Alpha", pinned: true });
     api.renameSession.mockResolvedValue({ id: "alpha", title: "Renamed Alpha" });
     api.setLastDestination.mockResolvedValue({ destination: "#/skills" });
@@ -135,6 +142,36 @@ describe("App shell routing", () => {
     expect(api.getPerson).toHaveBeenCalledWith("person one");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Board" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("opens a newly created person chat before the cached session list refreshes", async () => {
+    window.location.hash = "#/people/person-1";
+    api.getPerson.mockResolvedValue({
+      person: { person_id: "person-1", sequence_state: "open", version: 1 },
+      brief: { who: "Alyssa", why: "Strong fit", learned: [], missing: [], sources: [] },
+      timeline: [],
+      sourcing_chat: null,
+    });
+    api.getSessions.mockResolvedValue({ sessions: [], open_id: null, last_destination: null });
+    api.getSession.mockResolvedValue({
+      id: "thread-person",
+      title: "Sourcing · Alyssa",
+      messages: [],
+      events: [],
+      active_person: { person_id: "person-1", version: 1, label: "Alyssa" },
+    });
+    render(<App />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create sourcing chat" }),
+    );
+
+    await waitFor(() =>
+      expect(api.getSession).toHaveBeenCalledWith("thread-person", "person-1"),
+    );
+    expect(
+      screen.getByRole("link", { name: "Active person: Alyssa" }),
+    ).toBeInTheDocument();
   });
 
   it("renders a direct Scheduled hash route", async () => {
@@ -177,6 +214,44 @@ describe("App shell routing", () => {
     render(<App />);
 
     await waitFor(() => expect(api.getSession).toHaveBeenCalledWith("thread-alpha"));
+  });
+
+  it("keeps the person identity on the canonical bound-chat route", async () => {
+    window.location.hash = "#/chat/thread-alpha/person/person%20one";
+    api.getSessions.mockResolvedValue({
+      sessions: [
+        {
+          session_id: "thread-alpha",
+          title: "Sourcing · Alyssa",
+          n_msgs: 0,
+          pinned: false,
+          opened_at: "2026-08-27T10:00:00Z",
+          updated_at: "2026-08-27T10:00:00Z",
+        },
+      ],
+      open_id: "thread-alpha",
+      last_destination: "#/chat/thread-alpha/person/person%20one",
+    });
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Sourcing · Alyssa",
+      messages: [],
+      events: [],
+      active_person: {
+        person_id: "person one",
+        version: 2,
+        label: "Alyssa Lee",
+      },
+    });
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(api.getSession).toHaveBeenCalledWith("thread-alpha", "person one"),
+    );
+    expect(
+      screen.getByRole("link", { name: "Active person: Alyssa Lee" }),
+    ).toHaveAttribute("href", "#/people/person%20one");
   });
 
   it("does not persist a scheduled transcript over the last normal destination", async () => {
@@ -276,6 +351,40 @@ describe("App shell routing", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/settings");
+  });
+
+  it("restores the same canonical person-bound chat after restart", async () => {
+    window.location.hash = "";
+    api.getSessions.mockResolvedValue({
+      sessions: [
+        {
+          session_id: "thread-alpha",
+          title: "Sourcing · Alyssa",
+          n_msgs: 0,
+          pinned: false,
+          opened_at: "2026-08-27T10:00:00Z",
+          updated_at: "2026-08-27T10:00:00Z",
+        },
+      ],
+      open_id: "thread-alpha",
+      last_destination: "#/chat/thread-alpha/person/person%20one",
+    });
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Sourcing · Alyssa",
+      messages: [],
+      events: [],
+      active_person: { person_id: "person one", version: 2, label: "Alyssa Lee" },
+    });
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(api.getSession).toHaveBeenCalledWith("thread-alpha", "person one"),
+    );
+    expect(window.location.hash).toBe(
+      "#/chat/thread-alpha/person/person%20one",
+    );
   });
 
   it("does not persist a cached destination before fresh session state resolves", async () => {

@@ -6,11 +6,12 @@ import { ComposerDraftProvider } from "./ComposerDraftContext";
 import { Queue } from "./Queue";
 import { ThreadHeader } from "./ThreadHeader";
 import { UserMessage } from "./UserMessage";
-import type { CurrentRunMetrics, QueueItem } from "../api";
+import type { ActivePerson, CurrentRunMetrics, QueueItem } from "../api";
 import { Inspector } from "./Inspector";
 
 type ThreadViewProps = {
   readonly title: string | null;
+  readonly activePerson?: ActivePerson | null;
   readonly personaName?: string | null;
   readonly runMetrics?: CurrentRunMetrics | null;
   readonly loading: boolean;
@@ -53,6 +54,7 @@ function Starter({
 
 export function ThreadView({
   title,
+  activePerson,
   personaName,
   runMetrics,
   loading,
@@ -80,6 +82,7 @@ export function ThreadView({
     <ThreadPrimitive.Root className="sourcecado-thread">
       <ThreadHeader
         title={title}
+        activePerson={activePerson}
         personaName={personaName}
         runMetrics={runMetrics}
       />

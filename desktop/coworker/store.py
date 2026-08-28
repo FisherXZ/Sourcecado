@@ -216,6 +216,10 @@ class ConversationStore:
             "artifacts": "TEXT",
             "session_id": "TEXT",
             "waiting_approval_count": "INTEGER DEFAULT 0",
+            # Count of events already in the reused sched-{job_id} file
+            # when this run started. The restart reconciler must ignore
+            # those; they belong to earlier attempts.
+            "event_offset": "INTEGER NOT NULL DEFAULT 0",
         }
         for column, definition in run_migrations.items():
             try:
@@ -237,6 +241,12 @@ class ConversationStore:
                 waiting_approval_count = COALESCE(waiting_approval_count, 0)
             """
         )
+        # Pre-S4 scheduler writes stored run_turn's raw "ok" status directly;
+        # RECEIPT_STATUSES has mapped it to "success" ever since, but rows
+        # written before that mapping existed are still on disk with the old
+        # text. Normalize them once so every consumer -- API, UI, future
+        # exports -- agrees on the shared status contract.
+        self._conn.execute("UPDATE runs SET status = 'success' WHERE status = 'ok'")
         try:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
@@ -369,27 +379,72 @@ class ConversationStore:
                 raise
 
     def _reconcile_orphaned_runs(self) -> None:
-        """Close runs the prior process left mid-flight without inventing an outcome."""
+        """Close runs the prior process left mid-flight without inventing an outcome.
+
+        A crash can land between this attempt's terminal event and the
+        matching runs-table update. Trust only events written after this
+        run started: sched-{job_id} files are reused, so last week's
+        terminal event is still in the file.
+        """
         now = datetime.now(UTC).isoformat()
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
-                self._conn.execute(
+                running = self._conn.execute(
                     """
-                    UPDATE runs SET
-                        status = 'interrupted',
-                        result = ?,
-                        summary = ?,
-                        finished_at = ?,
-                        duration_ms = COALESCE(duration_ms, 0)
-                    WHERE status = 'running'
-                    """,
-                    (_INTERRUPTED_RUN_SUMMARY, _INTERRUPTED_RUN_SUMMARY, now),
-                )
+                    SELECT id, session_id, event_offset
+                    FROM runs WHERE status = 'running'
+                    """
+                ).fetchall()
+                for row in running:
+                    status, result, summary = self._terminal_transcript_outcome(
+                        str(row["session_id"]),
+                        int(row["event_offset"] or 0),
+                    )
+                    self._conn.execute(
+                        """
+                        UPDATE runs SET
+                            status = ?,
+                            result = ?,
+                            summary = ?,
+                            finished_at = ?,
+                            duration_ms = COALESCE(duration_ms, 0)
+                        WHERE id = ?
+                        """,
+                        (status, result, summary, now, row["id"]),
+                    )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
+
+    # Mirrors scheduler.RECEIPT_STATUSES' run_turn -> receipt mapping, keyed
+    # by the transcript's turn_end "state" instead of run_turn's return
+    # value. Duplicated rather than imported: store.py cannot import
+    # coworker.automation.scheduler without a circular import (scheduler.py
+    # imports ConversationStore).
+    _TRANSCRIPT_TERMINAL_STATES = {
+        "complete": "success",
+        "partial": "partial",
+        "stopped": "partial",
+    }
+
+    def _terminal_transcript_outcome(
+        self, session_id: str, event_offset: int = 0
+    ) -> tuple[str, str, str]:
+        """Derive (status, result, summary) from this attempt's last event, if terminal."""
+        events = self.load_events(session_id)[max(0, event_offset) :]
+        last = events[-1] if events else None
+        if last is not None and last.get("type") == "error":
+            message = str(last.get("message") or _INTERRUPTED_RUN_SUMMARY)
+            return "failed", message, message
+        if last is not None and last.get("type") == "turn_end":
+            status = self._TRANSCRIPT_TERMINAL_STATES.get(str(last.get("state")))
+            if status is not None:
+                text = str(last.get("text") or "")
+                summary = text or _INTERRUPTED_RUN_SUMMARY
+                return status, text, summary
+        return "interrupted", _INTERRUPTED_RUN_SUMMARY, _INTERRUPTED_RUN_SUMMARY
 
     def _file(self, sid: str) -> Path:
         if not valid_session_id(sid):
@@ -673,15 +728,16 @@ class ConversationStore:
         self, job_id: int, *, session_id: str, started_at: str
     ) -> dict[str, Any]:
         with self._lock:
+            event_offset = len(self.load_events(session_id))
             cursor = self._conn.execute(
                 """
                 INSERT INTO runs
                     (job_id, status, result, started_at, finished_at,
                      duration_ms, summary, artifacts, session_id,
-                     waiting_approval_count)
-                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0)
+                     waiting_approval_count, event_offset)
+                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0, ?)
                 """,
-                (job_id, started_at, session_id),
+                (job_id, started_at, session_id, event_offset),
             )
             self._conn.commit()
             row = self._conn.execute(
@@ -1557,6 +1613,7 @@ def _inbox_row(row: sqlite3.Row) -> dict[str, Any]:
 
 def _run_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
+    item.pop("event_offset", None)
     raw = item.get("artifacts") or "[]"
     try:
         parsed = json.loads(raw)

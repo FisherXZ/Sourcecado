@@ -5,15 +5,23 @@ import { BoardView } from "../src/Board";
 import { PersonFileView } from "../src/PersonFile";
 
 const api = vi.hoisted(() => ({
+  attachPersonMeeting: vi.fn(),
   getBoard: vi.fn(),
   getPerson: vi.fn(),
+  openPersonSourcingChat: vi.fn(),
+  refreshPersonMeetings: vi.fn(),
+  rejectPersonMeeting: vi.fn(),
   revertPerson: vi.fn(),
   setPersonSequence: vi.fn(),
 }));
 
 vi.mock("../src/api", () => ({
+  attachPersonMeeting: api.attachPersonMeeting,
   getBoard: api.getBoard,
   getPerson: api.getPerson,
+  openPersonSourcingChat: api.openPersonSourcingChat,
+  refreshPersonMeetings: api.refreshPersonMeetings,
+  rejectPersonMeeting: api.rejectPersonMeeting,
   revertPerson: api.revertPerson,
   setPersonSequence: api.setPersonSequence,
 }));
@@ -59,6 +67,63 @@ describe("Board and person-file routes", () => {
         { version: 1, created_at: "2026-08-26T10:00:00Z" },
         { version: 2, created_at: "2026-08-26T11:00:00Z" },
       ],
+      sourcing_chat: null,
+      meeting_evidence: {
+        attached: [
+          {
+            evidence_id: "meeting-calendar",
+            provider: "calendar",
+            provider_id: "cal-1",
+            title: "Calendar review",
+            starts_at: "2026-09-01T10:00:00Z",
+            ends_at: "2026-09-01T10:30:00Z",
+            participants: [{ name: "Ada", email: "ada@example.test" }],
+            source_ref: {
+              id: "calendar:cal-1",
+              title: "Calendar review",
+              url: "https://calendar.test/cal-1",
+              provider: "Google Calendar",
+            },
+            notes: null,
+            status: "attached",
+            match_reason: "exact_email",
+          },
+        ],
+        proposed: [
+          {
+            evidence_id: "meeting-granola",
+            provider: "granola",
+            provider_id: "granola-1",
+            title: "Granola review",
+            starts_at: "2026-09-02T10:00:00Z",
+            ends_at: null,
+            participants: [{ name: "Alyssa Lee", email: null }],
+            source_ref: {
+              id: "granola:granola-1",
+              title: "Granola review",
+              url: null,
+              provider: "Granola",
+            },
+            notes: "Meeting notes",
+            status: "proposed",
+            match_reason: "name_only",
+          },
+        ],
+        rejected: [],
+      },
+    });
+    api.attachPersonMeeting.mockResolvedValue({ meeting: { status: "attached" } });
+    api.rejectPersonMeeting.mockResolvedValue({ meeting: { status: "rejected" } });
+    api.refreshPersonMeetings.mockResolvedValue({
+      sources: {
+        calendar: { status: "ok", records: 1 },
+        granola: { status: "ok", records: 1 },
+      },
+    });
+    api.openPersonSourcingChat.mockResolvedValue({
+      created: true,
+      session: { id: "thread one", title: "Sourcing · Alyssa Lee", n_msgs: 0 },
+      active_person: { person_id: "person one", version: 2, label: "Alyssa Lee" },
     });
     api.setPersonSequence.mockResolvedValue({
       person: { person_id: "person one", sequence_state: "in_conversation" },
@@ -112,5 +177,120 @@ describe("Board and person-file routes", () => {
         rationaleSummary: "Restore version 1 from person history.",
       }),
     );
+  });
+
+  it("creates the person's sourcing chat and navigates with both identities", async () => {
+    window.location.hash = "#/people/person%20one";
+    render(<PersonFileView personId="person one" />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create sourcing chat" }),
+    );
+
+    await waitFor(() =>
+      expect(api.openPersonSourcingChat).toHaveBeenCalledWith("person one", 2),
+    );
+    await waitFor(() =>
+      expect(window.location.hash).toBe(
+        "#/chat/thread%20one/person/person%20one",
+      ),
+    );
+  });
+
+  it("offers the same single action as Open when the person is already bound", async () => {
+    api.getPerson.mockResolvedValueOnce({
+      ...(await api.getPerson()),
+      sourcing_chat: { session_id: "thread one", person_id: "person one" },
+    });
+    render(<PersonFileView personId="person one" />);
+
+    expect(
+      await screen.findByRole("button", { name: "Open sourcing chat" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Create sourcing chat" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a stale person-chat failure visible without navigating", async () => {
+    window.location.hash = "#/people/person%20one";
+    api.openPersonSourcingChat.mockRejectedValueOnce(new Error("stale version"));
+    render(<PersonFileView personId="person one" />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create sourcing chat" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Refresh the person file",
+    );
+    expect(window.location.hash).toBe("#/people/person%20one");
+  });
+
+  it("shows missing person recovery without offering a chat action", async () => {
+    api.getPerson.mockRejectedValueOnce(new Error("not found"));
+    render(<PersonFileView personId="missing-person" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn’t load this person file",
+    );
+    expect(
+      screen.queryByRole("button", { name: /sourcing chat/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Board" })).toHaveAttribute(
+      "href",
+      "#/board",
+    );
+  });
+
+  it("renders attached meetings and explicit review actions for uncertain matches", async () => {
+    render(<PersonFileView personId="person one" />);
+
+    expect(await screen.findByRole("heading", { name: "Meeting evidence" })).toBeInTheDocument();
+    expect(screen.getByText("Calendar review")).toBeInTheDocument();
+    expect(screen.getByText("Granola review")).toBeInTheDocument();
+    expect(screen.getByText("Name-only match — review required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Attach Granola review" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject Granola review" })).toBeInTheDocument();
+  });
+
+  it("refreshes, attaches, and rejects meeting evidence from the person view", async () => {
+    render(<PersonFileView personId="person one" />);
+    await screen.findByRole("heading", { name: "Meeting evidence" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh meeting evidence" }));
+    await waitFor(() => expect(api.refreshPersonMeetings).toHaveBeenCalledWith("person one"));
+    expect(await screen.findByText("Calendar and Granola refreshed.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach Granola review" }));
+    await waitFor(() =>
+      expect(api.attachPersonMeeting).toHaveBeenCalledWith(
+        "person one",
+        "meeting-granola",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject Granola review" }));
+    await waitFor(() =>
+      expect(api.rejectPersonMeeting).toHaveBeenCalledWith(
+        "person one",
+        "meeting-granola",
+      ),
+    );
+  });
+
+  it("shows independent partial-source refresh status", async () => {
+    api.refreshPersonMeetings.mockResolvedValueOnce({
+      sources: {
+        calendar: { status: "failed", error: "unavailable" },
+        granola: { status: "ok", records: 1 },
+      },
+    });
+    render(<PersonFileView personId="person one" />);
+    await screen.findByRole("heading", { name: "Meeting evidence" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh meeting evidence" }));
+
+    expect(
+      await screen.findByText("Granola refreshed; Calendar is unavailable."),
+    ).toBeInTheDocument();
   });
 });

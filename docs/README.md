@@ -17,6 +17,7 @@ Sourcecado's dated documents record several product shapes. They are intentional
 - `qa/` — current end-to-end and visual QA evidence
 - `desktop/docs/adr/` — ADRs scoped to the active local runtime
 - `desktop/docs/evaluations.md` — isolated fake/live agent evaluation workflow and artifact safety
+- `desktop/docs/effective-tools.md` — per-run schema, permission, persona, connector, and workspace capability boundary
 
 These are dated working records. Check their status and the current code before treating an unchecked item as outstanding.
 
