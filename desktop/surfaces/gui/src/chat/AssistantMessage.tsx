@@ -40,6 +40,31 @@ function AssistantText({ text }: TextMessagePartProps) {
   );
 }
 
+function noticeFrame(code: unknown): {
+  readonly title: string;
+  readonly detail: string | null;
+} {
+  if (code === "transport") {
+    return {
+      title: "Connection problem.",
+      detail: "Sourcecado will keep trying to reconnect.",
+    };
+  }
+  if (code === "compacted") {
+    return {
+      title: "Older context was compacted.",
+      detail: "Available messages are shown.",
+    };
+  }
+  if (code === "unsupported_version" || code === "malformed_event") {
+    return {
+      title: "Some conversation history is unavailable.",
+      detail: "Available messages are shown.",
+    };
+  }
+  return { title: "This turn failed.", detail: null };
+}
+
 function SafeToolFallback(part: ToolCallMessagePartProps) {
   const lastDelivery = useLastApprovalDelivery();
   if (!part.approval) return null;
@@ -76,9 +101,9 @@ export function AssistantMessage() {
     | RunBudgetStatus
     | undefined;
   const notice = message.metadata.custom?.sourcecadoNotice === true;
-  const noticeCode = message.metadata.custom?.sourcecadoNoticeCode;
-  const transportNotice = noticeCode === "transport";
-  const compactedNotice = noticeCode === "compacted";
+  const frame = notice
+    ? noticeFrame(message.metadata.custom?.sourcecadoNoticeCode)
+    : null;
   const prose = message.content
     .filter((part) => part.type === "text")
     .map((part) => (part.type === "text" ? part.text : ""))
@@ -101,14 +126,8 @@ export function AssistantMessage() {
       className={`sourcecado-assistant-message${notice ? " sourcecado-notice" : ""}`}
       {...(notice ? { role: "note" } : {})}
     >
-      {notice ? (
-        <p className="sourcecado-notice-title">
-          {transportNotice
-            ? "Connection problem."
-            : compactedNotice
-              ? "Older context was compacted."
-              : "Some conversation history is unavailable."}
-        </p>
+      {frame ? (
+        <p className="sourcecado-notice-title">{frame.title}</p>
       ) : null}
       <MessagePrimitive.Parts
         components={{
@@ -123,12 +142,8 @@ export function AssistantMessage() {
       {sourcecadoState === "cancelled" ? (
         <p className="sourcecado-terminal-receipt">Run cancelled.</p>
       ) : null}
-      {notice ? (
-        <p className="sourcecado-notice-detail">
-          {transportNotice
-            ? "Sourcecado will keep trying to reconnect."
-            : "Available messages are shown."}
-        </p>
+      {frame?.detail ? (
+        <p className="sourcecado-notice-detail">{frame.detail}</p>
       ) : null}
       {copyable ? (
         <button

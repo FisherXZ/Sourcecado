@@ -551,6 +551,55 @@ describe("ChatPage Warm Operator thread", () => {
     expect(notice).not.toHaveTextContent("Available messages are shown");
   });
 
+  it("frames a terminal provider failure as a failed turn, not a history gap", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        type: "turn_start",
+        session_id: "thread-alpha",
+        run_id: "run-1",
+        event_id: "event-start",
+        message_id: "assistant-1",
+        part_id: "assistant-part-1",
+        state: "running",
+      });
+    });
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        type: "error",
+        session_id: "thread-alpha",
+        run_id: "run-1",
+        event_id: "terminal-failed",
+        message_id: "assistant-1",
+        part_id: "assistant-part-1",
+        state: "failed",
+        error_kind: "rate_limit",
+        message:
+          "The model provider remained rate limited after bounded retries.",
+      });
+    });
+
+    const notice = await screen.findByRole("note");
+    expect(notice).toHaveTextContent("This turn failed.");
+    expect(notice).toHaveTextContent(
+      "The model provider remained rate limited after bounded retries.",
+    );
+    expect(notice).not.toHaveTextContent(
+      "Some conversation history is unavailable",
+    );
+    expect(notice).not.toHaveTextContent("Available messages are shown");
+  });
+
   it("keeps isolated drafts when switching away from and back to a thread", async () => {
     api.getSession.mockImplementation(async (id: string) => ({
       id,
