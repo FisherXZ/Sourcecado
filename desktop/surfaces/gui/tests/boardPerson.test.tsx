@@ -334,6 +334,28 @@ describe("Board and person-file routes", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows meeting evidence and Drive evidence as sibling sections on one person file", async () => {
+    render(<PersonFileView personId="person one" />);
+
+    const meetings = await screen.findByRole("region", { name: "Meeting evidence" });
+    const drive = screen.getByRole("region", { name: "Drive evidence" });
+
+    expect(within(meetings).getByText("Calendar review")).toBeInTheDocument();
+    expect(within(meetings).getByText("Granola review")).toBeInTheDocument();
+    expect(
+      within(meetings).getByRole("button", { name: "Refresh meeting evidence" }),
+    ).toBeInTheDocument();
+    expect(within(meetings).queryByText("Fall sourcing masterdoc")).not.toBeInTheDocument();
+    expect(within(meetings).queryByLabelText("Search Drive")).not.toBeInTheDocument();
+
+    expect(within(drive).getByText("Fall sourcing masterdoc")).toBeInTheDocument();
+    expect(within(drive).getByLabelText("Search Drive")).toBeInTheDocument();
+    expect(within(drive).queryByText("Calendar review")).not.toBeInTheDocument();
+    expect(
+      within(drive).queryByRole("button", { name: "Refresh meeting evidence" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders attached Drive evidence on the person file", async () => {
     render(<PersonFileView personId="person one" />);
 
