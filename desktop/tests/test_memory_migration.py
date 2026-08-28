@@ -216,6 +216,38 @@ def test_a_failing_memory_step_undoes_its_own_classification_write(
     assert "classification_status" not in memories_ddl
 
 
+def test_the_memory_step_keeps_the_transaction_it_was_given(tmp_path):
+    """Isolates the transaction half of the rollback, which the backup hides.
+
+    `apply_migrations` restores the store from the backup as well, so a step
+    that ended its own transaction still leaves the right file on disk and the
+    end-to-end test above stays green. This asserts the narrower thing with no
+    backup involved: run the step inside a transaction, roll it back by hand,
+    and nothing it wrote survives. `executescript` commits before it runs, so
+    it fails here.
+    """
+    root = build_legacy_state(tmp_path / "state")
+    db = root / "club.db"
+    spec = migrations.spec_for("conversation_db")
+    step = spec.migrations[-1]
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        step.apply(
+            migrations.MigrationContext(
+                root=root, spec=spec, path=db, connection=conn
+            )
+        )
+        assert "classification_status" in migrations.column_names(conn, "memories")
+
+        conn.rollback()
+
+        assert "classification_status" not in migrations.column_names(conn, "memories")
+    finally:
+        conn.close()
+
+
 def test_rerunning_the_migration_reports_current_and_changes_nothing(tmp_path):
     root = build_legacy_state(tmp_path / "state")
     migrations.apply_migrations(root)
