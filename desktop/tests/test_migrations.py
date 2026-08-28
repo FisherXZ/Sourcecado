@@ -44,6 +44,39 @@ def _user_version(path: Path) -> int:
         conn.close()
 
 
+def _dump_database(path: Path) -> dict[str, object]:
+    """Everything a rollback has to put back, in comparable form.
+
+    Restoring a live SQLite file goes through the online backup API, which
+    rewrites page layout, so the bytes legitimately differ for a logically
+    identical database. This captures what must not differ: the schema version,
+    the exact DDL of every table and index, and every row of every table --
+    `SELECT *` so an added column shows up as a wider tuple.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        integrity = [str(row[0]) for row in conn.execute("PRAGMA integrity_check")]
+        schema = sorted(
+            (str(row[0]), str(row[1]), str(row[2] or ""))
+            for row in conn.execute(
+                "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+            )
+        )
+        tables = [name for kind, name, _sql in schema if kind == "table"]
+        rows = {
+            name: conn.execute(f"SELECT * FROM {name} ORDER BY rowid").fetchall()
+            for name in tables
+        }
+        return {
+            "user_version": int(conn.execute("PRAGMA user_version").fetchone()[0]),
+            "integrity": integrity,
+            "schema": schema,
+            "rows": rows,
+        }
+    finally:
+        conn.close()
+
+
 def _plan_for(plan, store_id):
     return next(item for item in plan.stores if item.store_id == store_id)
 
@@ -444,15 +477,9 @@ def test_a_failed_backup_aborts_the_migration_and_leaves_state_untouched(tmp_pat
 # --- failure, rollback, rerun -------------------------------------------
 
 
-def test_a_failing_migration_rolls_the_store_back_and_keeps_the_old_version(
-    tmp_path, monkeypatch
-):
-    root = build_legacy_state(tmp_path / "state")
-
-    def explode(_context):
-        raise RuntimeError("migration step failed")
-
-    original = migrations.spec_for("conversation_db")
+def _break_step(store_id, monkeypatch, apply):
+    """Swap one store's migration for a step that fails partway through."""
+    original = migrations.spec_for(store_id)
     broken = migrations.dataclasses.replace(
         original,
         migrations=(
@@ -460,8 +487,8 @@ def test_a_failing_migration_rolls_the_store_back_and_keeps_the_old_version(
                 from_version=0,
                 to_version=1,
                 description="deliberately failing step",
-                count=lambda _context: 3,
-                apply=explode,
+                count=lambda _context: 1,
+                apply=apply,
             ),
         ),
     )
@@ -469,33 +496,70 @@ def test_a_failing_migration_rolls_the_store_back_and_keeps_the_old_version(
         migrations,
         "REGISTRY",
         tuple(
-            broken if item.store_id == "conversation_db" else item
+            broken if item.store_id == store_id else item
             for item in migrations.REGISTRY
         ),
     )
+
+
+def test_a_sqlite_migration_that_fails_halfway_leaves_the_database_as_it_was(
+    tmp_path, monkeypatch
+):
+    """Two mechanisms cover a SQLite store: the step runs inside BEGIN IMMEDIATE
+    and is rolled back, and the store is then restored from the backup. They are
+    deliberately redundant, so this asserts the outcome rather than crediting one
+    of them. Disabling either alone still passes; disabling both fails here. The
+    JSON test below is the one that isolates the backup restore, because a JSON
+    document has no transaction to fall back on.
+    """
+    root = build_legacy_state(tmp_path / "state")
+    before = _dump_database(root / "club.db")
+    assert before["integrity"] == ["ok"]
+    assert len(before["rows"]["runs"]) == 2
+
+    def mutate_then_explode(context):
+        # Real work lands first, so the test can tell an undo from a no-op.
+        context.connection.execute("ALTER TABLE jobs ADD COLUMN next_run_at TEXT")
+        context.connection.execute("DELETE FROM runs")
+        raise RuntimeError("migration step failed halfway")
+
+    _break_step("conversation_db", monkeypatch, mutate_then_explode)
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is not None
     assert outcome.rolled_back == ("conversation_db",)
 
-    # Restoring a live SQLite file goes through the online backup API, so the
-    # bytes are rewritten. What must hold is that no half-applied schema and no
-    # new version survive, and that every legacy row is still there.
-    assert _user_version(root / "club.db") == 0
-    conn = sqlite3.connect(root / "club.db")
-    conn.row_factory = sqlite3.Row
-    try:
-        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(jobs)")}
-        assert "next_run_at" not in columns
-        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 2
-        assert (
-            conn.execute(
-                "SELECT title FROM sessions WHERE session_id = 'main'"
-            ).fetchone()[0]
-            == "find leads at Rippling"
-        )
-    finally:
-        conn.close()
+    # Sound, at the old version, at the old schema, every original row present.
+    after = _dump_database(root / "club.db")
+    assert after["integrity"] == ["ok"]
+    assert after["user_version"] == 0
+    assert after["schema"] == before["schema"]
+    assert after["rows"] == before["rows"]
+    jobs_ddl = next(sql for kind, name, sql in after["schema"] if name == "jobs")
+    assert "next_run_at" not in jobs_ddl
+
+
+def test_a_json_migration_that_fails_halfway_is_restored_from_the_backup(
+    tmp_path, monkeypatch
+):
+    """A JSON document has no transaction, so the backup is the only way back."""
+    root = build_legacy_state(tmp_path / "state")
+    path = root / "workspace_grants.json"
+    before = path.read_bytes()
+
+    def corrupt_then_explode(context):
+        context.path.write_text("{ half written", encoding="utf-8")
+        raise RuntimeError("migration step failed halfway")
+
+    _break_step("workspace_grants", monkeypatch, corrupt_then_explode)
+
+    outcome = migrations.apply_migrations(root)
+    assert outcome.error is not None
+    assert outcome.rolled_back == ("workspace_grants",)
+
+    assert path.read_bytes() == before
+    assert json.loads(path.read_text(encoding="utf-8"))["grants"][0]["id"] == "grant_legacy_1"
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
 
 
 def test_a_partially_applied_migration_does_not_leave_other_stores_half_done(

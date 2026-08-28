@@ -68,6 +68,37 @@ _PRIVATE_KEY = re.compile(
     r"-----END (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED) )?PRIVATE KEY-----",
     re.DOTALL,
 )
+# Issuer prefixes that mean "credential" on their own.
+_CREDENTIAL_PREFIX = re.compile(
+    r"(?i)^(?:sk-|pk-|rk-|ya29\.|1//|gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA|AIza)"
+)
+# Any long run that could be a bare token. Deciding is left to
+# _looks_like_credential so that Sourcecado's own identifiers survive.
+_TOKEN_RUN = re.compile(r"[A-Za-z0-9._\-+/]{24,}")
+
+
+def _looks_like_credential(value: str) -> bool:
+    """True for a bare secret, false for a Sourcecado identifier.
+
+    The identifiers Doctor must keep printable — `per_<32 hex>`, `run_<32 hex>`,
+    `receipt_<32 hex>`, a sha256, an ISO timestamp — draw on at most two of
+    lowercase, uppercase, and digits. Issued credentials almost always mix all
+    three, or announce themselves with a known prefix. Anything shorter than 24
+    characters is left alone; it cannot carry a usable secret.
+    """
+    core = value.strip("._-+/")
+    if len(core) < 24:
+        return False
+    if _CREDENTIAL_PREFIX.match(value):
+        return True
+    classes = sum(
+        (
+            any(character.islower() for character in core),
+            any(character.isupper() for character in core),
+            any(character.isdigit() for character in core),
+        )
+    )
+    return classes >= 3
 
 
 class Severity(StrEnum):
@@ -212,6 +243,12 @@ def redact(text: str, root: Path) -> str:
     value = _PRIVATE_KEY.sub("[redacted private key]", value)
     value = _SECRET_ASSIGNMENT.sub(
         lambda match: f"{match.group('key')}{match.group('separator')}[redacted]", value
+    )
+    # Backstop for a bare token sitting in a field Doctor prints verbatim, such
+    # as a session id or an unexpected run status.
+    value = _TOKEN_RUN.sub(
+        lambda match: "[redacted]" if _looks_like_credential(match.group(0)) else match.group(0),
+        value,
     )
     if len(value) > MAX_DETAIL_CHARS:
         value = value[: MAX_DETAIL_CHARS - 1] + "…"

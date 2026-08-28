@@ -12,6 +12,7 @@ from coworker import doctor, migrations
 from coworker.doctor import Repair, Severity
 from tests.state_fixtures import (
     PLANTED_API_KEY,
+    PLANTED_BEARER,
     PLANTED_CANARIES,
     build_current_state,
     build_legacy_state,
@@ -579,26 +580,256 @@ def test_backups_are_listed_for_inspection_and_restore(tmp_path):
 # --- bounded and redacted output ----------------------------------------
 
 
-def test_no_planted_secret_survives_into_doctor_output(tmp_path):
-    root = build_current_state(tmp_path / "state", plant_secrets=True)
+# Stores whose canary can only reach the report through a permissions finding.
+# They have no content check of their own, so drift is their evidence route.
+_DRIFT_ONLY_CARRIERS = (
+    "secrets.json",
+    ".env",
+    "memory/99.md",
+    "mcp.json",
+    "workspace_grants.json",
+    "shell_tasks.json",
+    "host_command_approvals.json",
+    "directory_requests.json",
+)
+
+# Stores that produce a finding naming themselves.
+_SELF_REPORTING_CARRIERS = {
+    "conversation_db": "sqlite.corrupt_row",
+    "people_db": "sqlite.corrupt_row",
+    "conversation_transcripts": "jsonl.torn_tail",
+    "presentation_events": "jsonl.record_version",
+    "workspace_receipts": "jsonl.torn_tail",
+}
+
+
+def _provoke_findings_in_every_store(root: Path, *, include_blocking: bool = True) -> None:
+    """Give Doctor a reason to say something about each kind of store.
+
+    A store Doctor stays silent about never puts its bytes near the output, so
+    asserting "no secret leaked" from a silent store proves nothing. Each defect
+    below drives a real finding on a store that is carrying a planted credential.
+
+    `include_blocking` adds an unreadable JSON document. That is a fail-closed
+    condition, so it stops every repair — callers testing the repair path must
+    leave it out or they will be testing a no-op.
+    """
     conn = _connect(root, "club.db")
     conn.execute("UPDATE inbox SET arguments = ?", (f"authorization: Bearer {PLANTED_API_KEY}",))
+    conn.execute(
+        "INSERT INTO chat_queue "
+        "(session_id, id, text, position, state, created_at, updated_at) "
+        f"VALUES ('ghost', 'q1', 'send the key {PLANTED_API_KEY}', 0, 'waiting', 'x', 'x')"
+    )
     conn.commit()
     conn.close()
+    people = _connect(root, "people.db")
+    # Add a corrupt row rather than overwriting the planted one, so people.db
+    # still carries a credential for the leak assertions to be about.
+    people.execute(
+        "INSERT INTO events "
+        "(event_id, person_id, source, kind, summary, payload, actor) "
+        "SELECT 'evt_corrupt', person_id, 'gmail', 'mail', 'corrupt payload', "
+        "'{broken', 'assistant' FROM people LIMIT 1"
+    )
+    people.commit()
+    people.close()
+    # JSONL directory and JSONL log: a crash-torn tail holding a credential.
     with (root / "conversations" / "main.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"role": "user", "content": PLANTED_API_KEY})[:40])
     with (root / "workspace_receipts.jsonl").open("a", encoding="utf-8") as handle:
-        handle.write("{\"summary\": \"api_key=" + PLANTED_API_KEY + "\", \"tru")
-    os.chmod(root / "secrets.json", 0o644)
+        handle.write('{"summary": "api_key=' + PLANTED_API_KEY + '", "tru')
+    # JSONL directory again, on the record-version path.
+    with (root / "events" / "main.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"version": 1, "type": "error", "message": PLANTED_BEARER}) + "\n")
+    if include_blocking:
+        # JSON document: unreadable, so the parse error itself must stay clean.
+        (root / "shell_tasks.json").write_text(
+            '{"version": 1, "tasks": [{"command_summary": "' + PLANTED_BEARER + '"',
+            encoding="utf-8",
+        )
+    for name in _DRIFT_ONLY_CARRIERS:
+        os.chmod(root / name, 0o644)
+
+
+def _assert_no_canary(texts, label=""):
+    for text in texts:
+        for canary in PLANTED_CANARIES:
+            assert canary not in text, f"{label}: {canary}"
+
+
+def test_every_store_kind_holds_a_planted_secret(tmp_path):
+    """Guard the guard: if a store stops carrying a canary, the leak tests below
+    would quietly stop testing it."""
+    root = build_current_state(tmp_path / "state", plant_secrets=True)
+
+    carriers = {
+        migrations.StoreKind.SQLITE: ["club.db", "people.db"],
+        migrations.StoreKind.JSONL_DIR: ["conversations/main.jsonl", "events/main.jsonl"],
+        migrations.StoreKind.JSONL_LOG: ["workspace_receipts.jsonl"],
+        migrations.StoreKind.JSON_DOCUMENT: [
+            "workspace_grants.json",
+            "shell_tasks.json",
+            "host_command_approvals.json",
+            "directory_requests.json",
+            "mcp.json",
+        ],
+        migrations.StoreKind.OPAQUE_FILE: ["secrets.json", ".env"],
+        migrations.StoreKind.DIRECTORY: ["memory/99.md"],
+    }
+    assert set(carriers) == {spec.kind for spec in migrations.REGISTRY}
+    _provoke_findings_in_every_store(root)
+    for kind, names in carriers.items():
+        for name in names:
+            raw = (root / name).read_bytes()
+            assert any(c.encode() in raw for c in PLANTED_CANARIES), f"{kind}: {name}"
+
+
+def test_no_planted_secret_survives_into_doctor_output(tmp_path):
+    root = build_current_state(tmp_path / "state", plant_secrets=True)
+    _provoke_findings_in_every_store(root)
 
     report = doctor.diagnose(root)
     rendered = report.render()
     serialized = json.dumps(report.to_dict())
 
-    assert report.findings
-    for canary in PLANTED_CANARIES:
-        assert canary not in rendered, canary
-        assert canary not in serialized, canary
+    # Doctor named every store that reports on itself. Without this the leak
+    # assertions could pass because Doctor said nothing about that store at all.
+    for store_id, check in _SELF_REPORTING_CARRIERS.items():
+        assert any(
+            item.store_id == store_id and item.check == check for item in report.findings
+        ), (store_id, check, sorted((i.store_id, i.check) for i in report.findings))
+    assert any(item.store_id == "shell_tasks" for item in report.findings)
+
+    _assert_no_canary([rendered, serialized], "diagnose")
+
+
+def test_no_planted_secret_survives_from_a_drift_only_store(tmp_path):
+    """The stores with no content check of their own reach the report only
+    through a permissions finding, whose detail list is capped. Prove coverage
+    in batches that fit under the cap, rather than assuming all eight fit."""
+    root = build_current_state(tmp_path / "state", plant_secrets=True)
+    _provoke_findings_in_every_store(root, include_blocking=False)
+
+    batch = doctor.MAX_DETAIL_ROWS - 2
+    covered = set()
+    for start in range(0, len(_DRIFT_ONLY_CARRIERS), batch):
+        chunk = _DRIFT_ONLY_CARRIERS[start : start + batch]
+        for name in _DRIFT_ONLY_CARRIERS:
+            os.chmod(root / name, 0o600)
+        for name in chunk:
+            os.chmod(root / name, 0o644)
+
+        report = doctor.diagnose(root)
+        drift = _finding(report, "permissions.drift")
+        named = " ".join(drift.detail)
+        for name in chunk:
+            assert name in named, (name, drift.detail)
+            covered.add(name)
+        _assert_no_canary(
+            [report.render(), json.dumps(report.to_dict())], f"drift batch {chunk}"
+        )
+
+    assert covered == set(_DRIFT_ONLY_CARRIERS)
+
+
+def test_no_planted_secret_survives_a_repair_or_its_report(tmp_path):
+    """The repair path renders a second report and writes a manifest and backups."""
+    root = build_current_state(tmp_path / "state", plant_secrets=True)
+    # No blocking defect: a fail-closed report makes repair a no-op, and this
+    # test would then prove nothing about the repair path.
+    _provoke_findings_in_every_store(root, include_blocking=False)
+
+    report = doctor.repair(root)
+
+    # The repair really ran, and really wrote a backup, before anything below.
+    assert report.blocked is False
+    assert set(report.applied_repairs) == {
+        "migration.apply",
+        "jsonl.truncate_torn_tail",
+        "permissions.tighten",
+    }, report.applied_repairs
+    assert report.backup_id is not None
+    manifests = sorted((root / migrations.BACKUPS_DIR_NAME).rglob("manifest.json"))
+    assert len(manifests) == 1
+    backup = root / migrations.BACKUPS_DIR_NAME / report.backup_id
+    assert (backup / "club.db").is_file()
+    assert (backup / "conversations" / "main.jsonl").is_file()
+
+    texts = [report.render(), json.dumps(report.to_dict())]
+    texts += [path.read_text(encoding="utf-8") for path in manifests]
+    _assert_no_canary(texts, "repair")
+
+
+def test_redact_strips_credentials_without_mangling_identifiers(tmp_path):
+    """The backstop layer, tested directly.
+
+    Doctor's first guarantee is structural: findings carry table names, row ids,
+    and counts, never row content. redact() is the second layer, for the few
+    fields printed verbatim. It has to strip a secret without destroying the
+    identifiers that make a report actionable.
+    """
+    root = tmp_path / "state"
+
+    for secret in PLANTED_CANARIES[:3]:
+        assert secret not in doctor.redact(secret, root)
+        assert secret not in doctor.redact(f"session {secret} is orphaned", root)
+    assert "[redacted]" in doctor.redact(f"api_key={PLANTED_API_KEY}", root)
+    assert "[redacted]" in doctor.redact(f"authorization: Bearer {PLANTED_BEARER}", root)
+    assert "[redacted private key]" in doctor.redact(
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----", root
+    )
+
+    # Identifiers Doctor must keep printing, verbatim.
+    keep = [
+        "per_0f3c9a1b4d2e4f6a8b0c1d2e3f405162",
+        "run_9d41f0b2c7e84a15b6d3f8021ac95e77",
+        "receipt_4b1c8e2a9f6d403bb85c7e1a2d9f6035",
+        "sched-1",
+        "call_gmail_send_1",
+        "2026-08-27T09:12:00+00:00",
+        "a" * 64,
+        "0f3c9a1b4d2e4f6a8b0c1d2e3f4051620f3c9a1b4d2e4f6a8b0c1d2e3f405162",
+        "<state>/conversations/main.jsonl",
+        "https://www.linkedin.com/in/dana-ruiz",
+    ]
+    for value in keep:
+        assert doctor.redact(value, root) == value, value
+
+    assert doctor.redact(str(root / "club.db"), root) == "<state>/club.db"
+    assert len(doctor.redact("x" * 5000, root)) <= doctor.MAX_DETAIL_CHARS
+
+
+def test_a_secret_in_an_identifier_field_is_redacted_from_the_report(tmp_path):
+    """Session ids and run statuses are printed verbatim, so they need the
+    backstop. This drives a credential through both."""
+    root = build_current_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    conn = _connect(root, "club.db")
+    conn.execute(
+        "INSERT INTO chat_queue "
+        "(session_id, id, text, position, state, created_at, updated_at) "
+        "VALUES (?, 'q1', 'stranded', 0, 'waiting', 'x', 'x')",
+        (PLANTED_API_KEY,),
+    )
+    conn.execute(
+        "INSERT INTO runs (job_id, status, result, session_id, artifacts) "
+        "VALUES (1, ?, '', 'sched-1', '[]')",
+        (PLANTED_BEARER,),
+    )
+    conn.commit()
+    conn.close()
+
+    report = doctor.diagnose(root)
+    rendered = report.render()
+    serialized = json.dumps(report.to_dict())
+
+    # The findings fired, so the identifiers really did reach the report.
+    assert _finding(report, "queue.orphaned_session").record_count == 1
+    assert _finding(report, "schedule.unknown_run_status").record_count == 1
+    assert PLANTED_API_KEY not in rendered and PLANTED_API_KEY not in serialized
+    assert PLANTED_BEARER not in rendered and PLANTED_BEARER not in serialized
+    assert "[redacted]" in rendered
 
 
 def test_no_secret_survives_a_repair_backup_manifest(tmp_path):

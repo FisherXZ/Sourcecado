@@ -167,18 +167,77 @@ not report row contents, message bodies, tokens, authorization headers, or
 private reasoning. Paths are printed relative to `<state>`; an absolute home
 path never appears.
 
-Every detail line passes through a redaction filter that strips private keys and
-`key: value` credential assignments, and every finding is capped: at most 8
-detail lines, at most 200 characters per line, at most 60 findings, and at most
-16000 characters in the whole report. A finding that affects 200 files says so
-by its count, not by listing 200 paths.
+This holds in two layers, and both are tested.
 
-`test_no_planted_secret_survives_into_doctor_output` plants a live-shaped API
-key, an OAuth access token, a refresh token, a message body, and a line of
-private reasoning across `club.db`, `people.db`, the transcripts, the receipt
-log, `secrets.json`, and `.env`, then asserts none of them appear in the
-rendered report or its JSON. `test_no_secret_survives_a_repair_backup_manifest`
-does the same for the backup manifest.
+**The first layer is structural.** A check reports what it counted, not what it
+read: a corrupt row becomes `inbox.arguments rowid 4`, never the value in that
+column. This is the layer that does the real work.
+
+**The second layer is `redact()`,** a filter every summary and detail line passes
+through on the way into a finding — so it covers the JSON output too, not just
+the rendered text. It strips PEM private key blocks, `key: value` credential
+assignments, absolute paths, and bare high-entropy tokens. It exists for the few
+fields Doctor prints verbatim because the finding is *about* them: a session id,
+an approval id, an unexpected run status.
+
+Telling a secret from an identifier is done by character mix. Sourcecado's own
+identifiers — `per_<32 hex>`, `run_<32 hex>`, a sha256, an ISO timestamp — use at
+most two of lowercase, uppercase, and digits. Issued credentials mix all three,
+or start with a known issuer prefix (`sk-`, `ya29.`, `ghp_`, `AKIA`, `AIza`, and
+the rest). Anything under 24 characters is left alone. So `per_0f3c9a…` survives
+intact and `sk-live-AbC123…` becomes `[redacted]`.
+
+Known limit: a bare token that draws on fewer than three character classes and
+carries no known prefix — a 40-character all-lowercase string, say — would be
+truncated but not redacted if it landed in an identifier field. The structural
+layer is what makes that unreachable in practice today; the filter is the
+backstop, not the guarantee.
+
+Every finding is capped: at most 8 detail lines, at most 200 characters per
+line, at most 60 findings, at most 16000 characters in the whole report. A
+finding that affects 200 files says so by its count, not by listing 200 paths.
+
+### How this is proven
+
+`test_every_store_kind_holds_a_planted_secret` asserts each of the six store
+kinds is carrying a live-shaped canary — an API key, an OAuth access token, a
+refresh token, a message body, a line of private reasoning — planted in
+`club.db`, `people.db`, the transcripts, the event log, the receipt log, all
+five JSON documents, `secrets.json`, `.env`, and a memory note. It fails if a
+store ever stops carrying one, so the leak tests cannot quietly stop testing it.
+
+`test_no_planted_secret_survives_into_doctor_output` then asserts Doctor
+produced a finding *for each of those stores* before asserting no canary appears
+in the report or its JSON. Without that first assertion the test would pass for
+a store Doctor never mentioned, which proves nothing.
+
+Five stores — `secrets.json`, `.env`, `mcp.json`, `workspace_grants.json`, the
+memory notes, and the three remaining JSON documents — have no content check of
+their own. Their only route into the report is a permissions finding, whose
+detail list is capped at 8 lines. Eight carriers against a cap of 8 leaves no
+headroom, so `test_no_planted_secret_survives_from_a_drift_only_store` proves
+coverage in batches that fit under the cap and asserts every carrier was named
+in some batch, rather than assuming they all fit at once.
+
+`test_no_planted_secret_survives_a_repair_or_its_report` covers the repair path
+and every backup manifest. It asserts the repair actually ran — the exact set of
+applied repairs, a backup id, exactly one manifest, and named files inside the
+backup — before it asserts anything about leaks. That guard exists because the
+test originally planted an unreadable JSON document, which is a fail-closed
+condition: `repair` correctly refused, wrote no backup, and the leak assertions
+passed over a no-op. The blocking defect now belongs only to the diagnose test.
+
+`test_redact_strips_credentials_without_mangling_identifiers` tests the filter
+directly, including the negative cases: ten real identifiers that must come back
+byte-for-byte unchanged. `test_a_secret_in_an_identifier_field_is_redacted_from_the_report`
+drives a credential through a session id and a run status — the two fields
+printed verbatim — and proves the backstop catches it.
+
+Every one of these was checked by mutation, because a test that cannot fail is
+not evidence. Each of the following breaks the suite: making `redact()` an
+identity function; dropping only its bare-token rule; making a check emit row
+content; making `repair` a no-op; making the permissions finding stop naming
+files; and removing the canary from any single store.
 
 ## Backups
 

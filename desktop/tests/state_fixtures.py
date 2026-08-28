@@ -150,19 +150,26 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
     grants = WorkspaceGrantStore(root)
     grant_root = root.parent / "granted-workspace"
     grant_root.mkdir(parents=True, exist_ok=True)
-    grants.add(grant_root, label="Sourcing notes", access=GrantAccess.READ_ONLY)
+    # A credential pasted into a label or a command summary is the realistic way
+    # a secret reaches a store that is not itself secret-bearing.
+    label = f"Sourcing notes {PLANTED_API_KEY}" if plant_secrets else "Sourcing notes"
+    grants.add(grant_root, label=label, access=GrantAccess.READ_ONLY)
 
     ShellTaskStore(root).put(
         {
             "task_id": "task_1",
             "status": "succeeded",
             "execution_target": "docker",
-            "command_summary": "ls -la",
+            "command_summary": (
+                f"curl -H 'authorization: Bearer {PLANTED_BEARER}' api.example.com"
+                if plant_secrets
+                else "ls -la"
+            ),
             "exit_code": 0,
         }
     )
     DirectoryRequestStore(root).create(
-        {"label": "Sourcing notes", "access": "read_only"},
+        {"label": label, "access": "read_only"},
         session_id="main",
         run_id="run_a1",
     )
@@ -173,7 +180,11 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
                 {
                     "id": "host_approval_1",
                     "fingerprint": "b" * 64,
-                    "command_summary": "npm test",
+                    "command_summary": (
+                        f"npm test --token={PLANTED_API_KEY}"
+                        if plant_secrets
+                        else "npm test"
+                    ),
                     "cwd": "/tmp/granted-workspace",
                     "environment_fingerprint": "c" * 64,
                     "actor": "director",
@@ -194,7 +205,12 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
         grant_id="grant_1",
     )
 
-    _write_json(root / "mcp.json", {"mcpServers": {}})
+    _write_json(
+        root / "mcp.json",
+        {"mcpServers": {"granola": {"headers": {"Authorization": PLANTED_BEARER}}}}
+        if plant_secrets
+        else {"mcpServers": {}},
+    )
     secrets_payload: dict[str, Any] = {"google": {"scopes": ["gmail.readonly"]}}
     if plant_secrets:
         secrets_payload = {
@@ -217,6 +233,23 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
             {"role": "assistant", "content": PLANTED_REASONING},
         )
         store.set_setting("apollo_key_hint", PLANTED_API_KEY)
+        store.append_event(
+            "main",
+            {
+                "version": 2,
+                "type": "error",
+                "session_id": "main",
+                "run_id": "run_a1",
+                "event_id": "event_a3",
+                "message_id": "message_a1",
+                "part_id": "part_a1",
+                "message": f"Apollo rejected api_key={PLANTED_API_KEY}",
+            },
+        )
+        _write_private(
+            root / "memory" / "99.md",
+            f"# 99\n\nApollo key is {PLANTED_API_KEY}. {PLANTED_REASONING}\n",
+        )
 
     return root
 
