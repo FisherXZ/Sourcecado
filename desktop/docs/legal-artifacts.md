@@ -29,4 +29,14 @@ Any facet short of `present` blocks `ready_to_use` and produces a reason like `p
 
 It does not decide who counts as an authorized approver (`approval["authorized"]` is a caller-declared fact), and it does not author or judge legal language -- only structural placeholders (`[COUNTERPARTY NAME]`, `[EFFECTIVE DATE]`) and generic markers. Recording real approval, and authoring the canonical Berkeley Codeology template text, are human/counsel actions outside this module's scope.
 
-It is not yet wired into any live path -- `coworker/drive.py`'s existing `_legal_source_safety` hotfix and `coworker/drive_evidence.py`'s `normalize()` are unchanged. Wiring `classify()` into the Drive-read and tool-call path is follow-up integration work.
+## Where it runs
+
+`coworker/drive.py`'s `_legal_source_safety` is the live call site. A Drive read that looks like a legal document (by filename or by the opening of its body) is classified, and the assessment is returned as the read result's `source_safety` field, alongside `legal_document: True`. That field is the same one `drive_evidence.normalize()` and `drive_ingestion` already read to mark a source `sensitive`, so it now carries facet evidence instead of a two-string name match.
+
+A Drive read declares nothing. It has no lifecycle status, no approval record, and no expected counterparty, so `status` resolves to `unverified` and `ready_to_use` is `False` for every legal document read from Drive. The facets still vary per document: which parties the body names, whether it carries a date, whether it states a term. The body is untrusted external text and never gets to declare its own standing.
+
+`source_safety` is a full assessment, so `attach_gap(people, person_id, result["source_safety"], actor=...)` files the knowledge gap directly, with no Drive-specific gap format in between.
+
+## Still to do
+
+Nothing in the product records a declared status, an approval, or an expected counterparty for a Drive file yet, so no read can reach `ready_to_use`. Recording those is human work (see issue #39). Filing the gap automatically when a person-linked Drive source is attached belongs in `coworker/drive_evidence.py` or `coworker/drive_ingestion.py`; today the caller has to make that `attach_gap` call.

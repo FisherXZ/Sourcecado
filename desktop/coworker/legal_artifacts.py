@@ -159,6 +159,13 @@ def _verify_parties(body: str, expected_party: str) -> tuple[Evidence, str]:
     if not parties:
         return Evidence.MISSING, "no_named_parties_found"
     expected_norm = expected_party.strip().casefold()
+    if not expected_norm:
+        # The caller declared no counterparty to check against. The body's
+        # parties are readable, but the expectation they should be checked
+        # against is not, so this facet cannot verify. Reporting it as a
+        # failed match would invent an expectation the caller never made,
+        # and the names still have to reach the human who resolves the gap.
+        return Evidence.MISSING, "no_expected_party_declared:" + ", ".join(parties)
     found_expected = any(p.casefold() == expected_norm for p in parties)
     unexpected = [p for p in parties if p.casefold() != expected_norm and not _is_placeholder(p)]
     if not found_expected:

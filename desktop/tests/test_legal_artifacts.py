@@ -141,6 +141,31 @@ def test_classify_flags_partial_party_match():
     assert assessment["ready_to_use"] is False
 
 
+def test_classify_cannot_verify_parties_without_a_declared_expectation():
+    """No declared counterparty means the facet cannot verify.
+
+    This is the shape a Drive read hands in: the body's parties are readable,
+    the expectation to check them against is not. Reporting that as a failed
+    match would invent an expectation the caller never made, so it reads
+    `missing` -- and the names still reach the human resolving the gap.
+    """
+    assessment = classify(
+        artifact_id="drive:nda-undeclared",
+        title="Codeology NDA Template",
+        body=_mismatched_party_body(),
+        status=None,
+        expected_party="",
+    )
+
+    parties = assessment["facets"]["parties"]
+    assert parties["evidence"] == "missing"
+    assert parties["reason"].startswith("no_expected_party_declared:")
+    assert "Northwind Distribution" in parties["reason"]
+    assert "Ridgeline Ventures" in parties["reason"]
+    assert assessment["status"] == "unverified"
+    assert assessment["ready_to_use"] is False
+
+
 def test_classify_flags_missing_dates():
     assessment = classify(
         artifact_id="drive:nda-2",

@@ -15,6 +15,7 @@ from coworker.connectors.google_oauth import (
     save_google,
 )
 from coworker.gmail import GmailError
+from coworker.legal_artifacts import classify
 from coworker.secrets import SecretStore
 from coworker.drive_extract import (
     DriveExtractionError,
@@ -98,18 +99,33 @@ def _redact_credentials(text: str) -> tuple[str, int]:
     return safe, redaction_count
 
 
-def _legal_source_safety(name: str, text: str) -> dict[str, Any] | None:
+def _legal_source_safety(
+    name: str, text: str, *, artifact_id: str, modified_time: Any
+) -> dict[str, Any] | None:
+    """Classify a Drive file that reads as a legal artifact.
+
+    Deciding *whether* a file is a legal document stays here and stays
+    name/body based. Judging it is `legal_artifacts.classify`'s job.
+
+    A Drive read declares nothing: it carries no lifecycle status, no
+    approval record, and no expected counterparty, so every legal file read
+    from Drive resolves to `unverified` and can never be `ready_to_use`. The
+    body is untrusted external text and never gets to declare its own
+    standing -- it only supplies the parties, dates, and terms the classifier
+    reads out of it. The returned mapping is an assessment that
+    `legal_artifacts.attach_gap` consumes unchanged.
+    """
     if not (_LEGAL_NAME_RE.search(name) or _LEGAL_BODY_RE.search(text[:4000])):
         return None
-    reasons: list[str] = []
-    if "codeology" in name.lower() and "berkeley consulting" in text.lower():
-        reasons.append("unexpected_recipient_berkeley_consulting")
-    return {
-        "legal_document": True,
-        "ready_to_use": False,
-        "status": "party_mismatch" if reasons else "unverified",
-        "reasons": reasons,
-    }
+    assessment = classify(
+        artifact_id=artifact_id,
+        title=name,
+        body=text,
+        status=None,
+        expected_party="",
+        modified_time=str(modified_time) if modified_time else None,
+    )
+    return {"legal_document": True, **assessment}
 
 
 def _source_reference(
@@ -333,7 +349,12 @@ class DriveApi:
             "sensitive_content_redacted": redaction_count > 0,
             "redaction_count": redaction_count,
         }
-        source_safety = _legal_source_safety(safe_name, safe_text)
+        source_safety = _legal_source_safety(
+            safe_name,
+            safe_text,
+            artifact_id=f"drive:{result['id']}",
+            modified_time=result["modifiedTime"],
+        )
         if source_safety is not None:
             result["source_safety"] = source_safety
         return result
