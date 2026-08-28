@@ -11,6 +11,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+# Declared data version for workspace_receipts.jsonl, read by
+# coworker.migrations. An append-only log carries no header, so the version
+# is recorded out of band.
+SCHEMA_VERSION = 1
+
 
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)(?P<key>(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password))"

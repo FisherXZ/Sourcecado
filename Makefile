@@ -2,7 +2,7 @@ PYTHON ?= python3
 VENV := desktop/.venv
 GUI := desktop/surfaces/gui
 
-.PHONY: setup sidecar gui native test test-python test-gui eval build
+.PHONY: setup sidecar gui native test test-python test-gui eval build doctor doctor-repair
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -28,6 +28,12 @@ test-gui:
 
 eval:
 	cd desktop && .venv/bin/python -m coworker.evals --artifacts .eval-artifacts
+
+doctor:
+	cd desktop && .venv/bin/python -m coworker.doctor
+
+doctor-repair:
+	cd desktop && .venv/bin/python -m coworker.doctor repair
 
 build:
 	npm --prefix $(GUI) run build

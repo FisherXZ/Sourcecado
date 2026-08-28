@@ -13,6 +13,8 @@ from typing import Any, Callable
 
 from coworker.secrets import SecretStore
 
+# Declared data version for mcp.json, read by coworker.migrations.
+SCHEMA_VERSION = 1
 GRANOLA_URL = "https://mcp.granola.ai/mcp"
 _WRITE = re.compile(r"write|create|delete|update", re.I)
 
