@@ -1276,11 +1276,14 @@ class DeepSeekProvider(OpenAICompatProvider):
                 if tools and "reasoning_content" not in message:
                     key = _continuity_key(prepared, message)
                     reasoning = cache.get(key) if cache is not None else None
-                    if reasoning is None:
-                        raise RuntimeError(
-                            "deepseek transient reasoning is unavailable for continuation"
-                        )
-                    message["reasoning_content"] = reasoning
+                    # The reasoning is deliberately never persisted, so a
+                    # restart empties this cache for every prior assistant
+                    # turn. DeepSeek accepts a continuation without it, and
+                    # refusing to send left the conversation permanently
+                    # unusable, so send what we have. Replay still happens
+                    # whenever the cache is warm.
+                    if reasoning is not None:
+                        message["reasoning_content"] = reasoning
             prepared.append(message)
         return prepared
 
