@@ -42,6 +42,10 @@ CHECKPOINT_KINDS = frozenset(
         "terminal",
     }
 )
+# A run carrying either of these has a hole in its record: work happened that
+# no checkpoint describes. Readers must not call silence elsewhere an absence,
+# and retention must not delete the only marker that the hole exists.
+INCOMPLETE_RECORD_KINDS = frozenset({"process_interrupted", "tool_outcome_unknown"})
 
 _ID_LIMIT = 256
 _SHORT_LIMIT = 128
@@ -102,6 +106,8 @@ _CHECKPOINT_FIELDS = {
     "person_id": _id_text,
     "provider": _id_text,
     "model_id": _id_text,
+    "persona_id": _id_text,
+    "prompt_version": _short_text,
     "status": _short_text,
     "reason": _short_text,
     "error_class": _short_text,

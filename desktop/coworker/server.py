@@ -28,6 +28,7 @@ from coworker.automation.scheduler import (
     next_monday_0900,
     now_iso,
 )
+from coworker.agent_run_repository import AgentRunRepository
 from coworker.apollo_curation import curate_apollo_candidates
 from coworker.calendar import calendar_from_secrets
 from coworker.connectors.google_oauth import (
@@ -80,6 +81,8 @@ from coworker.provider import (
     safe_model_identifier,
 )
 from coworker.provider_retry import verified_provider_chain
+from coworker.run_ledger import RunLedger
+from coworker.run_ledger_api import run_ledger_router
 from coworker.secrets import SecretStore
 from coworker.store import ConversationStore, valid_session_id
 from coworker.telemetry import (
@@ -372,6 +375,11 @@ def create_app(
             people=app.state.people,
         )
     )
+    # Read side only. Registering an owner and reclaiming leases belongs to
+    # whatever starts the sidecar process, not to opening the store.
+    app.state.agent_runs = AgentRunRepository(root)
+    app.state.run_ledger = RunLedger(app.state.agent_runs, approvals=app.state.store)
+    app.include_router(run_ledger_router(ledger=app.state.run_ledger))
     app.state.calendar = calendar_from_secrets(app.state.secrets, http=http)
     app.state.apollo_key = apollo_key if apollo_key is not None else os.environ.get("APOLLO_API_KEY")
     app.state.tavily_key = os.environ.get("TAVILY_API_KEY")
