@@ -1,5 +1,7 @@
 # Sourcecado
 
+![Sourcecado — Your AI sourcing director.](brand/marketing/social-card-light.jpg)
+
 Sourcecado is a local-first desktop assistant for Codeology sourcing directors. It helps one operator find people, prepare tailored outreach, keep active conversations moving, and leave behind a useful person file for the next officer.
 
 The current product is the Python sidecar and React/Tauri desktop app in `desktop/`. The retired hosted Next.js implementation is preserved under `archive/hosted-web/`; it is historical reference, not the default runtime.
@@ -69,6 +71,7 @@ Run the deterministic baseline/candidate agent harness separately with `make eva
 - `desktop/coworker/` — local FastAPI sidecar, agent loop, tools, connectors, permissions, and persistence
 - `desktop/surfaces/gui/` — React/Vite interface and Tauri shell
 - `desktop/tests/` — Python tests
+- `brand/` — mascot poses, landing hero, social cards, and the dock-icon master
 - `docs/` — current product records, ADRs, QA evidence, plans, and historical design documents
 - `archive/hosted-web/` — retired Next.js/Postgres implementation, kept intact for reference
 - `scratchpad/` — non-authoritative working artifacts

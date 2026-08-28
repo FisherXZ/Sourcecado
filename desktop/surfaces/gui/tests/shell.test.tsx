@@ -579,6 +579,8 @@ describe("App shell routing", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Welcome to Sourcecado" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start a chat" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Connections" })).toHaveAttribute("href", "#/connections");
+    expect(document.querySelector(".welcome-page")).toBeInTheDocument();
+    expect(document.querySelector("img.app-mark")).toHaveAttribute("src", "/favicon.png");
   });
 
   it("keeps navigation usable through boot failure and retry", async () => {
