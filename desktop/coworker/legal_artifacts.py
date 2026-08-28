@@ -213,15 +213,15 @@ def _verify_parties_against_title(parties: list[str], title: str) -> tuple[Evide
     its own would otherwise have no way to see it.
     """
     title_tokens = _significant_tokens(title)
-    named = [
-        party
-        for party in parties
-        if not _is_placeholder(party) and _significant_tokens(party)
-    ]
-    if not title_tokens or not named:
+    named = [party for party in parties if not _is_placeholder(party)]
+    # An organization whose whole name is generic ("Partners Group") reduces
+    # to no tokens. It still gets reported to the human -- it is one of the
+    # parties -- but it cannot be the thing that makes the comparison possible.
+    comparable = [party for party in named if _significant_tokens(party)]
+    if not title_tokens or not comparable:
         # Nothing to compare. Either the title is pure document boilerplate
         # ("Master Services Agreement") and names no organization to expect,
-        # or the body's parties are placeholders and name none to check.
+        # or the body names none that can be checked against one.
         return Evidence.MISSING, "no_expected_party_declared:" + ", ".join(parties)
     matched: list[str] = []
     unmatched: list[str] = []

@@ -250,6 +250,27 @@ def test_classify_does_not_match_parties_on_a_shared_corporate_form():
     assert "Widget Labs LLC" in parties["reason"]
 
 
+def test_classify_reports_every_named_party_including_uncomparable_ones():
+    """A party whose whole name is generic still reaches the human.
+
+    "Partners Group" reduces to no name-bearing tokens, so it cannot carry the
+    comparison. Dropping it from the reason would hand the person resolving
+    the gap an incomplete list of who the agreement is actually between.
+    """
+    assessment = classify(
+        artifact_id="drive:nda-generic-party",
+        title="Codeology NDA.docx",
+        body="NONDISCLOSURE AGREEMENT between Partners Group and Widget Labs LLC.",
+        status=None,
+        expected_party="",
+    )
+
+    parties = assessment["facets"]["parties"]
+    assert parties["evidence"] == "absent"
+    assert "Partners Group" in parties["reason"]
+    assert "Widget Labs LLC" in parties["reason"]
+
+
 def test_classify_cannot_compare_a_title_that_names_no_organization():
     """A subject-matter filename carries no expectation, so it asks nothing.
 
