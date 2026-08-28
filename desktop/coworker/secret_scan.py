@@ -36,6 +36,12 @@ copies a secret-bearing store to begin with, but this does not trust that --
 it skips any `secret_bearing` store id by its own registry lookup, regardless
 of what a backup's manifest claims was copied.
 
+An incomplete scan is never clean. Path.glob and Path.rglob return [] on an
+unlistable directory without raising, so this lists the directory first and
+records the store as unreadable when that fails. A truncated SQLite file that
+cannot be walked is unreadable too. Clean is reserved for a complete read
+with no match; that result feeds the remediation receipt.
+
 Output discipline matches `coworker/doctor.py`: bounded, and never the
 matched value. A finding names a store id, a record or file identity -- a
 table and rowid, a transcript file and line number, a JSON document's path --
@@ -47,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -91,7 +98,8 @@ class ScanReport:
 
     @property
     def clean(self) -> bool:
-        return not self.findings
+        # Unreadable stores are not a proof of absence.
+        return not self.findings and not self.unreadable
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -197,6 +205,21 @@ def _scan_sqlite(path: Path, root: Path, needles: frozenset[str], home: Path) ->
     return identities
 
 
+def _list_store_files(path: Path, pattern: str | None = None) -> list[Path] | None:
+    """List files in a store directory, or None if the directory cannot be listed.
+
+    Path.glob and Path.rglob return [] on an unlistable directory without
+    raising, which would look like a successful empty scan.
+    """
+    try:
+        os.listdir(path)
+    except OSError:
+        return None
+    if pattern is None:
+        return sorted(file for file in path.rglob("*") if file.is_file())
+    return sorted(path.glob(pattern))
+
+
 def _scan_jsonl_file(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str]:
     identities: list[str] = []
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -218,11 +241,12 @@ def _scan_one_file(path: Path, root: Path, needles: frozenset[str], home: Path) 
     return []
 
 
-def _scan_directory(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str]:
+def _scan_directory(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str] | None:
+    files = _list_store_files(path)
+    if files is None:
+        return None
     identities: list[str] = []
-    for file in sorted(path.rglob("*")):
-        if not file.is_file():
-            continue
+    for file in files:
         text = file.read_text(encoding="utf-8", errors="replace")
         relative = _relative(file, root)
         if _matched(text, needles, home=home, root=root, location=relative):
@@ -242,8 +266,11 @@ def _scan_path(
         if kind is StoreKind.SQLITE:
             return _scan_sqlite(path, root, needles, home)
         if kind is StoreKind.JSONL_DIR:
+            files = _list_store_files(path, "*.jsonl")
+            if files is None:
+                return None
             identities: list[str] = []
-            for file in sorted(path.glob("*.jsonl")):
+            for file in files:
                 identities.extend(_scan_jsonl_file(file, root, needles, home))
             return identities
         if kind is StoreKind.JSONL_LOG:
@@ -380,14 +407,16 @@ def _render(report: ScanReport) -> str:
     if report.unreadable:
         lines.append(f"unreadable       {', '.join(report.unreadable)}")
     lines.append("")
-    if report.clean:
-        lines.append("result           clean -- no match found")
-    else:
+    if report.findings:
         lines.append("result           MATCH FOUND -- value present in current state")
         for item in report.findings:
             lines.append(f"  {item.store_id:<24} {item.count} match(es)")
             for entry in item.detail:
                 lines.append(f"      - {entry}")
+    elif report.unreadable:
+        lines.append("result           incomplete -- some stores could not be read")
+    else:
+        lines.append("result           clean -- no match found")
     rendered = "\n".join(lines) + "\n"
     if len(rendered) > MAX_REPORT_CHARS:
         rendered = rendered[: MAX_REPORT_CHARS - 32].rstrip() + "\n... output truncated\n"
@@ -436,7 +465,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     print(json.dumps(report.to_dict(), indent=2) if args.json else report.render(), end="")
-    return 0 if report.clean else 1
+    if report.findings:
+        return 1
+    if report.unreadable:
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

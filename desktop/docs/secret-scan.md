@@ -44,12 +44,13 @@ Exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Clean. The value was searched for and not found. |
+| 0 | Clean. Every targeted store was read and the value was not found. |
 | 1 | Found. The value is present in at least one store. |
-| 2 | Nothing to search for -- an unknown key, an empty vault, or a scan that failed before it could run. |
+| 2 | Incomplete or nothing to search for -- an unreadable live store or backup copy, an unknown key, an empty vault, or a scan that failed before it could run. |
 
-Code 2 is deliberate, not an afterthought: a scan that found nothing to search
-for and reported "clean" anyway would be worse than no scan at all.
+Code 2 is deliberate: a scan that could not finish, or that found nothing to
+search for, must not report "clean". Doctor treats unreadable as no answer,
+not as absence. A clean result feeds the remediation receipt.
 
 ## What it scans
 

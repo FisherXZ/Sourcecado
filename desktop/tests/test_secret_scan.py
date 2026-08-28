@@ -14,6 +14,7 @@ from a random suffix, never a literal that looks like an issued credential.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -169,6 +170,86 @@ def test_after_rotation_the_revoked_value_is_still_found_in_conversations_and_ev
     assert replacement not in payload
 
 
+# --- an incomplete scan is not a clean one ----------------------------------
+
+
+def test_a_truncated_store_that_still_holds_the_value_is_not_reported_clean(
+    tmp_path, capsys
+):
+    """A store that cannot be read is not a proof the value is absent.
+
+    Public seam: scan_state / ScanReport.clean / ScanReport.render / main.
+    A garbage club.db can still contain the planted bytes. The structured
+    SQLite walk reports it unreadable. That must not print
+    'clean -- no match found' or exit 0 -- those feed the remediation receipt.
+    """
+    root = tmp_path / "state"
+    root.mkdir()
+    probe = _probe_value()
+    _write_secrets(root, {"probe": {"api_key": probe}})
+    (root / "club.db").write_bytes(
+        b"not-a-database " + probe.encode() + b" trailing-garbage"
+    )
+
+    report = scan_state(root, secret_key="probe")
+
+    assert report.unreadable == ("conversation_db",)
+    assert not report.clean
+    rendered = report.render()
+    assert "clean -- no match found" not in rendered
+    assert probe not in rendered
+
+    code = main(["--state", str(root), "--secret-key", "probe"])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "clean -- no match found" not in captured.out
+    assert probe not in captured.out
+
+
+@pytest.mark.parametrize(
+    "dirname,store_id",
+    [
+        ("conversations", "conversation_transcripts"),
+        ("events", "presentation_events"),
+    ],
+)
+def test_an_unlistable_jsonl_directory_is_not_reported_clean(
+    tmp_path, capsys, dirname, store_id
+):
+    """Path.glob on an unlistable directory returns [] without raising.
+
+    Public seam: scan_state / ScanReport.unreadable / ScanReport.clean / main.
+    A conversations/ or events/ directory that cannot be listed still holds
+    the planted file. That must land in unreadable, must not print
+    'clean -- no match found', and must not exit 0.
+    """
+    root = tmp_path / "state"
+    root.mkdir()
+    probe = _probe_value()
+    _write_secrets(root, {"probe": {"api_key": probe}})
+    folder = root / dirname
+    folder.mkdir()
+    (folder / "main.jsonl").write_text(
+        json.dumps({"role": "user", "content": f"using {probe}"}) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(folder, 0o000)
+    try:
+        report = scan_state(root, secret_key="probe")
+        code = main(["--state", str(root), "--secret-key", "probe"])
+        captured = capsys.readouterr()
+    finally:
+        os.chmod(folder, 0o700)
+
+    assert store_id in report.unreadable
+    assert not report.clean
+    rendered = report.render()
+    assert "clean -- no match found" not in rendered
+    assert probe not in rendered
+    assert code == 2
+    assert probe not in captured.out
+
+
 # --- bounded output ----------------------------------------------------------
 
 
@@ -277,6 +358,79 @@ def test_a_secret_bearing_entry_inside_a_backup_stays_excluded_even_if_the_manif
 
 
 # --- the CLI -----------------------------------------------------------------
+
+
+def test_an_unreadable_store_is_not_reported_clean(tmp_path, capsys):
+    """Doctor treats unreadable as no answer, not as absence.
+
+    A clean receipt feeds a remediation receipt. If a live store cannot be
+    read, the report may list it under unreadable, but it must not print
+    'clean -- no match found' or exit 0.
+    """
+    root = tmp_path / "state"
+    root.mkdir()
+    probe = _probe_value()
+    _write_secrets(root, {"probe": {"api_key": probe}})
+    events = root / "events"
+    events.mkdir()
+    planted = events / "main.jsonl"
+    planted.write_text(json.dumps({"type": "turn_end", "text": "idle"}) + "\n", encoding="utf-8")
+    planted.chmod(0o000)
+    try:
+        report = scan_state(root, secret_key="probe")
+        code = main(["--state", str(root), "--secret-key", "probe"])
+    finally:
+        planted.chmod(0o600)
+
+    assert report.unreadable == ("presentation_events",)
+    assert report.findings == ()
+    assert report.clean is False
+    rendered = report.render()
+    assert "clean -- no match found" not in rendered
+    assert "MATCH FOUND" not in rendered
+    assert probe not in rendered
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "clean -- no match found" not in captured.out
+    assert probe not in captured.out
+
+
+def test_an_unreadable_backup_copy_is_not_reported_clean(tmp_path, capsys):
+    root = tmp_path / "state"
+    root.mkdir()
+    probe = _probe_value()
+    _write_secrets(root, {"probe": {"api_key": probe}})
+    backup_id = "doctor-20260101T090000000000Z"
+    backup_dir = _write_backup(
+        root,
+        backup_id,
+        [
+            {
+                "store_id": "workspace_grants",
+                "kind": "json_document",
+                "relative_path": "workspace_grants.json",
+                "content_backed_up": True,
+                "mode": "0o600",
+            }
+        ],
+    )
+    planted = backup_dir / "workspace_grants.json"
+    planted.write_text(json.dumps({"grants": []}), encoding="utf-8")
+    planted.chmod(0o000)
+    try:
+        report = scan_state(root, secret_key="probe")
+        code = main(["--state", str(root), "--secret-key", "probe"])
+    finally:
+        planted.chmod(0o600)
+
+    label = f"backup:{backup_id}:workspace_grants"
+    assert label in report.unreadable
+    assert report.clean is False
+    assert "clean -- no match found" not in report.render()
+    captured = capsys.readouterr()
+    assert code == 2
+    assert probe not in captured.out
 
 
 def test_cli_exits_nonzero_and_prints_nothing_sensitive_when_a_match_is_found(tmp_path, capsys):
