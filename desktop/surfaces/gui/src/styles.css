@@ -264,7 +264,7 @@
 
 .person-summary-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 12px;
   margin-top: 12px;
 }
@@ -401,6 +401,145 @@
 
 .person-drive-actions {
   margin-top: 8px;
+}
+
+/* --- living brief ------------------------------------------------------
+   The claim list is a dense operator table, so it stays quiet: hairline
+   dividers, no fills except the state pill. Warmth lives in the empty
+   states and the header, per DESIGN.md. */
+
+.person-partial,
+.person-attention {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.person-attention {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.person-claims {
+  display: grid;
+  gap: 0;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.person-claim {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.person-claim:last-child {
+  border-bottom: 0;
+}
+
+.person-claim-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.person-claim-state,
+.person-claim-flag {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.person-claim-state.is-current {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.person-claim-state.is-stale,
+.person-claim-flag {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.person-claim-state.is-conflicting {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.person-claim-refs {
+  overflow-wrap: anywhere;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 11px;
+}
+
+.person-handoff {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.person-handoff p {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.person-handoff label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.person-handoff textarea {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.person-handoff textarea:focus-visible,
+.person-handoff button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.person-handoff button {
+  justify-self: start;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.person-handoff button:disabled {
+  cursor: wait;
+  opacity: .65;
 }
 
 @media (max-width: 1179px) {

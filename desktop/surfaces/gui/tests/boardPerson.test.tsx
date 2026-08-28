@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoardView } from "../src/Board";
 import { PersonFileView } from "../src/PersonFile";
+import { claim, livingBrief } from "./livingBrief";
 
 const api = vi.hoisted(() => ({
   attachPersonMeeting: vi.fn(),
   attachPersonDriveEvidence: vi.fn(),
   getBoard: vi.fn(),
+  savePersonHandoff: vi.fn(),
   getPerson: vi.fn(),
   openPersonSourcingChat: vi.fn(),
   refreshPersonMeetings: vi.fn(),
@@ -22,6 +24,7 @@ vi.mock("../src/api", () => ({
   attachPersonMeeting: api.attachPersonMeeting,
   attachPersonDriveEvidence: api.attachPersonDriveEvidence,
   getBoard: api.getBoard,
+  savePersonHandoff: api.savePersonHandoff,
   getPerson: api.getPerson,
   openPersonSourcingChat: api.openPersonSourcingChat,
   refreshPersonMeetings: api.refreshPersonMeetings,
@@ -72,13 +75,7 @@ describe("Board and person-file routes", () => {
           },
         ],
       },
-      brief: {
-        who: "Alyssa Lee",
-        why: "Strong sourcing fit.",
-        learned: ["Led university sourcing."],
-        missing: ["Timing"],
-        sources: ["Apollo"],
-      },
+      brief: livingBrief(),
       timeline: [
         {
           event_id: "event-1",
@@ -169,6 +166,10 @@ describe("Board and person-file routes", () => {
     api.attachPersonDriveEvidence.mockResolvedValue({
       source: { id: "source_ref_drive2", restricted: false },
       person: { person_id: "person one" },
+    });
+    api.savePersonHandoff.mockResolvedValue({
+      person: { person_id: "person one" },
+      brief: livingBrief(),
     });
   });
 
