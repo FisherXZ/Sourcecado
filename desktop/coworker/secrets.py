@@ -8,6 +8,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
+# Declared data version for secrets.json, read by coworker.migrations. The
+# version is recorded out of band so this file keeps holding only secrets.
+SCHEMA_VERSION = 1
+
 
 class SecretStore:
     def __init__(self, path: str | Path) -> None:

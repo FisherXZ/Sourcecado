@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+# Declared schema version for club.db and the transcript log, read by the
+# migration registry in coworker.migrations. Reporting only: this module
+# does not stamp or check it.
+SCHEMA_VERSION = 1
+TRANSCRIPT_VERSION = 1
 _INTERRUPTED_APPROVAL_ERROR = (
     "Outcome is unknown after Sourcecado restarted. "
     "Verify the external resource before retrying."

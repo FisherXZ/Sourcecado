@@ -14,6 +14,9 @@ from typing import Any
 
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
+# Declared schema version for people.db, read by coworker.migrations.
+SCHEMA_VERSION = 1
+
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 ACTORS = ("director", "assistant")
 ATTACHMENT_TYPES = frozenset({"artifact", "knowledge_gap", "source_ref"})
