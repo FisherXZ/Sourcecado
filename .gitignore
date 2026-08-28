@@ -25,6 +25,7 @@ __pycache__/
 
 # isolated worktrees
 .claude/worktrees/
+.worktrees/
 
 # local agent configuration and vendored personal skills
 .claude/settings.local.json

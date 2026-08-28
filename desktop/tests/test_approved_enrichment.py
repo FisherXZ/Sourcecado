@@ -126,7 +126,8 @@ def test_a_person_apollo_cannot_be_matched_on_is_refused_before_the_spend(tmp_pa
     http = FakeHttp({MATCH_URL: APOLLO_PERSON})
     app = _app(tmp_path, http)
     client = TestClient(app)
-    person_id, session_id = _person(app, apollo_id="ada", first="Ada", last=None)
+    # No email, no surname, and no Apollo ID: nothing identifies anybody.
+    person_id, session_id = _person(app, apollo_id=None, first="Ada", last=None)
 
     res = _park(client, person_id, session_id)
 
@@ -249,3 +250,74 @@ def test_an_expired_enrichment_approval_spends_no_credit(tmp_path):
     assert expired["decision"] is None
     assert _match_calls(http) == []
     assert app.state.people.get(person_id)["email"] is None
+
+
+# --------------------------------------------------------------------------
+# Issue #126 — a masked surname must never reach Apollo, and a kept candidate
+# must still be enrichable through the Apollo ID the shortlist already stored.
+# --------------------------------------------------------------------------
+
+
+def test_a_masked_surname_parks_no_approval_and_spends_nothing(tmp_path):
+    """The shortlist obfuscates surnames. `Zh***g` cannot match anybody.
+
+    Before this guard the match key was built from first plus last, both
+    non-empty, so an approval was parked and Allow spent one real credit on a
+    lookup that could not succeed.
+    """
+    http = FakeHttp({MATCH_URL: APOLLO_PERSON})
+    app = _app(tmp_path, http)
+    client = TestClient(app)
+    person_id, session_id = _person(app, apollo_id=None, first="Fisher", last="Zh***g")
+
+    res = _park(client, person_id, session_id)
+
+    assert res.status_code == 409
+    assert res.json()["code"] == "no_match_key"
+    assert app.state.inbox.pending() == []
+    assert _match_calls(http) == []
+
+
+def test_a_kept_candidate_enriches_through_its_stored_apollo_id(tmp_path):
+    """Keep stores the Apollo ID. A masked surname must not strand it."""
+    http = FakeHttp({MATCH_URL: APOLLO_PERSON})
+    app = _app(tmp_path, http)
+    client = TestClient(app)
+    person_id, session_id = _person(
+        app, apollo_id="679c7e37", first="Fisher", last="Zh***g"
+    )
+
+    parked = _park(client, person_id, session_id)
+
+    assert parked.status_code == 201, parked.text
+    resource = parked.json()["item"]["resource"]
+    assert resource["matched_on"] == "apollo_id"
+    assert "1 Apollo credit" in resource["reason"]
+    # Parking still spends nothing.
+    assert _match_calls(http) == []
+
+    decided = _decide(client, parked.json()["item"]["id"])
+
+    assert decided.status_code == 200, decided.text
+    calls = _match_calls(http)
+    assert len(calls) == 1
+    # The masked surname must not travel to Apollo at all.
+    body = calls[0]["json"]
+    assert body.get("id") == "679c7e37"
+    assert body.get("last_name") is None
+    assert app.state.people.get(person_id)["email"] == "ada@analytic.example"
+
+
+def test_a_real_surname_still_matches_on_name(tmp_path):
+    """Control. The mask guard must not swallow ordinary surnames."""
+    http = FakeHttp({MATCH_URL: APOLLO_PERSON})
+    app = _app(tmp_path, http)
+    client = TestClient(app)
+    person_id, session_id = _person(
+        app, apollo_id="ada", first="Ada", last="Lovelace"
+    )
+
+    parked = _park(client, person_id, session_id)
+
+    assert parked.status_code == 201, parked.text
+    assert parked.json()["item"]["resource"]["matched_on"] == "name"

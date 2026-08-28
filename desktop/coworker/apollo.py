@@ -24,6 +24,9 @@ MISSING_KEY = "APOLLO_API_KEY is not configured."
 # cost before the director allows it; nothing here decides to spend on its own.
 ENRICH_CREDIT_COST = 1
 
+# How the approval card says a match key was chosen.
+MATCH_LABELS = {"email": "email", "apollo_id": "Apollo ID", "name": "name"}
+
 
 class HttpError(RuntimeError):
     def __init__(self, status: int, url: str = "", body: object | None = None) -> None:
@@ -238,6 +241,16 @@ def search_people(
     return {"people": people}
 
 
+def masked_name(value: str | None) -> bool:
+    """True when Apollo obfuscated this name, for example ``Zh***g``.
+
+    The shortlist hides surnames on purpose. Sending one to people/match
+    spends a credit on a lookup that cannot succeed, so a masked name is
+    never a usable match key.
+    """
+    return "*" in str(value or "")
+
+
 def enrich_contact(
     *,
     http: Any,
@@ -246,13 +259,20 @@ def enrich_contact(
     first_name: str | None = None,
     last_name: str | None = None,
     organization_name: str | None = None,
+    apollo_id: str | None = None,
 ) -> dict[str, Any]:
-    if not email and not (first_name and last_name):
-        raise ValueError("Provide email, or firstName and lastName.")
+    if masked_name(last_name):
+        raise ValueError(
+            "That surname is still obfuscated by Apollo, so it cannot match. "
+            "Enrich by Apollo ID or by email instead."
+        )
+    if not apollo_id and not email and not (first_name and last_name):
+        raise ValueError("Provide apolloId, email, or firstName and lastName.")
     data = http.post(
         MATCH_URL,
         headers={"content-type": "application/json", "x-api-key": api_key},
         json={
+            "id": apollo_id,
             "email": email,
             "first_name": first_name,
             "last_name": last_name,
@@ -284,14 +304,19 @@ def enrichment_match(person: dict[str, Any]) -> dict[str, Any] | None:
     first = str(person.get("first_name") or "").strip()
     last = str(person.get("last_name") or "").strip()
     company = str(person.get("company") or "").strip()
+    apollo_id = str(person.get("apollo_id") or "").strip()
     if email:
         return {"email": email, "organization_name": company or None}
-    if first and last:
+    if first and last and not masked_name(last):
         return {
             "first_name": first,
             "last_name": last,
             "organization_name": company or None,
         }
+    # A kept shortlist candidate has a masked surname and no email. The Apollo
+    # ID keep already stored identifies the exact record, so it is what is left.
+    if apollo_id:
+        return {"apollo_id": apollo_id}
     return None
 
 
@@ -308,7 +333,12 @@ def enrichment_resource(
         for part in (person.get("first_name"), person.get("last_name"))
         if part
     ).strip()
-    matched_on = "email" if match.get("email") else "name"
+    if match.get("email"):
+        matched_on = "email"
+    elif match.get("apollo_id"):
+        matched_on = "apollo_id"
+    else:
+        matched_on = "name"
     return {
         "kind": "apollo_enrichment",
         "person_id": str(person.get("person_id") or ""),
@@ -319,7 +349,7 @@ def enrichment_resource(
         "credits": ENRICH_CREDIT_COST,
         "reason": (
             f"Spends {ENRICH_CREDIT_COST} Apollo credit to look up "
-            f"{display or 'this person'} by {matched_on} and write the result "
+            f"{display or 'this person'} by {MATCH_LABELS[matched_on]} and write the result "
             "to this person file only."
         ),
     }
