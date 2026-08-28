@@ -12,6 +12,12 @@ from coworker.connectors.google_oauth import (
     refresh_access_token,
     save_google,
 )
+from coworker.evidence_envelope import (
+    EvidenceParts,
+    combine,
+    external,
+    opaque,
+)
 from coworker.gmail import GmailError
 from coworker.secrets import SecretStore
 
@@ -175,3 +181,72 @@ def calendar_from_secrets(secrets: SecretStore, *, http: Any | None = None) -> C
         client_id=client_id,
         client_secret=client_secret,
     )
+
+
+def calendar_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
+    """Adapt a Calendar listing or write receipt into evidence envelopes.
+
+    An event title and an attendee display name are written by whoever created
+    the invite, which is usually not the director. A create or update receipt
+    echoes what Google stored, so it is classified the same way rather than
+    trusted because Sourcecado started the call.
+    """
+    if not isinstance(payload, dict):
+        return opaque("calendar", tool_name, payload)
+    if tool_name == "calendar_list":
+        rows = payload.get("events")
+        rows = rows if isinstance(rows, list) else []
+        parts = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            attendees = row.get("attendees") if isinstance(row.get("attendees"), list) else []
+            lines = [f"Summary: {row.get('summary') or ''}"]
+            for attendee in attendees:
+                if isinstance(attendee, dict):
+                    lines.append(
+                        f"Attendee: {attendee.get('displayName') or ''} "
+                        f"<{attendee.get('email') or ''}>"
+                    )
+            start = _timestamp(row.get("start"))
+            parts.append(
+                external(
+                    "calendar",
+                    identity=("event", row.get("id"), start),
+                    title=str(row.get("summary") or "Calendar event"),
+                    body="\n".join(lines),
+                    url=row.get("htmlLink"),
+                    sensitivity="sensitive",
+                    source_time=start,
+                )
+            )
+        combined = combine(parts)
+        return EvidenceParts(
+            metadata={
+                "event_ids": [
+                    str(row.get("id") or "") for row in rows if isinstance(row, dict)
+                ],
+                "count": len(rows),
+            },
+            envelopes=combined.envelopes,
+        )
+    if tool_name in {"calendar_create", "calendar_update"}:
+        return external(
+            "calendar",
+            identity=("event", payload.get("id"), tool_name),
+            title=str(payload.get("summary") or "Calendar event"),
+            body=f"Summary: {payload.get('summary') or ''}",
+            metadata={"id": payload.get("id")},
+            url=payload.get("htmlLink"),
+            sensitivity="sensitive",
+        )
+    return opaque("calendar", tool_name, payload)
+
+
+def _timestamp(value: Any) -> str | None:
+    if isinstance(value, dict):
+        raw = value.get("dateTime") or value.get("date")
+    else:
+        raw = value
+    text = str(raw or "").strip()
+    return text or None

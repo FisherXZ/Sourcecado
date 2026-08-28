@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoardView } from "../src/Board";
 import { PersonFileView } from "../src/PersonFile";
+import { livingBrief } from "./livingBrief";
 
 const api = vi.hoisted(() => ({
   attachPersonMeeting: vi.fn(),
   attachPersonDriveEvidence: vi.fn(),
   getBoard: vi.fn(),
   getPerson: vi.fn(),
+  savePersonHandoff: vi.fn(),
   openPersonSourcingChat: vi.fn(),
   refreshPersonMeetings: vi.fn(),
   refreshReplies: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock("../src/api", () => ({
   refreshReplies: api.refreshReplies,
   rejectPersonMeeting: api.rejectPersonMeeting,
   revertPerson: api.revertPerson,
+  savePersonHandoff: api.savePersonHandoff,
   searchPersonDriveEvidence: api.searchPersonDriveEvidence,
   setPersonSequence: api.setPersonSequence,
 }));
@@ -88,13 +91,13 @@ function personFile(overrides: Record<string, unknown> = {}) {
       knowledge_gaps: [],
       ...((overrides.person as Record<string, unknown>) ?? {}),
     },
-    brief: {
+    brief: livingBrief({
       who: "Bob Builder",
       why: "Strong systems fit.",
       learned: [],
       missing: [],
       sources: ["gmail"],
-    },
+    }),
     timeline: [
       {
         event_id: "event-send",

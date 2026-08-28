@@ -8,6 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from coworker.evidence_envelope import (
+    EvidenceParts,
+    combine,
+    external,
+    opaque,
+)
+
 SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"
 MATCH_URL = "https://api.apollo.io/api/v1/people/match"
 
@@ -316,3 +323,73 @@ def enrichment_resource(
             "to this person file only."
         ),
     }
+def apollo_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
+    """Adapt an Apollo search or enrichment into evidence envelopes.
+
+    Apollo is a vendor claim about a person, not a fact about them. Names,
+    titles, employers, and contact details are all vendor-authored, so the
+    person file records them with a source reference rather than as something
+    Sourcecado knows.
+    """
+    if not isinstance(payload, dict):
+        return opaque("apollo", tool_name, payload)
+    if tool_name == "apollo_search_people":
+        rows = payload.get("people")
+        rows = rows if isinstance(rows, list) else []
+        parts = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parts.append(
+                external(
+                    "apollo",
+                    identity=("person", row.get("apolloId")),
+                    title=" ".join(
+                        str(row.get(key) or "")
+                        for key in ("firstName", "lastNameObfuscated")
+                    ).strip()
+                    or "Apollo candidate",
+                    body="\n".join(
+                        f"{key}: {row.get(key)}"
+                        for key in (
+                            "firstName",
+                            "lastNameObfuscated",
+                            "title",
+                            "organizationName",
+                        )
+                        if row.get(key)
+                    ),
+                    sensitivity="sensitive",
+                )
+            )
+        combined = combine(parts)
+        return EvidenceParts(
+            metadata={
+                "apollo_ids": [
+                    str(row.get("apolloId") or "")
+                    for row in rows
+                    if isinstance(row, dict)
+                ],
+                "count": len(rows),
+                "has_email": [
+                    bool(row.get("hasEmail"))
+                    for row in rows
+                    if isinstance(row, dict)
+                ],
+            },
+            envelopes=combined.envelopes,
+        )
+    if tool_name == "apollo_enrich_contact":
+        return external(
+            "apollo",
+            identity=("contact", payload.get("email"), payload.get("linkedinUrl")),
+            title=str(payload.get("name") or "Apollo contact"),
+            body="\n".join(
+                f"{key}: {payload.get(key)}"
+                for key in ("name", "title", "organizationName", "email", "phone")
+                if payload.get(key)
+            ),
+            url=payload.get("linkedinUrl"),
+            sensitivity="sensitive",
+        )
+    return opaque("apollo", tool_name, payload)

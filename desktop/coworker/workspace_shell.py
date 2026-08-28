@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from coworker.evidence_envelope import EvidenceParts, external, opaque
+from coworker.run_evidence import Evidence
 from coworker.workspace import GrantUnavailable, WorkspaceGrantStore
 from coworker.workspace_files import (
     StaleWorkspaceWrite,
@@ -1020,3 +1022,53 @@ class ShellRuntime:
         for task_id in task_ids:
             self.kill(task_id)
         self.docker.close()
+
+
+def shell_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
+    """Adapt shell output into an evidence envelope.
+
+    A process wrote this, not the director. Command output is the connector
+    with the widest injection surface, because a repository under a workspace
+    grant can print anything at all, including a forged fence spliced onto an
+    exotic line separator. `evidence_envelope.seal` prefixes every line, so
+    what a process prints cannot become a line of the prompt.
+    """
+    if not isinstance(payload, dict):
+        return opaque("shell", tool_name, payload)
+    status = str(payload.get("status") or "")
+    output = str(payload.get("output") or "")
+    if status == "running":
+        content = Evidence.PARTIAL if output else Evidence.MISSING
+    elif status in {"interrupted", "unknown"}:
+        content = Evidence.AMBIGUOUS
+    else:
+        content = Evidence.PRESENT if output else Evidence.ABSENT
+    return external(
+        "shell",
+        identity=("task", payload.get("task_id"), payload.get("next_offset")),
+        title=f"shell task {payload.get('task_id') or ''}".strip(),
+        body=output,
+        metadata={
+            "task_id": payload.get("task_id"),
+            "status": status,
+            "exit_code": payload.get("exit_code"),
+            "next_offset": payload.get("next_offset"),
+            "unsandboxed": bool(payload.get("unsandboxed", False)),
+            "truncated": bool(payload.get("truncated", False)),
+        },
+        content=content,
+        truncated=bool(payload.get("truncated", False)),
+        source_time=str(payload.get("finished_at") or "") or None,
+    )
+
+
+def workspace_file_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
+    """Adapt a workspace file read or content search into an envelope.
+
+    A file under a grant is on the director's disk, which is not the same as
+    the director having written it. A vendored dependency, a downloaded
+    document, and a checked-out branch are all somebody else's text. The
+    filesystem tools return several shapes, so the whole payload is fenced
+    rather than picked apart.
+    """
+    return opaque("workspace", tool_name, payload)
