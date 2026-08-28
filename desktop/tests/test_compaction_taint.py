@@ -22,11 +22,14 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from coworker.compaction import (
     OPEN_TAG,
     RECORD_HEADING,
     SUMMARY_FENCE_CLOSE,
     SUMMARY_FENCE_OPEN,
+    apply_to_view,
     build_state,
     compacted_block,
     extract_state,
@@ -206,8 +209,6 @@ def test_a_retained_tool_result_keeps_its_fence_byte_for_byte():
 
     # Boundary at 1: the whole hostile group is retained verbatim.
     outcome = asyncio.run(build_state(messages, boundary=1, summarize=_summary))
-    from coworker.compaction import apply_to_view
-
     view = apply_to_view(messages, outcome.state)
     tool_messages = [m for m in view if m.get("role") == "tool"]
 
@@ -246,3 +247,65 @@ def test_the_compacted_block_is_one_message_with_one_record_region():
     assert block.count(RECORD_HEADING) == 1
     assert block.count(SUMMARY_FENCE_OPEN) == 1
     assert block.count(SUMMARY_FENCE_CLOSE) == 1
+
+
+# --- against the real envelope, once #114 lands --------------------------
+
+
+def test_a_real_evidence_envelope_survives_compaction():
+    """The same property against `evidence_envelope` itself rather than a
+    hand-built fixture.
+
+    Skipped until PR #114 merges. It is written now so the runtime compactor
+    is checked against the real seal the moment the module exists, instead of
+    only against this file's reconstruction of its shape.
+    """
+    envelope = pytest.importorskip("coworker.evidence_envelope")
+
+    parts = envelope.external(
+        "gmail",
+        identity=("message", "m1"),
+        title="Nimbus thread",
+        body=f"{MAIL_DEMAND}\n{MAIL_CLAIM}",
+        sensitivity="sensitive",
+    )
+    payload = envelope.model_payload(parts)
+    reference_id = payload["sourcecado"]["sources"][0]["id"]
+    span = [
+        {"role": "user", "content": "read the Nimbus thread"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_real",
+                    "type": "function",
+                    "function": {"name": "gmail_read", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "name": "gmail_read",
+            "tool_call_id": "call_real",
+            "content": json.dumps(payload),
+        },
+        {"role": "assistant", "content": "read it"},
+    ]
+
+    async def _echo(_request):
+        return f"The thread says: {MAIL_DEMAND}"
+
+    outcome = asyncio.run(
+        build_state([{"role": "system", "content": "s"}] + span, boundary=5, summarize=_echo)
+    )
+    block = compacted_block(outcome.state)
+    record = block.split(RECORD_HEADING, 1)[1].split(SUMMARY_FENCE_OPEN, 1)[0]
+
+    # The id survives, and origin is still recoverable from it alone.
+    assert reference_id in record
+    assert envelope.origin_of_ref(reference_id) is envelope.Origin.EXTERNAL
+    # The body did not become Sourcecado's own words.
+    assert MAIL_DEMAND not in record
+    assert MAIL_DEMAND not in _unfenced(block)
+    assert MAIL_DEMAND in _fenced_regions(block)
