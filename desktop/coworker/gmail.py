@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from typing import Any, Protocol
 
@@ -34,6 +35,31 @@ PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 
 class GmailError(RuntimeError):
     pass
+
+
+class GmailHistoryExpired(GmailError):
+    """The stored cursor is older than the history Gmail still keeps.
+
+    Distinct from a generic failure because the caller's answer is different:
+    a failure means try again later, this means the incremental boundary is
+    gone and the tracked threads have to be read directly.
+    """
+
+
+def _http_status(exc: BaseException) -> int | None:
+    """The HTTP status behind a GmailError, if there was one.
+
+    ``_request`` raises ``_from_http_error(exc) from exc``, so the original
+    error is still on the chain even after the message has been rewritten.
+    """
+    for candidate in (exc, exc.__cause__):
+        if isinstance(candidate, HttpError):
+            return int(candidate.status)
+        response = getattr(candidate, "response", None)
+        status = getattr(response, "status_code", None)
+        if status is not None:
+            return int(status)
+    return None
 
 
 def _from_http_error(exc: BaseException) -> GmailError:
@@ -94,9 +120,95 @@ class FakeGmail:
         self.sends: list[dict[str, Any]] = []
         self.send_attempts: list[str] = []
         self.account_email: str | None = None
+        # The mailbox as Gmail stores it, plus the counters a reply-filing test
+        # reads to prove the refresh really reached the connector.
+        self.inbox: list[dict[str, Any]] = []
+        self.history_id = 1000
+        self.history_page_size = 2
+        self.history_floor: int | None = None
+        self.history_calls: list[tuple[str, str | None]] = []
+        self.reads: list[str] = []
+        self.thread_reads: list[str] = []
 
     def account(self) -> str | None:
         return self.account_email
+
+    def deliver(
+        self,
+        *,
+        thread_id: str,
+        message_id: str,
+        sender: str,
+        to: str,
+        subject: str,
+        snippet: str = "",
+        cc: str | None = None,
+        label_ids: tuple[str, ...] = ("INBOX",),
+    ) -> dict[str, Any]:
+        """Put one message in the mailbox and advance the history id."""
+        self.history_id += 1
+        headers = [
+            {"name": "From", "value": sender},
+            {"name": "To", "value": to},
+            {"name": "Subject", "value": subject},
+        ]
+        if cc:
+            headers.append({"name": "Cc", "value": cc})
+        record = {
+            "id": message_id,
+            "threadId": thread_id,
+            "labelIds": list(label_ids),
+            "snippet": snippet,
+            "internalDate": str(1_756_000_000_000 + self.history_id),
+            "historyId": str(self.history_id),
+            "payload": {"headers": headers},
+        }
+        self.inbox.append(record)
+        return record
+
+    def profile_history_id(self) -> str:
+        return str(self.history_id)
+
+    def history(
+        self, *, start_history_id: str, page_token: str | None = None
+    ) -> dict[str, Any]:
+        self.history_calls.append((str(start_history_id), page_token))
+        start = int(start_history_id)
+        if self.history_floor is not None and start < self.history_floor:
+            raise GmailHistoryExpired(
+                "The stored Gmail cursor is older than the history Gmail keeps."
+            )
+        fresh = [
+            item
+            for item in self.inbox
+            if int(item["historyId"]) > start and "INBOX" in item["labelIds"]
+        ]
+        offset = int(page_token or 0)
+        page = fresh[offset : offset + self.history_page_size]
+        following = offset + self.history_page_size
+        return {
+            "message_ids": [item["id"] for item in page],
+            "history_id": str(self.history_id),
+            "next_page_token": str(following) if following < len(fresh) else None,
+        }
+
+    def inbound_message(self, *, message_id: str) -> dict[str, Any]:
+        self.reads.append(message_id)
+        for item in self.inbox:
+            if item["id"] == message_id:
+                return inbound_message_view(item)
+        raise GmailError(f"Message {message_id} was not found.")
+
+    def thread(self, *, thread_id: str) -> dict[str, Any]:
+        self.thread_reads.append(thread_id)
+        return {
+            "id": thread_id,
+            "messages": [
+                inbound_message_view(item)
+                for item in self.inbox
+                if item["threadId"] == thread_id
+            ],
+        }
 
     def _find(self, draft_id: str) -> dict[str, Any] | None:
         for item in self.drafts:
@@ -147,6 +259,16 @@ class FakeGmail:
         item["message_id"] = message_id
         item["thread_id"] = thread_id
         self.sends.append({"draft_id": draft_id})
+        # Gmail keeps what we sent on the same thread. A thread re-read has to
+        # meet our own message, so the reply reader has to skip it.
+        self.deliver(
+            thread_id=thread_id,
+            message_id=message_id,
+            sender=self.account_email or "me@example.test",
+            to=item["to"],
+            subject=item["subject"],
+            label_ids=("SENT",),
+        )
         return {
             "id": message_id,
             "threadId": thread_id,
@@ -192,6 +314,28 @@ class MissingGmail:
 
     def account(self) -> str | None:
         return None
+
+    def profile_history_id(self) -> str:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
+    def history(
+        self, *, start_history_id: str, page_token: str | None = None
+    ) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
+    def inbound_message(self, *, message_id: str) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
+    def thread(self, *, thread_id: str) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
 
 
 def _raw_message(*, to: str, subject: str, body: str) -> str:
@@ -352,6 +496,76 @@ class GmailApi:
     def account(self) -> str | None:
         return load_google(self.secrets).get("email")
 
+    def profile_history_id(self) -> str:
+        """The mailbox's current history id — the boundary a sync starts from."""
+        data = self._request("get", PROFILE_URL) or {}
+        history_id = str(data.get("historyId") or "")
+        if not history_id:
+            raise GmailError("Gmail did not return a history id.")
+        return history_id
+
+    def history(
+        self, *, start_history_id: str, page_token: str | None = None
+    ) -> dict[str, Any]:
+        """One page of inbox messages added since ``start_history_id``.
+
+        Scoped to messages added to the inbox so a sync never walks the whole
+        mailbox. Gmail answers 404 once the cursor falls out of its history
+        window; that is a different situation from a failure, so it gets its
+        own error.
+        """
+        params: dict[str, Any] = {
+            "startHistoryId": str(start_history_id),
+            "historyTypes": "messageAdded",
+            "labelId": "INBOX",
+            "maxResults": 100,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        try:
+            data = self._request("get", HISTORY_URL, params=params) or {}
+        except Exception as exc:
+            if _http_status(exc) == 404:
+                raise GmailHistoryExpired(
+                    "The stored Gmail cursor is older than the history Gmail keeps."
+                ) from exc
+            raise
+        message_ids: list[str] = []
+        for record in data.get("history") or []:
+            for added in (record or {}).get("messagesAdded") or []:
+                message = (added or {}).get("message") or {}
+                identifier = str(message.get("id") or "")
+                if identifier and identifier not in message_ids:
+                    message_ids.append(identifier)
+        return {
+            "message_ids": message_ids,
+            "history_id": str(data.get("historyId") or "") or None,
+            "next_page_token": str(data.get("nextPageToken") or "") or None,
+        }
+
+    def inbound_message(self, *, message_id: str) -> dict[str, Any]:
+        data = self._request(
+            "get",
+            f"{MESSAGES_URL}/{message_id}",
+            params={"format": "metadata", "metadataHeaders": list(INBOUND_HEADERS)},
+        ) or {}
+        return inbound_message_view({"id": message_id, **data})
+
+    def thread(self, *, thread_id: str) -> dict[str, Any]:
+        data = self._request(
+            "get",
+            f"{THREADS_URL}/{thread_id}",
+            params={"format": "metadata", "metadataHeaders": list(INBOUND_HEADERS)},
+        ) or {}
+        return {
+            "id": str(data.get("id") or thread_id),
+            "messages": [
+                inbound_message_view(item)
+                for item in (data.get("messages") or [])
+                if isinstance(item, dict)
+            ],
+        }
+
     def search(self, query: str, max_results: int = 10) -> dict[str, Any]:
         listing = self._request(
             "get",
@@ -402,6 +616,46 @@ class GmailApi:
 
 
 MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+HISTORY_URL = "https://gmail.googleapis.com/gmail/v1/users/me/history"
+THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads"
+
+# Everything needed to decide who a reply belongs to, and nothing more.
+# `format=metadata` never returns a body, so a background read cannot pull
+# message text into a person file even by accident.
+INBOUND_HEADERS = ("From", "To", "Cc", "Reply-To", "Delivered-To", "Subject", "Date")
+
+
+def _received_at(value: Any) -> str | None:
+    """Gmail's internalDate, in milliseconds, as an ISO timestamp."""
+    try:
+        millis = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return datetime.fromtimestamp(millis / 1000, UTC).isoformat()
+
+
+def inbound_message_view(data: dict[str, Any]) -> dict[str, Any]:
+    """One Gmail message as the reply reader sees it: identity and headers.
+
+    Shared by the live client and the fake so the fake cannot drift into
+    answering a question the real Gmail response could not answer.
+    """
+    payload = data.get("payload") or {}
+    headers = _header_map(payload)
+    return {
+        "id": str(data.get("id") or ""),
+        "thread_id": str(data.get("threadId") or "") or None,
+        "label_ids": [str(item) for item in (data.get("labelIds") or [])],
+        "from": headers.get("from"),
+        "to": headers.get("to"),
+        "cc": headers.get("cc"),
+        "reply_to": headers.get("reply-to"),
+        "delivered_to": headers.get("delivered-to"),
+        "subject": headers.get("subject"),
+        "snippet": str(data.get("snippet") or ""),
+        "received_at": _received_at(data.get("internalDate")) or headers.get("date"),
+        "history_id": str(data.get("historyId") or "") or None,
+    }
 
 
 def _header_map(payload: dict[str, Any]) -> dict[str, str]:

@@ -127,6 +127,11 @@ class PersonStore:
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (person_id, version)
             );
+            CREATE TABLE IF NOT EXISTS reply_sync (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                history_id TEXT,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         self._ensure_schema()
@@ -641,6 +646,252 @@ class PersonStore:
         )
         return {"event": event, "person": person, "advanced_to_open": needs_open}
 
+    # --- inbound replies -------------------------------------------------
+
+    def reply_cursor(self) -> str | None:
+        """The Gmail history id the last completed reply sync reached."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT history_id FROM reply_sync WHERE id = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["history_id"]) if row["history_id"] else None
+
+    def set_reply_cursor(self, history_id: str | None) -> None:
+        """Move the incremental boundary, or clear it to force a re-baseline."""
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO reply_sync (id, history_id, updated_at)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    history_id = excluded.history_id,
+                    updated_at = excluded.updated_at
+                """,
+                (history_id, self._now()),
+            )
+            self._conn.commit()
+
+    def _has_external_event(self, person_id: str, external_key: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT 1 FROM events
+                WHERE person_id = ? AND external_key = ?
+                """,
+                (person_id, external_key),
+            ).fetchone()
+        return row is not None
+
+    def _has_attachment(
+        self, person_id: str, record_type: str, idempotency_key: str
+    ) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT 1 FROM person_attachments
+                WHERE person_id = ? AND record_type = ? AND idempotency_key = ?
+                """,
+                (person_id, record_type, idempotency_key),
+            ).fetchone()
+        return row is not None
+
+    def _already_transitioned_for(self, person_id: str, message_id: str) -> bool:
+        """Whether this exact reply already moved this person once.
+
+        The state receipt written for the move carries the Gmail message id
+        that caused it, so the receipt is also the record that stops a second
+        move. Nothing here depends on the sync cursor: a cursor that is lost
+        and rebuilt replays the same message and still finds this.
+        """
+        for event in self.timeline(person_id):
+            payload = event.get("payload")
+            if event.get("kind") != "state" or not isinstance(payload, dict):
+                continue
+            source_ref = payload.get("source_ref")
+            if (
+                isinstance(source_ref, dict)
+                and str(source_ref.get("message_id") or "") == message_id
+            ):
+                return True
+        return False
+
+    def file_inbound_reply(
+        self,
+        person_id: str,
+        *,
+        message_id: str,
+        thread_id: str | None,
+        sender: str,
+        subject: str | None,
+        snippet: str,
+        received_at: str | None,
+        actor: str = "assistant",
+    ) -> dict[str, Any]:
+        """File one verified inbound reply, then open the conversation.
+
+        Keyed on the Gmail message id twice over: the timeline event carries it
+        as its external key, so a repeated sync updates one event instead of
+        adding a second, and the state receipt carries it too, so the Open to
+        In conversation move happens once even after the sync cursor is lost
+        and the message is read again.
+
+        Only Open advances. A person the director already moved to In
+        conversation or Done stays where they put them.
+        """
+        if not message_id.strip():
+            raise ValueError("message_id is required")
+        source_ref = {
+            "provider": "Gmail",
+            "message_id": message_id,
+            "thread_id": thread_id,
+            "url": (
+                f"https://mail.google.com/mail/u/0/#all/{thread_id}"
+                if thread_id
+                else None
+            ),
+        }
+        headline = (subject or "").strip() or "no subject"
+        external_key = f"gmail:message:{message_id}"
+        already_filed = self._has_external_event(person_id, external_key)
+        event = self.upsert_external_event(
+            person_id,
+            external_key=external_key,
+            source="gmail",
+            kind="mail",
+            summary=f"Reply from {sender}: {headline}",
+            payload={
+                "direction": "inbound",
+                "message_id": message_id,
+                "thread_id": thread_id,
+                "from": sender,
+                "subject": subject,
+                "snippet": snippet,
+                "received_at": received_at,
+                "source_ref": source_ref,
+                "untrusted": True,
+                "read_only": True,
+            },
+            actor=actor,
+            tool="gmail_read",
+        )
+        with self._lock:
+            row = self._load_person_row(person_id)
+            advance = str(row["sequence_state"] or "") == "open"
+        if advance and self._already_transitioned_for(person_id, message_id):
+            advance = False
+        person = (
+            self.set_sequence(
+                person_id,
+                "in_conversation",
+                actor="assistant",
+                rationale_summary=f"Verified inbound reply from {sender}.",
+                source_ref=source_ref,
+            )
+            if advance
+            else self.get(person_id)
+        )
+        return {
+            "event": event,
+            "person": person,
+            "advanced_to_in_conversation": advance,
+            "already_filed": already_filed,
+        }
+
+    def record_reply_gap(
+        self,
+        person_id: str,
+        *,
+        message_id: str,
+        thread_id: str | None,
+        reason: str,
+        question: str,
+        candidate_count: int,
+        received_at: str | None,
+        actor: str = "assistant",
+    ) -> dict[str, Any]:
+        """Record that a reply on this person's thread could not be attributed.
+
+        The gap carries thread identity, the refusal reason, and the question a
+        human has to answer. It never carries the reply text: the message may
+        belong to someone else, and copying its words onto a person file is the
+        contamination the refusal exists to prevent.
+        """
+        if not message_id.strip():
+            raise ValueError("message_id is required")
+        idempotency_key = f"gmail:reply:{message_id}"
+        already_recorded = self._has_attachment(
+            person_id, "knowledge_gap", idempotency_key
+        )
+        gap = self.upsert_attachment(
+            person_id,
+            record_type="knowledge_gap",
+            fields={
+                "kind": "unassigned_reply",
+                "provider": "Gmail",
+                "evidence": "ambiguous",
+                "message_id": message_id,
+                "thread_id": thread_id,
+                "reason": reason,
+                "question": question,
+                "candidate_count": int(candidate_count),
+                "received_at": received_at,
+            },
+            idempotency_key=idempotency_key,
+            actor=actor,
+            rationale_summary="Inbound reply could not be tied to one person.",
+        )
+        return {"gap": gap, "already_recorded": already_recorded}
+
+    def mail_state(self, person_id: str) -> dict[str, Any]:
+        """Last contact, replied state, and whether the person needs attention.
+
+        Ordering comes from the ledger, not from comparing timestamps: the
+        events are read in write order, so the last mail event seen is the
+        latest one whatever format its stamp is in.
+        """
+        direction: str | None = None
+        last_at: str | None = None
+        replied = False
+        replied_at: str | None = None
+        for event in self.timeline(person_id):
+            payload = (
+                event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            )
+            created = str(event.get("created_at") or "") or None
+            if event.get("kind") == "send" and payload.get("sent"):
+                direction, last_at = "outbound", created
+            elif payload.get("direction") == "inbound":
+                replied = True
+                replied_at = payload.get("received_at") or created
+                direction, last_at = "inbound", replied_at
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT fields_json FROM person_attachments
+                WHERE person_id = ? AND record_type = 'knowledge_gap'
+                """,
+                (person_id,),
+            ).fetchall()
+        needs_review = any(
+            json.loads(str(row["fields_json"])).get("kind") == "unassigned_reply"
+            for row in rows
+        )
+        if direction == "inbound":
+            follow_up = {"needed": True, "reason": "reply_unanswered"}
+        elif needs_review:
+            follow_up = {"needed": True, "reason": "reply_needs_review"}
+        else:
+            follow_up = {"needed": False, "reason": None}
+        return {
+            "last_contact_at": last_at,
+            "last_contact_direction": direction,
+            "replied": replied,
+            "replied_at": replied_at,
+            "follow_up": follow_up,
+        }
+
     def get(
         self,
         person_id: str,
@@ -678,6 +929,7 @@ class PersonStore:
         ]
         visible_restricted = sum(1 for item in attachments if item["restricted"])
         person["restricted_source_count"] = int(restricted_hidden) - visible_restricted
+        person.update(self.mail_state(person_id))
         return person
 
     def set_sequence(
@@ -690,6 +942,7 @@ class PersonStore:
         session_id: str | None = None,
         run_id: str | None = None,
         rationale_summary: str = "",
+        source_ref: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if state not in SEQUENCE_STATES:
             raise ValueError(f"invalid sequence state {state}")
@@ -729,6 +982,10 @@ class PersonStore:
                     "state": state,
                     "rationale_summary": rationale_summary,
                     "version": next_version,
+                    # The external record that justified the move, when one
+                    # did. This is what a reader points at to check the move,
+                    # and what stops the same source moving the person twice.
+                    **({"source_ref": source_ref} if source_ref else {}),
                 },
                 actor=actor,
                 session_id=session_id,
@@ -759,6 +1016,7 @@ class PersonStore:
         for row in rows:
             person = self._person_dict(row)
             assert person is not None
+            person.update(self.mail_state(person["person_id"]))
             board[person["sequence_state"]].append(person)
         return board
 
