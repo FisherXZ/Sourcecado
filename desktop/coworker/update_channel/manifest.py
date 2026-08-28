@@ -27,10 +27,14 @@ Verification returns a `Verification`, never an exception, so the refusal
 reason can be shown to an operator and logged. Every path that cannot reach a
 positive answer refuses; there is no default-allow branch.
 
-`TRUSTED_KEYS` is empty. Sourcecado has no update signing key yet, so in a real
-installation every manifest is refused. That is the correct behaviour until an
-authorized identity exists, and `docs/update-channel.md` records what must be
-supplied to change it.
+`TRUSTED_KEYS` carries one key, for the `preview` channel only. Its private
+seed was generated offline and lives solely in the GitHub secret
+`SOURCECADO_UPDATE_SIGNING_KEY`; only the public half is in this file, which is
+what an installation needs to refuse a manifest it cannot verify. `stable`
+trusts nothing, so a preview key can never install a stable update.
+
+This is the Sourcecado update key. It is unrelated to Apple code signing, and
+its presence says nothing about whether a build is signed or notarized.
 """
 
 from __future__ import annotations
@@ -93,7 +97,11 @@ PRODUCT = "sourcecado"
 # Empty on purpose. No authorized signing identity has been issued, so no
 # manifest can verify. `tests/test_update_manifest.py` holds a tripwire that
 # goes red the day a key is added, so adding one cannot happen quietly.
-TRUSTED_KEYS: dict[str, dict[str, str]] = {}
+TRUSTED_KEYS: dict[str, dict[str, str]] = {
+    # Generated offline 2026-08-28. Public half only; the seed is a GitHub
+    # secret and was never written to this repository.
+    "preview": {"preview-2026-08": "hxekkYpRHJo4mQNDth6vTrrVQQ8Vf4EP4bjcgA2zqLs="},
+}
 
 
 class Channel(StrEnum):
