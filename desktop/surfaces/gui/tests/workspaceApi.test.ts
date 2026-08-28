@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -57,6 +58,15 @@ describe("workspace API boundary", () => {
 
     await expect(pickDirectory()).resolves.toBe("/Users/operator/Workspace");
     expect(open).toHaveBeenCalledWith({ directory: true, multiple: false });
+  });
+
+  it("grants the main window dialog:allow-open so the native folder picker is allowed", () => {
+    const capabilities = JSON.parse(
+      readFileSync("src-tauri/capabilities/default.json", "utf8"),
+    ) as { windows: unknown; permissions: unknown };
+
+    expect(capabilities.windows).toEqual(["main"]);
+    expect(capabilities.permissions).toContain("dialog:allow-open");
   });
 
   it("revokes the addressed permanent approval", async () => {

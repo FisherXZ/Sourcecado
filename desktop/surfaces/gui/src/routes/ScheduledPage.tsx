@@ -44,6 +44,9 @@ const RUN_STATUS_LABELS: Record<ScheduleRunStatus, string> = {
   // automation failed when it was merely cut short sends them debugging a
   // problem that does not exist.
   interrupted: "Interrupted",
+  // A status this build does not recognize. Distinct from "Failed" for the
+  // same reason as "Interrupted": an indeterminate outcome is not a failure.
+  unknown: "Needs review",
 };
 
 function draftFromTemplate(template: ScheduleTemplate): CreateDraft {
@@ -68,6 +71,9 @@ function formatTimestamp(stamp: string | null): string {
 }
 
 function formatDuration(durationMs: number): string {
+  // Legacy rows written before duration tracking existed always recorded 0;
+  // showing "0ms" reads as an instant run instead of "never measured".
+  if (durationMs === 0) return "Legacy run";
   if (durationMs < 1000) return `${durationMs}ms`;
   return `${(durationMs / 1000).toFixed(1)}s`;
 }

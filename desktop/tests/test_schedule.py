@@ -554,6 +554,114 @@ def test_store_reopen_heals_orphaned_running_run_to_interrupted(tmp_path):
     assert "success" not in healed["summary"].lower()
 
 
+def test_legacy_ok_run_normalizes_to_success_on_restart(tmp_path):
+    """P2: production rows written before the canonical status vocabulary
+    existed used run_turn's raw "ok" directly. Restoring the store must heal
+    them to "success" so the UI renders them as Completed, not Failed."""
+    store = ConversationStore(tmp_path)
+    job = store.add_job("0 9 * * 1", "weekly check-in")
+    store.record_run(job["id"], "ok", "Found three priority contacts.")
+
+    restarted = ConversationStore(tmp_path).list_schedule()["runs"][0]
+
+    assert restarted["status"] == "success"
+    assert restarted["result"] == "Found three priority contacts."
+
+
+def test_reopen_recovers_true_success_from_the_scheduled_transcript(tmp_path):
+    """P2: a crash can land between the transcript's terminal event and the
+    matching runs-table update. When the transcript already recorded the
+    outcome, trust it instead of blindly stamping 'interrupted'."""
+    store = ConversationStore(tmp_path)
+    job = store.add_job("0 9 * * 1", "weekly", next_run_at=None)
+    session_id = f"sched-{job['id']}"
+    store.start_run(
+        int(job["id"]), session_id=session_id, started_at="2026-08-26T09:00:00+00:00"
+    )
+    store.append_event(session_id, {"type": "turn_start", "state": "running"})
+    store.append_event(
+        session_id,
+        {"type": "turn_end", "text": "Found three priority contacts.", "state": "complete"},
+    )
+
+    healed = ConversationStore(tmp_path).list_schedule()["runs"][0]
+
+    assert healed["status"] == "success"
+    assert healed["result"] == "Found three priority contacts."
+    assert healed["finished_at"]
+
+
+def test_reopen_recovers_true_failure_from_the_scheduled_transcript(tmp_path):
+    """P2: same as above, but the transcript's terminal event was an error."""
+    store = ConversationStore(tmp_path)
+    job = store.add_job("0 9 * * 1", "weekly", next_run_at=None)
+    session_id = f"sched-{job['id']}"
+    store.start_run(
+        int(job["id"]), session_id=session_id, started_at="2026-08-26T09:00:00+00:00"
+    )
+    store.append_event(
+        session_id, {"type": "error", "state": "failed", "message": "provider timed out"}
+    )
+
+    healed = ConversationStore(tmp_path).list_schedule()["runs"][0]
+
+    assert healed["status"] == "failed"
+    assert healed["result"] == "provider timed out"
+
+
+def test_reopen_does_not_copy_last_weeks_completed_receipt_when_this_attempt_never_turned(
+    tmp_path,
+):
+    """Scheduled jobs reuse sched-{job_id}. A crash after start_run and
+    before this week's turn_start must not adopt last week's terminal
+    event as this week's outcome."""
+    store = ConversationStore(tmp_path)
+    job = store.add_job("0 9 * * 1", "weekly", next_run_at=None)
+    session_id = f"sched-{job['id']}"
+
+    week1 = store.start_run(
+        int(job["id"]),
+        session_id=session_id,
+        started_at="2026-08-17T16:00:00+00:00",
+    )
+    store.append_event(session_id, {"type": "turn_start", "state": "running"})
+    store.append_event(
+        session_id,
+        {
+            "type": "turn_end",
+            "text": "Week 1 found three contacts.",
+            "state": "complete",
+        },
+    )
+    store.finish_run(
+        int(week1["id"]),
+        status="success",
+        result="Week 1 found three contacts.",
+        summary="Week 1 found three contacts.",
+        artifacts=[],
+        duration_ms=1500,
+        finished_at="2026-08-17T16:00:02+00:00",
+    )
+
+    week2 = store.start_run(
+        int(job["id"]),
+        session_id=session_id,
+        started_at="2026-08-24T16:00:00+00:00",
+    )
+    assert week2["status"] == "running"
+    assert week2["duration_ms"] is None
+
+    first, second = ConversationStore(tmp_path).list_schedule()["runs"]
+
+    assert first["status"] == "success"
+    assert first["result"] == "Week 1 found three contacts."
+    assert second["id"] == week2["id"]
+    assert second["status"] == "interrupted"
+    assert second["result"] != "Week 1 found three contacts."
+    assert second["summary"] != "Week 1 found three contacts."
+    assert "restarted" in second["summary"].lower()
+
+
 def test_scheduled_run_statuses_stay_inside_the_shared_contract(tmp_path):
     """S4: every status the sidecar writes to the runs table is declared, so
     the client never coerces an honest outcome into 'Failed'."""
