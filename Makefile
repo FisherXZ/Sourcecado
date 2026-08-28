@@ -2,11 +2,11 @@ PYTHON ?= python3
 VENV := desktop/.venv
 GUI := desktop/surfaces/gui
 
-.PHONY: setup sidecar gui native test test-python test-gui eval build
+.PHONY: setup sidecar gui native test test-python test-gui eval build build-sidecar smoke-test
 
 setup:
 	$(PYTHON) -m venv $(VENV)
-	$(VENV)/bin/python -m pip install -r desktop/requirements.txt
+	$(VENV)/bin/python -m pip install --require-hashes -r desktop/requirements.lock
 	npm --prefix $(GUI) ci
 
 sidecar:
@@ -31,3 +31,9 @@ eval:
 
 build:
 	npm --prefix $(GUI) run build
+
+build-sidecar:
+	bash desktop/packaging/build_sidecar.sh
+
+smoke-test:
+	$(PYTHON) desktop/packaging/smoke_test.py desktop/surfaces/gui/src-tauri/resources/sourcecado-sidecar/sourcecado-sidecar

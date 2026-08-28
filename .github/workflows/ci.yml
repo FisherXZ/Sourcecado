@@ -18,10 +18,10 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: desktop/requirements.txt
+          cache-dependency-path: desktop/requirements.lock
 
       - name: Install dependencies
-        run: python -m pip install -r desktop/requirements.txt
+        run: python -m pip install --require-hashes -r desktop/requirements.lock
 
       - name: Test
         working-directory: desktop
@@ -53,3 +53,98 @@ jobs:
 
       - name: Typecheck and build
         run: npm run build
+
+  macos-preview:
+    name: macOS preview artifact
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: desktop/requirements.lock
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: desktop/surfaces/gui/package-lock.json
+
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
+
+      - name: Install Python dependencies
+        run: python -m pip install --require-hashes -r desktop/requirements.lock
+
+      - name: Python tests
+        working-directory: desktop
+        run: pytest -q
+
+      - name: Install GUI dependencies
+        working-directory: desktop/surfaces/gui
+        run: npm ci
+
+      - name: GUI tests
+        working-directory: desktop/surfaces/gui
+        run: npm test
+
+      - name: GUI typecheck and build
+        working-directory: desktop/surfaces/gui
+        run: npm run build
+
+      - name: Rust format check
+        working-directory: desktop/surfaces/gui/src-tauri
+        run: cargo fmt --check
+
+      - name: Build sidecar
+        run: bash desktop/packaging/build_sidecar.sh
+
+      - name: Rust lint
+        working-directory: desktop/surfaces/gui/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        working-directory: desktop/surfaces/gui/src-tauri
+        run: cargo test
+
+      - name: Native Tauri build
+        working-directory: desktop/surfaces/gui
+        run: npm run tauri -- build
+
+      - name: Smoke test the packaged sidecar
+        run: |
+          python3 desktop/packaging/smoke_test.py \
+            "desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app/Contents/Resources/resources/sourcecado-sidecar/sourcecado-sidecar"
+
+      - name: Audit locked Python dependencies
+        run: |
+          python -m pip install --quiet pip-audit
+          python -m pip_audit -r desktop/requirements.lock
+
+      - name: Record build provenance and checksums
+        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        run: |
+          {
+            echo "commit: ${{ github.sha }}"
+            echo "workflow_run: ${{ github.run_id }}"
+            echo "built_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "runner: $(sw_vers -productVersion) $(uname -m)"
+            rustc -vV
+            python3 --version
+            node --version
+          } > provenance.txt
+          find Sourcecado.app -type f -exec shasum -a 256 {} \; > checksums.txt
+          cat provenance.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sourcecado-macos-preview
+          path: |
+            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app
+            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/checksums.txt
+            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/provenance.txt
+          retention-days: 14
