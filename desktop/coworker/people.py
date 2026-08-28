@@ -469,6 +469,178 @@ class PersonStore:
             self._conn.commit()
         return self.get(person_id)
 
+    def record_apollo_enrichment(
+        self,
+        person_id: str,
+        *,
+        result: dict[str, Any],
+        approval_id: str,
+        credits: int,
+        matched_on: str,
+        actor: str = "director",
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Apply one approved enrichment and file the Apollo source receipt.
+
+        Only ``person_id`` is written. The receipt records which Apollo record
+        the facts came from and what the spend bought, so a later reader can
+        tell an enriched field from a typed one.
+        """
+        person = self.apply_enrichment(
+            person_id,
+            name=result.get("name"),
+            title=result.get("title"),
+            company=result.get("organizationName"),
+            email=result.get("email"),
+            linkedin_url=result.get("linkedinUrl"),
+            phone=result.get("phone"),
+        )
+        if person is None:
+            return None
+        applied = sorted(
+            field
+            for field, value in (
+                ("name", result.get("name")),
+                ("title", result.get("title")),
+                ("company", result.get("organizationName")),
+                ("email", result.get("email")),
+                ("linkedin_url", result.get("linkedinUrl")),
+                ("phone", result.get("phone")),
+            )
+            if value
+        )
+        source = self.upsert_attachment(
+            person_id,
+            record_type="source_ref",
+            fields={
+                "source": "apollo",
+                "apollo_id": str(result.get("apolloId") or "") or None,
+                "matched_on": matched_on,
+                "approval_id": approval_id,
+                "credits": int(credits),
+                "fields_applied": applied,
+                "fetched_at": self._now(),
+            },
+            idempotency_key=f"apollo:enrich:{approval_id}",
+            actor=actor,
+            rationale_summary="Approved Apollo enrichment",
+            session_id=session_id,
+            run_id=run_id,
+        )
+        with self._lock:
+            self._receipt(
+                person_id,
+                kind="enrich",
+                summary=f"Enriched from Apollo ({credits} credit)",
+                payload={
+                    "approval_id": approval_id,
+                    "apollo_id": str(result.get("apolloId") or "") or None,
+                    "credits": int(credits),
+                    "matched_on": matched_on,
+                    "fields_applied": applied,
+                    "source_ref_id": source["id"],
+                },
+                actor=actor,
+                session_id=session_id,
+                run_id=run_id,
+                tool="apollo_enrich_contact",
+            )
+            self._conn.commit()
+        return {
+            "person": self.get(person_id),
+            "source_ref": source,
+            "fields_applied": applied,
+        }
+
+    def record_approved_send(
+        self,
+        person_id: str,
+        *,
+        message_id: str,
+        thread_id: str | None,
+        draft_id: str,
+        to: str,
+        subject: str,
+        body_digest: str,
+        account: str | None,
+        approval_id: str,
+        actor: str = "director",
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """File the durable receipt for one approved send, then open the person.
+
+        Keyed on the Gmail message id, so re-filing the same message can never
+        produce a second receipt. Advancing to Open only happens when the person
+        is not already on the board; an in-conversation or done person is left
+        where the director put them.
+        """
+        if not message_id.strip():
+            raise ValueError("message_id is required")
+        external_key = f"gmail:message:{message_id}"
+        payload = {
+            "sent": True,
+            "message_id": message_id,
+            "thread_id": thread_id,
+            "draft_id": draft_id,
+            "to": to,
+            "subject": subject,
+            "body_digest": body_digest,
+            "account": account,
+            "approval_id": approval_id,
+        }
+        with self._lock:
+            row = self._load_person_row(person_id)
+            already = self._conn.execute(
+                "SELECT event_id FROM events WHERE person_id = ? AND external_key = ?",
+                (person_id, external_key),
+            ).fetchone()
+            if already is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO events (
+                        event_id, person_id, external_key, source, kind, summary,
+                        payload, actor, session_id, run_id, tool
+                    ) VALUES (?, ?, ?, 'gmail', 'send', ?, ?, ?, ?, ?, 'gmail_send')
+                    """,
+                    (
+                        _new_event_id(),
+                        person_id,
+                        external_key,
+                        f"Sent approved outreach to {to}".strip(),
+                        json.dumps(payload),
+                        actor,
+                        session_id,
+                        run_id,
+                    ),
+                )
+                self._conn.execute(
+                    "UPDATE people SET updated_at = ? WHERE person_id = ?",
+                    (self._now(), person_id),
+                )
+                self._conn.commit()
+            event = self._event_dict(
+                self._conn.execute(
+                    "SELECT * FROM events WHERE person_id = ? AND external_key = ?",
+                    (person_id, external_key),
+                ).fetchone()
+            )
+            needs_open = not str(row["sequence_state"] or "").strip()
+        person = (
+            self.set_sequence(
+                person_id,
+                "open",
+                actor=actor if actor in ACTORS else "director",
+                session_id=session_id,
+                run_id=run_id,
+                rationale_summary="Approved outreach sent",
+            )
+            if needs_open
+            else self.get(person_id)
+        )
+        return {"event": event, "person": person, "advanced_to_open": needs_open}
+
     def get(
         self,
         person_id: str,
