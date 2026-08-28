@@ -505,6 +505,8 @@ def test_explicit_add_never_demotes_existing_tree_source_scope(tmp_path):
 
     source = store.list_sources(job["id"])[0]
     assert source["scope"] == "tree"
+    assert source["parent_id"] == "root"
+    assert source["path"] == "Sourcing/Fall 2026/Tree note.txt"
 
 
 def test_failed_explicit_source_counts_failure_and_sets_partial_terminal_state(tmp_path):

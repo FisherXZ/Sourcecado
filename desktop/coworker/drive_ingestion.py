@@ -785,8 +785,18 @@ class DriveIngestionStore:
                         WHEN drive_ingestion_sources.scope = 'tree' THEN 'tree'
                         ELSE excluded.scope
                     END,
-                    parent_id = excluded.parent_id,
-                    path = excluded.path,
+                    parent_id = CASE
+                        WHEN drive_ingestion_sources.scope = 'tree'
+                             AND excluded.scope != 'tree'
+                        THEN drive_ingestion_sources.parent_id
+                        ELSE excluded.parent_id
+                    END,
+                    path = CASE
+                        WHEN drive_ingestion_sources.scope = 'tree'
+                             AND excluded.scope != 'tree'
+                        THEN drive_ingestion_sources.path
+                        ELSE excluded.path
+                    END,
                     name = excluded.name,
                     mime_type = excluded.mime_type,
                     modified_time = excluded.modified_time,
