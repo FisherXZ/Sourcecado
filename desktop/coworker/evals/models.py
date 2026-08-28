@@ -132,6 +132,7 @@ class EvalRunResult:
     persisted_effects: dict[str, Any]
     execution_environment: dict[str, Any]
     artifacts: RunArtifacts
+    run_contract: dict[str, Any] = field(default_factory=dict)
     infrastructure_error: str | None = None
     judge: JudgeObservation | None = None
 

@@ -13,6 +13,10 @@ MATCH_URL = "https://api.apollo.io/api/v1/people/match"
 
 MISSING_KEY = "APOLLO_API_KEY is not configured."
 
+# One people/match call spends one Apollo credit. The approval card states the
+# cost before the director allows it; nothing here decides to spend on its own.
+ENRICH_CREDIT_COST = 1
+
 
 class HttpError(RuntimeError):
     def __init__(self, status: int, url: str = "", body: object | None = None) -> None:
@@ -252,10 +256,63 @@ def enrich_contact(
     phones = person.get("phone_numbers") or []
     phone = phones[0].get("raw_number") if phones else None
     return {
+        "apolloId": person.get("id") or None,
         "name": person.get("name") or None,
         "title": person.get("title") or None,
         "organizationName": (person.get("organization") or {}).get("name") or None,
         "linkedinUrl": person.get("linkedin_url") or None,
         "email": person.get("email") or None,
         "phone": phone or None,
+    }
+
+
+def enrichment_match(person: dict[str, Any]) -> dict[str, Any] | None:
+    """The lookup Apollo will be asked for, taken from the person file.
+
+    Returns None when the person file cannot identify anybody. Apollo's match
+    endpoint needs an email, or a first and last name; guessing either one is
+    how the wrong contact gets enriched and the credit gets wasted.
+    """
+    email = str(person.get("email") or "").strip()
+    first = str(person.get("first_name") or "").strip()
+    last = str(person.get("last_name") or "").strip()
+    company = str(person.get("company") or "").strip()
+    if email:
+        return {"email": email, "organization_name": company or None}
+    if first and last:
+        return {
+            "first_name": first,
+            "last_name": last,
+            "organization_name": company or None,
+        }
+    return None
+
+
+def enrichment_resource(
+    person: dict[str, Any], match: dict[str, Any]
+) -> dict[str, Any]:
+    """The approval card for one enrichment: which person, and what it costs.
+
+    Names the exact person file being changed, not a search row, so Allow can
+    never land the facts on somebody else.
+    """
+    display = " ".join(
+        part
+        for part in (person.get("first_name"), person.get("last_name"))
+        if part
+    ).strip()
+    matched_on = "email" if match.get("email") else "name"
+    return {
+        "kind": "apollo_enrichment",
+        "person_id": str(person.get("person_id") or ""),
+        "person": display or "Unnamed person",
+        "title": person.get("title") or None,
+        "company": person.get("company") or None,
+        "matched_on": matched_on,
+        "credits": ENRICH_CREDIT_COST,
+        "reason": (
+            f"Spends {ENRICH_CREDIT_COST} Apollo credit to look up "
+            f"{display or 'this person'} by {matched_on} and write the result "
+            "to this person file only."
+        ),
     }

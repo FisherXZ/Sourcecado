@@ -367,3 +367,122 @@
     flex-direction: column;
   }
 }
+
+/* Outreach: draft, review, approve. Dense and quiet; the only colour is the
+   accent tint on the reviewed version and the warm error on a refusal. */
+.person-outreach-compose,
+.person-outreach-review {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.person-outreach-compose label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.person-outreach-compose input,
+.person-outreach-compose textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.55;
+}
+
+.person-outreach-compose button,
+.person-outreach-actions button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.person-outreach-compose button {
+  justify-self: start;
+}
+
+.person-outreach-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.person-outreach-actions button:disabled,
+.person-outreach-compose button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.person-outreach-recipient,
+.person-outreach-account,
+.person-outreach-version {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.person-outreach-status {
+  color: var(--accent-deep);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.person-outreach-body {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.person-outreach-version code,
+.person-outreach-approval code,
+.person-outreach-sent code {
+  font-family: ui-monospace, "Geist Mono", monospace;
+}
+
+.person-outreach-approval {
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-tint);
+}
+
+.person-outreach-approval p {
+  margin: 0 0 8px;
+  line-height: 1.55;
+}
+
+.person-outreach-approval [role="alert"],
+.person-outreach-error {
+  margin: 0;
+  color: var(--error);
+  line-height: 1.45;
+}
+
+.person-outreach-sent {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+}

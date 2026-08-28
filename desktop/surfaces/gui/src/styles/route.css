@@ -1494,3 +1494,111 @@
     animation: none;
   }
 }
+
+/* Diagnostic bundle: review first, save second. Quiet by default -- this is a
+   recovery surface, not a place to decorate. */
+.bundle-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 0;
+}
+
+.bundle-start label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bundle-start input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.bundle-preview h3 {
+  margin: 20px 0 0;
+  font-size: 13px;
+}
+
+.bundle-categories,
+.bundle-excluded {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bundle-categories > li {
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+
+.bundle-categories header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.bundle-categories p,
+.bundle-excluded li {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.bundle-in,
+.bundle-out {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.bundle-in {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.bundle-out {
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.bundle-save {
+  margin: 18px 0 0;
+}
+
+.bundle-refused {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--error-bg);
+}
+
+.bundle-refused strong {
+  color: var(--error);
+}
+
+.bundle-refused span,
+.bundle-refused li {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.bundle-refused ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}

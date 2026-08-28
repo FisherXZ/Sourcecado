@@ -12,10 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from coworker.apollo import FakeHttp
-from coworker.gmail import FakeGmail
+from coworker.gmail import FakeGmail, GmailError
 from coworker.inbox import Inbox
 from coworker.mcp import FakeMcp
 from coworker.people import PersonStore
+from coworker.skills import BUILTIN_SKILLS, SkillLoader
 from coworker.store import ConversationStore
 from coworker.workspace import GrantAccess
 from coworker.workspace_runtime import WorkspaceRuntime
@@ -98,6 +99,61 @@ class CredentialFreeConnector:
         return unavailable
 
 
+class FixtureGmail(FakeGmail):
+    """FakeGmail whose reads come from a scenario fixture, not live mail.
+
+    Drafts and sends still accumulate on the instance, so a scenario can assert
+    the exact set of outbound effects a run produced.
+    """
+
+    def __init__(
+        self,
+        *,
+        messages: tuple[dict[str, Any], ...] = (),
+        account: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.messages = [dict(message) for message in messages]
+        self.account_email = account
+        self.searches: list[dict[str, Any]] = []
+
+    def search(self, query: str, max_results: int = 10) -> dict[str, Any]:
+        self.searches.append({"query": query, "max_results": max_results})
+        return {
+            "messages": [
+                {
+                    "id": str(message.get("id") or ""),
+                    "from": message.get("from"),
+                    "subject": message.get("subject"),
+                    "date": message.get("date"),
+                }
+                for message in self.messages[: max(int(max_results), 0)]
+            ]
+        }
+
+    def read(self, *, message_id: str) -> dict[str, Any]:
+        for message in self.messages:
+            if str(message.get("id") or "") == message_id:
+                return dict(message)
+        raise GmailError(f"Message {message_id} was not found.")
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorFixtures:
+    """Offline connector inputs a scenario needs before its scene can run.
+
+    ``apollo_key`` and ``tavily_key`` are literal fakes that only unlock the
+    in-process ``FakeHttp`` route table. They are never read from the host.
+    """
+
+    apollo_key: str | None = None
+    tavily_key: str | None = None
+    http_routes: tuple[tuple[str, Any], ...] = ()
+    gmail_messages: tuple[dict[str, Any], ...] = ()
+    gmail_drafts: tuple[dict[str, str], ...] = ()
+    gmail_account: str | None = None
+
+
 @dataclass(slots=True)
 class ConnectorFakes:
     gmail: FakeGmail
@@ -107,15 +163,27 @@ class ConnectorFakes:
     mcp: FakeMcp
 
     @classmethod
-    def create(cls) -> "ConnectorFakes":
+    def create(cls, fixtures: ConnectorFixtures | None = None) -> "ConnectorFakes":
+        fixtures = fixtures or ConnectorFixtures()
+
         def environment_probe(_arguments: dict[str, Any]) -> dict[str, Any]:
             return {"sensitive_keys": sensitive_environment_keys()}
 
+        gmail = FixtureGmail(
+            messages=tuple(fixtures.gmail_messages),
+            account=fixtures.gmail_account,
+        )
+        for draft in fixtures.gmail_drafts:
+            gmail.create_draft(
+                to=str(draft.get("to") or ""),
+                subject=str(draft.get("subject") or ""),
+                body=str(draft.get("body") or ""),
+            )
         return cls(
-            gmail=FakeGmail(),
+            gmail=gmail,
             drive=CredentialFreeConnector("drive"),
             calendar=CredentialFreeConnector("calendar"),
-            http=FakeHttp(),
+            http=FakeHttp(dict(fixtures.http_routes)),
             mcp=FakeMcp(
                 [
                     {
@@ -148,6 +216,9 @@ class EvalEnvironment:
     workspace_grant: dict[str, Any]
     connectors: ConnectorFakes
     credential_environment: dict[str, str]
+    skills: SkillLoader
+    apollo_key: str | None = None
+    tavily_key: str | None = None
 
     @classmethod
     def create(
@@ -156,6 +227,7 @@ class EvalEnvironment:
         *,
         label: str,
         apply_environment: bool = False,
+        fixtures: ConnectorFixtures | None = None,
     ) -> "EvalEnvironment":
         safe_label = re.sub(r"[^A-Za-z0-9._-]+", "-", label).strip("-.") or "run"
         artifact_root = private_artifact_root(artifact_root)
@@ -184,6 +256,7 @@ class EvalEnvironment:
             access=GrantAccess.READ_WRITE,
             allow_shell=False,
         )
+        fixtures = fixtures or ConnectorFixtures()
         return cls(
             root=root,
             state_dir=state_dir,
@@ -194,8 +267,11 @@ class EvalEnvironment:
             inbox=Inbox(store),
             workspace_runtime=workspace_runtime,
             workspace_grant=workspace_grant,
-            connectors=ConnectorFakes.create(),
+            connectors=ConnectorFakes.create(fixtures),
             credential_environment=credential_environment,
+            skills=SkillLoader([BUILTIN_SKILLS]),
+            apollo_key=fixtures.apollo_key,
+            tavily_key=fixtures.tavily_key,
         )
 
     def close(self) -> None:
