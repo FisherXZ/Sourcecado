@@ -1,12 +1,12 @@
 [package]
-name = "club-desktop"
+name = "sourcecado-desktop"
 version = "0.0.1"
-description = "Club desktop shell"
+description = "Sourcecado desktop shell"
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "club_desktop_lib"
+name = "sourcecado_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
