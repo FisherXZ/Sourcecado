@@ -1,5 +1,10 @@
 import { useId, useState } from "react";
 
+import {
+  curateApolloCandidates,
+  openPersonSourcingChat,
+  type ApolloCurationResult,
+} from "../api";
 import { usePopulateComposer } from "../chat/ComposerDraftContext";
 import { useInspector } from "../chat/Inspector";
 import type { DomainRendererProps } from "../chat/toolRegistry";
@@ -12,6 +17,12 @@ type ApolloCandidate = {
   readonly hasEmail: boolean;
   readonly phoneStatus: string | null;
   readonly missing: readonly string[];
+  readonly raw: Record<string, unknown>;
+};
+
+type FailedCandidate = {
+  readonly candidate: ApolloCandidate;
+  readonly code: string;
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -44,6 +55,7 @@ function candidateOf(value: unknown, index: number): ApolloCandidate | null {
     hasEmail: raw.hasEmail === true,
     phoneStatus: text(raw.directPhoneStatus),
     missing,
+    raw,
   };
 }
 
@@ -74,8 +86,17 @@ export function ApolloPeopleResult({
   const titleId = useId();
   const listId = useId();
   const [visibleCount, setVisibleCount] = useState(5);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [target, setTarget] = useState("");
+  const [reviewing, setReviewing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [curation, setCuration] = useState<ApolloCurationResult | null>(null);
+  const [curationFailed, setCurationFailed] = useState(false);
+  const [openingPersonId, setOpeningPersonId] = useState<string | null>(null);
+  const [chatActionFailed, setChatActionFailed] = useState(false);
+  const [failedCandidates, setFailedCandidates] = useState<FailedCandidate[]>([]);
   const populateComposer = usePopulateComposer();
-  const { select } = useInspector();
+  const { select, threadId } = useInspector();
   if (status === "error") return null;
   if (status === "loading") {
     return (
@@ -166,8 +187,116 @@ export function ApolloPeopleResult({
     ? raw.people
         .map(candidateOf)
         .filter((candidate): candidate is ApolloCandidate => candidate !== null)
+        .filter(
+          (candidate, index, candidates) =>
+            candidates.findIndex((item) => item.id === candidate.id) === index,
+        )
     : [];
   const query = queryLabel(args);
+  const selected = people.filter((candidate) => selectedIds.has(candidate.id));
+
+  function toggleCandidate(candidateId: string) {
+    setReviewing(false);
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(candidateId)) next.delete(candidateId);
+      else next.add(candidateId);
+      return next;
+    });
+  }
+
+  async function keepSelected() {
+    if (!threadId || selected.length === 0 || !target.trim() || submitting) return;
+    setSubmitting(true);
+    setCurationFailed(false);
+    try {
+      const next = await curateApolloCandidates({
+        sessionId: threadId,
+        target: target.trim(),
+        people: selected.map((candidate) => candidate.raw),
+        bindOriginal: selected.length === 1,
+      });
+      setCuration(next);
+      setFailedCandidates(
+        next.failed.flatMap((failure) => {
+          const candidate =
+            selected.find((item) => item.id === failure.apollo_id) ??
+            selected[failure.row_index];
+          return candidate ? [{ candidate, code: failure.code }] : [];
+        }),
+      );
+      setReviewing(false);
+    } catch {
+      setCurationFailed(true);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function retryFailed() {
+    if (!threadId || failedCandidates.length === 0 || submitting) return;
+    const retrying = failedCandidates.map((failure) => failure.candidate);
+    setSubmitting(true);
+    setCurationFailed(false);
+    try {
+      const next = await curateApolloCandidates({
+        sessionId: threadId,
+        target: target.trim(),
+        people: retrying.map((candidate) => candidate.raw),
+        bindOriginal: false,
+      });
+      setCuration((current) => {
+        if (!current) return next;
+        const kept = [...current.kept];
+        for (const person of next.kept) {
+          const index = kept.findIndex((item) => item.apollo_id === person.apollo_id);
+          if (index === -1) kept.push(person);
+          else kept[index] = person;
+        }
+        return {
+          ...next,
+          kept,
+          original_session: current.original_session,
+        };
+      });
+      setFailedCandidates(
+        next.failed.flatMap((failure) => {
+          const candidate =
+            retrying.find((item) => item.id === failure.apollo_id) ??
+            retrying[failure.row_index];
+          return candidate ? [{ candidate, code: failure.code }] : [];
+        }),
+      );
+    } catch {
+      setCurationFailed(true);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function keptName(person: ApolloCurationResult["kept"][number]): string {
+    return [person.first_name, person.last_name].filter(Boolean).join(" ") || "Person";
+  }
+
+  async function openKeptChat(person: ApolloCurationResult["kept"][number]) {
+    if (openingPersonId) return;
+    const existingSession = person.sourcing_chat?.session_id;
+    if (existingSession) {
+      window.location.hash = `#/chat/${encodeURIComponent(existingSession)}/person/${encodeURIComponent(person.person_id)}`;
+      return;
+    }
+    setOpeningPersonId(person.person_id);
+    setChatActionFailed(false);
+    try {
+      const opened = await openPersonSourcingChat(person.person_id, person.version);
+      if (opened.active_person.person_id !== person.person_id) return;
+      window.location.hash = `#/chat/${encodeURIComponent(opened.session.id)}/person/${encodeURIComponent(person.person_id)}`;
+    } catch {
+      setChatActionFailed(true);
+    } finally {
+      setOpeningPersonId(null);
+    }
+  }
 
   if (people.length === 0) {
     return (
@@ -192,7 +321,7 @@ export function ApolloPeopleResult({
         <div>
           <h3 id={titleId}>Apollo shortlist</h3>
           <p>
-            <span>{people.length} candidates</span>
+            <span>{people.length} {people.length === 1 ? "candidate" : "candidates"}</span>
             {" · "}
             <span>{query}</span>
           </p>
@@ -222,6 +351,14 @@ export function ApolloPeopleResult({
       <ol id={listId} aria-label="Apollo candidates">
         {people.slice(0, visibleCount).map((candidate) => (
           <li key={candidate.id}>
+            <label className="sourcecado-apollo-select">
+              <input
+                type="checkbox"
+                checked={selectedIds.has(candidate.id)}
+                onChange={() => toggleCandidate(candidate.id)}
+              />
+              <span>Select {candidate.name}</span>
+            </label>
             <button
               type="button"
               className="sourcecado-apollo-candidate-name"
@@ -275,6 +412,101 @@ export function ApolloPeopleResult({
           Show {Math.min(5, people.length - visibleCount)} more candidates
         </button>
       ) : null}
+      <section className="sourcecado-apollo-curation" aria-label="Curate Apollo shortlist">
+        <label>
+          <span>Target for selected people</span>
+          <input
+            value={target}
+            onChange={(event) => {
+              setTarget(event.currentTarget.value);
+              setReviewing(false);
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={selected.length === 0 || !target.trim()}
+          onClick={() => setReviewing(true)}
+        >
+          Review {selected.length} selected {selected.length === 1 ? "candidate" : "candidates"}
+        </button>
+        {reviewing ? (
+          <section
+            className="sourcecado-apollo-review"
+            aria-label="Review selected Apollo candidates"
+          >
+            <h4>Review before keeping</h4>
+            <p>{target.trim()}</p>
+            <ul>
+              {selected.map((candidate) => <li key={candidate.id}>{candidate.name}</li>)}
+            </ul>
+            <p>Keeping creates person files. It does not enrich or use Apollo credits.</p>
+            <button type="button" disabled={submitting} onClick={() => void keepSelected()}>
+              {submitting
+                ? "Keeping…"
+                : `Keep ${selected.length} ${selected.length === 1 ? "person" : "people"}`}
+            </button>
+          </section>
+        ) : null}
+        {curationFailed ? <p role="alert">Couldn’t keep the selected people. Try again.</p> : null}
+        {curation ? (
+          <section
+            className="sourcecado-apollo-curation-receipt"
+            aria-label="Apollo curation receipt"
+          >
+            <p role="status">
+              Kept {curation.kept.length} {curation.kept.length === 1 ? "person" : "people"}.
+            </p>
+            {curation.original_session.reason === "multiple_selection" ? (
+              <p>The original target conversation remains unbound. Continue in each person’s sourcing chat.</p>
+            ) : null}
+            <ul>
+              {curation.kept.map((person) => {
+                const name = keptName(person);
+                return (
+                  <li key={person.person_id}>
+                    <a
+                      href={`#/people/${encodeURIComponent(person.person_id)}`}
+                      aria-label={`Open person file for ${name}`}
+                    >
+                      {name}
+                    </a>
+                    <button
+                      type="button"
+                      disabled={openingPersonId !== null}
+                      aria-label={`${person.sourcing_chat ? "Open" : "Create"} sourcing chat for ${name}`}
+                      onClick={() => void openKeptChat(person)}
+                    >
+                      {openingPersonId === person.person_id
+                        ? "Opening…"
+                        : person.sourcing_chat
+                          ? "Open chat"
+                          : "Create chat"}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {chatActionFailed ? (
+              <p role="alert" aria-label="Sourcing chat unavailable">
+                Couldn’t open this person’s sourcing chat. Refresh the person file and try again.
+              </p>
+            ) : null}
+            {failedCandidates.length > 0 ? (
+              <div className="sourcecado-apollo-curation-failures">
+                {failedCandidates.map(({ candidate, code }) => (
+                  <p key={candidate.id}>
+                    {candidate.name} needs review ({code.replaceAll("_", " ")}).
+                  </p>
+                ))}
+                <button type="button" disabled={submitting} onClick={() => void retryFailed()}>
+                  Retry {failedCandidates.length} failed {failedCandidates.length === 1 ? "candidate" : "candidates"}
+                </button>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+      </section>
       <div className="sourcecado-apollo-credit-note">
         <p>Enrichment uses Apollo credits and requires approval.</p>
         <button

@@ -391,6 +391,33 @@ export type PersonSourcingChatResult = {
   active_person: ActivePerson;
 };
 
+export type ApolloCurationKept = {
+  row_index: number;
+  apollo_id: string;
+  person_id: string;
+  version: number;
+  operation: "created" | "updated";
+  first_name: string | null;
+  last_name: string | null;
+  title: string | null;
+  company: string | null;
+  sourcing_chat: { session_id: string } | null;
+};
+
+export type ApolloCurationResult = {
+  status: "success" | "partial" | "failed";
+  selected_row_count: number;
+  selected_identity_count: number;
+  kept: ApolloCurationKept[];
+  failed: Array<{ row_index: number; apollo_id: string | null; code: string }>;
+  duplicates: Array<{ row_index: number; apollo_id: string }>;
+  original_session: {
+    session_id: string;
+    bound_person_id: string | null;
+    reason: string;
+  };
+};
+
 export async function getBoard(): Promise<Board> {
   const res = await get("/v1/board");
   if (!res.ok) throw new Error(`board ${res.status}`);
@@ -453,6 +480,114 @@ export async function openPersonSourcingChat(
       person_id: activePerson.person_id,
       version: activePerson.version,
       label: activePerson.label,
+    },
+  };
+}
+
+export async function curateApolloCandidates(input: {
+  sessionId: string;
+  target: string;
+  people: Array<Record<string, unknown>>;
+  bindOriginal: boolean;
+}): Promise<ApolloCurationResult> {
+  const res = await fetch(`${httpBase()}/v1/apollo/curate`, {
+    method: "POST",
+    headers: {
+      "X-Club-Token": apiToken(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      session_id: input.sessionId,
+      target: input.target,
+      people: input.people,
+      bind_original: input.bindOriginal,
+    }),
+  });
+  const raw = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) throw new Error(`Apollo curation ${res.status}`);
+  const status = String(raw.status);
+  const keptRaw = Array.isArray(raw.kept) ? raw.kept : null;
+  const failedRaw = Array.isArray(raw.failed) ? raw.failed : null;
+  const duplicatesRaw = Array.isArray(raw.duplicates) ? raw.duplicates : null;
+  const originalRaw = record(raw.original_session);
+  if (
+    !["success", "partial", "failed"].includes(status) ||
+    !Number.isInteger(raw.selected_row_count) ||
+    !Number.isInteger(raw.selected_identity_count) ||
+    !keptRaw ||
+    !failedRaw ||
+    !duplicatesRaw ||
+    !originalRaw
+  ) {
+    throw new Error("Apollo curation payload malformed");
+  }
+  const nullableText = (value: unknown): string | null =>
+    typeof value === "string" && value ? value : null;
+  const kept = keptRaw.map((value) => {
+    const item = record(value);
+    const chat = item.sourcing_chat === null ? null : record(item.sourcing_chat);
+    if (
+      !Number.isInteger(item.row_index) ||
+      typeof item.apollo_id !== "string" ||
+      !item.apollo_id ||
+      typeof item.person_id !== "string" ||
+      !item.person_id ||
+      !Number.isInteger(item.version) ||
+      !["created", "updated"].includes(String(item.operation)) ||
+      (chat && (typeof chat.session_id !== "string" || !chat.session_id))
+    ) {
+      throw new Error("Apollo curation payload malformed");
+    }
+    return {
+      row_index: item.row_index as number,
+      apollo_id: item.apollo_id,
+      person_id: item.person_id,
+      version: item.version as number,
+      operation: item.operation as "created" | "updated",
+      first_name: nullableText(item.first_name),
+      last_name: nullableText(item.last_name),
+      title: nullableText(item.title),
+      company: nullableText(item.company),
+      sourcing_chat: chat ? { session_id: chat.session_id as string } : null,
+    };
+  });
+  const failed = failedRaw.map((value) => {
+    const item = record(value);
+    if (!Number.isInteger(item.row_index) || typeof item.code !== "string") {
+      throw new Error("Apollo curation payload malformed");
+    }
+    return {
+      row_index: item.row_index as number,
+      apollo_id: nullableText(item.apollo_id),
+      code: item.code,
+    };
+  });
+  const duplicates = duplicatesRaw.map((value) => {
+    const item = record(value);
+    if (!Number.isInteger(item.row_index) || typeof item.apollo_id !== "string") {
+      throw new Error("Apollo curation payload malformed");
+    }
+    return { row_index: item.row_index as number, apollo_id: item.apollo_id };
+  });
+  if (
+    typeof originalRaw.session_id !== "string" ||
+    (originalRaw.bound_person_id !== null &&
+      typeof originalRaw.bound_person_id !== "string") ||
+    typeof originalRaw.reason !== "string"
+  ) {
+    throw new Error("Apollo curation payload malformed");
+  }
+  return {
+    status: status as ApolloCurationResult["status"],
+    selected_row_count: raw.selected_row_count as number,
+    selected_identity_count: raw.selected_identity_count as number,
+    kept,
+    failed,
+    duplicates,
+    original_session: {
+      session_id: originalRaw.session_id,
+      bound_person_id: originalRaw.bound_person_id as string | null,
+      reason: originalRaw.reason,
     },
   };
 }

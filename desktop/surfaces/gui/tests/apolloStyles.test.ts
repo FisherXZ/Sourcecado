@@ -18,6 +18,21 @@ describe("Apollo shortlist styles", () => {
     );
   });
 
+  it("keeps shortlist selection and review compact and keyboard visible", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-apollo-curation\s*\{[^}]*display:\s*grid;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-apollo-select input\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-apollo-select\s*\{[^}]*min-height:\s*44px;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-apollo-curation-receipt li\s*\{[^}]*display:\s*flex;/,
+    );
+  });
+
   it("disables candidate skeleton animation when reduced motion is requested", () => {
     expect(styles).toMatch(
       /\.sourcecado-apollo-skeleton span\s*\{[^}]*animation:\s*shell-shimmer/,
