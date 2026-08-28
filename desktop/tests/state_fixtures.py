@@ -226,6 +226,7 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
         root / ".env",
         f"APOLLO_API_KEY={PLANTED_API_KEY}\n" if plant_secrets else "CLUB_PERSONA=sourcing\n",
     )
+    _write_drive_ingestion_db(root, CURRENT_DRIVE_INGESTION_DDL)
 
     if plant_secrets:
         store.append(
@@ -342,6 +343,131 @@ LEGACY_PEOPLE_DDL = """
 
 LEGACY_PERSON_ID = "per_0f3c9a1b4d2e4f6a8b0c1d2e3f405162"
 
+# DriveIngestionStore as it shipped before work_revision. user_version stays 0.
+LEGACY_DRIVE_INGESTION_DDL = """
+    CREATE TABLE drive_ingestion_jobs (
+        id TEXT PRIMARY KEY,
+        folder_id TEXT NOT NULL,
+        resolved_path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        cancel_requested INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE drive_ingestion_folders (
+        job_id TEXT NOT NULL,
+        drive_id TEXT NOT NULL,
+        parent_id TEXT,
+        path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        page_token TEXT,
+        generation INTEGER NOT NULL,
+        error_kind TEXT,
+        PRIMARY KEY (job_id, drive_id)
+    );
+    CREATE TABLE drive_ingestion_sources (
+        job_id TEXT NOT NULL,
+        drive_id TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'tree',
+        parent_id TEXT,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        modified_time TEXT,
+        web_view_link TEXT,
+        sensitivity TEXT NOT NULL DEFAULT 'standard',
+        extraction_status TEXT NOT NULL DEFAULT 'pending',
+        content TEXT,
+        citations_json TEXT NOT NULL DEFAULT '[]',
+        redaction_count INTEGER NOT NULL DEFAULT 0,
+        source_safety_json TEXT,
+        generation INTEGER NOT NULL,
+        last_action TEXT NOT NULL DEFAULT 'pending',
+        error_kind TEXT,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        needs_read INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (job_id, drive_id)
+    );
+    CREATE TABLE drive_ingestion_proposals (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        source_drive_id TEXT NOT NULL,
+        person_id TEXT NOT NULL,
+        record_type TEXT NOT NULL,
+        fields_json TEXT NOT NULL,
+        diff_json TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewer TEXT
+    );
+"""
+
+# The constructor's current CREATE TABLE, still at user_version 0 until adopted.
+CURRENT_DRIVE_INGESTION_DDL = """
+    CREATE TABLE drive_ingestion_jobs (
+        id TEXT PRIMARY KEY,
+        folder_id TEXT NOT NULL,
+        resolved_path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        work_revision INTEGER NOT NULL DEFAULT 1,
+        cancel_requested INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE drive_ingestion_folders (
+        job_id TEXT NOT NULL,
+        drive_id TEXT NOT NULL,
+        parent_id TEXT,
+        path TEXT NOT NULL,
+        status TEXT NOT NULL,
+        page_token TEXT,
+        generation INTEGER NOT NULL,
+        error_kind TEXT,
+        PRIMARY KEY (job_id, drive_id)
+    );
+    CREATE TABLE drive_ingestion_sources (
+        job_id TEXT NOT NULL,
+        drive_id TEXT NOT NULL,
+        scope TEXT NOT NULL DEFAULT 'tree',
+        parent_id TEXT,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        modified_time TEXT,
+        web_view_link TEXT,
+        sensitivity TEXT NOT NULL DEFAULT 'standard',
+        extraction_status TEXT NOT NULL DEFAULT 'pending',
+        content TEXT,
+        citations_json TEXT NOT NULL DEFAULT '[]',
+        redaction_count INTEGER NOT NULL DEFAULT 0,
+        source_safety_json TEXT,
+        generation INTEGER NOT NULL,
+        last_action TEXT NOT NULL DEFAULT 'pending',
+        error_kind TEXT,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        needs_read INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (job_id, drive_id)
+    );
+    CREATE TABLE drive_ingestion_proposals (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        source_drive_id TEXT NOT NULL,
+        person_id TEXT NOT NULL,
+        record_type TEXT NOT NULL,
+        fields_json TEXT NOT NULL,
+        diff_json TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        reviewer TEXT
+    );
+"""
+
 
 def build_legacy_state(root: Path, *, plant_secrets: bool = False) -> Path:
     """Write the pre-registry state directory, populated the way an install is."""
@@ -456,6 +582,7 @@ def build_legacy_state(root: Path, *, plant_secrets: bool = False) -> Path:
     conn.commit()
     conn.close()
     os.chmod(root / "people.db", 0o600)
+    _write_drive_ingestion_db(root, LEGACY_DRIVE_INGESTION_DDL)
 
     conv_dir = root / "conversations"
     conv_dir.mkdir(exist_ok=True)
@@ -565,3 +692,30 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     body = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
     _write_private(path, body)
+
+
+def _write_drive_ingestion_db(root: Path, ddl: str) -> None:
+    path = root / "drive_ingestion.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(ddl)
+        conn.execute(
+            """
+            INSERT INTO drive_ingestion_jobs
+                (id, folder_id, resolved_path, status, generation, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "drive_ingest_1",
+                "folder_1",
+                "Codeology/Sourcing",
+                "paused",
+                1,
+                "2026-08-01T09:00:00+00:00",
+                "2026-08-01T09:00:00+00:00",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    os.chmod(path, 0o600)

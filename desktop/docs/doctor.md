@@ -68,6 +68,7 @@ process and fails if the model or connector modules appear in `sys.modules`, and
 | --- | --- | --- | --- |
 | `conversation_db` | `club.db` | SQLite | `PRAGMA user_version` |
 | `people_db` | `people.db` | SQLite | `PRAGMA user_version` |
+| `drive_ingestion` | `drive_ingestion.db` | SQLite | `PRAGMA user_version` |
 | `conversation_transcripts` | `conversations/` | JSONL directory | `state_versions.json` |
 | `presentation_events` | `events/` | JSONL directory | `state_versions.json` |
 | `workspace_receipts` | `workspace_receipts.jsonl` | JSONL log | `state_versions.json` |

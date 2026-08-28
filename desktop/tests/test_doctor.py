@@ -232,6 +232,29 @@ def test_a_malformed_database_is_reported_and_never_repaired(tmp_path):
     assert _outside_backups(_tree_digest(root)) == _outside_backups(before)
 
 
+def test_a_corrupt_drive_ingestion_db_is_reported_and_never_repaired(tmp_path):
+    root = build_current_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    path = root / "drive_ingestion.db"
+    raw = bytearray(path.read_bytes())
+    raw[4096 : 4096 + 512] = b"\x00" * 512
+    path.write_bytes(bytes(raw))
+    before = _tree_digest(root)
+
+    report = doctor.diagnose(root)
+    assert {"sqlite.integrity", "store.unreadable"} & _checks(report)
+    assert report.healthy is False
+    assert report.blocked is True
+    assert all(
+        item.repair is not Repair.AUTOMATIC
+        for item in report.findings
+        if item.store_id == "drive_ingestion"
+    )
+
+    doctor.repair(root)
+    assert _outside_backups(_tree_digest(root)) == _outside_backups(before)
+
+
 def test_a_file_that_is_not_a_database_blocks_every_repair(tmp_path):
     root = build_current_state(tmp_path / "state")
     (root / "club.db").write_bytes(b"this is not a sqlite file")
@@ -295,6 +318,31 @@ def test_an_unknown_future_version_fails_closed_without_modifying_state(tmp_path
 
 
 # --- permissions, dependencies -------------------------------------------
+
+
+def test_doctor_inspects_drive_ingestion_db_when_present(tmp_path):
+    """A director who used Drive folder ingestion has drive_ingestion.db on disk.
+
+    Doctor, packaging, and later updates consume the registry, so a world-readable
+    copy of that database must show up as a named store with permission drift.
+    """
+    root = build_current_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    path = root / "drive_ingestion.db"
+    os.chmod(path, 0o666)
+
+    report = doctor.diagnose(root)
+
+    drive = next(item for item in report.stores if item.store_id == "drive_ingestion")
+    assert drive.present is True
+    assert drive.kind == "sqlite"
+    finding = _finding(report, "permissions.drift")
+    assert finding.repair is Repair.AUTOMATIC
+    assert any(
+        "drive_ingestion.db" in line and "0o666" in line for line in finding.detail
+    )
+    assert report.healthy is False
+    assert any(item.action == "permissions.tighten" for item in report.proposed_repairs)
 
 
 def test_unsafe_state_permissions_are_detected_and_repaired(tmp_path):

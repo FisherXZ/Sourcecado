@@ -89,6 +89,7 @@ def test_registry_names_every_active_durable_store():
     assert registered == {
         "conversation_db",
         "people_db",
+        "drive_ingestion",
         "conversation_transcripts",
         "presentation_events",
         "memory_notes",
@@ -252,6 +253,34 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
             ).fetchall()
         }
         assert {"person_attachments", "person_versions"} <= tables
+    finally:
+        conn.close()
+
+
+def test_legacy_drive_ingestion_db_upgrades_from_the_pre_registry_shape(tmp_path):
+    root = build_legacy_state(tmp_path / "state")
+    db = root / "drive_ingestion.db"
+    assert _user_version(db) == 0
+
+    store_plan = _plan_for(migrations.plan_migrations(root), "drive_ingestion")
+    assert store_plan.status is StoreStatus.PENDING
+    assert store_plan.from_version == 0
+    assert store_plan.to_version == 1
+    assert store_plan.record_count > 0
+
+    assert migrations.apply_migrations(root).error is None
+    assert _user_version(db) == 1
+
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        job = conn.execute(
+            "SELECT * FROM drive_ingestion_jobs WHERE id = 'drive_ingest_1'"
+        ).fetchone()
+        assert job["folder_id"] == "folder_1"
+        assert job["resolved_path"] == "Codeology/Sourcing"
+        assert job["status"] == "paused"
+        assert job["work_revision"] == 1
     finally:
         conn.close()
 
