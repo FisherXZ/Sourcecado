@@ -14,5 +14,8 @@ describe("Board and person-file styles", () => {
     expect(styles).toMatch(
       /@media \(max-width: 767px\)[\s\S]*?\.board-grid,\s*\.person-summary-grid\s*\{[^}]*grid-template-columns:\s*1fr;/,
     );
+    expect(styles).toMatch(
+      /\.person-chat-action button\s*\{[^}]*min-height:\s*44px;/,
+    );
   });
 });

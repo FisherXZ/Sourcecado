@@ -164,6 +164,69 @@ describe("ChatPage Warm Operator thread", () => {
     expect(container).not.toHaveTextContent("private error");
   });
 
+  it("shows the route-verified active person without replacing the chat title", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Sourcing · Alyssa",
+      messages: [],
+      events: [],
+      active_person: {
+        person_id: "person one",
+        version: 2,
+        label: "Alyssa Lee, Partner at Codeology",
+      },
+    });
+
+    render(<ChatPage sessionId="thread-alpha" personId="person one" />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Sourcing · Alyssa" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: "Active person: Alyssa Lee, Partner at Codeology",
+      }),
+    ).toHaveAttribute("href", "#/people/person%20one");
+    expect(api.getSession).toHaveBeenCalledWith("thread-alpha", "person one");
+  });
+
+  it("canonicalizes a plain bound thread route to include its person", async () => {
+    window.location.hash = "#/chat/thread-alpha";
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Sourcing · Alyssa",
+      messages: [],
+      events: [],
+      active_person: {
+        person_id: "person one",
+        version: 2,
+        label: "Alyssa Lee",
+      },
+    });
+
+    render(<ChatPage sessionId="thread-alpha" />);
+
+    await waitFor(() =>
+      expect(window.location.hash).toBe(
+        "#/chat/thread-alpha/person/person%20one",
+      ),
+    );
+  });
+
+  it("shows a load failure when the route names a different person", async () => {
+    api.getSession.mockRejectedValueOnce(new Error("binding mismatch"));
+
+    render(<ChatPage sessionId="thread-alpha" personId="person two" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "couldn’t load this conversation",
+    );
+    expect(
+      screen.queryByRole("link", { name: /Active person:/ }),
+    ).not.toBeInTheDocument();
+    expect(api.getSession).toHaveBeenCalledWith("thread-alpha", "person two");
+  });
+
   it("does not carry measurements across threads while the next run loads", async () => {
     const betaMetrics = deferred<{
       version: 1;
