@@ -377,6 +377,37 @@ export type PersonFile = {
   }>;
   versions?: Array<{ version: number; created_at: string }>;
   sourcing_chat: { session_id: string; person_id: string } | null;
+  meeting_evidence?: MeetingEvidenceView;
+};
+
+export type MeetingEvidence = {
+  evidence_id: string;
+  provider: "calendar" | "granola";
+  provider_id: string;
+  title: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  participants: Array<{ name: string | null; email: string | null }>;
+  source_ref: {
+    id: string;
+    title: string;
+    url: string | null;
+    provider: string;
+  };
+  notes: string | null;
+  status: "attached" | "proposed" | "rejected" | "unmatched";
+  match_reason: string | null;
+};
+
+export type MeetingEvidenceView = {
+  attached: MeetingEvidence[];
+  proposed: MeetingEvidence[];
+  rejected: MeetingEvidence[];
+};
+
+export type MeetingRefreshResult = {
+  sources: Record<string, { status: "ok"; records: number } | { status: "failed"; error: string }>;
+  meeting_evidence?: MeetingEvidenceView;
 };
 
 export type ActivePerson = {
@@ -428,6 +459,38 @@ export async function getPerson(id: string): Promise<PersonFile> {
   const res = await get(`/v1/people/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`person ${res.status}`);
   return res.json();
+}
+
+export async function refreshPersonMeetings(id: string): Promise<MeetingRefreshResult> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(id)}/meetings/refresh`,
+    { method: "POST", headers: { "X-Club-Token": apiToken() } },
+  );
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `meeting refresh ${res.status}`);
+  return body;
+}
+
+async function reviewPersonMeeting(
+  id: string,
+  evidenceId: string,
+  action: "attach" | "reject",
+): Promise<{ meeting: MeetingEvidence; meeting_evidence: MeetingEvidenceView }> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(id)}/meetings/${encodeURIComponent(evidenceId)}/${action}`,
+    { method: "POST", headers: { "X-Club-Token": apiToken() } },
+  );
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `meeting ${action} ${res.status}`);
+  return body;
+}
+
+export function attachPersonMeeting(id: string, evidenceId: string) {
+  return reviewPersonMeeting(id, evidenceId, "attach");
+}
+
+export function rejectPersonMeeting(id: string, evidenceId: string) {
+  return reviewPersonMeeting(id, evidenceId, "reject");
 }
 
 export async function openPersonSourcingChat(

@@ -48,12 +48,23 @@ class CalendarApi:
         data = self._request("get", EVENTS_URL, params=params) or {}
         events = []
         for row in data.get("items") or []:
+            attendees = [
+                {
+                    "email": attendee.get("email"),
+                    "displayName": attendee.get("displayName"),
+                }
+                for attendee in row.get("attendees") or []
+                if isinstance(attendee, dict)
+                and (attendee.get("email") or attendee.get("displayName"))
+            ]
             events.append(
                 {
                     "id": row.get("id"),
                     "summary": row.get("summary"),
                     "start": row.get("start"),
                     "end": row.get("end"),
+                    "attendees": attendees,
+                    "htmlLink": row.get("htmlLink"),
                 }
             )
         return {"events": events}

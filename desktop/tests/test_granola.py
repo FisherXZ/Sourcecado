@@ -150,6 +150,24 @@ def test_tool_name_prefix_read_ok():
     assert ok is True
 
 
+def test_structured_mcp_meetings_remain_machine_readable():
+    from coworker.mcp import tool_result_payload
+
+    class Result:
+        structuredContent = {
+            "meetings": [
+                {
+                    "id": "granola-1",
+                    "title": "Partner sync",
+                    "participants": [{"email": "ada@example.test"}],
+                }
+            ]
+        }
+        content = []
+
+    assert tool_result_payload(Result()) == Result.structuredContent
+
+
 def test_ws_denied_mcp_write_does_not_call(tmp_path):
     called = []
     mcp = FakeMcp(

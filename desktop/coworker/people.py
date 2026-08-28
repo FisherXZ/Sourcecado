@@ -90,6 +90,7 @@ class PersonStore:
             CREATE TABLE IF NOT EXISTS events (
                 event_id TEXT PRIMARY KEY,
                 person_id TEXT NOT NULL,
+                external_key TEXT,
                 source TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 summary TEXT NOT NULL,
@@ -141,6 +142,18 @@ class PersonStore:
             self._conn.execute("ALTER TABLE people ADD COLUMN outcome TEXT")
         if "deleted_at" not in columns:
             self._conn.execute("ALTER TABLE people ADD COLUMN deleted_at TEXT")
+        event_columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(events)").fetchall()
+        }
+        if "external_key" not in event_columns:
+            self._conn.execute("ALTER TABLE events ADD COLUMN external_key TEXT")
+        self._conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS events_person_external_key
+            ON events(person_id, external_key)
+            """
+        )
 
     def _now(self) -> str:
         return datetime.now(UTC).isoformat()
@@ -574,6 +587,17 @@ class PersonStore:
             board[person["sequence_state"]].append(person)
         return board
 
+    def list_people(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM people
+                WHERE deleted_at IS NULL
+                ORDER BY person_id
+                """
+            ).fetchall()
+        return [person for row in rows if (person := self._person_dict(row))]
+
     def _event_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         item = dict(row)
         raw = item.get("payload") or "{}"
@@ -635,6 +659,86 @@ class PersonStore:
             row = self._conn.execute(
                 "SELECT * FROM events WHERE event_id = ?",
                 (event_id,),
+            ).fetchone()
+        return self._event_dict(row)
+
+    def upsert_external_event(
+        self,
+        person_id: str,
+        *,
+        external_key: str,
+        source: str,
+        kind: str,
+        summary: str,
+        payload: dict[str, Any] | None = None,
+        actor: str = "assistant",
+        tool: str | None = None,
+    ) -> dict[str, Any]:
+        key = external_key.strip()
+        if not key:
+            raise ValueError("external_key is required")
+        if source not in SOURCES:
+            raise ValueError(f"invalid source {source}")
+        if actor not in ACTORS:
+            raise ValueError(f"invalid actor {actor}")
+        if not summary.strip():
+            raise ValueError("summary is required")
+        with self._lock:
+            self._load_person_row(person_id)
+            existing = self._conn.execute(
+                """
+                SELECT event_id FROM events
+                WHERE person_id = ? AND external_key = ?
+                """,
+                (person_id, key),
+            ).fetchone()
+            if existing is None:
+                event_id = _new_event_id()
+                self._conn.execute(
+                    """
+                    INSERT INTO events (
+                        event_id, person_id, external_key, source, kind, summary,
+                        payload, actor, session_id, run_id, tool
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+                    """,
+                    (
+                        event_id,
+                        person_id,
+                        key,
+                        source,
+                        kind,
+                        summary.strip(),
+                        json.dumps(payload or {}),
+                        actor,
+                        tool,
+                    ),
+                )
+            else:
+                event_id = str(existing["event_id"])
+                self._conn.execute(
+                    """
+                    UPDATE events SET
+                        source = ?, kind = ?, summary = ?, payload = ?,
+                        actor = ?, tool = ?
+                    WHERE event_id = ?
+                    """,
+                    (
+                        source,
+                        kind,
+                        summary.strip(),
+                        json.dumps(payload or {}),
+                        actor,
+                        tool,
+                        event_id,
+                    ),
+                )
+            self._conn.execute(
+                "UPDATE people SET updated_at = CURRENT_TIMESTAMP WHERE person_id = ?",
+                (person_id,),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM events WHERE event_id = ?", (event_id,)
             ).fetchone()
         return self._event_dict(row)
 
