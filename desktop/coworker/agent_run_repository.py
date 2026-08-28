@@ -32,6 +32,8 @@ from coworker.agent_run_state import (
     validate_transition,
 )
 from coworker.agent_runs import (
+    CHECKPOINT_KINDS,
+    INCOMPLETE_RECORD_KINDS,
     RUN_TRIGGERS,
     add_usage,
     checkpoint_payload,
@@ -185,7 +187,11 @@ class AgentRunRepository:
         self,
         *,
         session_id: str | None = None,
+        person_id: str | None = None,
+        trigger: str | None = None,
         states: Iterable[str] | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
@@ -193,6 +199,18 @@ class AgentRunRepository:
         if session_id is not None:
             clauses.append("session_id = ?")
             params.append(str(session_id))
+        if person_id is not None:
+            clauses.append("person_id = ?")
+            params.append(str(person_id))
+        if trigger is not None:
+            clauses.append("trigger = ?")
+            params.append(str(trigger))
+        if created_after is not None:
+            clauses.append("created_at >= ?")
+            params.append(_stamp(created_after))
+        if created_before is not None:
+            clauses.append("created_at <= ?")
+            params.append(_stamp(created_before))
         wanted = tuple(states or ())
         if wanted:
             clauses.append(f"current_state IN ({','.join('?' * len(wanted))})")
@@ -406,6 +424,48 @@ class AgentRunRepository:
                 )
             ),
         )
+
+    # --- retention -------------------------------------------------------
+
+    def prune_checkpoints(self, *, finished_before: datetime) -> list[str]:
+        """Drop step detail for runs that finished before the cutoff.
+
+        This is the only write in the store that is not a compare-and-swap
+        against a lease, and it is deliberately narrow: it deletes rows from
+        `agent_run_checkpoints` and touches `agent_runs` never. Run identity,
+        person, source and artifact references, usage, approvals, and outcome
+        all live on the run row and survive. A terminal run never moves again,
+        so no lease can be racing this.
+
+        A run whose record marks a hole, or carries a checkpoint kind this
+        build cannot read, is skipped: retention must not delete the evidence
+        that evidence is missing.
+        """
+        cutoff = _stamp(finished_before)
+        readable = tuple(sorted(CHECKPOINT_KINDS - INCOMPLETE_RECORD_KINDS))
+        pruned: list[str] = []
+        with self._write():
+            rows = self._conn.execute(
+                f"""
+                SELECT run_id FROM agent_runs
+                WHERE finished_at IS NOT NULL AND finished_at < ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM agent_run_checkpoints c
+                      WHERE c.run_id = agent_runs.run_id
+                        AND c.kind NOT IN ({','.join('?' * len(readable))})
+                  )
+                ORDER BY finished_at
+                """,
+                (cutoff, *readable),
+            ).fetchall()
+            for row in rows:
+                run_id = str(row["run_id"])
+                removed = self._conn.execute(
+                    "DELETE FROM agent_run_checkpoints WHERE run_id = ?", (run_id,)
+                ).rowcount
+                if removed:
+                    pruned.append(run_id)
+        return pruned
 
     # --- recovery --------------------------------------------------------
 
