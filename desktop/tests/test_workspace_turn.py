@@ -198,5 +198,72 @@ def test_permanent_exact_host_approval_can_satisfy_an_afk_turn(tmp_path):
     assert inbox.pending() == []
 
 
+WORKSPACE_BODY_SHOULD_NOT_HIT_DISK = "WORKSPACE_BODY_SHOULD_NOT_HIT_DISK_9f2a1c"
+
+
+def test_cancelling_a_later_approval_does_not_write_a_workspace_file_body_to_disk(
+    tmp_path,
+):
+    """Workspace two-tier redaction: model may see the body this turn; disk must not.
+
+    Public seam: run_turn, then ConversationStore.load / load_events.
+    """
+    state, root, grant, runtime = runtime_with_file(tmp_path)
+    (root / "secret.txt").write_text(WORKSPACE_BODY_SHOULD_NOT_HIT_DISK)
+    store = ConversationStore(state)
+    sid = "session-cancel-after-read"
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="fs-read-1",
+                        name="fs_read",
+                        arguments={
+                            "grant_id": grant["id"],
+                            "path": "secret.txt",
+                        },
+                    )
+                ]
+            },
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="fs-write-1",
+                        name="fs_write",
+                        arguments={
+                            "grant_id": grant["id"],
+                            "path": "existing.txt",
+                            "content": "new",
+                        },
+                    )
+                ]
+            },
+        ]
+    )
+
+    async def cancel(_call_id):
+        return "cancel"
+
+    result = asyncio.run(
+        run_turn(
+            text="read then write",
+            sid=sid,
+            store=store,
+            provider=provider,
+            persona=None,
+            skills=None,
+            inbox=Inbox(store),
+            openai_tools=OPENAI_TOOLS,
+            execute_kwargs={"workspace_runtime": runtime},
+            wait_permission=cancel,
+        )
+    )
+
+    assert result["status"] == "stopped"
+    durable = str(store.load(sid)) + str(store.load_events(sid))
+    assert WORKSPACE_BODY_SHOULD_NOT_HIT_DISK not in durable
+
+
 async def _append(events, event):
     events.append(event)
