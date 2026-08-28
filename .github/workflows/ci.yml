@@ -159,15 +159,28 @@ jobs:
           UPDATE_KEY: ${{ secrets.SOURCECADO_UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          if [ -n "$CERTIFICATE" ] && [ -n "$UPDATE_KEY" ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
+          # Two independent credentials, deliberately not conflated. The Apple
+          # identity proves who built the artifact. The update key proves a
+          # manifest came from us and is generated offline with no Apple
+          # involvement. Requiring both meant that having no Apple certificate
+          # also blocked update-manifest generation, so the whole update,
+          # migration, and rollback path could not be exercised without paying
+          # Apple. They are now gated separately.
+          if [ -n "$CERTIFICATE" ]; then
+            echo "apple=true" >> "$GITHUB_OUTPUT"
           else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No Apple signing identity or update signing key is configured. This build is UNSIGNED and UNNOTARIZED and has no update manifest. See desktop/docs/update-channel.md."
+            echo "apple=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Apple signing identity is configured. This build is UNSIGNED and UNNOTARIZED, and Gatekeeper will require right-click then Open on first launch. See desktop/docs/update-channel.md."
+          fi
+          if [ -n "$UPDATE_KEY" ]; then
+            echo "update=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "update=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No update signing key is configured. This build has no update manifest, so the update and rollback paths cannot be exercised. See desktop/docs/update-channel.md."
           fi
 
       - name: Import the Developer ID certificate
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.apple == 'true'
         env:
           CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -187,7 +200,7 @@ jobs:
           rm -f "$RUNNER_TEMP/certificate.p12"
 
       - name: Sign the application
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.apple == 'true'
         env:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
@@ -204,7 +217,7 @@ jobs:
           codesign --verify --strict --verbose=2 Sourcecado.app
 
       - name: Notarize and staple
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.apple == 'true'
         env:
           NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
@@ -221,7 +234,7 @@ jobs:
           xcrun stapler staple Sourcecado.app
 
       - name: Verify the signed build independently
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.apple == 'true'
         working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
         run: |
           set -euo pipefail
@@ -245,6 +258,8 @@ jobs:
             echo "workflow_run: ${{ github.run_id }}"
             echo "built_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "runner: $(sw_vers -productVersion) $(uname -m)"
+            echo "signed: ${{ steps.signing.outputs.apple }}"
+            echo "update_manifest: ${{ steps.signing.outputs.update }}"
             rustc -vV
             python3 --version
             node --version
@@ -253,7 +268,7 @@ jobs:
           cat provenance.txt
 
       - name: Package the artifact and generate the signed update manifest
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.update == 'true'
         env:
           SOURCECADO_UPDATE_SIGNING_KEY: ${{ secrets.SOURCECADO_UPDATE_SIGNING_KEY }}
         working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
@@ -281,7 +296,7 @@ jobs:
             --home "$HOME"
 
       - name: Verify the update manifest independently
-        if: steps.signing.outputs.available == 'true'
+        if: steps.signing.outputs.update == 'true'
         working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
         run: |
           set -euo pipefail
@@ -295,11 +310,11 @@ jobs:
             --installed-version "$SOURCECADO_MINIMUM_FROM" \
             --trust "${{ vars.SOURCECADO_UPDATE_KEY_ID }}=${{ vars.SOURCECADO_UPDATE_PUBLIC_KEY }}"
 
-      - name: Upload the signed preview artifact and its manifest
-        if: steps.signing.outputs.available == 'true'
+      - name: Upload the packaged preview artifact and its manifest
+        if: steps.signing.outputs.update == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: sourcecado-macos-preview-signed
+          name: sourcecado-macos-preview-packaged
           path: |
             desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado-*.zip
             desktop/surfaces/gui/src-tauri/target/release/bundle/macos/update-preview.json
