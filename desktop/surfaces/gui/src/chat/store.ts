@@ -163,6 +163,7 @@ export type SourcecadoEvent =
         | "partial"
         | "cancelled"
         | "failed"
+        | "held"
         | "stopped"
         | "interrupted";
     }
@@ -520,7 +521,9 @@ export class SourcecadoChatStore {
         type: "message_state_changed",
         threadId: event.session_id,
         messageId: event.message_id,
-        state: "failed",
+        // `held` carries through unchanged. Collapsing it into `failed` here
+        // would undo the whole point of the sidecar sending it.
+        state: event.state === "held" ? "held" : "failed",
       });
     }
   }

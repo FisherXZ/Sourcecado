@@ -17,6 +17,7 @@ from coworker.agent_run_dispatch import (
     guarded_call,
     needs_fence,
 )
+from coworker.agent_runs import TERMINAL_AGENT_RUN_STATES
 from coworker.compaction import (
     CompactionContext,
     SessionCompactor,
@@ -817,6 +818,11 @@ async def run_turn(
         how it ended and how long it was, never what it said.
         """
         if run_context is None:
+            return
+        # The chat protocol carries states the run store does not know. `held`
+        # is one: a quarantined effect already parked the run and released its
+        # lease, and there is no run state that means "a person owns this now".
+        if state not in TERMINAL_AGENT_RUN_STATES:
             return
         run_context.finish(state, status=state, text=text_so_far)
 
@@ -1679,6 +1685,26 @@ async def run_turn(
     except asyncio.CancelledError:
         turn_span.cancel()
         raise
+    except AgentRunEffectQuarantined as exc:
+        # A consequential call was dispatched and never reported back. Saying
+        # "failed" here would be a claim nobody can make, and an operator told
+        # a send failed is an operator who sends it again. The effect is on the
+        # review queue; the terminal points at it and stops.
+        turn_span.partial(ErrorKind.TOOL)
+        _persist_closed(store, sid, history, workspace_runtime)
+        await _terminal(
+            {
+                "type": "error",
+                "state": "held",
+                "code": "outcome_unknown",
+                "effect_id": exc.effect_id,
+                "message": (
+                    "The outcome of this action is unknown. It is held for "
+                    "review; do not retry it until it is settled."
+                ),
+            }
+        )
+        return {"status": "held", "text": last_text}
     except Exception as exc:
         turn_span.fail(turn_error_kind)
         _persist_closed(store, sid, history, workspace_runtime)

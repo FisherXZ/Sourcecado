@@ -43,6 +43,17 @@ class GmailError(RuntimeError):
     pass
 
 
+class GmailOutcomeUnknown(GmailError):
+    """The request left this machine and no answer came back.
+
+    Distinct from a generic failure because the caller's answer is different:
+    a failure means nothing happened and the caller may say so, this means
+    nobody knows. `agent_run_dispatch.guarded_call` turns it into a quarantined
+    effect a person settles, so it must not be caught as an ordinary error on
+    the way up.
+    """
+
+
 class GmailHistoryExpired(GmailError):
     """The stored cursor is older than the history Gmail still keeps.
 
@@ -99,8 +110,12 @@ def _from_http_error(exc: BaseException) -> GmailError:
         status = getattr(response, "status_code", None)
         if status:
             return GmailError(f"Gmail API returned HTTP {status}.")
+    # No status anywhere on the chain. Gmail never answered, so whether the
+    # request was acted on is not something this process can know.
     text = str(exc).strip()
-    return GmailError(text or "Gmail request failed.")
+    return GmailOutcomeUnknown(
+        text or "Gmail did not answer, so the outcome is unknown."
+    )
 
 
 class GmailClient(Protocol):

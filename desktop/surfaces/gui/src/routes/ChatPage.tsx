@@ -296,7 +296,13 @@ export function ChatPage({
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
           if (threadId === activeThreadRef.current) {
-            setAnnouncement("Run failed.");
+            setAnnouncement(
+              // "Run failed." would send someone reading by ear straight to a
+              // retry for a send that may already have gone out.
+              applied.state === "held"
+                ? "Run held for review."
+                : "Run failed.",
+            );
           }
         }
       }

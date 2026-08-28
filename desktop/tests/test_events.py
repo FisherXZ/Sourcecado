@@ -91,7 +91,22 @@ def test_contract_rejects_a_text_delta_without_string_content():
         ),
         (
             {"type": "error", "state": "complete", "message": "failed"},
-            "error.state must be failed",
+            "error.state must be failed or held",
+        ),
+        (
+            # `held` is the one terminal that points at something an operator
+            # has to open. Without the effect id it points at nothing.
+            {"type": "error", "state": "held", "message": "unknown"},
+            "error.code must be outcome_unknown when state is held",
+        ),
+        (
+            {
+                "type": "error",
+                "state": "held",
+                "code": "outcome_unknown",
+                "message": "unknown",
+            },
+            "error.effect_id must be a non-empty string when state is held",
         ),
         (
             {

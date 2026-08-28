@@ -165,6 +165,20 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly message: string;
         readonly state: "failed";
       }
+    /**
+     * A consequential call was dispatched and never reported back.
+     *
+     * Not a softer `failed`. Nobody knows whether the mail went out, so the
+     * effect is on the operator's review queue and `effect_id` is the row to
+     * open. Telling a director a send failed is how a second one gets sent.
+     */
+    | {
+        readonly type: "error";
+        readonly message: string;
+        readonly state: "held";
+        readonly code: "outcome_unknown";
+        readonly effect_id: string;
+      }
   );
 
 /**
@@ -681,6 +695,12 @@ export function parseChatEvent(value: unknown): ChatEvent {
         )) ||
       (value.type === "error" &&
         value.state === "failed" &&
+        typeof value.message === "string") ||
+      (value.type === "error" &&
+        value.state === "held" &&
+        value.code === "outcome_unknown" &&
+        typeof value.effect_id === "string" &&
+        value.effect_id.length > 0 &&
         typeof value.message === "string") ||
       (value.type === "permission_required" &&
         typeof value.id === "string" &&

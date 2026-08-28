@@ -246,10 +246,19 @@ Three consequences follow, and each is a test.
 - Every tool outside `RETRY_SAFE` is fenced, not a list of the ones anyone
   thought of. `agent_run_dispatch.needs_fence` is `replay_class` and nothing
   else.
-- A call that *raises* is quarantined rather than reported. A cancelled turn
-  is the reachable case: an operator pressed stop while a send was in flight,
-  and nothing observed the outcome. `record_effect_outcome` has no value for
-  that, so the guard does not invent one.
+- A call that *raises* is quarantined rather than reported. `record_effect_outcome`
+  has no value for "nothing at all", so the guard does not invent one.
+- **A layer below the fence can make that unreachable, and one did.** The guard
+  only ever sees what the tool lets past. `_execute_bound_send` and
+  `tools.execute` caught every Gmail exception and returned `ok=False`, so a
+  send that timed out after the request left the machine was recorded as
+  `failed` and the operator was offered a clean second send. The connector is
+  the only layer that can tell the two apart, so `gmail.GmailOutcomeUnknown` is
+  raised there when no HTTP status was ever observed, and both call sites
+  re-raise it. A status means Gmail answered, and an answer is a fact; no
+  status means the request left and nothing came back. `verify_send_authority`
+  reads before the send, so an unknown from that step stays a plain
+  `SendAuthorityError` and never reaches the queue.
 - A caller that supplied a run store and could not open a run refuses to make
   the call. A caller that supplied no run store was never fenced, which is the
   legacy and test path. The two are different values, not the same `None`.
@@ -323,3 +332,10 @@ The following are named seams, not implementations.
   run eligible to resume, but nothing decides whether resuming a turn whose send
   may already have gone out is what the operator wants. That is a person's next
   decision and no code makes it.
+- **`restart` classifies and only quarantines.** `plan_restart` returns `RESUME`
+  and `DELIVER` verdicts, and `create_app` stores the outcome on
+  `app.state.run_restart` without acting on either. So a safe incomplete run is
+  not continued at startup, a final answer that was generated and recorded but
+  never delivered is not delivered, and a missing person projection is not
+  repaired. Those are three of issue #63's acceptance criteria and they are
+  tracked separately; this file describes what runs, not what is planned.

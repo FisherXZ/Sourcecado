@@ -95,6 +95,7 @@ from coworker.effective_tools import (
 from coworker.events import build_event, new_turn_identity, TurnIdentity
 from coworker.gmail import (
     GmailError,
+    GmailOutcomeUnknown,
     MissingGmail,
     SendAuthority,
     SendAuthorityError,
@@ -656,6 +657,11 @@ def create_app(
             sent = send_reviewed_draft(app.state.gmail, authority)
         except SendAuthorityError as exc:
             return False, {"error": str(exc), "code": exc.code, "sent": False}
+        except GmailOutcomeUnknown:
+            # Gmail never answered. Reporting `sent: False` here would be a
+            # claim this process cannot make, so the exception carries on to
+            # `guarded_call`, which quarantines the effect for a person.
+            raise
         except GmailError as exc:
             return False, {"error": str(exc), "code": "gmail_failed", "sent": False}
         except Exception as exc:
@@ -3236,6 +3242,19 @@ def create_app(
                             queue_item_id,
                             state="interrupted",
                             error="Run cancelled before completion.",
+                        )
+                    elif status == "held":
+                        # Same word problem, third surface. A queue row that
+                        # says "failed" invites the retry the fence exists to
+                        # stop, so the item is interrupted and says why.
+                        store.finish_queue_item(
+                            run_sid,
+                            queue_item_id,
+                            state="interrupted",
+                            error=(
+                                "The outcome of the last action is unknown. "
+                                "It is held for review."
+                            ),
                         )
                     else:
                         store.finish_queue_item(
