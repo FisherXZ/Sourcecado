@@ -1,5 +1,3 @@
-import time
-
 from fastapi.testclient import TestClient
 
 from coworker.provider import FakeProvider
@@ -10,6 +8,17 @@ from coworker.workspace_shell import DockerSandbox
 
 
 TOKEN = "workspace-api-token"
+
+
+def _until(ws, typ: str):
+    events = []
+    while True:
+        event = ws.receive_json()
+        events.append(event)
+        if event["type"] == typ:
+            return events
+        if event["type"] in {"turn_end", "error"}:
+            return events
 
 
 def app_and_client(tmp_path):
@@ -302,12 +311,7 @@ def test_workspace_retry_allow_executes_the_original_write(tmp_path):
 
     with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
         ws.send_json({"type": "chat", "text": "write the note", "session_id": "main"})
-        events = []
-        while True:
-            event = ws.receive_json()
-            events.append(event)
-            if event["type"] in {"turn_end", "error"}:
-                break
+        events = _until(ws, "turn_end")
         run_id = next(event["run_id"] for event in events if event.get("run_id"))
         ws.send_json(
             {
@@ -318,17 +322,19 @@ def test_workspace_retry_allow_executes_the_original_write(tmp_path):
                 "command_id": "retry-write-1",
             }
         )
-        time.sleep(0.08)
-        persisted = app.state.store.load_events("main")
+        retry_events = _until(ws, "tool_recovery")
         fresh = next(
             event
-            for event in persisted
+            for event in retry_events
             if event["type"] == "permission_required"
             and event.get("recovery_command_id") == "retry-write-1"
         )
         ws.send_json({"type": "permission", "id": fresh["id"], "decision": "allow"})
-        time.sleep(0.08)
+        outcome = _until(ws, "tool_recovery")
 
+    recovered = next(event for event in outcome if event["type"] == "tool_recovery")
+    assert recovered["status"] == "succeeded"
+    assert recovered["command_id"] == "retry-write-1"
     assert len(calls) == 2
     assert calls[-1]["content"] == "packet-body-secret"
     assert (root / "note.txt").read_text() == "packet-body-secret"
