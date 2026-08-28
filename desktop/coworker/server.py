@@ -90,7 +90,13 @@ from coworker.inbox import Inbox
 from coworker.mcp import LiveMcp, write_default_mcp_json
 from coworker.mcp_oauth import McpOAuth
 from coworker.meeting_evidence import MeetingEvidenceStore
-from coworker.brief import build_brief
+from coworker.brief import (
+    brief_payload,
+    build_brief,
+    person_brief,
+    project,
+    prompt_context,
+)
 from coworker.people import PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
@@ -149,7 +155,6 @@ TOKEN_HEADER = "X-Club-Token"
 TOKEN_ENV = "CLUB_API_TOKEN"
 SLICE = 29
 MAX_STEPS = 8
-_PERSON_FILE_EVENT_CAP = 12
 
 
 def _runtime_prompt_definition(persona: Persona | None) -> PromptDefinition:
@@ -177,6 +182,7 @@ def system_prompt_assembly(
     people: PersonStore | None = None,
     session_id: str | None = None,
 ) -> AssembledSystemPrompt:
+    definition = _runtime_prompt_definition(persona)
     dynamic: list[PromptSection] = []
     items = store.list_memories()
     if items:
@@ -200,39 +206,23 @@ def system_prompt_assembly(
             )
     if people is not None and session_id:
         person_id = people.person_for_session(session_id)
-        person = people.get(person_id) if person_id else None
-        if person is not None:
-            events = people.timeline(person_id)
-            brief = build_brief(person, events)
-            recent = events[-_PERSON_FILE_EVENT_CAP:]
-            learned_lines = [
-                (
-                    f"[{event.get('source')}:{event.get('event_id')}] "
-                    f"{event.get('summary')}"
-                )
-                for event in recent
-                if event.get("summary")
-                and event.get("source")
-                and event.get("event_id")
-            ]
-            person_context = (
-                "Person file:\n"
-                f"who: {brief['who']}\n"
-                f"why: {brief['why']}\n"
-                "learned:\n"
-                + ("\n".join(f"- {line}" for line in learned_lines) or "-")
-                + "\n"
-                f"missing: {', '.join(brief['missing'])}"
-            )
+        if person_id is not None and people.get(person_id) is not None:
+            # The model reads the same bounded projection the person view
+            # renders. Assembling person facts here instead would be the
+            # second summary that silently drifts from the one a director
+            # reads (issue #70, criterion 6).
             dynamic.append(
                 PromptSection(
                     "person_file",
                     "Person File context",
-                    _bounded_context(person_context, 2_000),
+                    prompt_context(
+                        person_brief(people, person_id, session_id=session_id),
+                        budget_chars=definition.dynamic_budgets["person_file"],
+                    ),
                 )
             )
     return assemble_system_prompt(
-        definition=_runtime_prompt_definition(persona),
+        definition=definition,
         dynamic_sections=tuple(dynamic),
     )
 
@@ -1823,7 +1813,9 @@ def create_app(
             )
         return {
             "person": person,
-            "brief": build_brief(person, timeline),
+            # The redacted timeline goes in, so nothing the person view hides
+            # from the ledger can reappear through the brief.
+            "brief": brief_payload(project(person, timeline, session_id=session_id)),
             "timeline": timeline,
             "versions": app.state.people.versions(person_id),
             "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
@@ -1832,6 +1824,49 @@ def create_app(
                 if session_id is not None
                 else None
             ),
+        }
+
+    @app.post("/v1/people/{person_id}/handoff")
+    async def people_handoff(person_id: str, request: Request):
+        """Save the reviewed four-field handoff onto the person file.
+
+        It goes through the ordinary person patch rather than a private write,
+        so it takes a version, leaves a receipt, snapshots alongside the
+        sources that existed when it was written, and reverts with them.
+        """
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        expected_version = payload.get("expected_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_version is required"}, status_code=400
+            )
+        fields = {
+            f"handoff_{name}": str(payload.get(name) or "").strip()
+            for name in ("who", "wanted", "happened", "they_want")
+        }
+        if not any(fields.values()):
+            return JSONResponse(
+                {"error": "a handoff needs at least one field"}, status_code=400
+            )
+        try:
+            app.state.people.patch(
+                person_id,
+                fields=fields,
+                expected_version=expected_version,
+                actor="director",
+                rationale_summary=str(
+                    payload.get("rationale_summary")
+                    or "Director reviewed the successor handoff."
+                ),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return {
+            "person": app.state.people.get(person_id, expand_sources=True),
+            "brief": brief_payload(person_brief(app.state.people, person_id)),
+            "versions": app.state.people.versions(person_id),
         }
 
     def _granola_meetings() -> dict[str, Any]:
@@ -1856,13 +1891,14 @@ def create_app(
                 return {"meetings": decoded["meetings"]}
         raise RuntimeError("Granola returned malformed meetings")
 
-    def _meeting_view(person_id: str) -> dict[str, Any]:
-        person = app.state.people.get(person_id)
-        assert person is not None
-        timeline = app.state.people.timeline(person_id)
+    def _meeting_view(
+        person_id: str, *, refresh: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return {
             "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
-            "brief": build_brief(person, timeline),
+            "brief": brief_payload(
+                person_brief(app.state.people, person_id, refresh=refresh)
+            ),
         }
 
     @app.post("/v1/people/{person_id}/meetings/refresh")
@@ -1879,7 +1915,7 @@ def create_app(
             calendar_fetch=calendar_fetch,
             granola_fetch=_granola_meetings,
         )
-        return {**result, **_meeting_view(person_id)}
+        return {**result, **_meeting_view(person_id, refresh=result)}
 
     @app.post("/v1/people/{person_id}/meetings/{evidence_id}/attach")
     def people_meetings_attach(person_id: str, evidence_id: str):

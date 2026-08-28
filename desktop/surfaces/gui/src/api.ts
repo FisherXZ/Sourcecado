@@ -403,19 +403,80 @@ export type ReplyRefreshResult = {
   error?: string;
 };
 
+/** One claim in the living brief, with the sources that back it. */
+export type BriefClaim = {
+  id: string;
+  text: string;
+  state: "current" | "stale" | "conflicting" | "missing";
+  authority: string;
+  updated_at: string;
+  truncated: boolean;
+  source_refs: string[];
+};
+
+/** One source reference, and how far the record supports reading it. */
+export type BriefSourceRef = {
+  id: string;
+  provider: string;
+  locator: string | null;
+  title: string | null;
+  observed_at: string;
+  modified_at: string | null;
+  fresh: boolean;
+  evidence: "present" | "absent" | "partial" | "missing" | "ambiguous" | "unsupported" | "expired";
+  truncated: boolean;
+};
+
+export type BriefHandoff = {
+  who: string;
+  wanted: string;
+  happened: string;
+  they_want: string;
+  generated: boolean;
+  source_refs: string[];
+  version: number;
+};
+
+export type LivingBrief = {
+  version: string;
+  who: string;
+  why: string;
+  learned: string[];
+  missing: string[];
+  sources: string[];
+  identity: BriefClaim;
+  target: BriefClaim | null;
+  state: { sequence: string | null; claim: BriefClaim | null };
+  outcome: BriefClaim | null;
+  last_contact: {
+    at: string | null;
+    direction: string | null;
+    replied: boolean;
+    follow_up: { needed: boolean; reason: string | null };
+    claim: BriefClaim | null;
+  };
+  wants: BriefClaim;
+  evidence: BriefClaim[];
+  conflicts: BriefClaim[];
+  gaps: BriefClaim[];
+  artifacts: BriefClaim[];
+  claims: BriefClaim[];
+  source_refs: BriefSourceRef[];
+  restricted_source_count: number;
+  partial: boolean;
+  partial_sources: string[];
+  omitted: number;
+  handoff: BriefHandoff;
+  person_version: number;
+};
+
 export type PersonFile = {
   person: BoardPerson &
     Record<string, unknown> & {
       sources?: PersonSourceRef[];
       knowledge_gaps?: PersonKnowledgeGap[];
     };
-  brief: {
-    who: string;
-    why: string;
-    learned: string[];
-    missing: string[];
-    sources: string[];
-  };
+  brief: LivingBrief;
   timeline: Array<{
     event_id: string;
     source: string;
@@ -902,6 +963,32 @@ export async function revertPerson(
   });
   const payload = await res.json();
   if (!res.ok) throw new Error(payload.error || `revert ${res.status}`);
+  return payload;
+}
+
+export async function savePersonHandoff(
+  id: string,
+  body: {
+    who: string;
+    wanted: string;
+    happened: string;
+    theyWant: string;
+    expectedVersion: number;
+  },
+): Promise<{ person: PersonFile["person"]; brief: LivingBrief }> {
+  const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}/handoff`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      who: body.who,
+      wanted: body.wanted,
+      happened: body.happened,
+      they_want: body.theyWant,
+      expected_version: body.expectedVersion,
+    }),
+  });
+  const payload = await res.json();
+  if (!res.ok) throw new Error(payload.error || `handoff ${res.status}`);
   return payload;
 }
 
