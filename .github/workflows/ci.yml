@@ -27,6 +27,10 @@ jobs:
         working-directory: desktop
         run: pytest -q
 
+      - name: Behavioural evaluations
+        working-directory: desktop
+        run: python -m coworker.evals --suite sourcing --artifacts .eval-artifacts
+
   gui:
     name: Desktop GUI
     runs-on: ubuntu-latest

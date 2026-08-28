@@ -14,6 +14,7 @@ from coworker.evals.environment import private_artifact_root, write_private_text
 from coworker.evals.models import EvalRunResult, EvalVariant
 from coworker.evals.runner import ARTIFACT_WARNING, EvalRunner
 from coworker.evals.scenarios import baseline_scenarios
+from coworker.evals.sourcing_scenarios import sourcing_scenarios, sourcing_variant_for
 from coworker.provider import provider_from_env
 
 
@@ -29,6 +30,15 @@ def _parser() -> argparse.ArgumentParser:
         "--tools",
         default="people_keep",
         help="comma-separated active Sourcecado tool names",
+    )
+    parser.add_argument(
+        "--suite",
+        choices=("baseline", "sourcing"),
+        default="baseline",
+        help=(
+            "baseline pairs a fake baseline and candidate; sourcing runs the "
+            "deterministic behavioural sourcing-director scenes"
+        ),
     )
     parser.add_argument(
         "--live",
@@ -103,6 +113,7 @@ def _write_summary(
     artifact_root: Path,
     *,
     mode: str,
+    suite: str,
     runs: list[EvalRunResult],
     comparison: ComparisonReport | None,
 ) -> None:
@@ -110,6 +121,7 @@ def _write_summary(
     payload = {
         "warning": ARTIFACT_WARNING,
         "mode": mode,
+        "suite": suite,
         "runs": [asdict(run) for run in runs],
         "comparison": asdict(comparison) if comparison is not None else None,
     }
@@ -119,16 +131,58 @@ def _write_summary(
     )
 
 
+def _run_sourcing_suite(
+    runner: EvalRunner, repetitions: int
+) -> list[EvalRunResult]:
+    runs: list[EvalRunResult] = []
+    for repetition in range(1, repetitions + 1):
+        for scenario in sourcing_scenarios():
+            result = runner.run_fake(
+                scenario,
+                sourcing_variant_for(scenario),
+                repetition=repetition,
+            )
+            runs.append(result)
+            contract = result.run_contract
+            catalog = contract.get("tool_catalog") or []
+            print(
+                f"{'pass' if result.passed else 'FAIL'} "
+                f"{result.scenario_id} r{repetition} "
+                f"prompt={contract.get('prompt', {}).get('version')} "
+                f"tools={len(catalog)}"
+            )
+            if result.infrastructure_error:
+                print(f"    infrastructure: {result.infrastructure_error}")
+            for invariant in result.invariants:
+                if not invariant.passed:
+                    print(f"    {invariant.name}: {invariant.detail}")
+    return runs
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.repetitions < 1:
         print("--repetitions must be positive", file=sys.stderr)
         return 2
+    if args.live and args.suite == "sourcing":
+        print(
+            "The sourcing suite asserts exact deterministic ledgers and cannot "
+            "gate a live model. Run it without --live.",
+            file=sys.stderr,
+        )
+        return 2
     print(f"WARNING: {ARTIFACT_WARNING}", file=sys.stderr)
     runner = EvalRunner(args.artifacts)
     runs: list[EvalRunResult] = []
     comparison: ComparisonReport | None = None
-    if args.live:
+    if args.suite == "sourcing":
+        runs = _run_sourcing_suite(runner, args.repetitions)
+        failures = sum(1 for run in runs if not run.passed)
+        print(
+            f"sourcing behavioural scenes: {len(runs) - failures}/{len(runs)} passed; "
+            f"prompt={runs[0].prompt_version if runs else 'unknown'}"
+        )
+    elif args.live:
         provider = provider_from_env()
         if provider is None:
             print(
@@ -177,6 +231,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _write_summary(
         args.artifacts,
         mode="live" if args.live else "fake",
+        suite=args.suite,
         runs=runs,
         comparison=comparison,
     )
