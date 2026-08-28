@@ -29,6 +29,13 @@ from coworker.automation.scheduler import (
     now_iso,
 )
 from coworker.agent_run_repository import AgentRunRepository
+from coworker.apollo import (
+    ENRICH_CREDIT_COST,
+    MISSING_KEY as APOLLO_MISSING_KEY,
+    enrich_contact,
+    enrichment_match,
+    enrichment_resource,
+)
 from coworker.apollo_curation import curate_apollo_candidates
 from coworker.bundle_redaction import registered_secret_values
 from coworker.calendar import calendar_from_secrets
@@ -69,7 +76,16 @@ from coworker.effective_tools import (
     effective_tool_catalog,
 )
 from coworker.events import build_event, new_turn_identity, TurnIdentity
-from coworker.gmail import MissingGmail, gmail_from_secrets
+from coworker.gmail import (
+    GmailError,
+    MissingGmail,
+    SendAuthority,
+    SendAuthorityError,
+    authority_for_draft,
+    draft_snapshot,
+    gmail_from_secrets,
+    send_reviewed_draft,
+)
 from coworker.inbox import Inbox
 from coworker.mcp import LiveMcp, write_default_mcp_json
 from coworker.mcp_oauth import McpOAuth
@@ -552,6 +568,111 @@ def create_app(
                 except Exception:
                     app.state.live_event_senders.discard(registration)
 
+    def _bound_resource(item: dict[str, Any]) -> dict[str, Any] | None:
+        """The person-bound authority this approval was parked with, if any."""
+        resource = item.get("resource")
+        if not isinstance(resource, dict):
+            return None
+        if resource.get("kind") in {"gmail_send_authority", "apollo_enrichment"}:
+            return resource
+        return None
+
+    def _execute_bound_send(item: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        """One approved send, against the binding the director actually read.
+
+        Reached only by the single caller that won the execution claim in
+        ConversationStore.decide_and_claim_inbox_execution. Everything below is
+        about sending the *right* message; whether a send happens at all is
+        already settled by that claim.
+        """
+        authority = SendAuthority.from_resource(
+            item.get("resource"), approval_id=str(item.get("id") or "")
+        )
+        if authority is None:
+            return False, {"error": "This send approval is missing its binding."}
+        try:
+            sent = send_reviewed_draft(app.state.gmail, authority)
+        except SendAuthorityError as exc:
+            return False, {"error": str(exc), "code": exc.code, "sent": False}
+        except GmailError as exc:
+            return False, {"error": str(exc), "code": "gmail_failed", "sent": False}
+        except Exception as exc:
+            return False, {"error": str(exc), "code": "gmail_failed", "sent": False}
+        try:
+            filed = app.state.people.record_approved_send(
+                authority.person_id,
+                message_id=sent["message_id"],
+                thread_id=sent["thread_id"],
+                draft_id=authority.draft_id,
+                to=authority.to,
+                subject=authority.subject,
+                body_digest=authority.body_digest,
+                account=authority.account,
+                approval_id=authority.approval_id,
+                actor="director",
+                session_id=str(item.get("session_id") or "") or None,
+                run_id=str(item.get("run_id") or "") or None,
+            )
+        except Exception as exc:
+            # The message is already gone. Report the send truthfully and say
+            # the receipt failed, rather than implying nothing was sent.
+            return True, {
+                **sent,
+                "receipt_error": str(exc),
+                "person_event_id": None,
+            }
+        return True, {
+            **sent,
+            "person_event_id": filed["event"]["event_id"],
+            "sequence_state": (filed["person"] or {}).get("sequence_state"),
+            "advanced_to_open": filed["advanced_to_open"],
+        }
+
+    def _execute_bound_enrichment(
+        item: dict[str, Any]
+    ) -> tuple[bool, dict[str, Any]]:
+        """One approved Apollo enrichment, onto exactly the approved person."""
+        resource = item.get("resource")
+        if not isinstance(resource, dict):
+            return False, {"error": "This enrichment approval is missing its binding."}
+        person_id = str(resource.get("person_id") or "")
+        person = app.state.people.get(person_id) if person_id else None
+        if person is None:
+            return False, {"error": "unknown person"}
+        if not app.state.apollo_key:
+            return False, {"error": APOLLO_MISSING_KEY}
+        match = enrichment_match(person)
+        if match is None:
+            return False, {"error": "This person file has no email and no full name."}
+        from coworker.apollo import LiveHttp
+
+        http = app.state.http if app.state.http is not None else LiveHttp()
+        try:
+            result = enrich_contact(
+                http=http, api_key=app.state.apollo_key, **match
+            )
+        except Exception as exc:
+            return False, {"error": str(exc)}
+        filed = app.state.people.record_apollo_enrichment(
+            person_id,
+            result=result,
+            approval_id=str(item.get("id") or ""),
+            credits=ENRICH_CREDIT_COST,
+            matched_on=str(resource.get("matched_on") or "name"),
+            actor="director",
+            session_id=str(item.get("session_id") or "") or None,
+            run_id=str(item.get("run_id") or "") or None,
+        )
+        if filed is None:
+            return False, {"error": "unknown person"}
+        return True, {
+            "person_id": person_id,
+            "credits": ENRICH_CREDIT_COST,
+            "fields_applied": filed["fields_applied"],
+            "source_ref_id": filed["source_ref"]["id"],
+            "apollo_id": result.get("apolloId"),
+        }
+
     async def _execute_claimed_approval(
         item: dict[str, Any], *, claimant: str
     ) -> dict[str, Any] | None:
@@ -579,34 +700,43 @@ def create_app(
             approval_tool_span = approval_span.child(tool_schema)
         except ValueError:
             pass
+        bound = _bound_resource(item)
         try:
-            ok, result = await asyncio.to_thread(
-                execute,
-                item["name"],
-                _claimed_arguments(item),
-                store=app.state.store,
-                gmail=app.state.gmail,
-                drive=app.state.drive,
-                calendar=app.state.calendar,
-                http=app.state.http,
-                apollo_key=app.state.apollo_key,
-                tavily_key=app.state.tavily_key,
-                skills=app.state.skills,
-                mcp=app.state.mcp,
-                people=app.state.people,
-                workspace_runtime=app.state.workspace_runtime,
-                approval_granted=True,
-                approval_scope=str(item.get("scope") or "once"),
-                approval_fingerprint=(
-                    str((item.get("resource") or {}).get("fingerprint"))
-                    if isinstance(item.get("resource"), dict)
-                    and (item.get("resource") or {}).get("fingerprint")
-                    else None
-                ),
-                session_id=str(item.get("session_id") or ""),
-                actor=str(item.get("actor") or "assistant"),
-                run_id=str(item.get("run_id") or "") or None,
-            )
+            if bound is not None:
+                runner = (
+                    _execute_bound_send
+                    if bound["kind"] == "gmail_send_authority"
+                    else _execute_bound_enrichment
+                )
+                ok, result = await asyncio.to_thread(runner, item)
+            else:
+                ok, result = await asyncio.to_thread(
+                    execute,
+                    item["name"],
+                    _claimed_arguments(item),
+                    store=app.state.store,
+                    gmail=app.state.gmail,
+                    drive=app.state.drive,
+                    calendar=app.state.calendar,
+                    http=app.state.http,
+                    apollo_key=app.state.apollo_key,
+                    tavily_key=app.state.tavily_key,
+                    skills=app.state.skills,
+                    mcp=app.state.mcp,
+                    people=app.state.people,
+                    workspace_runtime=app.state.workspace_runtime,
+                    approval_granted=True,
+                    approval_scope=str(item.get("scope") or "once"),
+                    approval_fingerprint=(
+                        str((item.get("resource") or {}).get("fingerprint"))
+                        if isinstance(item.get("resource"), dict)
+                        and (item.get("resource") or {}).get("fingerprint")
+                        else None
+                    ),
+                    session_id=str(item.get("session_id") or ""),
+                    actor=str(item.get("actor") or "assistant"),
+                    run_id=str(item.get("run_id") or "") or None,
+                )
         except asyncio.CancelledError:
             if approval_tool_span is not None:
                 approval_tool_span.cancel()
@@ -1899,6 +2029,196 @@ def create_app(
             },
             status_code=201,
         )
+
+    def _bound_sourcing_session(
+        person_id: str, payload: dict[str, Any]
+    ) -> tuple[str | None, JSONResponse | None]:
+        """A costly step starts from this person's own sourcing chat, or not at all."""
+        session_id = str(payload.get("session_id") or "").strip()
+        if not session_id:
+            return None, JSONResponse(
+                {"error": "session_id is required", "code": "unbound_session"},
+                status_code=400,
+            )
+        owner = app.state.people.person_for_session(session_id)
+        if owner != person_id:
+            return None, JSONResponse(
+                {
+                    "error": (
+                        "This chat is bound to a different person."
+                        if owner is not None
+                        else "This chat is not bound to this person."
+                    ),
+                    "code": "unbound_session",
+                },
+                status_code=409,
+            )
+        return session_id, None
+
+    @app.post("/v1/people/{person_id}/outreach/draft", status_code=201)
+    async def people_outreach_draft(person_id: str, request: Request):
+        """Draft outreach for a bound person. The recipient is never guessed.
+
+        The address comes from the person file, not from the request and not
+        from the model. Creating a draft sends nothing.
+        """
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        session_id, refusal = _bound_sourcing_session(person_id, payload)
+        if refusal is not None:
+            return refusal
+        to = str(person.get("email") or "").strip()
+        if not to:
+            return JSONResponse(
+                {
+                    "error": "This person file has no email address yet.",
+                    "code": "no_recipient",
+                },
+                status_code=409,
+            )
+        subject = str(payload.get("subject") or "").strip()
+        body = str(payload.get("body") or "").strip()
+        if not subject or not body:
+            return JSONResponse(
+                {"error": "subject and body are required"}, status_code=400
+            )
+        try:
+            created = app.state.gmail.create_draft(to=to, subject=subject, body=body)
+        except GmailError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        draft_id = str(created.get("id") or "")
+        try:
+            snapshot = draft_snapshot(app.state.gmail, draft_id=draft_id)
+        except SendAuthorityError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        return {
+            "draft": {
+                "id": draft_id,
+                "to": snapshot["to"],
+                "subject": snapshot["subject"],
+                "body": snapshot["body"],
+                "body_digest": snapshot["body_digest"],
+                "account": snapshot["account"],
+                "sent": False,
+            },
+            "person_id": person_id,
+            "session_id": session_id,
+        }
+
+    @app.get("/v1/people/{person_id}/outreach/draft/{draft_id}")
+    def people_outreach_draft_read(person_id: str, draft_id: str):
+        """Re-read the live draft so the director reviews what Gmail holds now."""
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            snapshot = draft_snapshot(app.state.gmail, draft_id=draft_id)
+        except SendAuthorityError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": exc.code}, status_code=404
+            )
+        return {
+            "draft": {
+                "id": snapshot["draft_id"],
+                "to": snapshot["to"],
+                "subject": snapshot["subject"],
+                "body": snapshot["body"],
+                "body_digest": snapshot["body_digest"],
+                "account": snapshot["account"],
+                # Reaching this line means Gmail still holds the draft, and
+                # Gmail only holds drafts that have not been sent.
+                "sent": False,
+            }
+        }
+
+    @app.post("/v1/people/{person_id}/outreach/send-approval", status_code=201)
+    async def people_outreach_send_approval(person_id: str, request: Request):
+        """Park one send approval bound to one reviewed draft version.
+
+        Nothing is sent here. This records what the director is being asked to
+        authorize: the account, the draft, the recipient, the subject, and the
+        digest of the body version they read. POST /v1/inbox/{id} decides it.
+        """
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        session_id, refusal = _bound_sourcing_session(person_id, payload)
+        if refusal is not None:
+            return refusal
+        draft_id = str(payload.get("draft_id") or "").strip()
+        reviewed = str(payload.get("reviewed_body_digest") or "").strip()
+        if not draft_id or not reviewed:
+            return JSONResponse(
+                {"error": "draft_id and reviewed_body_digest are required"},
+                status_code=400,
+            )
+        approval_id = f"send_{secrets.token_hex(8)}"
+        try:
+            authority = authority_for_draft(
+                app.state.gmail,
+                approval_id=approval_id,
+                person_id=person_id,
+                draft_id=draft_id,
+                reviewed_body_digest=reviewed,
+            )
+        except SendAuthorityError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": exc.code}, status_code=409
+            )
+        expected = str(person.get("email") or "").strip().casefold()
+        if authority.to.strip().casefold() != expected:
+            return JSONResponse(
+                {
+                    "error": "This draft is addressed to someone other than this person.",
+                    "code": "recipient_not_bound",
+                },
+                status_code=409,
+            )
+        parked = app.state.inbox.park(
+            "gmail_send",
+            {"draft_id": draft_id},
+            item_id=approval_id,
+            reason="Sending this email reaches a real person. Allow or Deny.",
+            session_id=session_id,
+            run_id=str(payload.get("run_id") or "").strip() or None,
+            resource=authority.as_resource(),
+        )
+        return {"item": parked}
+
+    @app.post("/v1/people/{person_id}/enrich-approval", status_code=201)
+    async def people_enrich_approval(person_id: str, request: Request):
+        """Park one Apollo enrichment approval naming the person and the spend."""
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        session_id, refusal = _bound_sourcing_session(person_id, payload)
+        if refusal is not None:
+            return refusal
+        if not app.state.apollo_key:
+            return JSONResponse({"error": APOLLO_MISSING_KEY}, status_code=409)
+        match = enrichment_match(person)
+        if match is None:
+            return JSONResponse(
+                {
+                    "error": "This person file has no email and no full name to match on.",
+                    "code": "no_match_key",
+                },
+                status_code=409,
+            )
+        resource = enrichment_resource(person, match)
+        parked = app.state.inbox.park(
+            "apollo_enrich_contact",
+            {"person_id": person_id},
+            item_id=f"enrich_{secrets.token_hex(8)}",
+            reason=str(resource["reason"]),
+            session_id=session_id,
+            run_id=str(payload.get("run_id") or "").strip() or None,
+            resource=resource,
+        )
+        return {"item": parked}
 
     @app.post("/v1/people/{person_id}/revert")
     async def people_revert(person_id: str, request: Request):

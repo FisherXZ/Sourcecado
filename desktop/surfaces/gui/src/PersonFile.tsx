@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
+import { OutreachPanel } from "./OutreachPanel";
+
 import {
   attachPersonMeeting,
   attachPersonDriveEvidence,
@@ -274,6 +276,14 @@ export function PersonFileView({ personId }: { personId: string }) {
           </ul>
         )}
       </section>
+
+      <OutreachPanel
+        personId={personId}
+        sessionId={file.sourcing_chat?.session_id ?? null}
+        recipient={
+          typeof file.person.email === "string" ? file.person.email : null
+        }
+      />
 
       <section className="person-section" aria-labelledby="person-meetings-heading">
         <div className="person-section-heading-row">

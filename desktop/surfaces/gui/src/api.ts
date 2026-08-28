@@ -719,6 +719,113 @@ export async function curateApolloCandidates(input: {
   };
 }
 
+export type OutreachDraft = {
+  readonly id: string;
+  readonly to: string;
+  readonly subject: string;
+  readonly body: string;
+  readonly body_digest: string;
+  readonly account: string | null;
+  readonly sent: boolean;
+};
+
+/** The binding a send approval carries. Never the body, only its digest. */
+export type SendAuthorityResource = {
+  readonly kind: "gmail_send_authority";
+  readonly person_id: string;
+  readonly draft_id: string;
+  readonly account: string | null;
+  readonly to: string;
+  readonly subject: string;
+  readonly body_digest: string;
+};
+
+export type PendingSendApproval = {
+  readonly id: string;
+  readonly name: string;
+  readonly state: string;
+  readonly resource: SendAuthorityResource;
+};
+
+async function personPost(
+  id: string,
+  path: string,
+  payload: Record<string, unknown>,
+): Promise<unknown> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(id)}/${path}`,
+    {
+      method: "POST",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `${path} ${res.status}`);
+  return body;
+}
+
+export async function createOutreachDraft(
+  personId: string,
+  input: { sessionId: string; subject: string; body: string },
+): Promise<OutreachDraft> {
+  const body = await personPost(personId, "outreach/draft", {
+    session_id: input.sessionId,
+    subject: input.subject,
+    body: input.body,
+  });
+  return (body as { draft: OutreachDraft }).draft;
+}
+
+export async function readOutreachDraft(
+  personId: string,
+  draftId: string,
+): Promise<OutreachDraft> {
+  const res = await get(
+    `/v1/people/${encodeURIComponent(personId)}/outreach/draft/${encodeURIComponent(draftId)}`,
+  );
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `draft ${res.status}`);
+  return (body as { draft: OutreachDraft }).draft;
+}
+
+export async function requestSendApproval(
+  personId: string,
+  input: { sessionId: string; draftId: string; reviewedBodyDigest: string },
+): Promise<PendingSendApproval> {
+  const body = await personPost(personId, "outreach/send-approval", {
+    session_id: input.sessionId,
+    draft_id: input.draftId,
+    reviewed_body_digest: input.reviewedBodyDigest,
+  });
+  return (body as { item: PendingSendApproval }).item;
+}
+
+export async function requestEnrichApproval(
+  personId: string,
+  sessionId: string,
+): Promise<{ readonly id: string; readonly reason: string }> {
+  const body = await personPost(personId, "enrich-approval", {
+    session_id: sessionId,
+  });
+  const item = (body as { item: { id: string; reason: string } }).item;
+  return { id: item.id, reason: item.reason };
+}
+
+export async function decideApproval(
+  id: string,
+  decision: "allow" | "deny",
+): Promise<{ readonly ok: boolean; readonly result: Record<string, unknown> }> {
+  const res = await fetch(`${httpBase()}/v1/inbox/${encodeURIComponent(id)}`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ decision, actor: "director", scope: "once" }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `approval ${res.status}`);
+  return body;
+}
+
 export async function setPersonSequence(
   id: string,
   state: string,
