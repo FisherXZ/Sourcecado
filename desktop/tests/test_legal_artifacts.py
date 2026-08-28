@@ -250,6 +250,32 @@ def test_classify_does_not_match_parties_on_a_shared_corporate_form():
     assert "Widget Labs LLC" in parties["reason"]
 
 
+def test_classify_flags_an_unexpected_party_whose_name_is_all_generic():
+    """A generic-named counterparty is still a counterparty.
+
+    "Standard General LLC" is a real firm that reduces to no name-bearing
+    tokens, as does "3M Company". A party that cannot carry the comparison
+    must still be counted against it: dropping it would let one matching
+    party report a clean bill of health for a document that names someone
+    unexpected. That is the silencing failure, arriving by a second door.
+    """
+    for counterparty in ("Standard General LLC", "3M Company"):
+        assessment = classify(
+            artifact_id="drive:nda-generic-extra",
+            title="Codeology NDA Template.docx",
+            body=(
+                "NONDISCLOSURE AGREEMENT between Berkeley Codeology and "
+                f"{counterparty}. Effective Date: January 4, 2024."
+            ),
+            status=None,
+            expected_party="",
+        )
+
+        parties = assessment["facets"]["parties"]
+        assert parties["evidence"] == "partial", counterparty
+        assert counterparty in parties["reason"]
+
+
 def test_classify_reports_every_named_party_including_uncomparable_ones():
     """A party whose whole name is generic still reaches the human.
 

@@ -167,6 +167,11 @@ def _significant_tokens(text: str) -> set[str]:
     Template" reduces to {"codeology"} and "Acme Robotics LLC" to
     {"acme", "robotics"}. An empty result means the text named nobody.
     """
+    # The length and digit rules are a second, independent way for a name to
+    # vanish: "3M", "BP", and "EY" reduce to nothing here, as does any name
+    # made only of generic words. A vanished name is still reported to the
+    # human and still counts as unmatched, so it can only over-ask, never
+    # silence -- see _verify_parties_against_title.
     return {
         token
         for token in _TOKEN_RE.findall(text.casefold())
