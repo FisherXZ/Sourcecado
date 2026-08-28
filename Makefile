@@ -2,7 +2,7 @@ PYTHON ?= python3
 VENV := desktop/.venv
 GUI := desktop/surfaces/gui
 
-.PHONY: setup sidecar gui native test test-python test-gui eval eval-sourcing build doctor doctor-repair build-sidecar smoke-test
+.PHONY: setup sidecar gui native test test-python test-gui eval eval-sourcing build doctor doctor-repair secret-scan build-sidecar smoke-test
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -37,6 +37,12 @@ doctor:
 
 doctor-repair:
 	cd desktop && .venv/bin/python -m coworker.doctor repair
+
+# Confirms a registered secret's absence from local state without ever
+# printing it. Pass KEY=<name> to scan for one value, e.g. `make secret-scan
+# KEY=apollo`; omit it to scan for every currently registered value.
+secret-scan:
+	cd desktop && .venv/bin/python -m coworker.secret_scan $(if $(KEY),--secret-key $(KEY),)
 
 build:
 	npm --prefix $(GUI) run build
