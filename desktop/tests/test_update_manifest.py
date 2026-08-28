@@ -327,22 +327,39 @@ def test_a_manifest_naming_a_store_this_build_has_never_heard_of_refuses(tmp_pat
 # --- the shipped trust store ---------------------------------------------
 
 
-def test_no_signing_key_is_shipped_yet_so_nothing_verifies_in_production(tmp_path):
-    """A tripwire, not a preference.
+def test_the_preview_channel_trusts_exactly_one_published_key(tmp_path):
+    """Replaces the empty-trust-store tripwire. Read this before changing it.
 
-    Sourcecado ships no update signing key, because no authorized Apple or
-    Sourcecado identity has been issued yet. The trust store is therefore empty
-    and every real manifest is refused. When a key is added, this test goes red
-    and whoever added it must say so here.
+    The store was empty because Sourcecado had no update signing identity. One
+    now exists: an Ed25519 key generated offline by Fisher on 2026-08-28, whose
+    private seed lives only in the GitHub secret
+    ``SOURCECADO_UPDATE_SIGNING_KEY`` and was never printed, committed, or
+    pasted anywhere. Only the public half is here, which is what every
+    installation needs in order to refuse a manifest it cannot verify.
+
+    This is the Sourcecado update key. It is not an Apple credential and says
+    nothing about code signing or notarization.
     """
-    assert m.TRUSTED_KEYS == {}
-    seed, public = _keypair()
+    assert m.TRUSTED_KEYS == {
+        "preview": {
+            "preview-2026-08": "hxekkYpRHJo4mQNDth6vTrrVQQ8Vf4EP4bjcgA2zqLs="
+        }
+    }
+    # Nothing is trusted on stable. A preview key must never install a stable
+    # update, which is the whole point of trusting per channel.
+    assert "stable" not in m.TRUSTED_KEYS
+
+
+def test_a_manifest_from_an_untrusted_key_is_still_refused(tmp_path):
+    """The shipped store must reject a well-formed manifest it did not sign."""
+    seed, _public = _keypair()
     artifact = _artifact(tmp_path)
+
     outcome = m.verify_manifest(
         _document(artifact, seed), installed=_installed(), artifact_path=artifact
     )
+
     assert not outcome.ok
-    assert outcome.refusal is m.Refusal.UNTRUSTED_KEY
 
 
 def test_registry_state_versions_reads_the_migration_registry():
