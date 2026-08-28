@@ -1182,9 +1182,16 @@ def test_turn_continues_after_workspace_shell_without_persisting_reasoning(
     assert "reasoning_content" not in durable
 
 
-def test_fresh_deepseek_provider_reports_unavailable_transient_continuation(
+def test_a_restarted_provider_continues_without_the_lost_reasoning(
     monkeypatch,
 ):
+    """Issue #130: a cold transient cache must not brick the conversation.
+
+    The reasoning is deliberately never persisted, so after a restart it is
+    gone for every prior assistant turn. Refusing to send left every
+    conversation with an assistant reply permanently unusable. DeepSeek
+    accepts the request without it, so send it.
+    """
     requests = []
 
     async def handler(request):
@@ -1192,7 +1199,8 @@ def test_fresh_deepseek_provider_reports_unavailable_transient_continuation(
         return httpx.Response(
             200,
             text=_sse(
-                {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+                {"choices": [{"delta": {"content": "pong"}, "finish_reason": None}]},
+                {"choices": [{"delta": {}, "finish_reason": "stop"}]},
             ),
         )
 
@@ -1235,13 +1243,18 @@ def test_fresh_deepseek_provider_reports_unavailable_transient_continuation(
             )
         ]
 
-    with pytest.raises(
-        RuntimeError,
-        match="transient reasoning is unavailable for continuation",
-    ):
-        asyncio.run(consume())
+    chunks = asyncio.run(consume())
 
-    assert requests == []
+    # The request goes out rather than raising.
+    assert len(requests) == 1
+    sent = requests[0]["messages"]
+    assistant = next(m for m in sent if m["role"] == "assistant")
+    # Nothing was invented to fill the gap.
+    assert "reasoning_content" not in assistant
+    # The tool-call shape DeepSeek requires is still repaired.
+    assert assistant["content"] == ""
+    assert "".join(c.text_delta or "" for c in chunks) == "pong"
+    # The durable transcript is still never mutated.
     assert durable_messages == original
 
 
@@ -1284,11 +1297,14 @@ def test_deepseek_cancellation_propagates_closes_stream_and_discards_partial_cal
     stream = CancelStream()
     request_count = 0
 
+    continuation_bodies = []
+
     async def handler(request):
         nonlocal request_count
         request_count += 1
         if request_count == 1:
             return httpx.Response(200, stream=stream)
+        continuation_bodies.append(json.loads(request.content))
         return httpx.Response(
             200,
             text=_sse(
@@ -1352,17 +1368,25 @@ def test_deepseek_cancellation_propagates_closes_stream_and_discards_partial_cal
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        with pytest.raises(
-            RuntimeError,
-            match="transient reasoning is unavailable for continuation",
-        ):
-            await consume_continuation()
+        await consume_continuation()
 
     asyncio.run(scenario())
 
     assert stream.closed is True
     assert not [chunk for chunk in emitted if chunk.tool_calls]
-    assert request_count == 1
+    # The cancelled round must not leave partial reasoning behind. It is no
+    # longer observable as a refusal (#130), so assert the property itself:
+    # the continuation carries no reasoning for the cancelled assistant turn.
+    assert continuation_bodies
+    first_continuation = continuation_bodies[0]
+    assert not [
+        message
+        for message in first_continuation["messages"]
+        if message["role"] == "assistant" and "reasoning_content" in message
+    ]
+    # Two requests now: the cancelled round, then the continuation that used
+    # to be refused before it ever reached the wire (#130).
+    assert request_count == 2
 
 
 def test_default_model_id_none(monkeypatch):
