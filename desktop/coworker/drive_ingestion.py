@@ -207,15 +207,15 @@ class DriveIngestionStore:
             source_counts = self._conn.execute(
                 """
                 SELECT
-                    SUM(CASE WHEN deleted = 0 THEN 1 ELSE 0 END) AS discovered,
+                    SUM(CASE WHEN deleted = 0 AND scope = 'tree' THEN 1 ELSE 0 END) AS discovered,
                     SUM(CASE WHEN last_action = 'read' THEN 1 ELSE 0 END) AS read_count,
                     SUM(CASE WHEN last_action = 'metadata_only' THEN 1 ELSE 0 END) AS metadata_count,
                     SUM(CASE WHEN last_action = 'skipped' THEN 1 ELSE 0 END) AS skipped_count,
                     SUM(CASE WHEN last_action = 'failed' THEN 1 ELSE 0 END) AS failed_count,
-                    SUM(CASE WHEN deleted = 1 THEN 1 ELSE 0 END) AS deleted_count,
+                    SUM(CASE WHEN deleted = 1 AND scope = 'tree' THEN 1 ELSE 0 END) AS deleted_count,
                     SUM(CASE WHEN needs_read = 1 THEN 1 ELSE 0 END) AS remaining_count
                 FROM drive_ingestion_sources
-                WHERE job_id = ? AND generation = ? AND scope = 'tree'
+                WHERE job_id = ? AND generation = ?
                 """,
                 (job_id, int(row["generation"])),
             ).fetchone()
@@ -612,17 +612,18 @@ class DriveIngestionStore:
             )
             self._conn.commit()
 
-    def _begin_run(self, job_id: str) -> None:
+    def _begin_run(self, job_id: str) -> bool:
         with self._lock:
-            self._conn.execute(
+            changed = self._conn.execute(
                 """
                 UPDATE drive_ingestion_jobs
-                SET status = 'running', cancel_requested = 0, updated_at = ?
-                WHERE id = ?
+                SET status = 'running', updated_at = ?
+                WHERE id = ? AND cancel_requested = 0
                 """,
                 (_now(), job_id),
-            )
+            ).rowcount
             self._conn.commit()
+        return changed == 1
 
     def request_cancel(self, job_id: str) -> dict[str, Any]:
         with self._lock:
@@ -780,7 +781,10 @@ class DriveIngestionStore:
                      modified_time, web_view_link, generation, last_action, needs_read)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1)
                 ON CONFLICT(job_id, drive_id) DO UPDATE SET
-                    scope = excluded.scope,
+                    scope = CASE
+                        WHEN drive_ingestion_sources.scope = 'tree' THEN 'tree'
+                        ELSE excluded.scope
+                    END,
                     parent_id = excluded.parent_id,
                     path = excluded.path,
                     name = excluded.name,
@@ -915,7 +919,8 @@ class DriveIngestionRunner:
         if self.store._cancel_was_requested(job_id):
             return self.store._pause(job_id)
         generation = int(job["generation"])
-        self.store._begin_run(job_id)
+        if not self.store._begin_run(job_id):
+            return self.store._pause(job_id)
 
         while folder := self.store._next_folder(job_id):
             try:
@@ -993,7 +998,15 @@ class DriveIngestionCoordinator:
         self.drive_factory = drive_factory
         self._tasks: dict[str, tuple[int, asyncio.Task[dict[str, Any]]]] = {}
 
-    async def start(self, job_id: str) -> asyncio.Task[dict[str, Any]]:
+    def require_drive(self) -> Any:
+        drive = self.drive_factory()
+        if drive is None:
+            raise ValueError("Drive is not connected")
+        return drive
+
+    async def start(
+        self, job_id: str, *, drive: Any = None
+    ) -> asyncio.Task[dict[str, Any]]:
         job = self.store.get_job(job_id)
         if job is None:
             raise ValueError("unknown Drive ingestion job")
@@ -1005,9 +1018,7 @@ class DriveIngestionCoordinator:
             and not existing[1].done()
         ):
             return existing[1]
-        drive = self.drive_factory()
-        if drive is None:
-            raise ValueError("Drive is not connected")
+        drive = drive if drive is not None else self.require_drive()
         task = asyncio.create_task(
             asyncio.to_thread(DriveIngestionRunner(self.store, drive).run, job_id)
         )

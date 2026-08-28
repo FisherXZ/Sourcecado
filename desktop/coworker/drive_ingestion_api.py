@@ -10,6 +10,14 @@ from fastapi.responses import JSONResponse
 from coworker.drive_ingestion import DriveIngestionCoordinator, DriveIngestionStore
 
 
+def _no_store(payload: Any, *, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(
+        payload,
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def drive_ingestion_router(
     *,
     store: DriveIngestionStore,
@@ -24,11 +32,12 @@ def drive_ingestion_router(
             body = await request.json()
             if not isinstance(body, dict):
                 raise ValueError("request body must be an object")
+            drive = coordinator.require_drive()
             job = store.create_job(
                 folder_id=str(body.get("folder_id") or ""),
                 resolved_path=str(body.get("resolved_path") or ""),
             )
-            await coordinator.start(job["id"])
+            await coordinator.start(job["id"], drive=drive)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         current = store.get_job(job["id"])
@@ -36,14 +45,14 @@ def drive_ingestion_router(
 
     @router.get("/v1/drive-ingestions")
     def list_drive_ingestions():
-        return {"jobs": store.list_jobs()}
+        return _no_store({"jobs": store.list_jobs()})
 
     @router.get("/v1/drive-ingestions/{job_id}")
     def get_drive_ingestion(job_id: str):
         job = store.get_job(job_id)
         if job is None:
-            return JSONResponse({"error": "job_not_found"}, status_code=404)
-        return {"job": job}
+            return _no_store({"error": "job_not_found"}, status_code=404)
+        return _no_store({"job": job})
 
     @router.get("/v1/drive-ingestions/{job_id}/query")
     def query_drive_ingestion(
@@ -53,21 +62,23 @@ def drive_ingestion_router(
         limit: int = 20,
     ):
         try:
-            return store.query(
-                job_id,
-                q,
-                include_external=include_external,
-                limit=limit,
+            return _no_store(
+                store.query(
+                    job_id,
+                    q,
+                    include_external=include_external,
+                    limit=limit,
+                )
             )
         except ValueError as exc:
             status = 404 if "unknown" in str(exc) else 409
-            return JSONResponse({"error": str(exc)}, status_code=status)
+            return _no_store({"error": str(exc)}, status_code=status)
 
     @router.get("/v1/drive-ingestions/{job_id}/sources")
     def list_drive_ingestion_sources(job_id: str):
         if store.get_job(job_id) is None:
-            return JSONResponse({"error": "job_not_found"}, status_code=404)
-        return {"sources": store.list_source_receipts(job_id)}
+            return _no_store({"error": "job_not_found"}, status_code=404)
+        return _no_store({"sources": store.list_source_receipts(job_id)})
 
     @router.post("/v1/drive-ingestions/{job_id}/cancel")
     def cancel_drive_ingestion(job_id: str):
@@ -85,10 +96,9 @@ def drive_ingestion_router(
         if job["status"] != "paused":
             return JSONResponse({"error": "job_not_paused"}, status_code=409)
         try:
-            if coordinator.drive_factory() is None:
-                raise ValueError("Drive is not connected")
+            drive = coordinator.require_drive()
             store.prepare_resume(job_id)
-            await coordinator.start(job_id)
+            await coordinator.start(job_id, drive=drive)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
         return JSONResponse({"job": store.get_job(job_id)}, status_code=202)
@@ -96,10 +106,9 @@ def drive_ingestion_router(
     @router.post("/v1/drive-ingestions/{job_id}/rerun")
     async def rerun_drive_ingestion(job_id: str):
         try:
-            if coordinator.drive_factory() is None:
-                raise ValueError("Drive is not connected")
+            drive = coordinator.require_drive()
             store.prepare_rerun(job_id)
-            await coordinator.start(job_id)
+            await coordinator.start(job_id, drive=drive)
         except ValueError as exc:
             status = 404 if "unknown" in str(exc) else 409
             return JSONResponse({"error": str(exc)}, status_code=status)
@@ -111,8 +120,7 @@ def drive_ingestion_router(
             body = await request.json()
             if not isinstance(body, dict):
                 raise ValueError("request body must be an object")
-            if coordinator.drive_factory() is None:
-                raise ValueError("Drive is not connected")
+            drive = coordinator.require_drive()
             store.add_explicit_source(
                 job_id,
                 drive_id=str(body.get("drive_id") or ""),
@@ -123,7 +131,7 @@ def drive_ingestion_router(
                 modified_time=str(body.get("modified_time") or "") or None,
                 web_view_link=str(body.get("web_view_link") or "") or None,
             )
-            await coordinator.start(job_id)
+            await coordinator.start(job_id, drive=drive)
         except ValueError as exc:
             status = 404 if "unknown" in str(exc) else 409
             return JSONResponse({"error": str(exc)}, status_code=status)
@@ -149,8 +157,8 @@ def drive_ingestion_router(
     @router.get("/v1/drive-ingestions/{job_id}/proposals")
     def list_board_proposals(job_id: str):
         if store.get_job(job_id) is None:
-            return JSONResponse({"error": "job_not_found"}, status_code=404)
-        return {"proposals": store.list_board_proposals(job_id)}
+            return _no_store({"error": "job_not_found"}, status_code=404)
+        return _no_store({"proposals": store.list_board_proposals(job_id)})
 
     @router.post("/v1/drive-ingestion-proposals/{proposal_id}/apply")
     def apply_board_attachment(proposal_id: str):

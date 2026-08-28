@@ -455,12 +455,94 @@ def test_global_match_is_excluded_unless_operator_explicitly_adds_it(tmp_path):
     )
     DriveIngestionRunner(store, drive).run(job["id"])
 
+    assert store.get_job(job["id"])["progress"] == {
+        "folders_discovered": 1,
+        "files_discovered": 1,
+        "read": 2,
+        "metadata_only": 0,
+        "skipped": 0,
+        "failed": 0,
+        "deleted": 0,
+        "remaining": 0,
+    }
     assert store.query(job["id"], "global")["matches"] == []
     included = store.query(job["id"], "global", include_external=True)["matches"]
     assert len(included) == 1
     assert included[0]["drive_id"] == "external"
     assert included[0]["scope"] == "explicit_global"
     assert included[0]["out_of_scope"] is True
+
+
+def test_explicit_add_never_demotes_existing_tree_source_scope(tmp_path):
+    tree_source = _file("same-id", "Tree note.txt", "root")
+    drive = FakeDrive(
+        {("root", None): {"files": [tree_source], "nextPageToken": None}},
+        {
+            "same-id": {
+                **tree_source,
+                "content": "Tree evidence.",
+                "status": "read",
+                "sources": [],
+                "sensitive_content_redacted": False,
+                "redaction_count": 0,
+            }
+        },
+    )
+    store = DriveIngestionStore(tmp_path)
+    job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
+    DriveIngestionRunner(store, drive).run(job["id"])
+
+    store.add_explicit_source(
+        job["id"],
+        drive_id="same-id",
+        name="Tree note.txt",
+        parent_id="somewhere-else",
+        display_path="External/Tree note.txt",
+        mime_type="text/plain",
+        modified_time="2026-08-27T10:00:00Z",
+        web_view_link="https://drive.example/same-id",
+    )
+
+    source = store.list_sources(job["id"])[0]
+    assert source["scope"] == "tree"
+
+
+def test_failed_explicit_source_counts_failure_and_sets_partial_terminal_state(tmp_path):
+    class EmptyDrive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            return {"files": [], "nextPageToken": None}
+
+    class FailedExplicitDrive(EmptyDrive):
+        def read(self, file_id, max_chars=20000):
+            return {"status": "failed", "reason": "unsupported_source"}
+
+    store = DriveIngestionStore(tmp_path)
+    job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
+    DriveIngestionRunner(store, EmptyDrive()).run(job["id"])
+    store.add_explicit_source(
+        job["id"],
+        drive_id="external-failed",
+        name="External.bin",
+        parent_id="somewhere-else",
+        display_path="External/External.bin",
+        mime_type="application/octet-stream",
+        modified_time="2026-08-27T10:00:00Z",
+        web_view_link="https://drive.example/external-failed",
+    )
+
+    completed = DriveIngestionRunner(store, FailedExplicitDrive()).run(job["id"])
+
+    assert completed["status"] == "completed_with_errors"
+    assert completed["progress"] == {
+        "folders_discovered": 1,
+        "files_discovered": 0,
+        "read": 0,
+        "metadata_only": 0,
+        "skipped": 0,
+        "failed": 1,
+        "deleted": 0,
+        "remaining": 0,
+    }
 
 
 def test_board_proposal_is_reviewable_and_never_writes_before_explicit_apply(tmp_path):
@@ -843,6 +925,25 @@ def test_cancel_requested_before_worker_start_pauses_without_touching_drive(tmp_
     store = DriveIngestionStore(tmp_path)
     job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
     store.request_cancel(job["id"])
+
+    paused = DriveIngestionRunner(store, UntouchedDrive()).run(job["id"])
+
+    assert paused["status"] == "paused"
+    assert paused["progress"]["remaining"] == 1
+
+
+def test_cancel_between_precheck_and_run_start_is_not_erased(tmp_path):
+    class CancelBeforeBeginStore(DriveIngestionStore):
+        def _begin_run(self, job_id):
+            self.request_cancel(job_id)
+            return super()._begin_run(job_id)
+
+    class UntouchedDrive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            raise AssertionError("Drive must not be touched after start-race cancel")
+
+    store = CancelBeforeBeginStore(tmp_path)
+    job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
 
     paused = DriveIngestionRunner(store, UntouchedDrive()).run(job["id"])
 

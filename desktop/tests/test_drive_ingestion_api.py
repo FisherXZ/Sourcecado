@@ -737,6 +737,158 @@ def test_api_lists_durable_jobs_after_store_reopens(tmp_path):
     assert response.json()["jobs"][0]["resolved_path"] == "Sourcing/Fall 2026"
 
 
+def test_private_ingestion_get_routes_disable_browser_caching(tmp_path):
+    class EmptyDrive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            return {"files": [], "nextPageToken": None}
+
+    store = DriveIngestionStore(tmp_path / "state")
+    job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
+    DriveIngestionRunner(store, EmptyDrive()).run(job["id"])
+    app = FastAPI()
+    app.include_router(
+        drive_ingestion_router(
+            store=store,
+            coordinator=DriveIngestionCoordinator(store, EmptyDrive),
+            people=PersonStore(tmp_path / "people"),
+        )
+    )
+    client = TestClient(app)
+
+    responses = [
+        client.get("/v1/drive-ingestions"),
+        client.get(f"/v1/drive-ingestions/{job['id']}"),
+        client.get(
+            f"/v1/drive-ingestions/{job['id']}/query", params={"q": "anything"}
+        ),
+        client.get(f"/v1/drive-ingestions/{job['id']}/sources"),
+        client.get(f"/v1/drive-ingestions/{job['id']}/proposals"),
+    ]
+
+    assert all(response.status_code == 200 for response in responses)
+    assert [response.headers.get("cache-control") for response in responses] == [
+        "no-store"
+    ] * 5
+
+
+def test_disconnected_rerun_keeps_completed_index_queryable_after_restart(tmp_path):
+    source = {
+        "id": "brief",
+        "name": "Brief.txt",
+        "mimeType": "text/plain",
+        "modifiedTime": "2026-08-27T10:00:00Z",
+        "parents": ["root"],
+        "webViewLink": "https://drive.example/brief",
+    }
+
+    class Drive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            return {"files": [source], "nextPageToken": None}
+
+        def read(self, file_id, max_chars=20000):
+            return {
+                **source,
+                "content": "Fall research dinner evidence.",
+                "status": "read",
+                "sources": [],
+                "sensitive_content_redacted": False,
+                "redaction_count": 0,
+            }
+
+    state = tmp_path / "state"
+    store = DriveIngestionStore(state)
+    job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
+    DriveIngestionRunner(store, Drive()).run(job["id"])
+    before = store.get_job(job["id"])
+    app = FastAPI()
+    app.include_router(
+        drive_ingestion_router(
+            store=store,
+            coordinator=DriveIngestionCoordinator(store, lambda: None),
+            people=PersonStore(tmp_path / "people"),
+        )
+    )
+
+    response = TestClient(app).post(f"/v1/drive-ingestions/{job['id']}/rerun")
+
+    assert response.status_code == 409
+    after = store.get_job(job["id"])
+    assert after["status"] == "completed"
+    assert after["generation"] == before["generation"]
+    assert after["work_revision"] == before["work_revision"]
+    assert store.query(job["id"], "research dinner")["matches"][0]["drive_id"] == "brief"
+    restarted = DriveIngestionStore(state).get_job(job["id"])
+    assert restarted["status"] == "completed"
+
+
+def test_disconnected_explicit_add_keeps_completed_index_unchanged_after_restart(tmp_path):
+    class EmptyDrive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            return {"files": [], "nextPageToken": None}
+
+    state = tmp_path / "state"
+    store = DriveIngestionStore(state)
+    job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
+    DriveIngestionRunner(store, EmptyDrive()).run(job["id"])
+    before = store.get_job(job["id"])
+    app = FastAPI()
+    app.include_router(
+        drive_ingestion_router(
+            store=store,
+            coordinator=DriveIngestionCoordinator(store, lambda: None),
+            people=PersonStore(tmp_path / "people"),
+        )
+    )
+
+    response = TestClient(app).post(
+        f"/v1/drive-ingestions/{job['id']}/external-sources",
+        json={
+            "drive_id": "global",
+            "name": "Global.txt",
+            "parent_id": "elsewhere",
+            "display_path": "External/Global.txt",
+            "mime_type": "text/plain",
+            "modified_time": "2026-08-27T10:00:00Z",
+            "web_view_link": "https://drive.example/global",
+        },
+    )
+
+    assert response.status_code == 409
+    after = store.get_job(job["id"])
+    assert after["status"] == "completed"
+    assert after["work_revision"] == before["work_revision"]
+    assert store.list_sources(job["id"]) == []
+    restarted = DriveIngestionStore(state).get_job(job["id"])
+    assert restarted["status"] == "completed"
+
+
+def test_disconnected_resume_keeps_paused_job_resumable_after_restart(tmp_path):
+    state = tmp_path / "state"
+    store = DriveIngestionStore(state)
+    job = store.create_job(folder_id="root", resolved_path="Sourcing/Fall 2026")
+    store.request_cancel(job["id"])
+    DriveIngestionRunner(store, object()).run(job["id"])
+    before = store.get_job(job["id"])
+    app = FastAPI()
+    app.include_router(
+        drive_ingestion_router(
+            store=store,
+            coordinator=DriveIngestionCoordinator(store, lambda: None),
+            people=PersonStore(tmp_path / "people"),
+        )
+    )
+
+    response = TestClient(app).post(f"/v1/drive-ingestions/{job['id']}/resume")
+
+    assert response.status_code == 409
+    after = store.get_job(job["id"])
+    assert after["status"] == "paused"
+    assert after["work_revision"] == before["work_revision"]
+    assert after["progress"]["remaining"] == 1
+    restarted = DriveIngestionStore(state).get_job(job["id"])
+    assert restarted["status"] == "paused"
+
+
 def test_later_chat_queries_index_without_rereading_drive(tmp_path):
     source = {
         "id": "brief",
@@ -806,3 +958,67 @@ def test_later_chat_queries_index_without_rereading_drive(tmp_path):
     assert finished["result"]["matches"][0]["drive_id"] == "brief"
     assert drive.read_calls == []
     assert "Fall research dinner evidence." in json.dumps(fake.calls)
+
+
+def test_failed_index_query_retry_uses_ingestion_store_after_job_completes(tmp_path):
+    fake = FakeProvider(steps=[])
+    app = create_app(token=TOKEN, state=tmp_path, provider=fake)
+    job = app.state.drive_ingestions.create_job(
+        folder_id="root", resolved_path="Sourcing/Fall 2026"
+    )
+    fake.steps.extend(
+        [
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="index-query-retry",
+                        name="drive_index_query",
+                        arguments={"job_id": job["id"], "query": "research dinner"},
+                    )
+                ]
+            },
+            {"deltas": ("The index is still running.",)},
+        ]
+    )
+    sid = app.state.store.open_session_id()
+
+    class EmptyDrive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            return {"files": [], "nextPageToken": None}
+
+    with TestClient(app).websocket_connect(
+        "/ws/chat", subprotocols=["club", TOKEN]
+    ) as ws:
+        ws.send_json({"type": "chat", "text": "query the index", "session_id": sid})
+        events = []
+        while True:
+            event = ws.receive_json()
+            events.append(event)
+            if event["type"] in {"turn_end", "error"}:
+                break
+        failed = next(event for event in events if event["type"] == "tool_finished")
+        assert failed["ok"] is False
+        DriveIngestionRunner(app.state.drive_ingestions, EmptyDrive()).run(job["id"])
+        ws.send_json(
+            {
+                "type": "retry_failed_step",
+                "session_id": sid,
+                "run_id": events[0]["run_id"],
+                "call_id": "index-query-retry",
+                "command_id": "retry-index-after-complete",
+            }
+        )
+        recovery_events = []
+        while True:
+            event = ws.receive_json()
+            recovery_events.append(event)
+            if event["type"] == "tool_recovery":
+                break
+
+    recovery = recovery_events[-1]
+    assert recovery["status"] == "succeeded"
+    retried = next(
+        event for event in recovery_events if event["type"] == "tool_finished"
+    )
+    assert retried["ok"] is True
+    assert retried["result"]["matches"] == []
