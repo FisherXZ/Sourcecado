@@ -9,6 +9,7 @@ import {
   type Settings,
   type WorkspaceDiagnostics,
 } from "../api";
+import { DiagnosticBundle } from "./DiagnosticBundle";
 import { WorkspaceSettings } from "./WorkspaceSettings";
 
 type SettingsState =
@@ -280,6 +281,8 @@ export function SettingsPage() {
               )
             }
           />
+
+          <DiagnosticBundle />
         </div>
       )}
     </main>
