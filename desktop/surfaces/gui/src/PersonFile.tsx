@@ -1,13 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import {
   attachPersonMeeting,
+  attachPersonDriveEvidence,
   getPerson,
   openPersonSourcingChat,
   refreshPersonMeetings,
   rejectPersonMeeting,
   revertPerson,
+  searchPersonDriveEvidence,
   setPersonSequence,
+  type DriveEvidenceCandidate,
   type PersonFile,
 } from "./api";
 
@@ -27,6 +30,11 @@ export function PersonFileView({ personId }: { personId: string }) {
   const [chatFailed, setChatFailed] = useState(false);
   const [meetingBusy, setMeetingBusy] = useState<string | null>(null);
   const [meetingStatus, setMeetingStatus] = useState<string | null>(null);
+  const [driveQuery, setDriveQuery] = useState("");
+  const [driveResults, setDriveResults] = useState<DriveEvidenceCandidate[] | null>(null);
+  const [driveSearching, setDriveSearching] = useState(false);
+  const [driveBusy, setDriveBusy] = useState<string | null>(null);
+  const [driveStatus, setDriveStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -130,6 +138,40 @@ export function PersonFileView({ personId }: { personId: string }) {
     }
   }
 
+  async function searchDrive(event: FormEvent) {
+    event.preventDefault();
+    if (driveSearching || !driveQuery.trim()) return;
+    setDriveSearching(true);
+    setDriveStatus(null);
+    try {
+      const result = await searchPersonDriveEvidence(personId, driveQuery.trim());
+      setDriveResults(result.files);
+    } catch {
+      setDriveResults(null);
+      setDriveStatus("Couldn’t search Drive. Try again.");
+    } finally {
+      setDriveSearching(false);
+    }
+  }
+
+  async function attachDrive(candidate: DriveEvidenceCandidate) {
+    if (driveBusy) return;
+    setDriveBusy(candidate.id);
+    setDriveStatus(null);
+    try {
+      await attachPersonDriveEvidence(personId, {
+        kind: "search_result",
+        fileId: candidate.id,
+      });
+      setFile(await getPerson(personId));
+      setDriveStatus(`Attached “${candidate.name ?? "Drive file"}” to this person.`);
+    } catch {
+      setDriveStatus("Couldn’t attach this Drive result. Try again.");
+    } finally {
+      setDriveBusy(null);
+    }
+  }
+
   if (failed) {
     return (
       <main className="route-page person-page">
@@ -153,6 +195,10 @@ export function PersonFileView({ personId }: { personId: string }) {
       </main>
     );
   }
+
+  const driveSources = (file.person.sources ?? []).filter(
+    (source) => source.fields?.provider === "Google Drive",
+  );
 
   return (
     <main className="route-page person-page">
@@ -285,6 +331,68 @@ export function PersonFileView({ personId }: { personId: string }) {
                     onClick={() => void reviewMeeting(meeting.evidence_id, "reject")}
                   >
                     Reject
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="person-section" aria-labelledby="person-drive-evidence-heading">
+        <h2 id="person-drive-evidence-heading">Drive evidence</h2>
+        {driveSources.length === 0 ? (
+          <p className="person-empty">No Drive evidence attached yet.</p>
+        ) : (
+          <div className="person-timeline">
+            {driveSources.map((source) => (
+              <article key={source.id} className="person-timeline-entry">
+                <p className="person-timeline-meta">
+                  Google Drive · {String(source.fields?.extraction_status ?? "metadata_only")}
+                </p>
+                <p>{String(source.fields?.title ?? "Drive file")}</p>
+                {source.fields?.out_of_scope ? (
+                  <p role="status">Outside the browsed folder — review before relying on it.</p>
+                ) : null}
+                {source.fields?.sensitivity === "sensitive" ? (
+                  <p role="status">Flagged sensitive — review before sharing.</p>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        )}
+
+        <form className="person-drive-search" onSubmit={(event) => void searchDrive(event)}>
+          <label htmlFor="person-drive-query">Search Drive</label>
+          <input
+            id="person-drive-query"
+            type="text"
+            value={driveQuery}
+            onChange={(event) => setDriveQuery(event.target.value)}
+            placeholder="File name or contents"
+          />
+          <button type="submit" disabled={driveSearching || !driveQuery.trim()}>
+            {driveSearching ? "Searching…" : "Search Drive"}
+          </button>
+        </form>
+        {driveStatus ? <p role="status">{driveStatus}</p> : null}
+        {driveResults !== null && driveResults.length === 0 ? (
+          <p className="person-empty">No Drive results for that search.</p>
+        ) : null}
+        {driveResults !== null && driveResults.length > 0 ? (
+          <div className="person-timeline">
+            {driveResults.map((candidate) => (
+              <article key={candidate.id} className="person-timeline-entry">
+                <p className="person-timeline-meta">{candidate.mimeType ?? "Drive file"}</p>
+                <p>{candidate.name ?? "Untitled Drive file"}</p>
+                <div className="person-drive-actions">
+                  <button
+                    type="button"
+                    disabled={driveBusy !== null}
+                    aria-label={`Attach ${candidate.name ?? "Drive file"}`}
+                    onClick={() => void attachDrive(candidate)}
+                  >
+                    {driveBusy === candidate.id ? "Attaching…" : "Attach to person"}
                   </button>
                 </div>
               </article>

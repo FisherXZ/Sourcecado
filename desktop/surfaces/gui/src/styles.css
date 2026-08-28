@@ -296,6 +296,52 @@
   font-family: ui-monospace, "Geist Mono", monospace;
 }
 
+.person-drive-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.person-drive-search label {
+  font-weight: 600;
+}
+
+.person-drive-search input {
+  flex: 1 1 220px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.person-drive-search button,
+.person-drive-actions button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.person-drive-search button:disabled,
+.person-drive-actions button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.person-drive-actions {
+  margin-top: 8px;
+}
+
 @media (max-width: 1179px) {
   .board-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
