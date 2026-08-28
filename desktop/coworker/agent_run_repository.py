@@ -1137,6 +1137,18 @@ class AgentRunRepository:
         raise AgentRunLeaseLost(lease.run_id)
 
     def _initialize_schema(self) -> None:
+        """Create what is missing. Record a version only for a new database.
+
+        Creating a database at the current version is not a migration. Changing
+        an existing database's version is, and that belongs to
+        `coworker/migrations.py`, which is the only other writer of
+        `PRAGMA user_version` anywhere in the codebase. Every registered store
+        works this way: the store owns its DDL, the registry owns its version.
+
+        So an existing store keeps whatever version the registry last recorded,
+        and starting the application never silently upgrades one. Doctor reports
+        it as behind and migrates it deliberately, with a backup first.
+        """
         with self._lock:
             version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
             if version > SCHEMA_VERSION:
@@ -1145,6 +1157,10 @@ class AgentRunRepository:
                     f"{DB_NAME} is at schema {version}, newer than this build's "
                     f"{SCHEMA_VERSION}"
                 )
+            fresh = version == 0 and not self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'agent_runs'"
+            ).fetchone()
             self._conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS agent_runs (
@@ -1188,7 +1204,8 @@ class AgentRunRepository:
                 """
                 + EFFECT_SCHEMA
             )
-            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            if fresh:
+                self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _stamp(value: datetime | None = None) -> str:

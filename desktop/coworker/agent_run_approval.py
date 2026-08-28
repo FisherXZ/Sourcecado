@@ -189,63 +189,85 @@ def _quoted(values: Iterable[str]) -> str:
 # below is also enforced in `AgentRunRepository`; it is repeated here because a
 # raw SQL edit, a future method, or a bug in one of those paths must still hit
 # a wall rather than turn "we do not know" into "it worked".
-EFFECT_SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS agent_run_effects (
-    effect_id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    tool_call_id TEXT,
-    approval_id TEXT,
-    replay_class TEXT NOT NULL,
-    arguments_fingerprint TEXT NOT NULL,
-    status TEXT NOT NULL,
-    dispatched_by TEXT NOT NULL,
-    dispatched_at TEXT NOT NULL,
-    settled_at TEXT,
-    outcome_ref TEXT,
-    reason TEXT,
-    resolved_by TEXT,
-    resolved_note TEXT,
-    resolved_at TEXT,
-    FOREIGN KEY (run_id) REFERENCES agent_runs(run_id),
-    CHECK (status IN ({_quoted(EFFECT_STATUSES)})),
-    CHECK (replay_class IN ({_quoted(ReplayClass)})),
-    -- A person's verdict cannot exist in this table without the person.
-    CHECK ((status IN ({_quoted(OPERATOR_OUTCOMES)})) = (resolved_by IS NOT NULL))
-);
-CREATE INDEX IF NOT EXISTS agent_run_effects_by_run
-    ON agent_run_effects(run_id, status);
-CREATE INDEX IF NOT EXISTS agent_run_effects_open
-    ON agent_run_effects(status, dispatched_at);
+#
+# Separate statements, not one script, and that is load-bearing.
+# `sqlite3.Connection.executescript` issues a COMMIT before it runs. Calling it
+# inside a migration's transaction would end that transaction, and the
+# registry's rollback would then have nothing left to roll back -- silently.
+# The migration in `coworker/migrations.py` executes these one at a time for
+# exactly that reason. `EFFECT_SCHEMA` below is only for creating a database
+# from nothing, where no transaction is open.
+EFFECT_STATEMENTS: tuple[str, ...] = (
+    f"""
+    CREATE TABLE IF NOT EXISTS agent_run_effects (
+        effect_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        tool_call_id TEXT,
+        approval_id TEXT,
+        replay_class TEXT NOT NULL,
+        arguments_fingerprint TEXT NOT NULL,
+        status TEXT NOT NULL,
+        dispatched_by TEXT NOT NULL,
+        dispatched_at TEXT NOT NULL,
+        settled_at TEXT,
+        outcome_ref TEXT,
+        reason TEXT,
+        resolved_by TEXT,
+        resolved_note TEXT,
+        resolved_at TEXT,
+        FOREIGN KEY (run_id) REFERENCES agent_runs(run_id),
+        CHECK (status IN ({_quoted(EFFECT_STATUSES)})),
+        CHECK (replay_class IN ({_quoted(ReplayClass)})),
+        -- A person's verdict cannot exist in this table without the person.
+        CHECK ((status IN ({_quoted(OPERATOR_OUTCOMES)})) = (resolved_by IS NOT NULL))
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS agent_run_effects_by_run
+        ON agent_run_effects(run_id, status)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS agent_run_effects_open
+        ON agent_run_effects(status, dispatched_at)
+    """,
+    f"""
+    CREATE TRIGGER IF NOT EXISTS agent_run_effects_open_as_dispatched
+    BEFORE INSERT ON agent_run_effects
+    WHEN NEW.status <> '{EffectStatus.DISPATCHED}'
+    BEGIN
+        SELECT RAISE(ABORT, 'an external effect record opens as dispatched');
+    END
+    """,
+    f"""
+    CREATE TRIGGER IF NOT EXISTS agent_run_effects_quarantine_is_operator_only
+    BEFORE UPDATE OF status ON agent_run_effects
+    WHEN OLD.status = '{EffectStatus.AMBIGUOUS}'
+     AND NEW.status NOT IN ({_quoted({EffectStatus.AMBIGUOUS, *OPERATOR_OUTCOMES})})
+    BEGIN
+        SELECT RAISE(ABORT,
+            'a quarantined external effect is settled by a person, never by code');
+    END
+    """,
+    f"""
+    CREATE TRIGGER IF NOT EXISTS agent_run_effects_settled_is_final
+    BEFORE UPDATE OF status ON agent_run_effects
+    WHEN OLD.status IN ({_quoted(SETTLED_EFFECT_STATUSES)})
+     AND NEW.status <> OLD.status
+    BEGIN
+        SELECT RAISE(ABORT, 'a settled external effect never changes outcome');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS agent_run_effects_are_never_deleted
+    BEFORE DELETE ON agent_run_effects
+    BEGIN
+        SELECT RAISE(ABORT,
+            'an external effect record is evidence that something left the machine');
+    END
+    """,
+)
 
-CREATE TRIGGER IF NOT EXISTS agent_run_effects_open_as_dispatched
-BEFORE INSERT ON agent_run_effects
-WHEN NEW.status <> '{EffectStatus.DISPATCHED}'
-BEGIN
-    SELECT RAISE(ABORT, 'an external effect record opens as dispatched');
-END;
-
-CREATE TRIGGER IF NOT EXISTS agent_run_effects_quarantine_is_operator_only
-BEFORE UPDATE OF status ON agent_run_effects
-WHEN OLD.status = '{EffectStatus.AMBIGUOUS}'
- AND NEW.status NOT IN ({_quoted({EffectStatus.AMBIGUOUS, *OPERATOR_OUTCOMES})})
-BEGIN
-    SELECT RAISE(ABORT,
-        'a quarantined external effect is settled by a person, never by code');
-END;
-
-CREATE TRIGGER IF NOT EXISTS agent_run_effects_settled_is_final
-BEFORE UPDATE OF status ON agent_run_effects
-WHEN OLD.status IN ({_quoted(SETTLED_EFFECT_STATUSES)})
- AND NEW.status <> OLD.status
-BEGIN
-    SELECT RAISE(ABORT, 'a settled external effect never changes outcome');
-END;
-
-CREATE TRIGGER IF NOT EXISTS agent_run_effects_are_never_deleted
-BEFORE DELETE ON agent_run_effects
-BEGIN
-    SELECT RAISE(ABORT,
-        'an external effect record is evidence that something left the machine');
-END;
-"""
+# The same DDL as one script, for creating a database from nothing. Safe there
+# because no transaction is open. Never use this inside a migration.
+EFFECT_SCHEMA = "\n".join(f"{statement.strip()};" for statement in EFFECT_STATEMENTS)

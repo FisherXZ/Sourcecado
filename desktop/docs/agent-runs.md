@@ -20,53 +20,41 @@ The run store is its own SQLite database, `agent_runs.db`, in the local state
 directory. It declares `SCHEMA_VERSION` in `coworker/agent_run_repository.py`
 and stamps it in `PRAGMA user_version`. Version 2 adds `agent_run_effects`.
 
-### The versioning gap this store still has
+### Versioning
 
-`agent_runs.db` is **not** in `coworker/migrations.py`'s `REGISTRY`. It was
-created outside it by the run store's own slice and has stayed outside it since.
-Doctor checks it through a private `StoreSpec` that `_check_run_ownership`
-builds by hand, reading `agent_run_repository.SCHEMA_VERSION` directly, so the
-fail-closed "written by a newer build" check does cover it -- but the registry's
-migration machinery does not. There is no recorded migration step, no backup
-before the upgrade, and no rollback.
+`agent_runs.db` is registered in `coworker/migrations.py` as `agent_runs_db`,
+on the same `PRAGMA user_version` channel as every other SQLite store, with two
+steps: an adoption step for the store as it shipped before the registry knew it
+existed, and `1 -> 2`, which adds the external-effect fence.
 
-Issue #73 is explicit that ad hoc create-if-missing is not sufficient release
-versioning, and this store does not meet that contract. Two things are true at
-once and both belong in the record:
+The division of labour matters and is the same for every store in the registry.
+**The store owns its DDL. The registry owns its version.** `migrations.py` is
+the only writer of `PRAGMA user_version` in the codebase, with one narrow
+exception: `AgentRunRepository` stamps a database it creates from nothing,
+because creating a database at the current version is not a migration. Changing
+an existing database's version is, and only the registry does that.
 
-- The version 1 to 2 upgrade is safe on its own terms, and that is asserted
-  rather than asserted-by-hand-waving. `EFFECT_SCHEMA` creates one table, two
-  indexes, and four triggers, and touches no existing table: no `ALTER TABLE`,
-  nothing named `agent_runs` or `agent_run_checkpoints`. That is what makes
-  `CREATE TABLE IF NOT EXISTS` sufficient here, and
-  `test_the_effect_schema_only_creates_objects_that_did_not_exist` fails the
-  moment it stops being true -- which is the exact latent corruption that
-  create-if-missing would otherwise hide.
-- It is still not the contract. Registering the store is the fix, it needs
-  `coworker/migrations.py`, and it has not been done here.
+The consequence is the point. Starting the application never silently upgrades
+a store. An existing version 1 database gains the fence tables on open, because
+`CREATE TABLE IF NOT EXISTS` runs either way and a store waiting to be migrated
+should still be fenced rather than unprotected -- but it stays recorded as
+version 1 until Doctor migrates it deliberately, with a backup taken first and
+a rollback if the step fails. A user who rolls back to an older build after
+merely running the app still finds a version that build can open.
 
-Registering it needs, in `coworker/migrations.py`: an `AGENT_RUNS_DB_VERSION`
-constant, a `StoreSpec` for `agent_runs.db` on the
-`VersionChannel.SQLITE_USER_VERSION` channel carrying the `json_columns` Doctor
-already lists, an adoption `Migration` for stores created before the registry
-knew about this one, and a `1 -> 2` `Migration` whose `apply` runs
-`EFFECT_SCHEMA`. Doctor then drops its private spec for `spec_for` and the store
-joins the `stores` table and the permission drift check.
+`EFFECT_STATEMENTS` is a tuple of separate statements rather than one script for
+one reason: `sqlite3.Connection.executescript` issues a COMMIT before it runs.
+A migration step that used it would end the transaction `_apply_store` opened,
+and the rollback would then silently have nothing to undo. The step executes the
+statements one at a time, and SQLite rolls DDL back like anything else.
 
-### States
-
-| State | Meaning |
-| --- | --- |
-| `running` | A live process holds the lease and is working the run. |
-| `waiting_approval` | Parked on an operator decision. Nobody owns it. |
-| `waiting_input` | Parked on a question to the operator. Nobody owns it. |
-| `waiting_external` | Parked on an external effect whose outcome is unknown. |
-| `interrupted` | The owner died or ran out of lease. Needs classification. |
-| `complete`, `partial`, `stopped`, `failed` | Terminal. The run never moves again. |
-
-Waiting and terminal runs hold no lease. A lease means "a process is driving
-this run right now", so parking or finishing releases it in the same
-transaction as the state change.
+Two properties are asserted rather than argued.
+`test_the_effect_schema_only_creates_objects_that_did_not_exist` fails the
+moment the schema needs a column on an existing table, which is the case
+`CREATE TABLE IF NOT EXISTS` would silently skip.
+`test_the_fence_step_never_commits_the_transaction_it_runs_inside` fails if the
+step ever stops being rollback-safe, and proves it is not vacuous by showing
+`executescript` really does commit.
 
 ## Ownership
 
@@ -225,6 +213,25 @@ decision that cannot wait, because an effect nobody knows the outcome of must
 stop being mistakable for work in progress before anything else looks at the
 run. Resuming and delivering are left to the caller.
 
+## A trap for whoever wires this up
+
+A consequential tool **must** open an effect record before it is called.
+`dispatch_effect` commits before the call and `record_effect_outcome` commits
+after it, and that ordering is the entire recovery argument: a process that dies
+before the dispatch commit made no call, and one that dies after it may or may
+not have.
+
+Call a consequential tool without `dispatch_effect` and a crash mid-call leaves
+a `tool_pending` checkpoint with no effect record. `classify_resume` then returns
+`REVIEW` -- it will not resume that run and there is no effect row for a person
+to settle, so the run needs manual attention. That is the safe direction and it
+is deliberate, but it is a trap: the failure shows up only after a crash, on the
+one code path nobody exercises by hand.
+
+`agent_run_approval.replay_class` names which tools this applies to. It reads
+`permissions.RETRY_SAFE`, and everything outside that list is consequential,
+including a tool the permission module has never heard of.
+
 ## Extension points
 
 The following are named seams, not implementations.
@@ -263,8 +270,6 @@ The following are named seams, not implementations.
   person may already have acted on the quarantine -- but the observation is
   lost unless the caller logs it. There is no way to attach a late, non-binding
   observation to a quarantined effect.
-- The run store is outside the migration registry, so its upgrade has no
-  backup and no rollback. See the versioning gap above.
 - A quarantined run comes to rest `interrupted`. Settling its effect makes the
   run eligible to resume, but nothing decides whether resuming a turn whose send
   may already have gone out is what the operator wants. That is a person's next

@@ -893,8 +893,18 @@ def test_the_effect_schema_only_creates_objects_that_did_not_exist(tmp_path):
     assert " ON agent_runs " not in EFFECT_SCHEMA
 
 
-def test_a_version_one_store_upgrades_without_losing_or_changing_a_row(tmp_path):
-    """A production-shaped upgrade fixture: v1 on disk, opened by this build."""
+def test_a_version_one_store_gains_the_fence_on_open_but_not_a_new_version(tmp_path):
+    """Opening a store creates what is missing. It does not migrate it.
+
+    The version belongs to `coworker/migrations.py`, which is the only other
+    writer of `PRAGMA user_version` in the codebase. Every registered store
+    works this way: the store owns its DDL, the registry owns its version. So
+    starting the application never silently upgrades an existing database, and
+    a rollback to an older build still finds a version it can open.
+
+    The upgrade itself -- with a backup, a rollback, and a rerun -- is the
+    registry's, and is tested in `tests/test_migrations.py`.
+    """
     before, checkpoints = _version_one_store(tmp_path)
     objects_before = _objects(tmp_path)
 
@@ -902,11 +912,11 @@ def test_a_version_one_store_upgrades_without_losing_or_changing_a_row(tmp_path)
 
     conn = _raw(tmp_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
         conn.close()
-    # Exactly the new objects appeared. Nothing existing was replaced.
+    # Exactly the fence appeared. Nothing existing was removed or replaced.
     added = _objects(tmp_path) - objects_before
     assert objects_before - _objects(tmp_path) == set()
     assert {name for _, name in added} == {
@@ -920,12 +930,13 @@ def test_a_version_one_store_upgrades_without_losing_or_changing_a_row(tmp_path)
         "agent_run_effects_settled_is_final",
         "agent_run_effects_are_never_deleted",
     }
-    # Every version 1 row survives byte for byte, including its lease and version.
+    # Every version 1 row survives, including its lease and its version.
     for run_id, run in before.items():
         assert reopened.get_run(run_id) == run
         assert reopened.list_checkpoints(run_id) == checkpoints[run_id]
         assert reopened.list_effects(run_id) == []
-    # The upgraded store works: a fence write lands on a run created before it.
+    # The fence works immediately, so a store waiting to be migrated is fenced
+    # rather than unprotected.
     live = next(
         run_id for run_id, run in before.items() if run["current_state"] == "running"
     )
@@ -937,7 +948,18 @@ def test_a_version_one_store_upgrades_without_losing_or_changing_a_row(tmp_path)
     ).effect["status"] == EffectStatus.DISPATCHED
 
 
-def test_the_upgrade_is_idempotent_across_reruns_and_a_restart(tmp_path):
+def test_a_brand_new_database_is_born_at_the_current_version(tmp_path):
+    """Creating a database at the current version is not a migration."""
+    repo = AgentRunRepository(tmp_path)
+    conn = _raw(tmp_path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        conn.close()
+    repo.close()
+
+
+def test_opening_an_unmigrated_store_repeatedly_changes_nothing_further(tmp_path):
     before, checkpoints = _version_one_store(tmp_path)
 
     first = AgentRunRepository(tmp_path)
@@ -952,7 +974,7 @@ def test_the_upgrade_is_idempotent_across_reruns_and_a_restart(tmp_path):
     assert _objects(tmp_path) == settled
     conn = _raw(tmp_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
     finally:
         conn.close()
     for run_id, run in before.items():
