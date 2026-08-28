@@ -21,6 +21,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import update_fixtures as fx  # noqa: E402
@@ -89,46 +91,98 @@ def _install_with_sidecar(tmp_path, *, health: str = "ok"):
 def _assert_healthy(install, timeout=25.0):
     if sidecar_health_check(install, timeout=timeout):
         return
+    raise AssertionError(
+        "health handshake failed\n" + "\n".join(_health_diagnostics(install))
+    )
+
+
+def _health_diagnostics(install) -> list[str]:
+    """Why the handshake failed, in a form a CI log reader can act on.
+
+    Every probe is individually guarded. A diagnostic that raises replaces the
+    diagnosis with its own error, which is exactly what happened before (#140):
+    `communicate()` was called on a stub that ends in `serve_forever()`, so it
+    always timed out and the collected details were discarded.
+    """
     binary = install.bundle_path / SIDECAR_RELATIVE
-    details = [
-        f"wrapper:\n{binary.read_text()}",
-        f"executable: {sys.executable}",
-        f"exists={binary.is_file()} x_ok={os.access(binary, os.X_OK)}",
-    ]
+    details: list[str] = []
+
+    def probe(label, fn):
+        try:
+            details.append(f"{label}: {fn()}")
+        except Exception as exc:  # never let a probe hide the diagnosis
+            details.append(f"{label}: PROBE FAILED {type(exc).__name__}: {exc}")
+
+    probe("wrapper", lambda: "\n" + binary.read_text())
+    probe("executable", lambda: sys.executable)
+    probe(
+        "binary",
+        lambda: f"exists={binary.is_file()} x_ok={os.access(binary, os.X_OK)}",
+    )
+
     env = os.environ.copy()
     env["CLUB_STATE_DIR"] = str(install.state_root / "diag-state")
     env["CLUB_API_TOKEN"] = "diag-token"
     env.pop("CLUB_EXIT_WITH_PARENT", None)
-    proc = subprocess.Popen(
-        [str(binary), "--host", "127.0.0.1", "--port", "18001"],
-        cwd=tempfile.gettempdir(),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    probe("STUB_HEALTH", lambda: env.get("STUB_HEALTH"))
+
+    port = _free_diagnostic_port()
+    probe("diagnostic port", lambda: port)
+    try:
+        proc = subprocess.Popen(
+            [str(binary), "--host", "127.0.0.1", "--port", str(port)],
+            cwd=tempfile.gettempdir(),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception as exc:
+        details.append(f"launch: FAILED {type(exc).__name__}: {exc}")
+        return details
+
     try:
         time.sleep(0.5)
-        details.append(f"poll after 0.5s: {proc.poll()}")
-        if proc.poll() is None:
+        probe("poll after 0.5s", proc.poll)
+
+        def handshake():
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
             try:
-                conn = http.client.HTTPConnection("127.0.0.1", 18001, timeout=2)
                 conn.request(
                     "GET", "/v1/health", headers={"X-Club-Token": "diag-token"}
                 )
                 resp = conn.getresponse()
-                details.append(f"http {resp.status} {resp.read()!r}")
+                return f"{resp.status} {resp.read()!r}"
+            finally:
                 conn.close()
-            except Exception as exc:
-                details.append(f"http error: {type(exc).__name__}: {exc}")
-        stdout, stderr = proc.communicate(timeout=2)
-        details.append(f"stdout: {stdout!r}")
-        details.append(f"stderr: {stderr!r}")
+
+        if proc.poll() is None:
+            probe("http", handshake)
+        else:
+            details.append("http: skipped, process already exited")
     finally:
+        # Kill first. The stub serves forever, so reading its output before
+        # ending it is a guaranteed timeout, which is the original bug.
         if proc.poll() is None:
             proc.kill()
-            proc.wait(timeout=5)
-    raise AssertionError("health handshake failed\n" + "\n".join(details))
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+            details.append(f"stdout: {stdout!r}")
+            details.append(f"stderr: {stderr!r}")
+        except Exception as exc:
+            details.append(f"stdout: UNREADABLE {type(exc).__name__}: {exc}")
+            details.append("stderr: UNREADABLE")
+
+    return details
+
+
+def _free_diagnostic_port() -> int:
+    """A port nobody else holds, so a busy runner cannot fail the probe."""
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def test_a_sidecar_that_answers_the_health_handshake_passes(tmp_path):
@@ -174,3 +228,32 @@ def test_the_launch_check_never_opens_the_operators_state(tmp_path):
         os.environ.pop("STUB_HEALTH", None)
     assert marker.read_bytes() == b"operator state"
     assert sorted(item.name for item in install.state_root.iterdir()) == ["club.db"]
+
+
+# --------------------------------------------------------------------------
+# Issue #140 - the diagnostic that explains a failed handshake must actually
+# reach the operator. It used to die inside itself and take the diagnosis
+# with it, which is why the CI failure went unexplained for six days.
+# --------------------------------------------------------------------------
+
+
+def test_the_health_diagnostic_reports_instead_of_dying_inside_itself(tmp_path):
+    """The stub serves forever, so anything that waits for it to exit hangs.
+
+    `_assert_healthy` collected a useful `details` list and then called
+    `communicate()` on a process that never exits. The resulting
+    TimeoutExpired replaced the diagnosis with a subprocess error.
+    """
+    install = _install_with_sidecar(tmp_path, health="degraded")
+    try:
+        with pytest.raises(AssertionError) as caught:
+            _assert_healthy(install, timeout=5.0)
+    finally:
+        os.environ.pop("STUB_HEALTH", None)
+
+    report = str(caught.value)
+    assert "health handshake failed" in report
+    # The things a reader needs in order to act, not just that it broke.
+    assert "wrapper:" in report
+    assert "poll after" in report
+    assert "stdout:" in report
