@@ -6,6 +6,7 @@ second owner, not a raw SQL edit. It becomes `ambiguous`, and only a named
 person moves it from there.
 """
 
+import re
 import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coworker.agent_run_approval import (
+    EFFECT_SCHEMA,
     EFFECT_STATUSES,
     MACHINE_OUTCOMES,
     OPERATOR_OUTCOMES,
@@ -26,6 +28,7 @@ from coworker.agent_run_approval import (
 from coworker.agent_run_owner import OwnerRegistry
 from coworker.agent_run_repository import (
     DB_NAME,
+    SCHEMA_VERSION,
     AgentRunLeaseLost,
     AgentRunRepository,
 )
@@ -796,34 +799,199 @@ def test_an_approval_never_unparks_a_run_whose_effect_is_quarantined(tmp_path):
 # --- what the store looks like to a reader that did not write it ---------
 
 
-def test_a_version_one_store_gains_the_effect_table_on_open(tmp_path):
-    """The table is created by the same idempotent script. Nothing migrates."""
+def _version_one_store(tmp_path):
+    """A production-shaped version 1 store: real rows in both v1 tables.
+
+    Built by the real repository, then wound back to exactly what a build
+    without the effect fence would have left on disk.
+    """
     repo, owner = _repo(tmp_path)
-    started = _start(repo, owner)
+    first = _start(repo, owner, session_id="sess-old-a")
+    repo.checkpoint(first.lease, kind="model_pending", payload={"step": 1}, now=NOW)
+    second = _start(repo, owner, session_id="sess-old-b")
+    repo.checkpoint(
+        second.lease,
+        kind="terminal",
+        state="complete",
+        terminal_result={"status": "ok", "text_length": 12},
+        source_refs=[{"id": "src-1", "title": "Ramp"}],
+        now=NOW,
+    )
+    parked = _start(repo, owner, session_id="sess-old-c")
+    repo.checkpoint(
+        parked.lease,
+        kind="waiting_approval",
+        state="waiting_approval",
+        approval_ids=["inbox-1"],
+        now=NOW,
+    )
+    before = {
+        run["run_id"]: run
+        for run in (
+            repo.get_run(first.run["run_id"]),
+            repo.get_run(second.run["run_id"]),
+            repo.get_run(parked.run["run_id"]),
+        )
+    }
+    checkpoints = {
+        run_id: repo.list_checkpoints(run_id) for run_id in before
+    }
     repo.close()
     conn = _raw(tmp_path)
     try:
-        conn.execute("DROP TABLE agent_run_effects")
-        conn.execute("PRAGMA user_version = 1")
+        conn.executescript(
+            "DROP TRIGGER IF EXISTS agent_run_effects_open_as_dispatched;"
+            "DROP TRIGGER IF EXISTS agent_run_effects_quarantine_is_operator_only;"
+            "DROP TRIGGER IF EXISTS agent_run_effects_settled_is_final;"
+            "DROP TRIGGER IF EXISTS agent_run_effects_are_never_deleted;"
+            "DROP TABLE IF EXISTS agent_run_effects;"
+            "PRAGMA user_version = 1;"
+        )
         conn.commit()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
     finally:
         conn.close()
+    return before, checkpoints
+
+
+def _objects(tmp_path):
+    conn = _raw(tmp_path)
+    try:
+        return {
+            (row[0], row[1])
+            for row in conn.execute("SELECT type, name FROM sqlite_master")
+        }
+    finally:
+        conn.close()
+
+
+def test_the_effect_schema_only_creates_objects_that_did_not_exist(tmp_path):
+    """The whole reason create-if-missing is enough here, asserted.
+
+    `CREATE TABLE IF NOT EXISTS` silently does nothing on a table that already
+    exists. That is safe only while the schema adds no column to an existing
+    table. If someone later adds one to `agent_runs`, this fails and says so,
+    rather than leaving a version 1 database stamped 2 with a missing column.
+    """
+    assert not re.search(r"\bALTER\s+TABLE\b", EFFECT_SCHEMA, re.I)
+    # Every object it creates is new. It never names a version 1 table.
+    created = set(
+        re.findall(
+            r"CREATE\s+(?:TABLE|INDEX|TRIGGER)\s+IF\s+NOT\s+EXISTS\s+(\w+)",
+            EFFECT_SCHEMA,
+            re.I,
+        )
+    )
+    assert created, "the effect schema must create something"
+    assert all(name.startswith("agent_run_effects") for name in created), created
+    for legacy in ("agent_runs", "agent_run_checkpoints"):
+        assert not re.search(
+            rf"\b(?:ALTER|DROP)\b[^;]*\b{legacy}\b(?!_)", EFFECT_SCHEMA, re.I
+        )
+    # And the trigger bodies only ever touch the new table.
+    assert "ON agent_run_effects" in EFFECT_SCHEMA
+    assert " ON agent_runs " not in EFFECT_SCHEMA
+
+
+def test_a_version_one_store_upgrades_without_losing_or_changing_a_row(tmp_path):
+    """A production-shaped upgrade fixture: v1 on disk, opened by this build."""
+    before, checkpoints = _version_one_store(tmp_path)
+    objects_before = _objects(tmp_path)
 
     reopened = AgentRunRepository(tmp_path)
 
     conn = _raw(tmp_path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
-        tables = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     finally:
         conn.close()
-    assert "agent_run_effects" in tables
-    # The runs written before the bump are untouched and still readable.
-    assert reopened.get_run(started.run["run_id"])["current_state"] == "running"
-    assert reopened.list_effects(started.run["run_id"]) == []
+    # Exactly the new objects appeared. Nothing existing was replaced.
+    added = _objects(tmp_path) - objects_before
+    assert objects_before - _objects(tmp_path) == set()
+    assert {name for _, name in added} == {
+        "agent_run_effects",
+        # SQLite's own index for the TEXT PRIMARY KEY.
+        "sqlite_autoindex_agent_run_effects_1",
+        "agent_run_effects_by_run",
+        "agent_run_effects_open",
+        "agent_run_effects_open_as_dispatched",
+        "agent_run_effects_quarantine_is_operator_only",
+        "agent_run_effects_settled_is_final",
+        "agent_run_effects_are_never_deleted",
+    }
+    # Every version 1 row survives byte for byte, including its lease and version.
+    for run_id, run in before.items():
+        assert reopened.get_run(run_id) == run
+        assert reopened.list_checkpoints(run_id) == checkpoints[run_id]
+        assert reopened.list_effects(run_id) == []
+    # The upgraded store works: a fence write lands on a run created before it.
+    live = next(
+        run_id for run_id, run in before.items() if run["current_state"] == "running"
+    )
+    later = NOW + timedelta(seconds=601)
+    lease = reopened.acquire_lease(live, reopened.registry.register(), 600, now=later)
+    assert lease is not None
+    assert reopened.dispatch_effect(
+        lease, tool_name="gmail_send", arguments=SEND_ARGS, now=later
+    ).effect["status"] == EffectStatus.DISPATCHED
+
+
+def test_the_upgrade_is_idempotent_across_reruns_and_a_restart(tmp_path):
+    before, checkpoints = _version_one_store(tmp_path)
+
+    first = AgentRunRepository(tmp_path)
+    settled = _objects(tmp_path)
+    first.close()
+    # Rerun: opening again must change nothing at all.
+    second = AgentRunRepository(tmp_path)
+    second.close()
+    # Post-restart: a third process, no shared connection or in-memory state.
+    third = AgentRunRepository(tmp_path)
+
+    assert _objects(tmp_path) == settled
+    conn = _raw(tmp_path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    finally:
+        conn.close()
+    for run_id, run in before.items():
+        assert third.get_run(run_id) == run
+        assert third.list_checkpoints(run_id) == checkpoints[run_id]
+
+
+def test_a_store_from_a_newer_build_fails_closed_without_touching_it(tmp_path):
+    """Unknown future versions refuse to open and modify nothing."""
+    before, checkpoints = _version_one_store(tmp_path)
+    AgentRunRepository(tmp_path).close()
+    conn = _raw(tmp_path)
+    try:
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+        conn.commit()
+    finally:
+        conn.close()
+    objects_before = _objects(tmp_path)
+
+    with pytest.raises(RuntimeError, match="newer than this build"):
+        AgentRunRepository(tmp_path)
+
+    conn = _raw(tmp_path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
+    finally:
+        conn.close()
+    assert _objects(tmp_path) == objects_before
+    # Reading it back with a build that does know the version finds it intact.
+    conn = _raw(tmp_path)
+    try:
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
+    finally:
+        conn.close()
+    recovered = AgentRunRepository(tmp_path)
+    for run_id, run in before.items():
+        assert recovered.get_run(run_id) == run
+        assert recovered.list_checkpoints(run_id) == checkpoints[run_id]
 
 
 def test_the_record_a_fenced_run_leaves_behind_passes_doctors_history_rules(tmp_path):

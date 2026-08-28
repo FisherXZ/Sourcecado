@@ -18,11 +18,40 @@ read, the artifacts it produced, the usage it spent, and how it ended.
 
 The run store is its own SQLite database, `agent_runs.db`, in the local state
 directory. It declares `SCHEMA_VERSION` in `coworker/agent_run_repository.py`
-and stamps it in `PRAGMA user_version`, which is the contract the migration
-registry reads. Version 2 adds `agent_run_effects`. The store is not in the
-migration registry, and the table is created by the same idempotent script that
-creates the run tables, so a version 1 store gains it on open with nothing to
-migrate.
+and stamps it in `PRAGMA user_version`. Version 2 adds `agent_run_effects`.
+
+### The versioning gap this store still has
+
+`agent_runs.db` is **not** in `coworker/migrations.py`'s `REGISTRY`. It was
+created outside it by the run store's own slice and has stayed outside it since.
+Doctor checks it through a private `StoreSpec` that `_check_run_ownership`
+builds by hand, reading `agent_run_repository.SCHEMA_VERSION` directly, so the
+fail-closed "written by a newer build" check does cover it -- but the registry's
+migration machinery does not. There is no recorded migration step, no backup
+before the upgrade, and no rollback.
+
+Issue #73 is explicit that ad hoc create-if-missing is not sufficient release
+versioning, and this store does not meet that contract. Two things are true at
+once and both belong in the record:
+
+- The version 1 to 2 upgrade is safe on its own terms, and that is asserted
+  rather than asserted-by-hand-waving. `EFFECT_SCHEMA` creates one table, two
+  indexes, and four triggers, and touches no existing table: no `ALTER TABLE`,
+  nothing named `agent_runs` or `agent_run_checkpoints`. That is what makes
+  `CREATE TABLE IF NOT EXISTS` sufficient here, and
+  `test_the_effect_schema_only_creates_objects_that_did_not_exist` fails the
+  moment it stops being true -- which is the exact latent corruption that
+  create-if-missing would otherwise hide.
+- It is still not the contract. Registering the store is the fix, it needs
+  `coworker/migrations.py`, and it has not been done here.
+
+Registering it needs, in `coworker/migrations.py`: an `AGENT_RUNS_DB_VERSION`
+constant, a `StoreSpec` for `agent_runs.db` on the
+`VersionChannel.SQLITE_USER_VERSION` channel carrying the `json_columns` Doctor
+already lists, an adoption `Migration` for stores created before the registry
+knew about this one, and a `1 -> 2` `Migration` whose `apply` runs
+`EFFECT_SCHEMA`. Doctor then drops its private spec for `spec_for` and the store
+joins the `stores` table and the permission drift check.
 
 ### States
 
@@ -234,6 +263,8 @@ The following are named seams, not implementations.
   person may already have acted on the quarantine -- but the observation is
   lost unless the caller logs it. There is no way to attach a late, non-binding
   observation to a quarantined effect.
+- The run store is outside the migration registry, so its upgrade has no
+  backup and no rollback. See the versioning gap above.
 - A quarantined run comes to rest `interrupted`. Settling its effect makes the
   run eligible to resume, but nothing decides whether resuming a turn whose send
   may already have gone out is what the operator wants. That is a person's next
