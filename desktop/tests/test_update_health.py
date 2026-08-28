@@ -12,9 +12,13 @@ undo, so it never does.
 
 from __future__ import annotations
 
+import http.client
 import os
 import shlex
+import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -82,10 +86,55 @@ def _install_with_sidecar(tmp_path, *, health: str = "ok"):
     return install
 
 
+def _assert_healthy(install, timeout=25.0):
+    if sidecar_health_check(install, timeout=timeout):
+        return
+    binary = install.bundle_path / SIDECAR_RELATIVE
+    details = [
+        f"wrapper:\n{binary.read_text()}",
+        f"executable: {sys.executable}",
+        f"exists={binary.is_file()} x_ok={os.access(binary, os.X_OK)}",
+    ]
+    env = os.environ.copy()
+    env["CLUB_STATE_DIR"] = str(install.state_root / "diag-state")
+    env["CLUB_API_TOKEN"] = "diag-token"
+    env.pop("CLUB_EXIT_WITH_PARENT", None)
+    proc = subprocess.Popen(
+        [str(binary), "--host", "127.0.0.1", "--port", "18001"],
+        cwd=tempfile.gettempdir(),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        time.sleep(0.5)
+        details.append(f"poll after 0.5s: {proc.poll()}")
+        if proc.poll() is None:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", 18001, timeout=2)
+                conn.request(
+                    "GET", "/v1/health", headers={"X-Club-Token": "diag-token"}
+                )
+                resp = conn.getresponse()
+                details.append(f"http {resp.status} {resp.read()!r}")
+                conn.close()
+            except Exception as exc:
+                details.append(f"http error: {type(exc).__name__}: {exc}")
+        stdout, stderr = proc.communicate(timeout=2)
+        details.append(f"stdout: {stdout!r}")
+        details.append(f"stderr: {stderr!r}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+    raise AssertionError("health handshake failed\n" + "\n".join(details))
+
+
 def test_a_sidecar_that_answers_the_health_handshake_passes(tmp_path):
     install = _install_with_sidecar(tmp_path)
     try:
-        assert sidecar_health_check(install, timeout=25.0) is True
+        _assert_healthy(install, timeout=25.0)
     finally:
         os.environ.pop("STUB_HEALTH", None)
 
@@ -120,7 +169,7 @@ def test_the_launch_check_never_opens_the_operators_state(tmp_path):
     marker = install.state_root / "club.db"
     marker.write_bytes(b"operator state")
     try:
-        assert sidecar_health_check(install, timeout=25.0) is True
+        _assert_healthy(install, timeout=25.0)
     finally:
         os.environ.pop("STUB_HEALTH", None)
     assert marker.read_bytes() == b"operator state"
