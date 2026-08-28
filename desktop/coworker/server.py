@@ -47,6 +47,8 @@ from coworker.connectors.google_oauth import (
     save_google,
 )
 from coworker.drive import drive_from_secrets
+from coworker.drive_ingestion import DriveIngestionCoordinator, DriveIngestionStore
+from coworker.drive_ingestion_api import drive_ingestion_router
 from coworker.effective_tools import (
     EffectiveToolCatalog,
     ToolAvailability,
@@ -357,6 +359,18 @@ def create_app(
         gmail if gmail is not None else gmail_from_secrets(app.state.secrets, http=http)
     )
     app.state.drive = drive_from_secrets(app.state.secrets, http=http)
+    app.state.drive_ingestions = DriveIngestionStore(root)
+    app.state.drive_ingestion_coordinator = DriveIngestionCoordinator(
+        app.state.drive_ingestions,
+        lambda: app.state.drive,
+    )
+    app.include_router(
+        drive_ingestion_router(
+            store=app.state.drive_ingestions,
+            coordinator=app.state.drive_ingestion_coordinator,
+            people=app.state.people,
+        )
+    )
     app.state.calendar = calendar_from_secrets(app.state.secrets, http=http)
     app.state.apollo_key = apollo_key if apollo_key is not None else os.environ.get("APOLLO_API_KEY")
     app.state.tavily_key = os.environ.get("TAVILY_API_KEY")
@@ -422,6 +436,7 @@ def create_app(
                     "store": app.state.store,
                     "gmail": app.state.gmail,
                     "drive": app.state.drive,
+                    "drive_ingestions": app.state.drive_ingestions,
                     "calendar": app.state.calendar,
                     "http": app.state.http,
                     "apollo_key": app.state.apollo_key,
@@ -813,6 +828,7 @@ def create_app(
                     store=store,
                     gmail=app.state.gmail,
                     drive=app.state.drive,
+                    drive_ingestions=app.state.drive_ingestions,
                     calendar=app.state.calendar,
                     http=app.state.http,
                     apollo_key=app.state.apollo_key,
@@ -2223,6 +2239,7 @@ def create_app(
                     store=store,
                     gmail=app.state.gmail,
                     drive=app.state.drive,
+                    drive_ingestions=app.state.drive_ingestions,
                     calendar=app.state.calendar,
                     http=app.state.http,
                     apollo_key=app.state.apollo_key,
@@ -2369,6 +2386,7 @@ def create_app(
                         "store": store,
                         "gmail": app.state.gmail,
                         "drive": app.state.drive,
+                        "drive_ingestions": app.state.drive_ingestions,
                         "calendar": app.state.calendar,
                         "http": app.state.http,
                         "apollo_key": app.state.apollo_key,

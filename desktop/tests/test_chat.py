@@ -796,7 +796,7 @@ def test_unsafe_failed_step_retry_creates_fresh_approval_before_execution(
                 "command_id": "unsafe-retry-1",
             }
         )
-        time.sleep(0.06)
+        retry_events = _until(ws, "tool_recovery")
         assert executions == ["gmail_draft"]
         persisted = built.state.store.load_events(sid)
         recovery = next(
@@ -808,7 +808,7 @@ def test_unsafe_failed_step_retry_creates_fresh_approval_before_execution(
         assert recovery["status"] == "approval_required"
         fresh = next(
             event
-            for event in persisted
+            for event in retry_events
             if event["type"] == "permission_required"
             and event.get("recovery_command_id") == "unsafe-retry-1"
         )
@@ -819,7 +819,8 @@ def test_unsafe_failed_step_retry_creates_fresh_approval_before_execution(
         ws.send_json(
             {"type": "permission", "id": fresh["id"], "decision": "allow"}
         )
-        time.sleep(0.06)
+        outcome_events = _until(ws, "tool_recovery")
+        assert outcome_events[-1]["status"] == "failed"
 
     assert executions == ["gmail_draft", "gmail_draft"]
     outcomes = [
