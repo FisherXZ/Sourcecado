@@ -96,6 +96,24 @@ jobs:
         working-directory: desktop/surfaces/gui
         run: npm test
 
+      - name: Stamp the preview channel into the build
+        run: |
+          set -euo pipefail
+          BASE="$(node -p "require('./desktop/surfaces/gui/package.json').version")"
+          # Preview builds carry a fourth component so consecutive builds are
+          # always an upgrade of each other without anyone hand-bumping a
+          # version. `minimum_upgradable_version` stays at the package version.
+          PREVIEW="${BASE}.${{ github.run_number }}"
+          {
+            echo "VITE_SOURCECADO_CHANNEL=preview"
+            echo "VITE_SOURCECADO_VERSION=${PREVIEW}"
+            echo "VITE_SOURCECADO_COMMIT=${{ github.sha }}"
+            echo "SOURCECADO_PREVIEW_VERSION=${PREVIEW}"
+            echo "SOURCECADO_MINIMUM_FROM=${BASE}"
+            echo "SOURCECADO_ARCH=$(uname -m | sed 's/^arm64$/aarch64/')"
+          } >> "$GITHUB_ENV"
+          echo "preview channel stamp: ${PREVIEW}"
+
       - name: GUI typecheck and build
         working-directory: desktop/surfaces/gui
         run: npm run build
@@ -124,6 +142,96 @@ jobs:
           python3 desktop/packaging/smoke_test.py \
             "desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app/Contents/Resources/resources/sourcecado-sidecar/sourcecado-sidecar"
 
+      # --- preview channel: signing, notarization, and the update manifest ---
+      #
+      # Everything from here to the end of the job is AUTHORED AND UNRUN. It is
+      # guarded on the signing credentials being present, and a run without them
+      # emits a warning and produces an unsigned build, so a skipped signing pass
+      # can never be mistaken for a successful one.
+      #
+      # desktop/docs/update-channel.md lists every secret and variable that has
+      # to be supplied, and how to generate the update signing key offline.
+
+      - name: Check for signing credentials
+        id: signing
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          UPDATE_KEY: ${{ secrets.SOURCECADO_UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CERTIFICATE" ] && [ -n "$UPDATE_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Apple signing identity or update signing key is configured. This build is UNSIGNED and UNNOTARIZED and has no update manifest. See desktop/docs/update-channel.md."
+          fi
+
+      - name: Import the Developer ID certificate
+        if: steps.signing.outputs.available == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/sourcecado-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - name: Sign the application
+        if: steps.signing.outputs.available == 'true'
+        env:
+          IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        run: |
+          set -euo pipefail
+          # Inner code first, then the bundle. `codesign --deep` is unsupported
+          # for distribution and mis-signs nested code quietly, and the frozen
+          # sidecar is exactly the nested code that would be mis-signed.
+          find Sourcecado.app/Contents -type f \
+            \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) -print0 \
+            | xargs -0 -n 1 codesign --force --options runtime --timestamp \
+                --sign "$IDENTITY"
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" Sourcecado.app
+          codesign --verify --strict --verbose=2 Sourcecado.app
+
+      - name: Notarize and staple
+        if: steps.signing.outputs.available == 'true'
+        env:
+          NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        run: |
+          set -euo pipefail
+          printf '%s' "$NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent Sourcecado.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --issuer "$NOTARY_ISSUER" --key-id "$NOTARY_KEY_ID" \
+            --key "$RUNNER_TEMP/notary.p8" --wait --timeout 30m
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/notarize.zip"
+          xcrun stapler staple Sourcecado.app
+
+      - name: Verify the signed build independently
+        if: steps.signing.outputs.available == 'true'
+        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        run: |
+          set -euo pipefail
+          # Independent of the signing step: this reads only what is on disk.
+          codesign --verify --strict --deep --verbose=2 Sourcecado.app
+          codesign --display --verbose=4 Sourcecado.app 2>&1 \
+            | grep -F "Authority=Developer ID Application"
+          xcrun stapler validate Sourcecado.app
+          spctl --assess --type execute --verbose=4 Sourcecado.app
+
       - name: Audit locked Python dependencies
         run: |
           python -m pip install --quiet pip-audit
@@ -143,6 +251,61 @@ jobs:
           } > provenance.txt
           find Sourcecado.app -type f -exec shasum -a 256 {} \; > checksums.txt
           cat provenance.txt
+
+      - name: Package the artifact and generate the signed update manifest
+        if: steps.signing.outputs.available == 'true'
+        env:
+          SOURCECADO_UPDATE_SIGNING_KEY: ${{ secrets.SOURCECADO_UPDATE_SIGNING_KEY }}
+        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        run: |
+          set -euo pipefail
+          ARTIFACT="Sourcecado-${SOURCECADO_PREVIEW_VERSION}-macos-${SOURCECADO_ARCH}.zip"
+          # `ditto` keeps the signature and the staple; `zip` does not.
+          ditto -c -k --keepParent Sourcecado.app "$ARTIFACT"
+          shasum -a 256 "$ARTIFACT" >> checksums.txt
+          # Generation refuses if the manifest or either attestation file matches
+          # the credential scan, and writes nothing when it does.
+          python3 "$GITHUB_WORKSPACE/desktop/packaging/update_manifest.py" generate \
+            --artifact "$ARTIFACT" \
+            --output update-preview.json \
+            --channel preview \
+            --version "$SOURCECADO_PREVIEW_VERSION" \
+            --minimum-from "$SOURCECADO_MINIMUM_FROM" \
+            --arch "$SOURCECADO_ARCH" \
+            --released-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --commit "${{ github.sha }}" \
+            --key-id "${{ vars.SOURCECADO_UPDATE_KEY_ID }}" \
+            --attest provenance.txt \
+            --attest checksums.txt \
+            --state-root "$RUNNER_TEMP/absent-state" \
+            --home "$HOME"
+
+      - name: Verify the update manifest independently
+        if: steps.signing.outputs.available == 'true'
+        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        run: |
+          set -euo pipefail
+          # No signing key here on purpose: verification needs only the public
+          # key, which is what every installation will have.
+          python3 "$GITHUB_WORKSPACE/desktop/packaging/update_manifest.py" verify \
+            --manifest update-preview.json \
+            --artifact "Sourcecado-${SOURCECADO_PREVIEW_VERSION}-macos-${SOURCECADO_ARCH}.zip" \
+            --channel preview \
+            --arch "$SOURCECADO_ARCH" \
+            --installed-version "$SOURCECADO_MINIMUM_FROM" \
+            --trust "${{ vars.SOURCECADO_UPDATE_KEY_ID }}=${{ vars.SOURCECADO_UPDATE_PUBLIC_KEY }}"
+
+      - name: Upload the signed preview artifact and its manifest
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sourcecado-macos-preview-signed
+          path: |
+            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado-*.zip
+            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/update-preview.json
+            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/checksums.txt
+            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/provenance.txt
+          retention-days: 14
 
       - uses: actions/upload-artifact@v4
         with:

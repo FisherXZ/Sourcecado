@@ -36,6 +36,13 @@ The smoke test launches the sidecar exactly as the shell does (loopback only, is
 
 ## Known gaps
 
-- No code signing or notarization. Gatekeeper requires right-click → Open on first launch. Not required for this preview-build slice (issue #76, criterion 9).
+- No code signing or notarization has run. The CI steps for signing, notarization, stapling, and independent verification are written in the `macos-preview` job and guarded on the signing credentials being present, so a run without them warns and produces an unsigned build. Until an authorized Apple identity is supplied, Gatekeeper still requires right-click → Open on first launch. See [the preview channel notes](update-channel.md) for exactly what has to be supplied.
 - `bundle.targets` is `["app"]` only. DMG creation depends on Finder AppleScript automation that is not reliable in non-interactive sessions (see ADR 0003) and is not required by any acceptance criterion.
 - Verified on `aarch64-apple-darwin` only.
+
+## Updating an installed preview build
+
+The artifact this page builds is what an update manifest describes. How that
+manifest is signed and verified, when an update is allowed to interrupt a
+running Sourcecado, and how to roll one back are in
+[update-channel.md](update-channel.md).
