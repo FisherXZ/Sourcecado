@@ -805,6 +805,9 @@ export class SourcecadoChatStore {
       const terminalTextState =
         event.state === "cancelled" ||
         event.state === "failed" ||
+        // A held turn is over. Leaving the text part `running` shows a
+        // director a spinner for a send nobody knows the outcome of.
+        event.state === "held" ||
         event.state === "stopped" ||
         event.state === "interrupted"
           ? event.state

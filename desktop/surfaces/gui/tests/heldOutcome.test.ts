@@ -64,6 +64,32 @@ describe("a turn whose outcome is unknown", () => {
     expect(store.messagesFor("thread-alpha")[0]?.state).toBe("held");
   });
 
+  it("stops the answer streaming, because the turn is over", () => {
+    // A held terminal ends the turn. If the text part stays `running` the
+    // director watches a spinner forever, which is the opposite of the signal
+    // this state exists to send.
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    store.replayChatEvents([...runningEvents, heldEvent]);
+    const part = store.messagesFor("thread-alpha")[0]?.parts[0];
+    expect(part).toMatchObject({ type: "text", state: "held" });
+  });
+
+  it("does not render the answer as still running once it is held", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    store.replayChatEvents([...runningEvents, heldEvent]);
+    const [message] = store
+      .messagesFor("thread-alpha")
+      .map(convertStructuredMessage);
+    const [content] = message?.content ?? [];
+    expect(content).not.toMatchObject({ status: { type: "running" } });
+  });
+
   it("does not render as an error, because nothing is known to have failed", () => {
     const store = new SourcecadoChatStore(
       [{ id: "thread-alpha", messages: [] }],

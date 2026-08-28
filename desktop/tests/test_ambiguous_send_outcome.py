@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from coworker.agent_run_approval import EffectStatus
-from coworker.apollo import FakeHttp
+from coworker.apollo import FakeHttp, HttpError
 from coworker.gmail import (
     DRAFTS_URL,
     GmailApi,
@@ -43,14 +43,48 @@ SEND_URL = f"{DRAFTS_URL}/send"
 def _api(tmp_path, routes) -> GmailApi:
     secrets = SecretStore(tmp_path / "secrets.json")
     secrets.put("gmail", {"refresh_token": "rt", "access_token": "at"})
-    return GmailApi(
-        secrets, http=FakeHttp(routes), client_id="cid", client_secret="sec"
-    )
+    http = routes if hasattr(routes, "post") else FakeHttp(routes)
+    return GmailApi(secrets, http=http, client_id="cid", client_secret="sec")
 
 
 def _timeout() -> httpx.ReadTimeout:
     """What httpx raises when the request went out and the read expired."""
     return httpx.ReadTimeout("timed out", request=httpx.Request("POST", SEND_URL))
+
+
+def _refused() -> httpx.ConnectError:
+    """What httpx raises when the socket never opened."""
+    return httpx.ConnectError(
+        "[Errno 61] Connection refused", request=httpx.Request("POST", SEND_URL)
+    )
+
+
+TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+
+def _four_o_one_then(retry_error, *, refresh_fails: bool = False):
+    """Gmail rejects the cached token, then the retry hits `retry_error`."""
+
+    class Scripted:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get(self, url, **kwargs):  # pragma: no cover - send is a POST
+            raise AssertionError(url)
+
+        def post(self, url, **kwargs):
+            self.calls.append(url)
+            if url == SEND_URL and self.calls.count(SEND_URL) == 1:
+                raise HttpError(401, url)
+            if url == TOKEN_URL:
+                if refresh_fails:
+                    raise retry_error
+                return {"access_token": "fresh"}
+            if url == SEND_URL:
+                raise retry_error
+            raise AssertionError(url)
+
+    return Scripted()
 
 
 def _rejected(status: int, message: str) -> httpx.HTTPStatusError:
@@ -72,6 +106,45 @@ def test_a_send_gmail_rejected_is_a_plain_failure_and_not_an_unknown(tmp_path):
         api.send(draft_id="draft_1")
     assert not isinstance(raised.value, GmailOutcomeUnknown)
     assert "insufficient scopes" in str(raised.value)
+
+
+def test_a_send_that_never_reached_gmail_is_a_plain_failure(tmp_path):
+    """A refused connection is not an unknown outcome. Nothing was attempted.
+
+    "No HTTP status" is too coarse on its own. A read that expires means the
+    request left and nothing came back; a connection that was never opened
+    means the bytes never went anywhere. On a laptop that is regularly offline,
+    calling the second one ambiguous puts a row in the operator's review queue
+    for every send they tried on a train.
+    """
+    api = _api(tmp_path, {SEND_URL: _refused()})
+    with pytest.raises(GmailError) as raised:
+        api.send(draft_id="draft_1")
+    assert not isinstance(raised.value, GmailOutcomeUnknown)
+
+
+def test_a_retry_after_a_refreshed_token_can_still_end_unknown(tmp_path):
+    """The 401 retry is the routine path, and it was skipping the classifier.
+
+    `_access_token` caches with no expiry check, so the first send after the
+    token ages out always runs POST, 401, refresh, POST. That retry sits inside
+    an `except` block, and an exception raised there is not caught by the
+    sibling clauses of the same `try`. It escaped as a raw transport error.
+    """
+    api = _api(tmp_path, _four_o_one_then(_timeout()))
+    with pytest.raises(GmailOutcomeUnknown):
+        api.send(draft_id="draft_1")
+    assert api.http.calls.count(SEND_URL) == 2
+
+
+def test_a_token_refresh_that_fails_means_nothing_was_sent(tmp_path):
+    """Gmail answered 401, so the first attempt sent nothing, and the retry
+    was never built. Both halves are known, so this is a plain failure."""
+    api = _api(tmp_path, _four_o_one_then(_timeout(), refresh_fails=True))
+    with pytest.raises(GmailError) as raised:
+        api.send(draft_id="draft_1")
+    assert not isinstance(raised.value, GmailOutcomeUnknown)
+    assert api.http.calls.count(SEND_URL) == 1
 
 
 def test_a_timeout_while_checking_the_draft_is_not_an_unknown_send(tmp_path):

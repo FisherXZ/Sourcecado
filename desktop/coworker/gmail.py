@@ -79,6 +79,42 @@ def _http_status(exc: BaseException) -> int | None:
     return None
 
 
+def _definite(exc: GmailError) -> GmailError:
+    """The same failure, stated as one nobody has to settle by hand."""
+    if not isinstance(exc, GmailOutcomeUnknown):
+        return exc
+    return GmailError(f"Gmail token refresh failed. {exc}")
+
+
+def _never_left(exc: BaseException) -> bool:
+    """Whether the request provably never reached Gmail.
+
+    A connection that was never opened, a proxy that refused, a name that did
+    not resolve: the bytes went nowhere, so this is an ordinary failure and
+    saying so costs nothing. Anything after the socket is open -- a read that
+    expires, a write that dies mid-body, a server that hangs up -- may have
+    been acted on, and only that half is ambiguous.
+
+    Imported here rather than at module scope to match `apollo.LiveHttp`, which
+    keeps `httpx` out of import time.
+    """
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover - httpx is a hard dependency
+        return False
+    return isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ProxyError,
+            httpx.PoolTimeout,
+            httpx.UnsupportedProtocol,
+            httpx.InvalidURL,
+        ),
+    )
+
+
 def _from_http_error(exc: BaseException) -> GmailError:
     """Turn httpx/Google HTTP failures into a GmailError with Google's message."""
     if isinstance(exc, HttpError):
@@ -110,9 +146,12 @@ def _from_http_error(exc: BaseException) -> GmailError:
         status = getattr(response, "status_code", None)
         if status:
             return GmailError(f"Gmail API returned HTTP {status}.")
-    # No status anywhere on the chain. Gmail never answered, so whether the
-    # request was acted on is not something this process can know.
+    # No status anywhere on the chain, so Gmail never answered. Whether the
+    # request was acted on depends on how far it got, and `_never_left` is the
+    # only part of that this process can actually decide.
     text = str(exc).strip()
+    if _never_left(exc):
+        return GmailError(text or "Gmail could not be reached, so nothing was sent.")
     return GmailOutcomeUnknown(
         text or "Gmail did not answer, so the outcome is unknown."
     )
@@ -406,10 +445,15 @@ class GmailApi:
                 client_secret=self.client_secret,
                 refresh_token=refresh,
             )
-        except GmailError:
-            raise
+        except GmailError as exc:
+            # A refresh sends no mail, so it never produces an unknown outcome.
+            # Whatever went wrong on the token endpoint, the caller has no
+            # usable credential and therefore made no request with one. Letting
+            # a `GmailOutcomeUnknown` through from here would quarantine a send
+            # that was never built.
+            raise _definite(exc)
         except Exception as exc:
-            raise _from_http_error(exc) from exc
+            raise _definite(_from_http_error(exc)) from exc
         access = str(tokens.get("access_token") or "")
         if not access:
             raise GmailError("Gmail token refresh failed.")
@@ -431,11 +475,32 @@ class GmailApi:
                 profile = load_google(self.secrets)
                 profile["access_token"] = ""
                 save_google(self.secrets, profile)
-                token = self._refresh(profile, str(profile.get("refresh_token") or ""))
+                try:
+                    token = self._refresh(
+                        profile, str(profile.get("refresh_token") or "")
+                    )
+                except GmailError:
+                    raise
+                except Exception as refresh_exc:
+                    # Gmail answered 401, so the first attempt sent nothing,
+                    # and the retry was never built. Both halves are known.
+                    raise GmailError(
+                        "Gmail rejected the access token and refreshing it "
+                        f"failed, so nothing was sent. {refresh_exc}"
+                    ) from refresh_exc
                 headers["Authorization"] = f"Bearer {token}"
-                if method == "get":
-                    return self.http.get(url, headers=headers, **kwargs)
-                return self.http.post(url, headers=headers, **kwargs)
+                # The retry runs inside this `except`, so the sibling clauses
+                # below never see what it raises. Without its own handler a
+                # transport error escaped raw, missed every classifier, and was
+                # swallowed as an ordinary failure by the tool layer.
+                try:
+                    if method == "get":
+                        return self.http.get(url, headers=headers, **kwargs)
+                    return self.http.post(url, headers=headers, **kwargs)
+                except GmailError:
+                    raise
+                except Exception as retry_exc:
+                    raise _from_http_error(retry_exc) from retry_exc
             raise _from_http_error(exc) from exc
         except GmailError:
             raise
