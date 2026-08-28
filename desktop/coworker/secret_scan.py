@@ -18,8 +18,10 @@ time this runs without anyone updating a hand-written list here. The vault
 stores -- `secrets`, `mcp_config`, `dotenv` -- are skipped on purpose:
 `coworker/migrations.py` marks each one `secret_bearing`, they exist to hold
 the *current* credential, and `secrets.json`'s own registry entry says it is
-"Never read into a report". This scan reads it once, to learn the value to
-search for, and never opens it as a target.
+"Never read into a report". After rotation that current value is the
+replacement, so a post-rotation scan reads a pre-rotation snapshot
+(`revoked_from` / `--revoked-from`) to learn the revoked value, and never
+opens the vault as a target.
 
 Doctor's own backups are scanned too. `<state>/backups/<id>/` holds a copy of
 whatever a repair touched, taken *before* the change, so a backup made before
@@ -111,19 +113,30 @@ class ScanReport:
 # --- reading the registered-secret store ----------------------------------
 
 
-def _load_needles(root: Path, secret_key: str | None) -> frozenset[str]:
-    """Every value worth searching for, read straight from the vault.
+def _load_needles(
+    root: Path, secret_key: str | None, revoked_from: Path | None = None
+) -> frozenset[str]:
+    """Every value worth searching for, read from a vault-shaped JSON file.
 
     An owner names a key, such as `apollo`, never the value itself -- so the
     value is never typed into a shell, never lands in a history file, and
     never has to be pasted into a ticket. Omitting the key searches for every
-    value the vault currently holds.
+    value the file currently holds.
+
+    After rotation the live vault holds the replacement. Passing `revoked_from`
+    reads a pre-rotation snapshot instead, so the scan searches the revoked
+    value rather than the new one. The live vault is not a fallback: if the
+    snapshot is missing or has no matching key, there is nothing to search.
     """
-    spec = migrations.spec_for("secrets")
-    if not store_present(root, spec):
-        return frozenset()
+    if revoked_from is not None:
+        path = Path(revoked_from).expanduser()
+    else:
+        spec = migrations.spec_for("secrets")
+        if not store_present(root, spec):
+            return frozenset()
+        path = store_path(root, spec)
     try:
-        payload = json.loads(store_path(root, spec).read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return frozenset()
     if not isinstance(payload, dict):
@@ -303,16 +316,23 @@ def scan_state(
     *,
     secret_key: str | None = None,
     home: Path | None = None,
+    revoked_from: str | Path | None = None,
 ) -> ScanReport:
     """Scan every durable, non-vault store for a registered secret's value.
 
     Raises `NoRegisteredSecret` when there is nothing to search for -- an
     unknown key, or an empty vault -- so a scan can never report "clean" for
     a search it never actually ran.
+
+    `revoked_from` is a vault-shaped JSON snapshot taken before rotation. When
+    it is set, needles come from that file, not from the live vault, because
+    the live vault holds the replacement and searching it cannot answer
+    whether the revoked value is gone.
     """
     root = Path(root).expanduser()
     home = home if home is not None else Path.home()
-    needles = _load_needles(root, secret_key)
+    snapshot = Path(revoked_from).expanduser() if revoked_from is not None else None
+    needles = _load_needles(root, secret_key, snapshot)
     if not needles:
         raise NoRegisteredSecret(
             f"no registered secret found under key {secret_key!r}"
@@ -391,13 +411,21 @@ def main(argv: list[str] | None = None) -> int:
         help="key in the registered-secret store to search for, e.g. apollo; "
         "omit to search for every registered value",
     )
+    parser.add_argument(
+        "--revoked-from",
+        help="vault-shaped JSON snapshot taken before rotation; after "
+        "rotation, pass this so the scan searches the revoked value rather "
+        "than the replacement now in the live vault",
+    )
     parser.add_argument("--state", help="state directory (defaults to CLUB_STATE_DIR)")
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
     args = parser.parse_args(argv)
     root = Path(args.state).expanduser() if args.state else state_root()
 
     try:
-        report = scan_state(root, secret_key=args.secret_key)
+        report = scan_state(
+            root, secret_key=args.secret_key, revoked_from=args.revoked_from
+        )
     except NoRegisteredSecret as exc:
         print(str(exc), file=sys.stderr)
         return 2

@@ -13,7 +13,8 @@ value in a shell, a history file, or a ticket.
 
 ```
 make secret-scan                # scan for every value currently registered
-make secret-scan KEY=apollo     # scan for one registered value by key
+make secret-scan KEY=apollo     # scan the live vault value for one key
+make secret-scan KEY=apollo REVOKED_FROM=./pre-rotation-secrets.json
 ```
 
 Or directly:
@@ -22,14 +23,22 @@ Or directly:
 cd desktop
 .venv/bin/python -m coworker.secret_scan
 .venv/bin/python -m coworker.secret_scan --secret-key apollo
+.venv/bin/python -m coworker.secret_scan --secret-key apollo --revoked-from ./pre-rotation-secrets.json
 .venv/bin/python -m coworker.secret_scan --secret-key apollo --json
 .venv/bin/python -m coworker.secret_scan --state /path/to/state
 ```
 
 The key is the name a credential is registered under in the secret store
 (`apollo`, `google`, and so on) -- not the credential itself. Typing the key
-is safe; the value it points at is read from `secrets.json` and never leaves
-this process as text.
+is safe.
+
+After rotation the live vault holds the replacement. `KEY=apollo` alone would
+search that replacement and can report clean while conversations and events
+still hold the revoked value. Copy `secrets.json` to a mode-0600 snapshot
+*before* writing the replacement, then pass that snapshot as `REVOKED_FROM`
+(or `--revoked-from`). Needles are read from the snapshot and never fall back
+to the live vault. The snapshot path is a filename, not the value; the value
+never leaves this process as text.
 
 Exit codes:
 
@@ -102,8 +111,9 @@ stdout and stderr.
 ## What this does not do
 
 It does not touch Google Drive, does not inspect revision history, and does
-not decide whether a rotation succeeded. It reads one local JSON file to learn
-what to search for and reads local state to search. Closing out issue #38
-still needs a human to review Drive's revision-retention controls, purge or
-replace the exposed revision, and record the accepted residual risk -- this
-tool only answers the one question stated above.
+not decide whether a rotation succeeded. It reads one local JSON file -- the
+pre-rotation snapshot when `REVOKED_FROM` is set, otherwise the live vault --
+to learn what to search for and reads local state to search. Closing out
+issue #38 still needs a human to review Drive's revision-retention controls,
+purge or replace the exposed revision, and record the accepted residual risk
+-- this tool only answers the one question stated above.

@@ -127,6 +127,48 @@ def test_an_empty_vault_refuses_rather_than_reporting_clean(tmp_path):
         scan_state(root)
 
 
+def test_after_rotation_the_revoked_value_is_still_found_in_conversations_and_events(tmp_path):
+    """Issue #38 asks whether the old value is gone, not whether the replacement is.
+
+    After Apollo rotation the live vault holds a different value. A scan that
+    reads secrets.json would search the replacement and report clean even while
+    conversations and events still carry the revoked value.
+    """
+    root = tmp_path / "state"
+    root.mkdir()
+    revoked = _probe_value()
+    replacement = _probe_value()
+    _write_secrets(root, {"apollo": {"api_key": replacement}})
+    snapshot = tmp_path / "pre-rotation-secrets.json"
+    snapshot.write_text(json.dumps({"apollo": {"api_key": revoked}}), encoding="utf-8")
+
+    conversations = root / "conversations"
+    conversations.mkdir()
+    (conversations / "main.jsonl").write_text(
+        json.dumps({"role": "user", "content": f"using {revoked}"}) + "\n",
+        encoding="utf-8",
+    )
+    events = root / "events"
+    events.mkdir()
+    (events / "main.jsonl").write_text(
+        json.dumps({"type": "error", "message": f"apollo rejected {revoked}"}) + "\n",
+        encoding="utf-8",
+    )
+
+    report = scan_state(root, secret_key="apollo", revoked_from=snapshot)
+
+    found_ids = {item.store_id for item in report.findings}
+    assert found_ids >= {"conversation_transcripts", "presentation_events"}, found_ids
+    assert not report.clean
+
+    rendered = report.render()
+    payload = json.dumps(report.to_dict())
+    assert revoked not in rendered
+    assert replacement not in rendered
+    assert revoked not in payload
+    assert replacement not in payload
+
+
 # --- bounded output ----------------------------------------------------------
 
 
@@ -269,6 +311,44 @@ def test_cli_exits_zero_on_a_genuinely_clean_state(tmp_path, capsys):
     assert code == 0
     assert "clean" in captured.out
     assert probe not in captured.out
+
+
+def test_cli_searches_the_revoked_snapshot_not_the_live_replacement(tmp_path, capsys):
+    root = tmp_path / "state"
+    root.mkdir()
+    revoked = _probe_value()
+    replacement = _probe_value()
+    _write_secrets(root, {"apollo": {"api_key": replacement}})
+    snapshot = tmp_path / "pre-rotation-secrets.json"
+    snapshot.write_text(json.dumps({"apollo": {"api_key": revoked}}), encoding="utf-8")
+    conversations = root / "conversations"
+    conversations.mkdir()
+    (conversations / "main.jsonl").write_text(
+        json.dumps({"role": "user", "content": f"using {revoked}"}) + "\n",
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "--state",
+            str(root),
+            "--secret-key",
+            "apollo",
+            "--revoked-from",
+            str(snapshot),
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+    body = json.loads(captured.out)
+
+    assert code == 1
+    assert not body["clean"]
+    assert any(item["store_id"] == "conversation_transcripts" for item in body["findings"])
+    assert revoked not in captured.out
+    assert replacement not in captured.out
+    assert revoked not in captured.err
+    assert replacement not in captured.err
 
 
 def test_cli_exits_with_a_usage_code_for_an_unregistered_key(tmp_path, capsys):

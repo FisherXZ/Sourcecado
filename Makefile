@@ -39,10 +39,12 @@ doctor-repair:
 	cd desktop && .venv/bin/python -m coworker.doctor repair
 
 # Confirms a registered secret's absence from local state without ever
-# printing it. Pass KEY=<name> to scan for one value, e.g. `make secret-scan
-# KEY=apollo`; omit it to scan for every currently registered value.
+# printing it. Pass KEY=<name> to scan for one value. After rotation, pass
+# REVOKED_FROM=<pre-rotation-secrets.json> so the scan searches the revoked
+# value rather than the replacement now in the live vault, e.g.
+# `make secret-scan KEY=apollo REVOKED_FROM=./pre-rotation-secrets.json`.
 secret-scan:
-	cd desktop && .venv/bin/python -m coworker.secret_scan $(if $(KEY),--secret-key $(KEY),)
+	cd desktop && .venv/bin/python -m coworker.secret_scan $(if $(KEY),--secret-key $(KEY),) $(if $(REVOKED_FROM),--revoked-from $(REVOKED_FROM),)
 
 build:
 	npm --prefix $(GUI) run build
