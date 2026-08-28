@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -37,6 +37,7 @@ from coworker.apollo import (
     enrichment_resource,
 )
 from coworker.apollo_curation import curate_apollo_candidates
+from coworker.bundle_redaction import registered_secret_values
 from coworker.calendar import calendar_from_secrets
 from coworker.connectors.google_oauth import (
     CALENDAR_SCOPE,
@@ -53,6 +54,16 @@ from coworker.connectors.google_oauth import (
     load_google,
     merge_scopes,
     save_google,
+)
+from coworker.diagnostic_bundle import (
+    HEALTH_WINDOW_RUNS,
+    BundleScanFailed,
+    BundleSources,
+    BundleSubject,
+    build_document,
+    build_preview,
+    export_bundle,
+    scan_bundle,
 )
 from coworker.drive import drive_from_secrets
 from coworker.drive_evidence import attach as attach_drive_evidence
@@ -2225,6 +2236,129 @@ def create_app(
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
         return {"person": person}
+
+    # --- diagnostic bundle ---------------------------------------------
+    #
+    # Two verbs on purpose. `preview` assembles and scans without writing, so
+    # the operator reviews exactly what a bundle would hold. `export` repeats
+    # the work and writes one file. Nothing here uploads anything: the module
+    # it calls opens no network client, and the only destination is a local
+    # directory inside the state root.
+
+    def _registered_secrets() -> frozenset[str]:
+        """Every credential this build holds, so the scan can refuse on any one.
+
+        These values are used for matching only. They are never rendered, never
+        logged, and never placed in a refusal.
+        """
+        values: set[str] = set()
+        secrets_path = Path(root) / "secrets.json"
+        if secrets_path.is_file():
+            try:
+                values |= registered_secret_values(
+                    json.loads(secrets_path.read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError):
+                pass
+        for name, value in os.environ.items():
+            named = name.upper()
+            if not any(
+                word in named
+                for word in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+            ):
+                continue
+            if len(value) < 16 or value.startswith("/") or "://" in value:
+                continue
+            values.add(value)
+        return frozenset(values)
+
+    def _diagnostic_sources(receipt: dict[str, Any] | None) -> BundleSources:
+        # Imported here rather than at module scope: the state inspector pulls
+        # in the whole migration registry, and the sidecar should not pay for
+        # that unless an operator actually asks for a bundle.
+        from coworker import doctor
+
+        session_id = str(((receipt or {}).get("run") or {}).get("session_id") or "")
+        try:
+            events = store.load_events(session_id) if session_id else []
+        except ValueError:
+            events = []
+        return BundleSources(
+            application={"name": "Sourcecado", "version": app.version, "slice": SLICE},
+            receipt=receipt,
+            recent_runs=app.state.run_ledger.query(limit=HEALTH_WINDOW_RUNS),
+            doctor=doctor.diagnose(root).to_dict(),
+            connectors=list(connectors().get("connectors") or []),
+            events=events,
+            registered_secrets=_registered_secrets(),
+            state_root=Path(root),
+            home=Path.home(),
+        )
+
+    def _bundle_start(payload: Any):
+        """Resolve the exact run or state finding an export starts from."""
+        body = payload if isinstance(payload, dict) else {}
+        run_id = str(body.get("run_id") or "").strip()
+        if run_id:
+            receipt = app.state.run_ledger.receipt(run_id)
+            if receipt is None:
+                return JSONResponse({"error": "run_not_found"}, status_code=404)
+            return BundleSubject(kind="run", run_id=run_id), receipt
+        check = str(body.get("check") or "").strip()
+        if not check:
+            return JSONResponse(
+                {"error": "run_id or check is required"}, status_code=400
+            )
+        return (
+            BundleSubject(
+                kind="doctor_finding",
+                check=check,
+                store_id=str(body.get("store_id") or "").strip() or None,
+            ),
+            None,
+        )
+
+    def _refused(matches) -> JSONResponse:
+        """A refusal names categories and locations. Never a value."""
+        return JSONResponse(
+            {
+                "error": "scan_refused",
+                "matches": [
+                    {"category": match.category, "location": match.location}
+                    for match in matches
+                ],
+            },
+            status_code=409,
+        )
+
+    @app.post("/v1/diagnostics/bundle/preview")
+    def diagnostics_bundle_preview(payload: dict[str, Any] | None = Body(default=None)):
+        started = _bundle_start(payload)
+        if isinstance(started, JSONResponse):
+            return started
+        subject, receipt = started
+        sources = _diagnostic_sources(receipt)
+        document = build_document(subject, sources)
+        matches = scan_bundle(document, sources)
+        if matches:
+            return _refused(matches)
+        return {"preview": build_preview(document)}
+
+    @app.post("/v1/diagnostics/bundle/export")
+    def diagnostics_bundle_export(payload: dict[str, Any] | None = Body(default=None)):
+        started = _bundle_start(payload)
+        if isinstance(started, JSONResponse):
+            return started
+        subject, receipt = started
+        try:
+            written = export_bundle(
+                subject,
+                _diagnostic_sources(receipt),
+                destination_dir=Path(root) / "diagnostics",
+            )
+        except BundleScanFailed as refused:
+            return _refused(refused.matches)
+        return {"bundle": written}
 
     @app.get("/v1/sessions")
     def sessions_list():

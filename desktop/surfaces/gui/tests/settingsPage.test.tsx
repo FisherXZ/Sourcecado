@@ -5,6 +5,8 @@ import { SettingsPage } from "../src/routes/SettingsPage";
 
 const api = vi.hoisted(() => ({
   createWorkspaceGrant: vi.fn(),
+  exportDiagnosticBundle: vi.fn(),
+  previewDiagnosticBundle: vi.fn(),
   getConnectors: vi.fn(),
   getSettings: vi.fn(),
   pickDirectory: vi.fn(),
@@ -16,6 +18,8 @@ const api = vi.hoisted(() => ({
 
 vi.mock("../src/api", () => ({
   createWorkspaceGrant: api.createWorkspaceGrant,
+  exportDiagnosticBundle: api.exportDiagnosticBundle,
+  previewDiagnosticBundle: api.previewDiagnosticBundle,
   getConnectors: api.getConnectors,
   getSettings: api.getSettings,
   pickDirectory: api.pickDirectory,
