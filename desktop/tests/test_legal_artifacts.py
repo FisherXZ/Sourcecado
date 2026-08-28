@@ -226,6 +226,55 @@ def test_classify_cannot_compare_parties_that_are_all_placeholders():
     assert parties["reason"].startswith("no_expected_party_declared:")
 
 
+def test_classify_does_not_match_parties_on_a_shared_corporate_form():
+    """`llc` in both a title and a body party is not a match.
+
+    This is the silencing direction, and it is worse than an over-ask: the
+    title's organization appears nowhere among the parties, but a shared
+    corporate suffix would report a clean bill of health and drop the
+    knowledge gap back to the generic question.
+    """
+    assessment = classify(
+        artifact_id="drive:nda-suffix",
+        title="Acme Robotics LLC - NDA.docx",
+        body=(
+            "NONDISCLOSURE AGREEMENT between Widget Labs LLC and Northwind "
+            "Distribution LLC. Effective Date: January 4, 2024."
+        ),
+        status=None,
+        expected_party="",
+    )
+
+    parties = assessment["facets"]["parties"]
+    assert parties["evidence"] == "absent"
+    assert "Widget Labs LLC" in parties["reason"]
+
+
+def test_classify_cannot_compare_a_title_that_names_no_organization():
+    """A subject-matter filename carries no expectation, so it asks nothing.
+
+    "Master Services Agreement" reduces to no name-bearing tokens. Grading a
+    correctly-formed contract `absent` because its filename describes the deal
+    instead of the parties is the noise that gets a checker disabled.
+    """
+    assessment = classify(
+        artifact_id="drive:msa",
+        title="Master Services Agreement.docx",
+        body=(
+            "This Agreement between Acme Robotics LLC and Widget Labs LLC. "
+            "Effective Date: January 4, 2024."
+        ),
+        status=None,
+        expected_party="",
+    )
+
+    parties = assessment["facets"]["parties"]
+    assert parties["evidence"] == "missing"
+    assert parties["reason"].startswith("no_expected_party_declared:")
+    # the names still reach the human resolving the gap
+    assert "Acme Robotics LLC" in parties["reason"]
+
+
 def test_classify_never_grants_ready_to_use_on_a_title_match_alone():
     """A filename is never enough to make a document usable.
 

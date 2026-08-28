@@ -127,18 +127,34 @@ _TERM_RE = re.compile(
 _TERM_PLACEHOLDER_RE = re.compile(r"[\[{][^\]}]*term[^\]}]*[\]}]", re.IGNORECASE)
 
 
-# Words that appear in a legal filename without naming a party. Stripped
-# before a title is used as the only available expectation.
-_TITLE_NOISE = frozenset(
+# Tokens that name no one in particular. A title and a body party that
+# overlap only here have not been shown to be the same organization, and a
+# title made only of these carries no expectation at all. Both directions
+# matter: without the corporate forms, "Acme Robotics LLC - NDA" matched
+# "Widget Labs LLC" on `llc` and reported a clean bill of health.
+_GENERIC_TOKENS = frozenset(
     {
+        # document type
         "addendum", "agreement", "agreements", "amendment", "conditions",
-        "contract", "contracts", "copy", "disclosure", "doc", "docx",
-        "draft", "executed", "final", "intent", "letter", "moa", "mou",
-        "mutual", "nda", "ndas", "non", "nondisclosure", "pdf", "revised",
-        "signed", "sow", "statement", "template", "templates", "terms",
-        "updated", "version", "work",
-        # structural words a title shares with any other title
-        "and", "between", "for", "the",
+        "confidential", "confidentiality", "contract", "contracts", "copy",
+        "disclosure", "doc", "docx", "draft", "executed", "final", "form",
+        "intent", "letter", "memorandum", "moa", "mou", "mutual", "nda",
+        "ndas", "pdf", "policy", "proposal", "reciprocal", "revised",
+        "sample", "signed", "sow", "statement", "template", "templates",
+        "terms", "understanding", "updated", "version",
+        # subject matter, which names a kind of deal and not a party
+        "client", "clients", "consulting", "contractor", "employment",
+        "engagement", "general", "independent", "lease", "license",
+        "licensing", "master", "partnership", "professional", "purchase",
+        "recruiting", "recruitment", "referral", "referrals", "retainer",
+        "sale", "service", "services", "standard", "subcontract",
+        "subcontractor", "supply", "vendor", "vendors", "work",
+        # corporate form, shared by every company there is
+        "companies", "company", "corp", "corporation", "gmbh", "holdings",
+        "inc", "incorporated", "llc", "llp", "ltd", "partners", "plc",
+        "pllc", "group",
+        # structural words any two titles share
+        "and", "between", "for", "non", "nondisclosure", "the",
     }
 )
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -148,13 +164,13 @@ def _significant_tokens(text: str) -> set[str]:
     """Name-bearing tokens of a title or a party, lowercased.
 
     Drops the boilerplate every legal filename carries, so "Codeology NDA
-    Template" reduces to {"codeology"} and cannot match a document merely
-    because both are agreements.
+    Template" reduces to {"codeology"} and "Acme Robotics LLC" to
+    {"acme", "robotics"}. An empty result means the text named nobody.
     """
     return {
         token
         for token in _TOKEN_RE.findall(text.casefold())
-        if len(token) > 2 and token not in _TITLE_NOISE and not token.isdigit()
+        if len(token) > 2 and token not in _GENERIC_TOKENS and not token.isdigit()
     }
 
 
@@ -197,10 +213,15 @@ def _verify_parties_against_title(parties: list[str], title: str) -> tuple[Evide
     its own would otherwise have no way to see it.
     """
     title_tokens = _significant_tokens(title)
-    named = [party for party in parties if not _is_placeholder(party)]
+    named = [
+        party
+        for party in parties
+        if not _is_placeholder(party) and _significant_tokens(party)
+    ]
     if not title_tokens or not named:
-        # Nothing to compare: a title of pure boilerplate, or a body whose
-        # parties are all unfilled placeholders.
+        # Nothing to compare. Either the title is pure document boilerplate
+        # ("Master Services Agreement") and names no organization to expect,
+        # or the body's parties are placeholders and name none to check.
         return Evidence.MISSING, "no_expected_party_declared:" + ", ".join(parties)
     matched: list[str] = []
     unmatched: list[str] = []
