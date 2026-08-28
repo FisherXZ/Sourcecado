@@ -10,6 +10,12 @@ left at the end of an append-only log, and applying a registered migration. A
 corrupt row, an orphaned link, an interrupted approval, or anything touching a
 person file or an external outcome is reported for review and left alone.
 
+Agent Run ownership is report-only, without exception, and one rule governs it:
+an owner is called dead only on kernel-backed proof that its process has exited.
+Another host, a missing marker, or a platform without file locking are unknown,
+and unknown is reported as unknown. Rounding unknown up to dead would invite an
+operator to take a run away from a process that is still working it.
+
 Output is bounded and redacted. Doctor reports store ids, versions, check names,
 and counts. It never prints a row, a message body, a token, an authorization
 header, or a path outside the state directory.
@@ -31,15 +37,28 @@ from pathlib import Path
 from typing import Any
 
 from coworker import migrations
+from coworker.agent_run_owner import OWNERS_DIR_NAME, Liveness, OwnerRegistry
+from coworker.agent_run_repository import DB_NAME as AGENT_RUNS_DB
+from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_VERSION
+from coworker.agent_run_state import (
+    AgentRunTransitionError,
+    is_leasable,
+    is_terminal,
+    validate_transition,
+)
+from coworker.agent_runs import json_list
 from coworker.migrations import (
     BackupFailed,
     StoreKind,
     StoreStatus,
+    VersionChannel,
     open_readonly,
     state_root,
     store_path,
     store_present,
 )
+from coworker.run_evidence import analyze_record
+from coworker.run_receipt import parse_moment
 
 MAX_DETAIL_ROWS = 8
 MAX_DETAIL_CHARS = 200
@@ -56,6 +75,28 @@ OPTIONAL_DEPENDENCIES = ("mcp", "pypdf")
 # the runs table without importing the scheduler, which pulls in the agent loop.
 KNOWN_RUN_STATUSES = frozenset(
     {"running", "success", "failed", "waiting_approval", "partial", "interrupted"}
+)
+
+# A read-only descriptor for the Agent Run store, so the integrity and JSON
+# column checks already written here cover it too. It is not a registry entry:
+# `agent_runs.db` has one schema version and no upgrade path yet, and adding it
+# to the registry belongs in `coworker/migrations.py`, which this does not touch.
+AGENT_RUNS_STORE_ID = "agent_runs_db"
+_AGENT_RUNS = migrations.StoreSpec(
+    store_id=AGENT_RUNS_STORE_ID,
+    kind=StoreKind.SQLITE,
+    relative_path=AGENT_RUNS_DB,
+    current_version=AGENT_RUNS_VERSION,
+    version_channel=VersionChannel.SQLITE_USER_VERSION,
+    description="Durable Agent Run identity, leases, and checkpoints",
+    json_columns=(
+        ("agent_runs", "approval_ids"),
+        ("agent_runs", "source_refs"),
+        ("agent_runs", "artifact_refs"),
+        ("agent_runs", "usage"),
+        ("agent_runs", "terminal_result"),
+        ("agent_run_checkpoints", "payload"),
+    ),
 )
 
 _SECRET_ASSIGNMENT = re.compile(
@@ -616,9 +657,8 @@ def _is_timestamp(value: object) -> bool:
 def _check_schedule(collector: _Collector, root: Path, spec) -> None:
     """Read-only consistency checks over jobs and runs.
 
-    Nothing here needs a canonical Agent Run identity. Checks that do — a stale
-    run owner, a dead lease, an impossible checkpoint transition — belong in
-    `_check_run_ownership`, which stays empty until issue #63 lands that identity.
+    These are the scheduler's own jobs and runs in `club.db`, which are not
+    Agent Runs. The durable Agent Run store is checked in `_check_run_ownership`.
     """
     conn = open_readonly(store_path(root, spec))
     try:
@@ -698,15 +738,455 @@ def _check_schedule(collector: _Collector, root: Path, spec) -> None:
         conn.close()
 
 
-def _check_run_ownership(collector: _Collector, root: Path, spec) -> None:
-    """Extension point for issue #63.
+def _check_run_ownership(collector: _Collector, root: Path, *, cross_store: bool) -> None:
+    """The Agent Run store: who owns a run, how it got here, and what it names.
 
-    Stale run owner, dead lease, and impossible checkpoint transition checks all
-    need the canonical Agent Run identity that #63 introduces. There is nothing
-    on disk today that can distinguish an abandoned owner from a live one, so
-    this deliberately reports nothing rather than guessing.
+    Three questions, in the order that keeps each honest. Is the run store
+    readable at all? Does its history describe a run that could have happened?
+    Do its references still resolve?
+
+    The one rule that outranks the rest: an owner is reported dead only when the
+    kernel says so. `OwnerRegistry` proves death by taking the exclusive `flock`
+    the owner held for the life of its process. Everything else -- another host,
+    a missing marker, a platform without `flock` -- is unknown. Unknown is
+    reported as unknown, because a check that quietly rounds it up to dead would
+    invite an operator to take a run away from a process that is still working
+    it. An unknown owner needs no rescue: its lease still expires, and expiry
+    reclaim is fenced by version.
     """
-    return
+    if not store_present(root, _AGENT_RUNS):
+        return
+    try:
+        version = migrations.read_version(root, _AGENT_RUNS)
+    except migrations.StoreUnreadable:
+        version = None
+    if version is not None and version > AGENT_RUNS_VERSION:
+        collector.add(
+            "agent_run.version_ahead",
+            AGENT_RUNS_STORE_ID,
+            Severity.ERROR,
+            Repair.NONE,
+            f"The Agent Run store was written by a newer Sourcecado "
+            f"(version {version}, this build knows {AGENT_RUNS_VERSION}). "
+            "Doctor will not read its runs.",
+            blocking=True,
+        )
+        return
+    if not _check_sqlite_integrity(collector, root, _AGENT_RUNS):
+        return
+    _check_json_columns(collector, root, _AGENT_RUNS)
+
+    conn = open_readonly(store_path(root, _AGENT_RUNS))
+    try:
+        if not {"agent_runs", "agent_run_checkpoints"} <= migrations.table_names(conn):
+            return
+        runs = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM agent_runs ORDER BY created_at, rowid"
+            )
+        ]
+        history: dict[str, list[dict[str, Any]]] = {}
+        for row in conn.execute(
+            "SELECT run_id, sequence, kind, state FROM agent_run_checkpoints "
+            "ORDER BY run_id, sequence"
+        ):
+            history.setdefault(str(row["run_id"]), []).append(dict(row))
+    finally:
+        conn.close()
+
+    _check_run_leases(collector, root, runs)
+    _check_run_history(collector, runs, history)
+    if cross_store:
+        _check_run_links(collector, root, runs, history)
+
+
+def _unprovable(owner_id: str | None, host: str | None) -> Liveness:
+    """No proof is available. Absence of proof is never proof of death."""
+    return Liveness.UNKNOWN
+
+
+def _liveness_probe(collector: _Collector, root: Path):
+    """The one source of proof, or `unknown` when there is no proof to read.
+
+    Two conditions have to hold before Doctor will ask the kernel anything.
+
+    The marker directory has to already exist. Doctor never creates it, and a
+    run store restored without its markers proves nothing about who is alive --
+    the same verdict `OwnerRegistry` gives for a marker that is simply gone.
+
+    It also has to already be owner-only, because `OwnerRegistry`'s constructor
+    restores that mode, and a check that changed a permission while only
+    diagnosing would break the promise that a check writes nothing. A loosened
+    directory is reported instead, and every owner in it stays unknown. That
+    costs a proof of death, which is the safe direction to lose one in: unknown
+    is never reported as dead.
+    """
+    markers = root / OWNERS_DIR_NAME
+    if not markers.is_dir():
+        return _unprovable
+    mode = markers.stat().st_mode & 0o777
+    if mode != migrations.DIR_MODE:
+        collector.add(
+            "agent_run.owner_markers_permissive",
+            AGENT_RUNS_STORE_ID,
+            Severity.WARN,
+            Repair.REVIEW_REQUIRED,
+            f"The Agent Run owner markers are {oct(mode)}, expected "
+            f"{oct(migrations.DIR_MODE)}. Reading them would restore the mode, "
+            "and a check may not change state, so owner liveness is left "
+            "unknown until the permissions are put back.",
+            count=1,
+            detail=[_relative(markers, root)],
+        )
+        return _unprovable
+    return OwnerRegistry(root).liveness_of
+
+
+def _check_run_leases(collector: _Collector, root: Path, runs: list[dict[str, Any]]) -> None:
+    now = datetime.now(UTC)
+    probe = _liveness_probe(collector, root)
+    verdicts: dict[str, Liveness] = {}
+    alive: list[str] = []
+    dead: list[str] = []
+    unknown: list[str] = []
+    expired: list[str] = []
+    unowned: list[str] = []
+    for run in runs:
+        run_id = str(run.get("run_id"))
+        owner = run.get("lease_owner")
+        if owner is None:
+            # A run is created already owned, so this can only follow a crash
+            # between creating a run and taking its lease.
+            if str(run.get("current_state")) == "running":
+                unowned.append(f"run {run_id}")
+            continue
+        owner = str(owner)
+        # Expiry is checked first and on its own. An expired lease is already
+        # reclaimable and already fenced, so whether its owner still breathes
+        # changes nothing -- and asking would risk answering the wrong question.
+        expires = parse_moment(run.get("lease_expires_at"))
+        if expires is None or expires <= now:
+            expired.append(f"run {run_id}")
+            continue
+        if owner not in verdicts:
+            verdicts[owner] = probe(owner, run.get("lease_owner_host"))
+        verdict = verdicts[owner]
+        # The run id is what an operator acts on. The owner id is not printed:
+        # it is built from the machine's host name, and Doctor keeps the host
+        # out of its report the same way it keeps absolute paths out.
+        if verdict is Liveness.ALIVE:
+            alive.append(f"run {run_id}")
+        elif verdict is Liveness.DEAD:
+            dead.append(f"run {run_id}")
+        else:
+            unknown.append(f"run {run_id}")
+    if alive:
+        collector.add(
+            "agent_run.owned_by_live_process",
+            AGENT_RUNS_STORE_ID,
+            Severity.INFO,
+            Repair.NONE,
+            "Runs are held by an owner whose process is proven alive. They are "
+            "being worked right now and nothing here is stale.",
+            count=len(alive),
+            detail=alive,
+        )
+    if dead:
+        collector.add(
+            "agent_run.dead_owner",
+            AGENT_RUNS_STORE_ID,
+            Severity.WARN,
+            Repair.REVIEW_REQUIRED,
+            "Runs hold an unexpired lease whose owner process the kernel "
+            "confirms has exited. Starting the sidecar reclaims them under a "
+            "lease; Doctor will not write to a run store it does not own.",
+            count=len(dead),
+            detail=dead,
+        )
+    if unknown:
+        collector.add(
+            "agent_run.unknown_owner",
+            AGENT_RUNS_STORE_ID,
+            Severity.INFO,
+            Repair.NONE,
+            "Runs are held by an owner whose liveness is unknown: another host, "
+            "a marker that is gone, or a platform without file locking. Unknown "
+            "is not dead. The lease still expires and reclaiming an expired "
+            "lease is fenced, so nothing is stranded.",
+            count=len(unknown),
+            detail=unknown,
+        )
+    if expired:
+        collector.add(
+            "agent_run.expired_lease",
+            AGENT_RUNS_STORE_ID,
+            Severity.WARN,
+            Repair.REVIEW_REQUIRED,
+            "Runs hold a lease that has run out of time. Anyone may reclaim it "
+            "and the version fence stops a late writer, so starting the sidecar "
+            "clears this. Doctor reports it and changes nothing.",
+            count=len(expired),
+            detail=expired,
+        )
+    if unowned:
+        collector.add(
+            "agent_run.unowned_running",
+            AGENT_RUNS_STORE_ID,
+            Severity.WARN,
+            Repair.REVIEW_REQUIRED,
+            "Runs are marked running with no lease at all. A run is created "
+            "already owned, so this follows a crash between creating the run "
+            "and owning it. Startup reclaim classifies these as interrupted.",
+            count=len(unowned),
+            detail=unowned,
+        )
+
+
+def _check_run_history(
+    collector: _Collector,
+    runs: list[dict[str, Any]],
+    history: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Records that no correct run could have produced.
+
+    Which edges are legal is not restated here. `coworker/agent_run_state.py`
+    holds the one table the store validates writes against, and this walks the
+    stored checkpoints back through the same `validate_transition`, so a check
+    cannot drift away from the rule it is checking.
+
+    What the record can support comes from `run_evidence.analyze_record`, which
+    already separates a checkpoint prefix retention deleted on purpose from a
+    sequence that is genuinely torn.
+    """
+    unsupported: list[str] = []
+    gaps: list[str] = []
+    after_terminal: list[str] = []
+    illegal: list[str] = []
+    mismatched: list[str] = []
+    leased: list[str] = []
+    for run in runs:
+        run_id = str(run.get("run_id"))
+        checkpoints = history.get(run_id, [])
+        record = analyze_record(run, checkpoints)
+        if record["unsupported"]:
+            # Fail closed. A record this build cannot read is not a record this
+            # build may call wrong, so no transition verdict is reached here.
+            unsupported.append(f"run {run_id}: {', '.join(record['unsupported'][:4])}")
+            continue
+        state = str(run.get("current_state"))
+        if run.get("lease_owner") is not None and not is_leasable(state):
+            leased.append(f"run {run_id} holds a lease in state {state}")
+        if record["damaged"]:
+            gaps.append(
+                f"run {run_id} stores {record['stored']} checkpoints of "
+                f"{record['expected']}, and not as a dense tail"
+            )
+            continue
+        previous: str | None = "running" if record["pruned_through"] == 0 else None
+        for item in checkpoints:
+            kind = str(item["kind"])
+            landed = str(item["state"])
+            if previous is None:
+                # Retention removed what came before, so this checkpoint's
+                # incoming edge cannot be judged. Its outgoing edges still can.
+                previous = landed
+                continue
+            if int(item["sequence"]) == 1 and kind != "run_started":
+                illegal.append(
+                    f"run {run_id} opens with {kind}; every run opens with run_started"
+                )
+            elif is_terminal(previous):
+                after_terminal.append(
+                    f"run {run_id} checkpoint {item['sequence']} is {kind} "
+                    f"after the run reached {previous}"
+                )
+            else:
+                try:
+                    validate_transition(kind, previous, landed)
+                except AgentRunTransitionError as exc:
+                    illegal.append(f"run {run_id} checkpoint {item['sequence']}: {exc}")
+            previous = landed
+        if (
+            checkpoints
+            and int(checkpoints[-1]["sequence"]) == record["expected"]
+            and str(checkpoints[-1]["state"]) != state
+        ):
+            mismatched.append(
+                f"run {run_id} row says {state}, its last checkpoint says "
+                f"{checkpoints[-1]['state']}"
+            )
+    if unsupported:
+        collector.add(
+            "agent_run.unsupported_record",
+            AGENT_RUNS_STORE_ID,
+            Severity.WARN,
+            Repair.REVIEW_REQUIRED,
+            "Runs carry a state, trigger, or checkpoint kind this build does "
+            "not know. Doctor reads no further into them rather than calling "
+            "something it cannot express a defect.",
+            count=len(unsupported),
+            detail=unsupported,
+        )
+    if gaps:
+        collector.add(
+            "agent_run.checkpoint_gap",
+            AGENT_RUNS_STORE_ID,
+            Severity.ERROR,
+            Repair.REVIEW_REQUIRED,
+            "Checkpoint sequences have holes. The sequence is dense by "
+            "construction, and retention only ever drops a leading run of it, "
+            "so this is damage rather than pruning. What the missing steps "
+            "recorded cannot be reconstructed.",
+            count=len(gaps),
+            detail=gaps,
+        )
+    if after_terminal:
+        collector.add(
+            "agent_run.checkpoint_after_terminal",
+            AGENT_RUNS_STORE_ID,
+            Severity.ERROR,
+            Repair.REVIEW_REQUIRED,
+            "Runs checkpointed after they had already finished. A terminal run "
+            "releases its lease and never moves again, so these rows were not "
+            "written by a correct run.",
+            count=len(after_terminal),
+            detail=after_terminal,
+        )
+    if illegal:
+        collector.add(
+            "agent_run.impossible_transition",
+            AGENT_RUNS_STORE_ID,
+            Severity.ERROR,
+            Repair.REVIEW_REQUIRED,
+            "Checkpoints record an edge the Agent Run state machine forbids.",
+            count=len(illegal),
+            detail=illegal,
+        )
+    if mismatched:
+        collector.add(
+            "agent_run.state_mismatch",
+            AGENT_RUNS_STORE_ID,
+            Severity.ERROR,
+            Repair.REVIEW_REQUIRED,
+            "Run rows disagree with their own last checkpoint. Both are written "
+            "in one transaction, so the record contradicts itself.",
+            count=len(mismatched),
+            detail=mismatched,
+        )
+    if leased:
+        collector.add(
+            "agent_run.lease_on_unleasable_state",
+            AGENT_RUNS_STORE_ID,
+            Severity.WARN,
+            Repair.REVIEW_REQUIRED,
+            "Runs hold a lease in a state that holds no lease. Parking or "
+            "finishing a run releases its lease in the same transaction as the "
+            "state change, so this pair cannot both be true.",
+            count=len(leased),
+            detail=leased,
+        )
+
+
+def _known_keys(root: Path, store_id: str, sql: str) -> set[str] | None:
+    """The ids one store holds, or None when that store cannot answer.
+
+    A store that is absent or unreadable gives no answer, and no answer is not
+    the same as "the target is gone". Doctor stays quiet rather than reporting
+    an orphan it cannot support.
+    """
+    spec = migrations.spec_for(store_id)
+    if not store_present(root, spec):
+        return None
+    try:
+        conn = open_readonly(store_path(root, spec))
+    except sqlite3.Error:
+        return None
+    try:
+        return {str(row[0]) for row in conn.execute(sql)}
+    except sqlite3.DatabaseError:
+        return None
+    finally:
+        conn.close()
+
+
+def _check_run_links(
+    collector: _Collector,
+    root: Path,
+    runs: list[dict[str, Any]],
+    history: dict[str, list[dict[str, Any]]],
+) -> None:
+    """References keyed by the canonical run identity, in both directions.
+
+    Orphaned is not pruned. Retention deletes checkpoint rows for a run whose
+    row stays, so it can leave a run with no steps but never a step with no
+    run. Approvals are never deleted by anything, so an approval id a run names
+    and the inbox does not hold is genuinely dangling.
+
+    Queue items are not covered because nothing links them by run identity:
+    `chat_queue` carries no run id and a run row carries no queue item id. The
+    only queue link a run has is the session it belongs to, which is checked.
+    """
+    known_runs = {str(run.get("run_id")) for run in runs}
+    sessions = _known_keys(root, "conversation_db", "SELECT session_id FROM sessions")
+    if sessions is not None:
+        transcripts = root / "conversations"
+        if transcripts.is_dir():
+            sessions |= {path.stem for path in transcripts.glob("*.jsonl")}
+    approvals = _known_keys(root, "conversation_db", "SELECT id FROM inbox")
+    people = _known_keys(root, "people_db", "SELECT person_id FROM people")
+
+    dangling_parents: list[str] = []
+    dangling_sessions: list[str] = []
+    dangling_people: list[str] = []
+    dangling_approvals: list[str] = []
+    for run in runs:
+        run_id = str(run.get("run_id"))
+        parent = run.get("parent_run_id")
+        if parent is not None and str(parent) not in known_runs:
+            dangling_parents.append(f"run {run_id} names parent {str(parent)[:48]}")
+        session = str(run.get("session_id") or "")
+        if sessions is not None and session not in sessions:
+            dangling_sessions.append(f"run {run_id} names session {session[:48]}")
+        person = run.get("person_id")
+        if people is not None and person is not None and str(person) not in people:
+            dangling_people.append(f"run {run_id} names person {str(person)[:48]}")
+        if approvals is not None:
+            for approval in json_list(run.get("approval_ids")):
+                if str(approval) not in approvals:
+                    dangling_approvals.append(
+                        f"run {run_id} names approval {str(approval)[:48]}"
+                    )
+    orphaned_checkpoints = sorted(set(history) - known_runs)
+
+    for check, entries, subject in (
+        ("agent_run.orphaned_parent", dangling_parents, "a parent run"),
+        ("agent_run.orphaned_session", dangling_sessions, "a session"),
+        ("agent_run.orphaned_person", dangling_people, "a person file"),
+        ("agent_run.orphaned_approval", dangling_approvals, "an approval"),
+    ):
+        if entries:
+            collector.add(
+                check,
+                AGENT_RUNS_STORE_ID,
+                Severity.WARN,
+                Repair.REVIEW_REQUIRED,
+                f"Runs name {subject} that no longer exists. A run is a record "
+                "of work that happened, so Doctor never edits or drops one.",
+                count=len(entries),
+                detail=entries,
+            )
+    if orphaned_checkpoints:
+        collector.add(
+            "agent_run.orphaned_checkpoint",
+            AGENT_RUNS_STORE_ID,
+            Severity.ERROR,
+            Repair.REVIEW_REQUIRED,
+            "Checkpoints belong to a run this store does not hold. Retention "
+            "deletes steps and keeps the run row, so it never produces this.",
+            count=len(orphaned_checkpoints),
+            detail=[f"checkpoints for run {item[:48]}" for item in orphaned_checkpoints],
+        )
 
 
 def _check_links(collector: _Collector, root: Path) -> None:
@@ -896,11 +1376,14 @@ def _scan(root: Path) -> _Scan:
                 _check_json_columns(collector, root, spec)
                 if spec.store_id == "conversation_db":
                     _check_schedule(collector, root, spec)
-                    _check_run_ownership(collector, root, spec)
         elif spec.kind in (StoreKind.JSONL_DIR, StoreKind.JSONL_LOG):
             torn_tails.extend(_check_jsonl(collector, root, spec))
     if not unreadable:
         _check_links(collector, root)
+    # The run store is its own database and is not in the registry, so it is
+    # checked here rather than inside the registry loop. Its own checks stand
+    # alone; only its cross-store references need the other stores readable.
+    _check_run_ownership(collector, root, cross_store=not unreadable)
     drift = _check_permissions(collector, root)
     dependencies = _check_dependencies(collector)
 
