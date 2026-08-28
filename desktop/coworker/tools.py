@@ -12,6 +12,7 @@ from coworker.apollo_curation import curate_apollo_candidates
 from coworker.web import MISSING_KEY as TAVILY_MISSING, search_web
 from coworker.gmail import GmailError, MissingGmail
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
+from coworker.drive_ingestion import DRIVE_INDEX_QUERY_SCHEMA, DriveIngestionStore
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
 from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES, WORKSPACE_TOOL_SCHEMAS
@@ -404,6 +405,7 @@ OPENAI_TOOLS = [
     DRIVE_SEARCH_SCHEMA,
     DRIVE_LIST_FOLDER_SCHEMA,
     DRIVE_READ_SCHEMA,
+    DRIVE_INDEX_QUERY_SCHEMA,
     CALENDAR_LIST_SCHEMA,
     CALENDAR_CREATE_SCHEMA,
     CALENDAR_UPDATE_SCHEMA,
@@ -440,6 +442,7 @@ def execute(
     store: ConversationStore | None = None,
     gmail: Any = None,
     drive: Any = None,
+    drive_ingestions: DriveIngestionStore | None = None,
     calendar: Any = None,
     http: Any = None,
     apollo_key: str | None = None,
@@ -482,6 +485,18 @@ def execute(
             run_id=run_id,
             allowed_source_ids=allowed_source_ids,
         )
+    if name == "drive_index_query":
+        if drive_ingestions is None:
+            return False, {"status": "failed", "error": "Drive index is unavailable"}
+        try:
+            return True, drive_ingestions.query(
+                str(args.get("job_id") or ""),
+                str(args.get("query") or ""),
+                include_external=bool(args.get("include_external")),
+                limit=int(args.get("limit") or 20),
+            )
+        except ValueError as exc:
+            return False, {"status": "failed", "error": str(exc)}
     if name == "now":
         return True, now()
     if name == "load_skill":
