@@ -118,7 +118,14 @@ def test_runtime_dynamic_context_is_ordered_bounded_and_total_bounded(tmp_path):
         "skill_catalog",
         "person_file",
     )
-    assert tuple(item.chars for item in dynamic) == (4_000, 3_000, 2_000)
+    assert tuple(item.chars for item in dynamic[:2]) == (4_000, 3_000)
+    # The person file is the bounded brief projection. It stops on a whole
+    # claim under its budget and states the count it left out, rather than
+    # being cut mid-claim at exactly the cap.
+    person_file = dynamic[2]
+    assert person_file.budget_chars == 2_000
+    assert 1_500 <= person_file.chars <= 2_000
+    assert "further record(s) not shown here." in assembled.text
     assert assembled.diagnostics.system_prompt_chars <= 15_500
 
 

@@ -33,4 +33,29 @@ describe("Board and person-file styles", () => {
       /@media \(max-width: 767px\)[\s\S]*?\.board-page-actions button\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/,
     );
   });
+
+  it("renders brief claims as a quiet divided list with tinted state pills", () => {
+    expect(styles).toMatch(
+      /\.person-claims\s*\{[^}]*display:\s*grid;[^}]*list-style:\s*none;/,
+    );
+    expect(styles).toMatch(
+      /\.person-claim\s*\{[^}]*border-bottom:\s*1px solid var\(--border\);/,
+    );
+    expect(styles).toMatch(
+      /\.person-claim-state\.is-current\s*\{[^}]*background:\s*var\(--accent-tint\);[^}]*color:\s*var\(--accent-deep\);/,
+    );
+    expect(styles).toMatch(
+      /\.person-claim-state\.is-conflicting\s*\{[^}]*background:\s*var\(--error-bg\);[^}]*color:\s*var\(--error\);/,
+    );
+    expect(styles).toMatch(
+      /\.person-claim-refs\s*\{[^}]*font-family:\s*ui-monospace, "Geist Mono", monospace;/,
+    );
+  });
+
+  it("keeps handoff review controls touch sized and on the accent", () => {
+    expect(styles).toMatch(/\.person-handoff textarea\s*\{[^}]*min-height:\s*44px;/);
+    expect(styles).toMatch(
+      /\.person-handoff button\s*\{[^}]*min-height:\s*44px;[^}]*background:\s*var\(--accent\);/,
+    );
+  });
 });
