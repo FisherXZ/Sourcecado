@@ -1,11 +1,43 @@
 import { useEffect, useState } from "react";
 
-import { getBoard, type Board, type BoardPerson } from "./api";
+import {
+  getBoard,
+  refreshReplies,
+  type Board,
+  type BoardPerson,
+  type ReplyRefreshResult,
+} from "./api";
 
 function label(person: BoardPerson): { name: string; detail: string | null } {
   const name = [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
   const detail = [person.title, person.company].filter(Boolean).join(" · ");
   return { name, detail: detail || null };
+}
+
+function day(stamp: string | null | undefined): string | null {
+  if (typeof stamp !== "string" || !stamp.trim()) return null;
+  return stamp.slice(0, 10);
+}
+
+/** Last contact and replied state, in the operator's words. */
+function contactLine(person: BoardPerson): string {
+  const when = day(person.last_contact_at);
+  if (!when) return "No contact yet";
+  const who = person.last_contact_direction === "inbound" ? "They replied" : "We wrote";
+  return `${who} · ${when}`;
+}
+
+const FOLLOW_UP_LABEL: Record<string, string> = {
+  reply_unanswered: "Needs follow-up",
+  reply_needs_review: "Reply needs review",
+};
+
+function FollowUpChip({ person }: { person: BoardPerson }) {
+  const reason = person.follow_up?.needed ? person.follow_up.reason : null;
+  if (!reason) return null;
+  return (
+    <span className="board-row-flag">{FOLLOW_UP_LABEL[reason] ?? "Needs follow-up"}</span>
+  );
 }
 
 function Bucket({
@@ -38,6 +70,10 @@ function Bucket({
               >
                 <strong>{copy.name}</strong>
                 {copy.detail ? <span>{copy.detail}</span> : null}
+                <span className="board-row-contact">
+                  {contactLine(person)}
+                  <FollowUpChip person={person} />
+                </span>
               </a>
             );
           })}
@@ -47,10 +83,32 @@ function Bucket({
   );
 }
 
+/** What the refresh did, said plainly. Counts come from the server. */
+function replyStatus(result: ReplyRefreshResult): string {
+  if (result.status !== "ok") {
+    return "Couldn’t reach Gmail. The last checked point is unchanged.";
+  }
+  const parts: string[] = [];
+  if (result.filed > 0) {
+    parts.push(`Filed ${result.filed} ${result.filed === 1 ? "reply" : "replies"}.`);
+  }
+  if (result.unassigned > 0) {
+    parts.push(
+      `${result.unassigned} ${result.unassigned === 1 ? "reply" : "replies"} need review.`,
+    );
+  }
+  if (parts.length === 0) {
+    return `Checked ${result.scanned} ${result.scanned === 1 ? "message" : "messages"}. No new replies.`;
+  }
+  return parts.join(" ");
+}
+
 export function BoardView() {
   const [board, setBoard] = useState<Board | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [checking, setChecking] = useState(false);
+  const [replyStatusText, setReplyStatusText] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -74,6 +132,21 @@ export function BoardView() {
     return () => window.removeEventListener("sourcecado:board-changed", refresh);
   }, []);
 
+  async function checkReplies() {
+    if (checking) return;
+    setChecking(true);
+    setReplyStatusText(null);
+    try {
+      const result = await refreshReplies();
+      setReplyStatusText(replyStatus(result.refresh));
+      setBoard(result.board);
+    } catch {
+      setReplyStatusText("Couldn’t check for replies. Try again.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
   const empty =
     board !== null &&
     board.open.length === 0 &&
@@ -86,6 +159,12 @@ export function BoardView() {
         <p className="eyebrow">Sourcing workspace</p>
         <h1>Board</h1>
         <p>Keep active people moving from open research to completed follow-up.</p>
+        <div className="board-page-actions">
+          <button type="button" disabled={checking} onClick={() => void checkReplies()}>
+            {checking ? "Checking for replies…" : "Check for replies"}
+          </button>
+          {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
+        </div>
       </header>
       {board === null && !failed ? <p role="status">Loading board…</p> : null}
       {failed ? (
