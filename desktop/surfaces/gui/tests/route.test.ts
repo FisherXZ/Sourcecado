@@ -11,6 +11,10 @@ describe("app route parser", () => {
     });
   });
 
+  it("parses the saved-memory classification destination", () => {
+    expect(parseHash("#/memory")).toEqual({ kind: "memory" });
+  });
+
   it("falls back safely when a person id is malformed", () => {
     expect(parseHash("#/people/%E0%A4%A")).toEqual({ kind: "board" });
   });

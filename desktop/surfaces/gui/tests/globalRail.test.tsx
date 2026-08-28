@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { GlobalRail } from "../src/app/GlobalRail";
@@ -6,13 +6,14 @@ import type { AppRoute } from "../src/app/route";
 
 const route: AppRoute = { kind: "skills" };
 
-function renderRail(open: boolean) {
+function renderRail(open: boolean, memoryReviewCount = 0) {
   return render(
     <GlobalRail
       open={open}
       route={route}
       sessions={[]}
       scheduledApprovalCount={0}
+      memoryReviewCount={memoryReviewCount}
       onNewChat={vi.fn()}
       onOpenSession={vi.fn()}
       onPin={vi.fn()}
@@ -55,6 +56,7 @@ describe("GlobalRail off-screen focus containment", () => {
         route={route}
         sessions={[]}
         scheduledApprovalCount={0}
+        memoryReviewCount={0}
         onNewChat={vi.fn()}
         onOpenSession={vi.fn()}
         onPin={vi.fn()}
@@ -81,5 +83,26 @@ describe("GlobalRail off-screen focus containment", () => {
     renderRail(false);
 
     expect(document.getElementById("app-rail")).not.toHaveAttribute("inert");
+  });
+});
+
+describe("GlobalRail saved-memory backlog", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows how many saved memories are waiting for review", () => {
+    renderRail(false, 12);
+
+    const badge = screen.getByLabelText("Saved memory: 12 waiting for review");
+    expect(badge).toHaveTextContent("12");
+    expect(screen.getByRole("link", { name: "Memory" })).toHaveAttribute("href", "#/memory");
+  });
+
+  it("shows no badge once the backlog is drained", () => {
+    renderRail(false, 0);
+
+    expect(screen.queryByLabelText(/waiting for review/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Memory" })).toBeInTheDocument();
   });
 });

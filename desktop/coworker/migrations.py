@@ -436,6 +436,22 @@ _CONVERSATION_ADDED_TABLES = {
     """,
 }
 
+# The context-projection-v1 metadata a memory row needs (issue #58): its
+# category, its scope, its Source Reference, when it changed, its freshness
+# window, its sensitivity, and the claim it competes on. Restated here because
+# the registry, not the constructor, is the release contract for version 2.
+_MEMORY_CLASSIFICATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("category", "TEXT"),
+    ("classification_status", "TEXT"),
+    ("person_id", "TEXT"),
+    ("session_id", "TEXT"),
+    ("source_ref", "TEXT"),
+    ("updated_at", "TEXT"),
+    ("fresh_until", "TEXT"),
+    ("sensitivity", "TEXT"),
+    ("claim_key", "TEXT"),
+)
+
 _PEOPLE_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("people", "version", "INTEGER NOT NULL DEFAULT 1"),
     ("people", "outcome", "TEXT"),
@@ -556,6 +572,60 @@ def _count_conversation_db(context: MigrationContext) -> int:
     return _sqlite_adoption_count(
         context, _CONVERSATION_ADDED_COLUMNS, _CONVERSATION_ADDED_TABLES
     )
+
+
+def _count_memory_classification(context: MigrationContext) -> int:
+    """How many memory rows still have no classification of their own."""
+    conn = context.connection
+    assert conn is not None
+    if "memories" not in table_names(conn):
+        return 0
+    if "classification_status" not in column_names(conn, "memories"):
+        return _row_count(conn, "memories")
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE classification_status IS NULL"
+        ).fetchone()[0]
+    )
+
+
+def _classify_legacy_memories(context: MigrationContext) -> int:
+    """Move every memory row written before context-projection-v1 to review.
+
+    The category is assigned by where the row came from, never by what it says.
+    A row worded like a global preference and a row stating a fact about one
+    Person are indistinguishable as text, so both land in `legacy_unclassified`
+    with `classification_status = needs_review` and stay out of model context
+    until the director says which is which.
+
+    Ids, content, and `created_at` are untouched, and `MEMORY.md` and the
+    per-row Markdown files are left exactly as they are.
+
+    Executed one statement at a time, never through `executescript`, which
+    issues a COMMIT before it runs. Inside the transaction `_apply_store` opens,
+    that COMMIT would end the transaction and leave the rollback with nothing to
+    undo -- silently, and with the store half migrated.
+    """
+    conn = context.connection
+    assert conn is not None
+    touched = _count_memory_classification(context)
+    present = column_names(conn, "memories")
+    for column, definition in _MEMORY_CLASSIFICATION_COLUMNS:
+        if column in present:
+            continue
+        conn.execute(f"ALTER TABLE memories ADD COLUMN {column} {definition}")
+    conn.execute(
+        """
+        UPDATE memories SET
+            category = 'legacy_unclassified',
+            classification_status = 'needs_review',
+            source_ref = 'sourcecado:memory/' || id,
+            updated_at = COALESCE(updated_at, created_at),
+            sensitivity = COALESCE(sensitivity, 'standard')
+        WHERE classification_status IS NULL
+        """
+    )
+    return touched
 
 
 def _adopt_people_db(context: MigrationContext) -> int:
@@ -757,6 +827,19 @@ REGISTRY: tuple[StoreSpec, ...] = (
             "Adopt the conversation schema shipped before the registry existed.",
             _count_conversation_db,
             _adopt_conversation_db,
+        )
+        + (
+            Migration(
+                from_version=1,
+                to_version=2,
+                description=(
+                    "Give every memory row a category, a scope, a Source "
+                    "Reference, and a freshness window, and withhold the "
+                    "unclassified ones from model context."
+                ),
+                count=_count_memory_classification,
+                apply=_classify_legacy_memories,
+            ),
         ),
         json_columns=(
             ("inbox", "arguments"),

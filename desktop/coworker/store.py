@@ -12,12 +12,120 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from coworker.context_projection import (
+    DEFAULT_PROJECTION_POLICY,
+    ContextAuthority,
+    ContextCategory,
+    ContextSensitivity,
+    ContextSourceRef,
+    ContextState,
+    ProjectionItem,
+)
+
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # Declared schema version for club.db and the transcript log, read by the
 # migration registry in coworker.migrations. Reporting only: this module
 # does not stamp or check it.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TRANSCRIPT_VERSION = 1
+
+# context-projection-v1 (issue #58). A memory row is model context only after
+# the director classifies it as a person-independent operator preference.
+# Everything else waits for review and is withheld: a new ambiguous `remember`
+# write as "unclassified", and a row migrated from before the contract as
+# "legacy_unclassified", which coworker/migrations.py writes.
+MEMORY_CATEGORY_UNCLASSIFIED = "unclassified"
+MEMORY_CATEGORY_PREFERENCE = "operator_preference"
+MEMORY_NEEDS_REVIEW = "needs_review"
+MEMORY_CLASSIFIED = "classified"
+MEMORY_SENSITIVITY_STANDARD = "standard"
+
+# The columns that carry that contract. They are added to an existing database
+# without a default on purpose: the registry step in coworker/migrations.py is
+# what writes every existing row to legacy_unclassified/needs_review, with a
+# backup taken first. A default here would do that work silently on the first
+# open and leave the registered migration with nothing left to migrate.
+_MEMORY_CONTEXT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("category", "TEXT"),
+    ("classification_status", "TEXT"),
+    ("person_id", "TEXT"),
+    ("session_id", "TEXT"),
+    ("source_ref", "TEXT"),
+    ("updated_at", "TEXT"),
+    ("fresh_until", "TEXT"),
+    ("sensitivity", "TEXT"),
+    ("claim_key", "TEXT"),
+)
+
+_MEMORY_COLUMNS = "id, content, created_at, " + ", ".join(
+    column for column, _definition in _MEMORY_CONTEXT_COLUMNS
+)
+
+# Read from the approved policy rather than restated, so the adapter clips to
+# exactly the cap the projector enforces and the two cannot drift apart.
+_MEMORY_ITEM_TOKENS = next(
+    budget.max_item_tokens
+    for budget in DEFAULT_PROJECTION_POLICY.category_budgets
+    if budget.category is ContextCategory.OPERATOR_PREFERENCE
+)
+
+
+def projection_tokens(text: str) -> int:
+    """The versioned budget unit for context-projection-v1.
+
+    `ceil(len(utf-8 bytes) / 3)`: provider-independent and conservative. It is
+    an explicit budget unit, not a claim about any provider's billed tokens.
+    """
+    return -(-len(text.encode("utf-8")) // 3)
+
+
+def _memory_source_ref(memory_id: int) -> str:
+    return f"sourcecado:memory/{memory_id}"
+
+
+def _memory_source_ref_record(row: sqlite3.Row) -> ContextSourceRef:
+    return ContextSourceRef(
+        id=_memory_source_ref(row["id"]),
+        provider="sourcecado",
+        locator=f"memory/{row['id']}",
+        observed_at=row["created_at"],
+        modified_at=row["updated_at"],
+        fresh_until=row["fresh_until"],
+    )
+
+
+def _is_past(value: str | None, moment: datetime) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed <= moment
+
+
+def _memory_line(memory_id: int, excerpt: str, state: str) -> str:
+    return f"[#{memory_id}] {excerpt} ({_memory_source_ref(memory_id)}, {state})"
+
+
+def _clip_memory_line(row: sqlite3.Row, state: ContextState) -> tuple[str, bool]:
+    """Render one preference, clipped at a word boundary to the per-item cap.
+
+    The Source Reference and the evidence state are outside the clipped span,
+    so shortening an excerpt never cuts either in half.
+    """
+    line = _memory_line(row["id"], row["content"], state.value)
+    if projection_tokens(line) <= _MEMORY_ITEM_TOKENS:
+        return line, False
+    words = row["content"].split()
+    while words:
+        words.pop()
+        candidate = _memory_line(row["id"], " ".join(words) + "…", state.value)
+        if projection_tokens(candidate) <= _MEMORY_ITEM_TOKENS:
+            return candidate, True
+    return _memory_line(row["id"], "…", state.value), True
 _INTERRUPTED_APPROVAL_ERROR = (
     "Outcome is unknown after Sourcecado restarted. "
     "Verify the external resource before retrying."
@@ -116,7 +224,16 @@ class ConversationStore:
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                category TEXT NOT NULL DEFAULT 'unclassified',
+                classification_status TEXT NOT NULL DEFAULT 'needs_review',
+                person_id TEXT,
+                session_id TEXT,
+                source_ref TEXT,
+                updated_at TEXT,
+                fresh_until TEXT,
+                sensitivity TEXT NOT NULL DEFAULT 'standard',
+                claim_key TEXT
             );
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -196,6 +313,13 @@ class ConversationStore:
                 ON chat_queue(session_id, position);
             """
         )
+        for column, definition in _MEMORY_CONTEXT_COLUMNS:
+            try:
+                self._conn.execute(
+                    f"ALTER TABLE memories ADD COLUMN {column} {definition}"
+                )
+            except sqlite3.OperationalError:
+                pass
         try:
             self._conn.execute("ALTER TABLE jobs ADD COLUMN next_run_at TEXT")
         except sqlite3.OperationalError:
@@ -631,15 +755,52 @@ class ConversationStore:
             self._conn.commit()
         self.set_setting("open_session_id", sid)
 
-    def remember(self, content: str) -> dict[str, Any]:
+    def remember(
+        self,
+        content: str,
+        *,
+        person_id: str | None = None,
+        session_id: str | None = None,
+        sensitivity: str = MEMORY_SENSITIVITY_STANDARD,
+        fresh_until: str | None = None,
+    ) -> dict[str, Any]:
+        """Save a memory row. It is never model context until classified.
+
+        A write becomes a global operator preference only when the director
+        explicitly asks for one, which is `memory_classify`. Nothing here reads
+        the content to guess a category: a row saying "prefer short drafts" and
+        a row saying "Ada moved to Analytic" both land in the same waiting
+        state, because the words alone cannot tell them apart.
+        """
+        now = datetime.now(UTC).isoformat()
         with self._lock:
             cursor = self._conn.execute(
-                "INSERT INTO memories (content) VALUES (?)", (content,)
+                """
+                INSERT INTO memories
+                    (content, category, classification_status, person_id,
+                     session_id, updated_at, fresh_until, sensitivity)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    content,
+                    MEMORY_CATEGORY_UNCLASSIFIED,
+                    MEMORY_NEEDS_REVIEW,
+                    person_id,
+                    session_id,
+                    now,
+                    fresh_until,
+                    sensitivity,
+                ),
+            )
+            memory_id = cursor.lastrowid
+            self._conn.execute(
+                "UPDATE memories SET source_ref = ? WHERE id = ?",
+                (_memory_source_ref(memory_id), memory_id),
             )
             self._conn.commit()
             row = self._conn.execute(
-                "SELECT id, content, created_at FROM memories WHERE id = ?",
-                (cursor.lastrowid,),
+                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = ?",
+                (memory_id,),
             ).fetchone()
         item = dict(row)
         self._write_memory_md(item)
@@ -649,20 +810,40 @@ class ConversationStore:
     def list_memories(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, content, created_at FROM memories ORDER BY id"
+                f"SELECT {_MEMORY_COLUMNS} FROM memories ORDER BY id"
             ).fetchall()
         return [dict(row) for row in rows]
 
     def memory_update(self, memory_id: int, content: str) -> dict[str, Any] | None:
+        """Rewrite a memory's content, which sends it back for review.
+
+        Rewritten text is text the director has not classified. Keeping the old
+        classification would let a rewrite change model context without anyone
+        approving what it now says.
+        """
         with self._lock:
             cursor = self._conn.execute(
-                "UPDATE memories SET content = ? WHERE id = ?", (content, memory_id)
+                """
+                UPDATE memories SET
+                    content = ?,
+                    category = ?,
+                    classification_status = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    content,
+                    MEMORY_CATEGORY_UNCLASSIFIED,
+                    MEMORY_NEEDS_REVIEW,
+                    datetime.now(UTC).isoformat(),
+                    memory_id,
+                ),
             )
             self._conn.commit()
             if cursor.rowcount == 0:
                 return None
             row = self._conn.execute(
-                "SELECT id, content, created_at FROM memories WHERE id = ?",
+                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = ?",
                 (memory_id,),
             ).fetchone()
         if row is None:
@@ -671,6 +852,136 @@ class ConversationStore:
         self._write_memory_md(item)
         self._write_memory_index()
         return item
+
+    def memory_classify(
+        self, memory_id: int, *, claim_key: str | None = None
+    ) -> dict[str, Any] | None:
+        """Record the director's explicit decision that a row is a preference.
+
+        Refuses a row that carries a Person or session scope. A fact about one
+        Person belongs on that Person File through the existing Board contract,
+        and promoting it here is exactly the silent widening the migration
+        default exists to prevent.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["person_id"] or row["session_id"]:
+                raise ValueError(
+                    "a Person- or session-scoped memory cannot become a global "
+                    "operator preference; file it on the Person File instead"
+                )
+            self._conn.execute(
+                """
+                UPDATE memories SET
+                    category = ?,
+                    classification_status = ?,
+                    claim_key = ?,
+                    source_ref = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    MEMORY_CATEGORY_PREFERENCE,
+                    MEMORY_CLASSIFIED,
+                    claim_key,
+                    _memory_source_ref(memory_id),
+                    datetime.now(UTC).isoformat(),
+                    memory_id,
+                ),
+            )
+            self._conn.commit()
+            updated = self._conn.execute(
+                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+        return dict(updated)
+
+    def memory_backlog(self) -> dict[str, Any]:
+        """What the director still has to classify, and what is already live."""
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_MEMORY_COLUMNS} FROM memories ORDER BY id"
+            ).fetchall()
+        waiting = [
+            dict(row)
+            for row in rows
+            if (row["classification_status"] or MEMORY_NEEDS_REVIEW)
+            != MEMORY_CLASSIFIED
+        ]
+        return {
+            "needs_review": len(waiting),
+            "classified": len(rows) - len(waiting),
+            "items": waiting,
+        }
+
+    def memory_projection_items(
+        self, *, now: datetime | None = None
+    ) -> tuple[ProjectionItem, ...]:
+        """The classified operator preferences, as already-scoped projection items.
+
+        Eligibility is decided in SQL before any ranking: unclassified rows,
+        Person- or session-scoped rows, and restricted rows never leave this
+        method, so they cannot reach a prompt.
+        """
+        moment = now or datetime.now(UTC)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT {_MEMORY_COLUMNS} FROM memories
+                WHERE classification_status = ?
+                  AND category = ?
+                  AND person_id IS NULL
+                  AND session_id IS NULL
+                  AND COALESCE(sensitivity, ?) = ?
+                ORDER BY id
+                """,
+                (
+                    MEMORY_CLASSIFIED,
+                    MEMORY_CATEGORY_PREFERENCE,
+                    MEMORY_SENSITIVITY_STANDARD,
+                    MEMORY_SENSITIVITY_STANDARD,
+                ),
+            ).fetchall()
+        contested: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            if row["claim_key"]:
+                contested.setdefault(row["claim_key"], []).append(row)
+        items: list[ProjectionItem] = []
+        for row in rows:
+            group = contested.get(row["claim_key"] or "", [])
+            conflicting = len(group) > 1
+            if conflicting:
+                state = ContextState.CONFLICTING
+            elif _is_past(row["fresh_until"], moment):
+                state = ContextState.STALE
+            else:
+                state = ContextState.CURRENT
+            refs = tuple(
+                _memory_source_ref_record(member)
+                for member in (group if conflicting else [row])
+            )
+            text, truncated = _clip_memory_line(row, state)
+            items.append(
+                ProjectionItem(
+                    id=f"memory:{row['id']}",
+                    category=ContextCategory.OPERATOR_PREFERENCE,
+                    text=text,
+                    tokens=projection_tokens(text),
+                    state=state,
+                    authority=ContextAuthority.DIRECTOR,
+                    updated_at=row["updated_at"] or row["created_at"],
+                    source_refs=refs,
+                    claim_key=row["claim_key"],
+                    truncated=truncated,
+                    sensitivity=ContextSensitivity.STANDARD,
+                )
+            )
+        return tuple(items)
 
     def add_job(
         self,

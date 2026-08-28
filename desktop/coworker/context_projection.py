@@ -1,7 +1,10 @@
-"""Inactive proposal contract for bounded Sourcecado context projection.
+"""The approved contract for bounded Sourcecado context projection.
 
-The active prompt runtime does not import this module. Category rules and store
-adapters remain subject to Fisher's issue #58 approval.
+The active prompt runtime imports this module. `brief.py` builds the person-file
+section from it (#70), and `server.py` builds the saved-memory section from it
+under the `context-projection-v1` category rules Fisher approved on issue #58.
+A change to selection, bounding, or scope-mismatch behaviour here changes what
+the model sees on the next request.
 """
 
 from __future__ import annotations

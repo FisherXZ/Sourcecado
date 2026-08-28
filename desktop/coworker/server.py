@@ -55,6 +55,10 @@ from coworker.connectors.google_oauth import (
     merge_scopes,
     save_google,
 )
+from coworker.context_projection import (
+    ProjectionIdentity,
+    prepare_context_projection,
+)
 from coworker.diagnostic_bundle import (
     HEALTH_WINDOW_RUNS,
     BundleScanFailed,
@@ -118,7 +122,11 @@ from coworker.provider_retry import verified_provider_chain
 from coworker.run_ledger import RunLedger
 from coworker.run_ledger_api import run_ledger_router
 from coworker.secrets import SecretStore
-from coworker.store import ConversationStore, valid_session_id
+from coworker.store import (
+    MEMORY_CATEGORY_PREFERENCE,
+    ConversationStore,
+    valid_session_id,
+)
 from coworker.telemetry import (
     AgentTurnSpan,
     ErrorKind,
@@ -174,6 +182,35 @@ def _bounded_context(text: str, budget_chars: int) -> str:
     return text if len(text) <= budget_chars else text[:budget_chars]
 
 
+def _saved_memory_body(
+    store: ConversationStore,
+    *,
+    identity: ProjectionIdentity,
+    budget_chars: int,
+) -> str:
+    """The classified operator preferences, under context-projection-v1.
+
+    Two caps apply and the first one reached wins: the approved 256-token
+    operator-preference category budget, with no borrowing from another
+    category, and the existing character envelope for this section. Selection
+    is whole items in both cases, so a preference is never cut in half and its
+    Source Reference is never cut off (issue #58).
+    """
+    candidates = store.memory_projection_items()
+    if not candidates:
+        return ""
+    projection = prepare_context_projection(identity=identity, items=candidates)
+    lines: list[str] = []
+    used = 0
+    for item in projection.items:
+        extra = len(item.text) + (1 if lines else 0)
+        if used + extra > budget_chars:
+            break
+        lines.append(item.text)
+        used += extra
+    return "\n".join(lines)
+
+
 def system_prompt_assembly(
     store: ConversationStore,
     persona: Persona | None = None,
@@ -184,16 +221,26 @@ def system_prompt_assembly(
 ) -> AssembledSystemPrompt:
     definition = _runtime_prompt_definition(persona)
     dynamic: list[PromptSection] = []
-    items = store.list_memories()
-    if items:
-        memory = "\n".join(f"[#{item['id']}] {item['content']}" for item in items)
-        dynamic.append(
-            PromptSection(
-                "saved_memory",
-                "Saved memory",
-                _bounded_context(memory, 4_000),
-            )
-        )
+    bound_person_id: str | None = None
+    bound_person: dict[str, Any] | None = None
+    if people is not None and session_id:
+        bound_person_id = people.person_for_session(session_id)
+        if bound_person_id is not None:
+            bound_person = people.get(bound_person_id)
+    memory = _saved_memory_body(
+        store,
+        identity=ProjectionIdentity(
+            persona_id=persona.id if persona is not None else "sourcing",
+            session_id=session_id or "",
+            person_id=bound_person_id if bound_person is not None else None,
+            target=(bound_person or {}).get("target"),
+            prompt_version=definition.version,
+            effective_tools_hash="",
+        ),
+        budget_chars=definition.dynamic_budgets["saved_memory"],
+    )
+    if memory:
+        dynamic.append(PromptSection("saved_memory", "Saved memory", memory))
     if skills is not None:
         catalog = catalog_text(skills)
         if catalog:
@@ -204,23 +251,21 @@ def system_prompt_assembly(
                     _bounded_context(catalog, 3_000),
                 )
             )
-    if people is not None and session_id:
-        person_id = people.person_for_session(session_id)
-        if person_id is not None and people.get(person_id) is not None:
-            # The model reads the same bounded projection the person view
-            # renders. Assembling person facts here instead would be the
-            # second summary that silently drifts from the one a director
-            # reads (issue #70, criterion 6).
-            dynamic.append(
-                PromptSection(
-                    "person_file",
-                    "Person File context",
-                    prompt_context(
-                        person_brief(people, person_id, session_id=session_id),
-                        budget_chars=definition.dynamic_budgets["person_file"],
-                    ),
-                )
+    if people is not None and bound_person is not None and bound_person_id is not None:
+        # The model reads the same bounded projection the person view
+        # renders. Assembling person facts here instead would be the
+        # second summary that silently drifts from the one a director
+        # reads (issue #70, criterion 6).
+        dynamic.append(
+            PromptSection(
+                "person_file",
+                "Person File context",
+                prompt_context(
+                    person_brief(people, bound_person_id, session_id=session_id),
+                    budget_chars=definition.dynamic_budgets["person_file"],
+                ),
             )
+        )
     return assemble_system_prompt(
         definition=definition,
         dynamic_sections=tuple(dynamic),
@@ -1089,6 +1134,45 @@ def create_app(
     @app.get("/v1/skills")
     def skills():
         return {"skills": app.state.skills.catalog()}
+
+    @app.get("/v1/memory/classification")
+    def memory_classification():
+        """What the director still has to classify before it can be used again.
+
+        Migrating to context-projection-v1 withholds every memory row written
+        before the contract until it is classified, so this count is how a
+        director sees that Sourcecado has not lost anything -- it is waiting.
+        """
+        return app.state.store.memory_backlog()
+
+    @app.post("/v1/memory/{memory_id}/classification")
+    async def memory_classify(memory_id: int, request: Request):
+        payload = await request.json()
+        category = str(payload.get("category") or "").strip()
+        if category != MEMORY_CATEGORY_PREFERENCE:
+            return JSONResponse(
+                {
+                    "error": (
+                        "only a person-independent operator preference can be "
+                        "classified here"
+                    )
+                },
+                status_code=400,
+            )
+        claim_key = str(payload.get("claim_key") or "").strip() or None
+        try:
+            item = app.state.store.memory_classify(memory_id, claim_key=claim_key)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if item is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"memory": item}
+
+    @app.delete("/v1/memory/{memory_id}")
+    def memory_delete(memory_id: int):
+        if not app.state.store.memory_forget(memory_id):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"forgotten": True, "id": memory_id}
 
     @app.get("/v1/settings")
     def settings():

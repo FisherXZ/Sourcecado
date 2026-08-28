@@ -7,6 +7,7 @@ const DESTINATIONS = [
   { label: "Scheduled", hash: "#/scheduled" },
   { label: "Connections", hash: "#/connections" },
   { label: "Skills", hash: "#/skills" },
+  { label: "Memory", hash: "#/memory" },
   { label: "Settings", hash: "#/settings" },
 ];
 

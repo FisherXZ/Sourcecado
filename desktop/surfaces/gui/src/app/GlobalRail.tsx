@@ -49,6 +49,7 @@ type Props = {
   route: AppRoute;
   sessions: SessionRow[] | null;
   scheduledApprovalCount: number;
+  memoryReviewCount: number;
   onNewChat: () => void;
   onOpenSession: (session: SessionRow) => void;
   onPin: (session: SessionRow) => void;
@@ -57,7 +58,7 @@ type Props = {
   onClose: () => void;
 };
 
-export function GlobalRail({ open, route, sessions, scheduledApprovalCount, onNewChat, onOpenSession, onPin, onRename, onSearch, onClose }: Props) {
+export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memoryReviewCount, onNewChat, onOpenSession, onPin, onRename, onSearch, onClose }: Props) {
   const pinned = sessions?.filter((session) => session.pinned) || [];
   const recent = sessions?.filter((session) => !session.pinned) || [];
   const railRef = useRef<HTMLElement>(null);
@@ -132,6 +133,14 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, onNe
           </RailLink>
           <RailLink href="#/connections" current={route.kind === "connections"}>Connections</RailLink>
           <RailLink href="#/skills" current={route.kind === "skills"}>Skills</RailLink>
+          <RailLink
+            href="#/memory"
+            current={route.kind === "memory"}
+            badge={memoryReviewCount}
+            badgeLabel={`Saved memory: ${memoryReviewCount} waiting for review`}
+          >
+            Memory
+          </RailLink>
         </div>
         <div className="thread-groups">
           {pinned.length > 0 && (
@@ -265,11 +274,13 @@ function RailLink({
   current,
   children,
   badge = 0,
+  badgeLabel,
 }: {
   href: string;
   current: boolean;
   children: string;
   badge?: number;
+  badgeLabel?: string;
 }) {
   return (
     <a
@@ -282,7 +293,7 @@ function RailLink({
       {badge > 0 && (
         <span
           className="rail-inbox-badge"
-          aria-label={`Inbox: ${badge} waiting approval${badge === 1 ? "" : "s"}`}
+          aria-label={badgeLabel || `Inbox: ${badge} waiting approval${badge === 1 ? "" : "s"}`}
         >
           {badge}
         </span>
