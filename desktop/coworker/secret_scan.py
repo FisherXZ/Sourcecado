@@ -1,0 +1,476 @@
+"""Non-printing scan for a registered secret's absence from Sourcecado's local state.
+
+Built for GitHub issue #38: after a credential is revoked, this answers one
+question without ever risking the credential itself -- does the value still
+appear anywhere in the conversations, transcripts, events, and logs this
+machine keeps? It does not inspect the vault the credential came from; it
+looks everywhere else a copy-paste, a chat message, a logged error, or a
+pasted command summary could have carried it.
+
+Reuse, not reinvention. Matching runs on `coworker.bundle_redaction.scan_text`,
+the same matcher the diagnostic bundle export already refuses on. A second
+matcher would drift from the first, and the one that drifts is the one that
+misses a leak.
+
+Every durable store this build knows about comes from
+`coworker.migrations.REGISTRY`, so a store added later is scanned the next
+time this runs without anyone updating a hand-written list here. The vault
+stores -- `secrets`, `mcp_config`, `dotenv` -- are skipped on purpose:
+`coworker/migrations.py` marks each one `secret_bearing`, they exist to hold
+the *current* credential, and `secrets.json`'s own registry entry says it is
+"Never read into a report". After rotation that current value is the
+replacement, so a post-rotation scan reads a pre-rotation snapshot
+(`revoked_from` / `--revoked-from`) to learn the revoked value, and never
+opens the vault as a target.
+
+Doctor's own backups are scanned too. `<state>/backups/<id>/` holds a copy of
+whatever a repair touched, taken *before* the change, so a backup made before
+a credential was rotated still carries the old value -- a store that reads
+clean today can still have a pre-remediation copy sitting a few directories
+over. Each backup finding is reported under its own id
+(`backup:<backup_id>:<store_id>`), never folded into the live store's
+finding, because "the live store is clean but a backup is not" calls for a
+different action than "the live store still has it". The vault exclusion is
+re-checked independently for backup content: Doctor's backup writer never
+copies a secret-bearing store to begin with, but this does not trust that --
+it skips any `secret_bearing` store id by its own registry lookup, regardless
+of what a backup's manifest claims was copied.
+
+An incomplete scan is never clean. Path.glob and Path.rglob return [] on an
+unlistable directory without raising, so this lists the directory first and
+records the store as unreadable when that fails. A truncated SQLite file that
+cannot be walked is unreadable too. Clean is reserved for a complete read
+with no match; that result feeds the remediation receipt.
+
+Output discipline matches `coworker/doctor.py`: bounded, and never the
+matched value. A finding names a store id, a record or file identity -- a
+table and rowid, a transcript file and line number, a JSON document's path --
+and a count. Never the text that matched, never a window of characters
+around it, and never the search term itself.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from coworker import migrations
+from coworker.bundle_redaction import registered_secret_values, scan_text
+from coworker.migrations import StoreKind, open_readonly, state_root, store_path, store_present
+
+STATE_LABEL = "<state>"
+MAX_DETAIL_ROWS = 8
+MAX_REPORT_CHARS = 16000
+
+
+class NoRegisteredSecret(Exception):
+    """Nothing was found to search for. Never a reason to report 'clean'."""
+
+
+@dataclass(frozen=True)
+class StoreFinding:
+    """One store where the value showed up. Never the value; never a snippet."""
+
+    store_id: str
+    count: int
+    detail: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"store_id": self.store_id, "count": self.count, "detail": list(self.detail)}
+
+
+@dataclass(frozen=True)
+class ScanReport:
+    generated_at: str
+    secret_key: str | None
+    needle_count: int
+    stores_scanned: tuple[str, ...]
+    backups_scanned: tuple[str, ...]
+    findings: tuple[StoreFinding, ...]
+    unreadable: tuple[str, ...] = ()
+
+    @property
+    def clean(self) -> bool:
+        # Unreadable stores are not a proof of absence.
+        return not self.findings and not self.unreadable
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "generated_at": self.generated_at,
+            "state_root": STATE_LABEL,
+            "secret_key": self.secret_key,
+            "values_searched": self.needle_count,
+            "stores_scanned": list(self.stores_scanned),
+            "backups_scanned": list(self.backups_scanned),
+            "clean": self.clean,
+            "findings": [item.to_dict() for item in self.findings],
+            "unreadable": list(self.unreadable),
+        }
+
+    def render(self) -> str:
+        return _render(self)
+
+
+# --- reading the registered-secret store ----------------------------------
+
+
+def _load_needles(
+    root: Path, secret_key: str | None, revoked_from: Path | None = None
+) -> frozenset[str]:
+    """Every value worth searching for, read from a vault-shaped JSON file.
+
+    An owner names a key, such as `apollo`, never the value itself -- so the
+    value is never typed into a shell, never lands in a history file, and
+    never has to be pasted into a ticket. Omitting the key searches for every
+    value the file currently holds.
+
+    After rotation the live vault holds the replacement. Passing `revoked_from`
+    reads a pre-rotation snapshot instead, so the scan searches the revoked
+    value rather than the new one. The live vault is not a fallback: if the
+    snapshot is missing or has no matching key, there is nothing to search.
+    """
+    if revoked_from is not None:
+        path = Path(revoked_from).expanduser()
+    else:
+        spec = migrations.spec_for("secrets")
+        if not store_present(root, spec):
+            return frozenset()
+        path = store_path(root, spec)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    if not isinstance(payload, dict):
+        return frozenset()
+    if secret_key is not None:
+        if secret_key not in payload:
+            return frozenset()
+        payload = {secret_key: payload[secret_key]}
+    return registered_secret_values(payload)
+
+
+# --- per-store scanning ----------------------------------------------------
+
+
+def _bounded(identities: list[str]) -> tuple[str, ...]:
+    if len(identities) <= MAX_DETAIL_ROWS:
+        return tuple(identities)
+    kept = identities[: MAX_DETAIL_ROWS - 1]
+    kept.append(f"and {len(identities) - (MAX_DETAIL_ROWS - 1)} more")
+    return tuple(kept)
+
+
+def _relative(path: Path, root: Path) -> str:
+    try:
+        return f"{STATE_LABEL}/{path.relative_to(root)}"
+    except ValueError:
+        return STATE_LABEL
+
+
+def _matched(
+    text: str, needles: frozenset[str], *, home: Path, root: Path, location: str
+) -> bool:
+    matches = scan_text(text, registered=needles, home=home, state_root=root, location=location)
+    return any(match.category == "registered_secret" for match in matches)
+
+
+def _scan_sqlite(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str]:
+    identities: list[str] = []
+    conn = open_readonly(path)
+    try:
+        for table in sorted(migrations.table_names(conn)):
+            try:
+                rows = conn.execute(f'SELECT rowid AS "_rowid", * FROM "{table}"')
+            except sqlite3.DatabaseError:
+                continue
+            for row in rows:
+                for key in row.keys():
+                    if key == "_rowid":
+                        continue
+                    value = row[key]
+                    if value is None:
+                        continue
+                    location = f"{table}.{key}"
+                    if _matched(str(value), needles, home=home, root=root, location=location):
+                        identities.append(f"{table}.{key} rowid {row['_rowid']}")
+    finally:
+        conn.close()
+    return identities
+
+
+def _list_store_files(path: Path, pattern: str | None = None) -> list[Path] | None:
+    """List files in a store directory, or None if the directory cannot be listed.
+
+    Path.glob and Path.rglob return [] on an unlistable directory without
+    raising, which would look like a successful empty scan.
+    """
+    try:
+        os.listdir(path)
+    except OSError:
+        return None
+    if pattern is None:
+        return sorted(file for file in path.rglob("*") if file.is_file())
+    return sorted(path.glob(pattern))
+
+
+def _scan_jsonl_file(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str]:
+    identities: list[str] = []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    relative = _relative(path, root)
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        if _matched(line, needles, home=home, root=root, location=f"{relative}:{number}"):
+            identities.append(f"{relative} line {number}")
+    return identities
+
+
+def _scan_one_file(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str]:
+    """A JSON document or an opaque file that is not secret-bearing: one blob of text."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    relative = _relative(path, root)
+    if _matched(text, needles, home=home, root=root, location=relative):
+        return [relative]
+    return []
+
+
+def _scan_directory(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str] | None:
+    files = _list_store_files(path)
+    if files is None:
+        return None
+    identities: list[str] = []
+    for file in files:
+        text = file.read_text(encoding="utf-8", errors="replace")
+        relative = _relative(file, root)
+        if _matched(text, needles, home=home, root=root, location=relative):
+            identities.append(relative)
+    return identities
+
+
+def _scan_path(
+    kind: StoreKind, path: Path, root: Path, needles: frozenset[str], home: Path
+) -> list[str] | None:
+    """Dispatch by kind only. Works the same for a live store or a backup copy
+    of one, since a backup is a byte-for-byte copy in the same layout.
+
+    None means the path could not be read; distinct from a clean empty list.
+    """
+    try:
+        if kind is StoreKind.SQLITE:
+            return _scan_sqlite(path, root, needles, home)
+        if kind is StoreKind.JSONL_DIR:
+            files = _list_store_files(path, "*.jsonl")
+            if files is None:
+                return None
+            identities: list[str] = []
+            for file in files:
+                identities.extend(_scan_jsonl_file(file, root, needles, home))
+            return identities
+        if kind is StoreKind.JSONL_LOG:
+            return _scan_jsonl_file(path, root, needles, home) if path.is_file() else []
+        if kind in (StoreKind.JSON_DOCUMENT, StoreKind.OPAQUE_FILE):
+            return _scan_one_file(path, root, needles, home)
+        if kind is StoreKind.DIRECTORY:
+            return _scan_directory(path, root, needles, home)
+    except (OSError, sqlite3.Error, UnicodeError):
+        return None
+    return []  # pragma: no cover - every current StoreKind is handled above
+
+
+def _scan_store(spec: migrations.StoreSpec, root: Path, needles: frozenset[str], home: Path) -> list[str] | None:
+    return _scan_path(spec.kind, store_path(root, spec), root, needles, home)
+
+
+# --- backup scanning ---------------------------------------------------------
+
+
+def _scan_backups(
+    root: Path, needles: frozenset[str], home: Path
+) -> tuple[list[StoreFinding], list[str], list[str]]:
+    """Scan every store a Doctor backup actually copied.
+
+    A backup is taken *before* a repair changes a store, so a backup made
+    before a credential was rotated can still hold the old value even once
+    every live store is clean. `migrations.list_backups` is the same reader
+    Doctor's own `backups` command uses, so this sees exactly what an
+    operator would see listed.
+
+    The vault exclusion is re-checked here independently of the backup
+    writer: Doctor never copies a `secret_bearing` store's content and always
+    records `content_backed_up: false` for it, but this does not trust a
+    manifest's word for that -- it looks the store id up in the registry and
+    skips it if `secret_bearing` is set, regardless of what the manifest claims.
+    """
+    findings: list[StoreFinding] = []
+    backups_scanned: list[str] = []
+    unreadable: list[str] = []
+    for manifest in migrations.list_backups(root):
+        backup_id = str(manifest.get("backup_id") or "")
+        if not backup_id:
+            continue
+        backup_dir = root / migrations.BACKUPS_DIR_NAME / backup_id
+        backups_scanned.append(backup_id)
+        for entry in manifest.get("entries") or []:
+            if not entry.get("content_backed_up"):
+                continue
+            try:
+                spec = migrations.spec_for(str(entry.get("store_id")))
+            except KeyError:
+                continue
+            if spec.secret_bearing or not store_present(backup_dir, spec):
+                continue
+            label = f"backup:{backup_id}:{spec.store_id}"
+            identities = _scan_path(spec.kind, store_path(backup_dir, spec), root, needles, home)
+            if identities is None:
+                unreadable.append(label)
+            elif identities:
+                findings.append(StoreFinding(label, len(identities), _bounded(identities)))
+    return findings, backups_scanned, unreadable
+
+
+# --- the scan ---------------------------------------------------------------
+
+
+def scan_state(
+    root: str | Path,
+    *,
+    secret_key: str | None = None,
+    home: Path | None = None,
+    revoked_from: str | Path | None = None,
+) -> ScanReport:
+    """Scan every durable, non-vault store for a registered secret's value.
+
+    Raises `NoRegisteredSecret` when there is nothing to search for -- an
+    unknown key, or an empty vault -- so a scan can never report "clean" for
+    a search it never actually ran.
+
+    `revoked_from` is a vault-shaped JSON snapshot taken before rotation. When
+    it is set, needles come from that file, not from the live vault, because
+    the live vault holds the replacement and searching it cannot answer
+    whether the revoked value is gone.
+    """
+    root = Path(root).expanduser()
+    home = home if home is not None else Path.home()
+    snapshot = Path(revoked_from).expanduser() if revoked_from is not None else None
+    needles = _load_needles(root, secret_key, snapshot)
+    if not needles:
+        raise NoRegisteredSecret(
+            f"no registered secret found under key {secret_key!r}"
+            if secret_key is not None
+            else "no registered secret values found to search for"
+        )
+
+    stores_scanned: list[str] = []
+    findings: list[StoreFinding] = []
+    unreadable: list[str] = []
+    for spec in migrations.REGISTRY:
+        if spec.secret_bearing or not store_present(root, spec):
+            continue
+        stores_scanned.append(spec.store_id)
+        identities = _scan_store(spec, root, needles, home)
+        if identities is None:
+            unreadable.append(spec.store_id)
+        elif identities:
+            findings.append(StoreFinding(spec.store_id, len(identities), _bounded(identities)))
+
+    backup_findings, backups_scanned, backup_unreadable = _scan_backups(root, needles, home)
+    findings.extend(backup_findings)
+    unreadable.extend(backup_unreadable)
+
+    return ScanReport(
+        generated_at=datetime.now(UTC).isoformat(),
+        secret_key=secret_key,
+        needle_count=len(needles),
+        stores_scanned=tuple(stores_scanned),
+        backups_scanned=tuple(backups_scanned),
+        findings=tuple(findings),
+        unreadable=tuple(unreadable),
+    )
+
+
+# --- rendering ---------------------------------------------------------------
+
+
+def _render(report: ScanReport) -> str:
+    lines = ["Sourcecado secret scan", f"state directory {STATE_LABEL}", ""]
+    lines.append(f"secret key       {report.secret_key or '(all registered)'}")
+    lines.append(f"values searched  {report.needle_count}")
+    lines.append(f"stores scanned   {len(report.stores_scanned)}")
+    lines.append(f"backups scanned  {len(report.backups_scanned)}")
+    if report.unreadable:
+        lines.append(f"unreadable       {', '.join(report.unreadable)}")
+    lines.append("")
+    if report.findings:
+        lines.append("result           MATCH FOUND -- value present in current state")
+        for item in report.findings:
+            lines.append(f"  {item.store_id:<24} {item.count} match(es)")
+            for entry in item.detail:
+                lines.append(f"      - {entry}")
+    elif report.unreadable:
+        lines.append("result           incomplete -- some stores could not be read")
+    else:
+        lines.append("result           clean -- no match found")
+    rendered = "\n".join(lines) + "\n"
+    if len(rendered) > MAX_REPORT_CHARS:
+        rendered = rendered[: MAX_REPORT_CHARS - 32].rstrip() + "\n... output truncated\n"
+    return rendered
+
+
+# --- command line -------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m coworker.secret_scan",
+        description=(
+            "Confirm a registered secret's absence from Sourcecado's local "
+            "conversations, transcripts, events, and logs. Never prints the "
+            "value; reports store, location, and count only."
+        ),
+    )
+    parser.add_argument(
+        "--secret-key",
+        help="key in the registered-secret store to search for, e.g. apollo; "
+        "omit to search for every registered value",
+    )
+    parser.add_argument(
+        "--revoked-from",
+        help="vault-shaped JSON snapshot taken before rotation; after "
+        "rotation, pass this so the scan searches the revoked value rather "
+        "than the replacement now in the live vault",
+    )
+    parser.add_argument("--state", help="state directory (defaults to CLUB_STATE_DIR)")
+    parser.add_argument("--json", action="store_true", help="emit the report as JSON")
+    args = parser.parse_args(argv)
+    root = Path(args.state).expanduser() if args.state else state_root()
+
+    try:
+        report = scan_state(
+            root, secret_key=args.secret_key, revoked_from=args.revoked_from
+        )
+    except NoRegisteredSecret as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except Exception:
+        # A scan that crashes must not let a traceback carry a fragment of
+        # what it was looking for. Diagnosing the cause is not this tool's job.
+        print("secret scan failed; nothing was reported", file=sys.stderr)
+        return 2
+
+    print(json.dumps(report.to_dict(), indent=2) if args.json else report.render(), end="")
+    if report.findings:
+        return 1
+    if report.unreadable:
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

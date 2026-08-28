@@ -2,7 +2,7 @@ PYTHON ?= python3
 VENV := desktop/.venv
 GUI := desktop/surfaces/gui
 
-.PHONY: setup sidecar gui native test test-python test-gui eval eval-sourcing build doctor doctor-repair build-sidecar smoke-test test-update update-status update-rollback update-manifest update-verify
+.PHONY: setup sidecar gui native test test-python test-gui eval eval-sourcing build doctor doctor-repair secret-scan build-sidecar smoke-test test-update update-status update-rollback update-manifest update-verify
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -37,6 +37,14 @@ doctor:
 
 doctor-repair:
 	cd desktop && .venv/bin/python -m coworker.doctor repair
+
+# Confirms a registered secret's absence from local state without ever
+# printing it. Pass KEY=<name> to scan for one value. After rotation, pass
+# REVOKED_FROM=<pre-rotation-secrets.json> so the scan searches the revoked
+# value rather than the replacement now in the live vault, e.g.
+# `make secret-scan KEY=apollo REVOKED_FROM=./pre-rotation-secrets.json`.
+secret-scan:
+	cd desktop && .venv/bin/python -m coworker.secret_scan $(if $(KEY),--secret-key $(KEY),) $(if $(REVOKED_FROM),--revoked-from $(REVOKED_FROM),)
 
 build:
 	npm --prefix $(GUI) run build

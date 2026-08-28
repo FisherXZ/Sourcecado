@@ -76,8 +76,16 @@ export function ThreadView({
     aui.composer.setText(draft);
     onDraftChange(draft);
   };
+  // Built here on purpose: this is the thread's composer. A component
+  // rendered under a message sees the edit composer instead, so it cannot
+  // start a turn without this.
+  const sendMessage = (text: string) => {
+    aui.composer.setText(text);
+    void aui.composer.send();
+    onDraftChange("");
+  };
   return (
-    <ComposerDraftProvider populate={populateComposer}>
+    <ComposerDraftProvider populate={populateComposer} send={sendMessage}>
     <div className="sourcecado-chat-workspace">
     <ThreadPrimitive.Root className="sourcecado-thread">
       <ThreadHeader

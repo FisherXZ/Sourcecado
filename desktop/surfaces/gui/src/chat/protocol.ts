@@ -117,6 +117,7 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly name: string;
         readonly arguments: Readonly<Record<string, unknown>>;
         readonly started_at?: string;
+        readonly run_budget?: RunBudgetStatus;
       }
     | {
         readonly type: "tool_finished";
@@ -157,6 +158,7 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly state: "complete" | "partial" | "stopped" | "interrupted";
         readonly message?: string;
         readonly compaction?: CompactionNotice;
+        readonly run_budget?: RunBudgetStatus;
       }
     | {
         readonly type: "error";
@@ -228,6 +230,222 @@ export function compactionNoticeText(value: unknown): string {
     );
   }
   parts.push("The full conversation is still saved on this machine.");
+  return parts.join(" ");
+}
+
+/**
+ * What the operator is told about a run's budget: counts and outcomes, never
+ * prose from the sidecar.
+ *
+ * Same discipline as `CompactionNotice`. Fields are copied one at a time and
+ * every sentence below is written here, so a sidecar that starts sending a
+ * reassuring message cannot get it rendered as Sourcecado's own account of
+ * what happened.
+ */
+export type RunBudgetName =
+  | "model_turns"
+  | "tool_calls"
+  | "elapsed_seconds"
+  | "input_tokens"
+  | "output_tokens"
+  | "estimated_cost_usd";
+
+export type RunBudgetMeasurements = Readonly<Record<RunBudgetName, number>>;
+
+export type RunBudgetWarning = {
+  readonly budget: RunBudgetName;
+  readonly used: number;
+  readonly limit: number;
+  readonly used_ratio: number;
+};
+
+export type RunBudgetReceipt = {
+  readonly id: string;
+  readonly name: string;
+  readonly ok: boolean;
+};
+
+export type RunBudgetStatus = {
+  readonly state: "running" | "warning" | "exhausted" | "finished";
+  /** A budget name, or "loop" when the run was stopped for repeating itself. */
+  readonly stopped_by: RunBudgetName | "loop" | null;
+  readonly exhausted: readonly RunBudgetName[];
+  readonly repeats: number;
+  readonly consumed: RunBudgetMeasurements;
+  readonly limits: RunBudgetMeasurements;
+  readonly warning: RunBudgetWarning | null;
+  readonly completed: readonly RunBudgetReceipt[];
+  readonly remaining: {
+    readonly requested_tools: readonly { readonly id: string; readonly name: string }[];
+    /** False whenever the run ended without the model closing it. */
+    readonly final_answer: boolean;
+  };
+  readonly unpriced_requests: number;
+  readonly unmeasured_requests: number;
+  readonly continue_available: boolean;
+};
+
+const RUN_BUDGET_NAMES: readonly RunBudgetName[] = [
+  "model_turns",
+  "tool_calls",
+  "elapsed_seconds",
+  "input_tokens",
+  "output_tokens",
+  "estimated_cost_usd",
+];
+
+const RUN_BUDGET_LABELS: Readonly<Record<RunBudgetName, string>> = {
+  model_turns: "model turns",
+  tool_calls: "tool calls",
+  elapsed_seconds: "time",
+  input_tokens: "input tokens",
+  output_tokens: "output tokens",
+  estimated_cost_usd: "estimated cost",
+};
+
+/** The text Sourcecado shows the operator when the composer offers to go on. */
+export const CONTINUE_RUN_PROMPT = "Continue this run from where it stopped.";
+
+function budgetName(value: unknown): RunBudgetName | null {
+  return RUN_BUDGET_NAMES.includes(value as RunBudgetName)
+    ? (value as RunBudgetName)
+    : null;
+}
+
+function measurements(value: unknown): RunBudgetMeasurements {
+  const source = isRecord(value) ? value : {};
+  const out = {} as Record<RunBudgetName, number>;
+  for (const name of RUN_BUDGET_NAMES) out[name] = countOf(source[name]);
+  return out;
+}
+
+function budgetWarning(value: unknown): RunBudgetWarning | null {
+  if (!isRecord(value)) return null;
+  const budget = budgetName(value.budget);
+  if (!budget) return null;
+  return {
+    budget,
+    used: countOf(value.used),
+    limit: countOf(value.limit),
+    used_ratio: countOf(value.used_ratio),
+  };
+}
+
+function budgetReceipts(value: unknown): RunBudgetReceipt[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) =>
+    isRecord(entry) &&
+    typeof entry.id === "string" &&
+    typeof entry.name === "string"
+      ? [{ id: entry.id, name: entry.name, ok: entry.ok === true }]
+      : [],
+  );
+}
+
+export function runBudgetStatus(value: unknown): RunBudgetStatus | undefined {
+  if (!isRecord(value)) return undefined;
+  const state = ["running", "warning", "exhausted", "finished"].includes(
+    String(value.state),
+  )
+    ? (value.state as RunBudgetStatus["state"])
+    : "running";
+  const remaining = isRecord(value.remaining) ? value.remaining : {};
+  const requested = Array.isArray(remaining.requested_tools)
+    ? remaining.requested_tools
+    : [];
+  return {
+    state,
+    stopped_by:
+      value.stopped_by === "loop" ? "loop" : budgetName(value.stopped_by),
+    exhausted: Array.isArray(value.exhausted)
+      ? value.exhausted.flatMap((entry) => {
+          const name = budgetName(entry);
+          return name ? [name] : [];
+        })
+      : [],
+    repeats: countOf(value.repeats),
+    consumed: measurements(value.consumed),
+    limits: measurements(value.limits),
+    warning: budgetWarning(value.warning),
+    completed: budgetReceipts(value.completed),
+    remaining: {
+      requested_tools: requested.flatMap((entry: unknown) =>
+        isRecord(entry) &&
+        typeof entry.id === "string" &&
+        typeof entry.name === "string"
+          ? [{ id: entry.id, name: entry.name }]
+          : [],
+      ),
+      // Absent means "we were not told the run closed", which is the safe
+      // reading: unfinished until the sidecar says otherwise.
+      final_answer: remaining.final_answer === true,
+    },
+    unpriced_requests: countOf(value.unpriced_requests),
+    unmeasured_requests: countOf(value.unmeasured_requests),
+    continue_available: value.continue_available === true,
+  };
+}
+
+function runBudgetLabel(name: RunBudgetName): string {
+  return RUN_BUDGET_LABELS[name];
+}
+
+/** One plain sentence, before the stop, naming the budget that is running out. */
+export function runBudgetWarningText(warning: RunBudgetWarning): string {
+  const percent = Math.min(100, Math.round(warning.used_ratio * 100));
+  return (
+    `This run has used ${percent}% of its ${runBudgetLabel(warning.budget)} ` +
+    "budget. It will stop and ask before going further."
+  );
+}
+
+/**
+ * What a stopped run says about itself. It never reads as a conclusion: the
+ * first sentence says the run did not finish, and the rest is what it did.
+ */
+export function runBudgetStopText(status: RunBudgetStatus): string {
+  const parts: string[] = [];
+  if (status.stopped_by === "loop") {
+    parts.push(
+      `Sourcecado stopped this run after ${status.repeats} tool calls in a ` +
+        "row that returned nothing new. It was repeating itself, not making " +
+        "progress, so it did not finish.",
+    );
+  } else {
+    const names = status.exhausted.length
+      ? status.exhausted.map(runBudgetLabel).join(" and ")
+      : "run";
+    parts.push(
+      `Sourcecado stopped this run at its ${names} budget. It did not finish.`,
+    );
+  }
+  const ran = status.completed.length;
+  const failed = status.completed.filter((receipt) => !receipt.ok).length;
+  parts.push(
+    ran === 1
+      ? "1 tool step completed."
+      : `${ran} tool steps completed.`,
+  );
+  if (failed > 0) {
+    parts.push(`${failed} of them failed.`);
+  }
+  const queued = status.remaining.requested_tools.length;
+  if (queued > 0) {
+    parts.push(
+      queued === 1
+        ? "1 more was queued and never ran."
+        : `${queued} more were queued and never ran.`,
+    );
+  }
+  if (!status.remaining.final_answer) {
+    parts.push("No final answer was written, so anything above is partial.");
+  }
+  if (status.unpriced_requests > 0) {
+    parts.push(
+      `The cost figure does not cover ${status.unpriced_requests} of this ` +
+        "run's model requests, because the provider reported no price for them.",
+    );
+  }
   return parts.join(" ");
 }
 
@@ -528,6 +746,21 @@ export function parseChatEvent(value: unknown): ChatEvent {
           delay_ms: value.delay_ms as number,
           message: value.message as string,
         };
+      }
+      if (
+        (value.type === "turn_end" || value.type === "tool_started") &&
+        "run_budget" in value
+      ) {
+        const budget = runBudgetStatus(value.run_budget);
+        const sanitized: Record<string, unknown> = { ...value };
+        delete sanitized.run_budget;
+        if (budget) sanitized.run_budget = budget;
+        if (value.type === "turn_end" && "compaction" in sanitized) {
+          const notice = compactionNotice(sanitized.compaction);
+          delete sanitized.compaction;
+          if (notice) sanitized.compaction = notice;
+        }
+        return sanitized as ProtocolChatEvent;
       }
       if (value.type === "turn_end" && "compaction" in value) {
         const notice = compactionNotice(value.compaction);
