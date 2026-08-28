@@ -24,6 +24,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from coworker.agent_run_approval import (
+    EFFECT_SCHEMA,
+    AgentRunEffectFenced,
+    EffectStatus,
+    bounded_actor,
+    bounded_note,
+    effect_fingerprint,
+    operator_decision,
+    replay_class,
+)
 from coworker.agent_run_owner import Liveness, OwnerRegistry, RunOwner
 from coworker.agent_run_state import (
     is_leasable,
@@ -48,7 +58,10 @@ from coworker.agent_runs import (
     project_terminal_result,
 )
 
-SCHEMA_VERSION = 1
+# 2 adds `agent_run_effects`: the external-effect fence. The table is created
+# by the same idempotent script that creates the run tables, so a version 1
+# store gains it on open and nothing has to be migrated.
+SCHEMA_VERSION = 2
 DB_NAME = "agent_runs.db"
 # Long enough for a slow provider call, short enough that crashed work is not
 # stranded for an operator's whole afternoon.
@@ -88,6 +101,17 @@ class CheckpointCommit:
     run: dict[str, Any]
     checkpoint: dict[str, Any]
     # None once the run parked or finished: nobody holds authority over it.
+    lease: AgentRunLease | None
+
+
+@dataclass(frozen=True)
+class EffectCommit:
+    """One external-effect write: run row, checkpoint, and effect row together."""
+
+    run: dict[str, Any]
+    checkpoint: dict[str, Any]
+    effect: dict[str, Any]
+    # None once the quarantine parked the run: nobody holds authority over it.
     lease: AgentRunLease | None
 
 
@@ -425,6 +449,383 @@ class AgentRunRepository:
             ),
         )
 
+    # --- approval fencing ------------------------------------------------
+
+    def resume_from_approval(
+        self,
+        run_id: str,
+        owner: RunOwner,
+        *,
+        approval_id: str,
+        decision: str,
+        lease_seconds: int | float = DEFAULT_LEASE_SECONDS,
+        now: datetime | None = None,
+    ) -> CheckpointCommit | None:
+        """Give a parked run back to a process, against a named resolution.
+
+        `acquire_lease` refuses waiting states on purpose: a parked run belongs
+        to a person, and a process that wants it back has to say which decision
+        released it. This is that door and it is deliberately narrow.
+
+        The lease and the move to `running` commit together. A run must never
+        rest in a waiting state while holding a lease -- waiting states hold no
+        lease, and Doctor reports the pair as a record contradicting itself.
+
+        A run parked in `waiting_external` is not opened here at all. Its effect
+        is quarantined, and an approval decision says nothing about whether a
+        send already went out. Only `resolve_quarantined_effect` settles that.
+        """
+        if decision not in {"allow", "deny"}:
+            raise ValueError(f"an approval resolves to allow or deny, not {decision!r}")
+        named = _bounded_id(approval_id, "approval_id")
+        seconds = _lease_seconds(lease_seconds)
+        stamp = _stamp(now)
+        expires_at = _stamp(_parse(stamp) + timedelta(seconds=seconds))
+        with self._write():
+            row = self._row(run_id)
+            if row is None:
+                raise KeyError(run_id)
+            state = str(row["current_state"])
+            if state == "waiting_external":
+                raise AgentRunEffectFenced(
+                    f"run {run_id} is parked on an external effect whose outcome "
+                    "is unknown; an approval decision does not settle that"
+                )
+            if not is_waiting(state):
+                return None
+            if named not in json_list(row["approval_ids"]):
+                raise ValueError(f"run {run_id} never raised approval {named!r}")
+            version = int(row["version"])
+            sequence = int(row["checkpoint_sequence"]) + 1
+            validate_transition("approval_resolved", state, "running")
+            changed = self._conn.execute(
+                """
+                UPDATE agent_runs SET
+                    current_state = 'running', checkpoint_sequence = ?,
+                    version = version + 1, updated_at = ?,
+                    lease_owner = ?, lease_owner_host = ?, lease_owner_pid = ?,
+                    lease_expires_at = ?
+                WHERE run_id = ? AND version = ? AND lease_owner IS NULL
+                """,
+                (
+                    sequence,
+                    stamp,
+                    owner.owner_id,
+                    owner.host,
+                    int(owner.pid),
+                    expires_at,
+                    str(run_id),
+                    version,
+                ),
+            ).rowcount
+            if changed != 1:
+                return None
+            checkpoint = self._append_checkpoint(
+                str(run_id),
+                sequence,
+                "approval_resolved",
+                "running",
+                {"approval_id": named, "status": decision},
+                stamp,
+            )
+            run = _run_row(self._row(run_id))
+        return CheckpointCommit(
+            run=run,
+            checkpoint=checkpoint,
+            lease=AgentRunLease(str(run_id), owner.owner_id, version + 1, expires_at),
+        )
+
+    # --- external effects ------------------------------------------------
+    #
+    # Three writes with one shape: compare-and-swap the run row against the
+    # lease, append the checkpoint, and move the effect row, all in one
+    # transaction. The run store is the fence of record for external effects
+    # precisely because these three facts commit together or not at all.
+    #
+    # The ordering that makes the window recoverable is the caller's job and is
+    # not negotiable: `dispatch_effect` commits *before* the external call, and
+    # `record_effect_outcome` commits *after* it. A process that dies before the
+    # dispatch commit made no call. A process that dies after it may or may not
+    # have, and that is exactly what `quarantine_effect` records.
+
+    def dispatch_effect(
+        self,
+        lease: AgentRunLease,
+        *,
+        tool_name: str,
+        arguments: Any = None,
+        effect_id: str | None = None,
+        tool_call_id: str | None = None,
+        approval_id: str | None = None,
+        step: int | None = None,
+        now: datetime | None = None,
+    ) -> EffectCommit:
+        """Record that an external effect is about to be attempted, before it is.
+
+        The arguments are fingerprinted, never stored. A recipient, a subject,
+        and a body belong to the transcript and the approval record; what this
+        store needs is only whether a call it is about to make is the call it
+        already dispatched.
+        """
+        identity = _bounded_id(effect_id or f"effect-{uuid.uuid4().hex}", "effect_id")
+        name = _bounded_id(tool_name, "tool_name")
+        stamp = _stamp(now)
+        payload = {
+            "attempt_id": identity,
+            "tool_name": name,
+            "tool_call_id": tool_call_id,
+            "approval_id": approval_id,
+            "step": step,
+            "status": str(EffectStatus.DISPATCHED),
+        }
+        with self._write():
+            row = self._effect_checkpoint(
+                lease, "tool_pending", "running", payload, stamp, release=False
+            )
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO agent_run_effects (
+                        effect_id, run_id, tool_name, tool_call_id, approval_id,
+                        replay_class, arguments_fingerprint, status,
+                        dispatched_by, dispatched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        identity,
+                        lease.run_id,
+                        name,
+                        _optional_id(tool_call_id),
+                        _optional_id(approval_id),
+                        str(replay_class(name)),
+                        effect_fingerprint(name, arguments),
+                        str(EffectStatus.DISPATCHED),
+                        lease.owner_id,
+                        stamp,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise AgentRunEffectFenced(
+                    f"effect {identity} is already on record"
+                ) from exc
+            effect = self._effect_row(identity)
+        return EffectCommit(
+            run=row["run"],
+            checkpoint=row["checkpoint"],
+            effect=effect,
+            lease=row["lease"],
+        )
+
+    def record_effect_outcome(
+        self,
+        lease: AgentRunLease,
+        effect_id: str,
+        *,
+        ok: bool,
+        outcome_ref: str | None = None,
+        error_class: str | None = None,
+        error_summary: str | None = None,
+        duration_ms: int | None = None,
+        now: datetime | None = None,
+    ) -> EffectCommit:
+        """Close the window. Only the process that dispatched may say what happened.
+
+        The owner check is not politeness. A second owner did not make the call,
+        so it has nothing to report, and letting it write an outcome is how an
+        unknown quietly becomes a certainty.
+        """
+        status = EffectStatus.SUCCEEDED if ok else EffectStatus.FAILED
+        stamp = _stamp(now)
+        payload = {
+            "attempt_id": str(effect_id),
+            "status": str(status),
+            "error_class": error_class,
+            "error_summary": error_summary,
+            "duration_ms": duration_ms,
+        }
+        with self._write():
+            # The effect fence is checked before the run's own state machine so
+            # that "this effect is already quarantined" is what the caller hears,
+            # whatever shape the run happens to be in. Both layers refuse; this
+            # one has the answer an operator needs.
+            existing = self._require_dispatched(
+                effect_id, lease.run_id, owner_id=lease.owner_id
+            )
+            payload["tool_name"] = existing["tool_name"]
+            row = self._effect_checkpoint(
+                lease, "tool_completed", "running", payload, stamp, release=False
+            )
+            changed = self._conn.execute(
+                """
+                UPDATE agent_run_effects SET
+                    status = ?, settled_at = ?, outcome_ref = COALESCE(?, outcome_ref)
+                WHERE effect_id = ? AND run_id = ? AND status = ?
+                  AND dispatched_by = ?
+                """,
+                (
+                    str(status),
+                    stamp,
+                    _optional_id(outcome_ref),
+                    str(effect_id),
+                    lease.run_id,
+                    str(EffectStatus.DISPATCHED),
+                    lease.owner_id,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise AgentRunEffectFenced(
+                    f"effect {effect_id} is {existing['status']}, and only its "
+                    "dispatching owner may report an outcome, and only once"
+                )
+            effect = self._effect_row(effect_id)
+        return EffectCommit(
+            run=row["run"],
+            checkpoint=row["checkpoint"],
+            effect=effect,
+            lease=row["lease"],
+        )
+
+    def quarantine_effect(
+        self,
+        lease: AgentRunLease,
+        effect_id: str,
+        *,
+        reason: str,
+        state: str = "interrupted",
+        now: datetime | None = None,
+    ) -> EffectCommit:
+        """Move an effect that never reported back into review, and park the run.
+
+        Any owner may do this, including one that did not dispatch, because
+        quarantining claims nothing about the world. It records that nobody
+        knows, which is true for every process that reads the row.
+
+        The run comes to rest holding no lease. `interrupted` is the resting
+        place after a crash: the work needs classification, and a person now
+        owns that. `waiting_external` is the resting place when the owner is
+        still alive and its call simply never answered.
+        """
+        kinds = {
+            "interrupted": "tool_outcome_unknown",
+            "waiting_external": "waiting_external",
+        }
+        if state not in kinds:
+            raise ValueError(
+                f"a quarantine leaves a run in {sorted(kinds)}, not {state!r}"
+            )
+        stamp = _stamp(now)
+        with self._write():
+            existing = self._require_dispatched(effect_id, lease.run_id)
+            payload = {
+                "attempt_id": str(effect_id),
+                "tool_name": existing["tool_name"],
+                "tool_call_id": existing["tool_call_id"],
+                "approval_id": existing["approval_id"],
+                "status": str(EffectStatus.AMBIGUOUS),
+                "reason": reason,
+            }
+            row = self._effect_checkpoint(
+                lease, kinds[state], state, payload, stamp, release=True
+            )
+            changed = self._conn.execute(
+                """
+                UPDATE agent_run_effects SET
+                    status = ?, settled_at = ?, reason = ?
+                WHERE effect_id = ? AND run_id = ? AND status = ?
+                """,
+                (
+                    str(EffectStatus.AMBIGUOUS),
+                    stamp,
+                    bounded_note(reason),
+                    str(effect_id),
+                    lease.run_id,
+                    str(EffectStatus.DISPATCHED),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise AgentRunEffectFenced(
+                    f"effect {effect_id} is {existing['status']}, which is already "
+                    "settled or already quarantined"
+                )
+            effect = self._effect_row(effect_id)
+        return EffectCommit(
+            run=row["run"],
+            checkpoint=row["checkpoint"],
+            effect=effect,
+            lease=row["lease"],
+        )
+
+    def resolve_quarantined_effect(
+        self,
+        effect_id: str,
+        *,
+        decision: str,
+        operator: str,
+        note: str | None = None,
+        outcome_ref: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """A person settles what the machine could not.
+
+        This write takes no lease, and that is deliberate: a quarantined run is
+        parked and holds none. Like `prune_checkpoints` it is narrow on purpose.
+        It touches one row of `agent_run_effects` and `agent_runs` never, it
+        moves only out of `ambiguous`, and its target statuses are the three the
+        table refuses to hold without a named person.
+
+        Settling the effect does not restart the run. What to do with a run
+        whose send turned out to have gone through is the operator's next
+        decision, not a consequence of recording this one.
+        """
+        status = operator_decision(decision)
+        actor = bounded_actor(operator)
+        stamp = _stamp(now)
+        with self._write():
+            existing = self._effect_row(effect_id)
+            changed = self._conn.execute(
+                """
+                UPDATE agent_run_effects SET
+                    status = ?, resolved_by = ?, resolved_note = ?,
+                    resolved_at = ?, outcome_ref = COALESCE(?, outcome_ref)
+                WHERE effect_id = ? AND status = ?
+                """,
+                (
+                    str(status),
+                    actor,
+                    bounded_note(note),
+                    stamp,
+                    _optional_id(outcome_ref),
+                    str(effect_id),
+                    str(EffectStatus.AMBIGUOUS),
+                ),
+            ).rowcount
+            if changed != 1:
+                raise AgentRunEffectFenced(
+                    f"effect {effect_id} is {existing['status']}; only a "
+                    "quarantined effect is a person's to settle"
+                )
+            resolved = self._effect_row(effect_id)
+        return resolved
+
+    def list_effects(self, run_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM agent_run_effects WHERE run_id = ? "
+                "ORDER BY dispatched_at, rowid",
+                (str(run_id),),
+            ).fetchall()
+        return [_effect_row(row) for row in rows]
+
+    def list_quarantined_effects(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """The review queue: every effect nobody knows the outcome of."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM agent_run_effects WHERE status = ? "
+                "ORDER BY dispatched_at, rowid LIMIT ?",
+                (str(EffectStatus.AMBIGUOUS), max(1, int(limit))),
+            ).fetchall()
+        return [_effect_row(row) for row in rows]
+
     # --- retention -------------------------------------------------------
 
     def prune_checkpoints(self, *, finished_before: datetime) -> list[str]:
@@ -606,6 +1007,109 @@ class AgentRunRepository:
             "created_at": stamp,
         }
 
+    def _effect_checkpoint(
+        self,
+        lease: AgentRunLease,
+        kind: str,
+        state: str,
+        payload: dict[str, Any],
+        stamp: str,
+        *,
+        release: bool,
+    ) -> dict[str, Any]:
+        """The run half of an external-effect write. Caller is inside `_write`.
+
+        Deliberately narrower than `checkpoint`: an effect write carries no
+        usage, no source or artifact references, and no terminal result, so it
+        merges none of them. It moves the state, appends the step, and drops the
+        lease when the run comes to rest.
+        """
+        row = self._row(lease.run_id)
+        if row is None:
+            raise KeyError(lease.run_id)
+        self._check_fence(row, lease, stamp)
+        current = str(row["current_state"])
+        validate_transition(kind, current, state)
+        sequence = int(row["checkpoint_sequence"]) + 1
+        changed = self._conn.execute(
+            """
+            UPDATE agent_runs SET
+                current_state = ?, checkpoint_sequence = ?, version = version + 1,
+                updated_at = ?,
+                lease_owner = CASE WHEN ? THEN NULL ELSE lease_owner END,
+                lease_owner_host = CASE WHEN ? THEN NULL ELSE lease_owner_host END,
+                lease_owner_pid = CASE WHEN ? THEN NULL ELSE lease_owner_pid END,
+                lease_expires_at = CASE WHEN ? THEN NULL ELSE lease_expires_at END
+            WHERE run_id = ? AND version = ? AND lease_owner = ?
+            """,
+            (
+                state,
+                sequence,
+                stamp,
+                release,
+                release,
+                release,
+                release,
+                lease.run_id,
+                lease.version,
+                lease.owner_id,
+            ),
+        ).rowcount
+        if changed != 1:
+            self._raise_fence_failure(lease, stamp)
+        checkpoint = self._append_checkpoint(
+            lease.run_id, sequence, kind, state, payload, stamp
+        )
+        return {
+            "run": _run_row(self._row(lease.run_id)),
+            "checkpoint": checkpoint,
+            "lease": (
+                None
+                if release
+                else AgentRunLease(
+                    lease.run_id, lease.owner_id, lease.version + 1, lease.expires_at
+                )
+            ),
+        }
+
+    def _require_dispatched(
+        self, effect_id: str, run_id: str, *, owner_id: str | None = None
+    ) -> dict[str, Any]:
+        """Refuse anything but an open effect, and say why. Caller is in `_write`.
+
+        The guarantee itself is the `WHERE status = 'dispatched'` on the update
+        that follows and the triggers under it. This is the sentence an operator
+        reads when the guarantee fires.
+        """
+        effect = self._effect_row(effect_id, run_id=run_id)
+        status = effect["status"]
+        if status != str(EffectStatus.DISPATCHED):
+            raise AgentRunEffectFenced(
+                f"effect {effect_id} is {status}: "
+                + (
+                    "a quarantined external effect is settled by a person, "
+                    "never by a retry, a resume, or a second owner"
+                    if status == str(EffectStatus.AMBIGUOUS)
+                    else "a settled external effect never changes outcome"
+                )
+            )
+        if owner_id is not None and effect["dispatched_by"] != owner_id:
+            raise AgentRunEffectFenced(
+                f"effect {effect_id} was dispatched by another process, which is "
+                "the only one that can say what its call did"
+            )
+        return effect
+
+    def _effect_row(
+        self, effect_id: str, run_id: str | None = None
+    ) -> dict[str, Any]:
+        row = self._conn.execute(
+            "SELECT * FROM agent_run_effects WHERE effect_id = ?", (str(effect_id),)
+        ).fetchone()
+        if row is None or (run_id is not None and str(row["run_id"]) != str(run_id)):
+            raise KeyError(effect_id)
+        return _effect_row(row)
+
     def _check_fence(
         self, row: sqlite3.Row, lease: AgentRunLease, stamp: str
     ) -> None:
@@ -633,6 +1137,18 @@ class AgentRunRepository:
         raise AgentRunLeaseLost(lease.run_id)
 
     def _initialize_schema(self) -> None:
+        """Create what is missing. Record a version only for a new database.
+
+        Creating a database at the current version is not a migration. Changing
+        an existing database's version is, and that belongs to
+        `coworker/migrations.py`, which is the only other writer of
+        `PRAGMA user_version` anywhere in the codebase. Every registered store
+        works this way: the store owns its DDL, the registry owns its version.
+
+        So an existing store keeps whatever version the registry last recorded,
+        and starting the application never silently upgrades one. Doctor reports
+        it as behind and migrates it deliberately, with a backup first.
+        """
         with self._lock:
             version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
             if version > SCHEMA_VERSION:
@@ -641,6 +1157,10 @@ class AgentRunRepository:
                     f"{DB_NAME} is at schema {version}, newer than this build's "
                     f"{SCHEMA_VERSION}"
                 )
+            fresh = version == 0 and not self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'agent_runs'"
+            ).fetchone()
             self._conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS agent_runs (
@@ -682,8 +1202,10 @@ class AgentRunRepository:
                 CREATE INDEX IF NOT EXISTS agent_runs_live_lease
                     ON agent_runs(lease_expires_at) WHERE lease_owner IS NOT NULL;
                 """
+                + EFFECT_SCHEMA
             )
-            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            if fresh:
+                self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _stamp(value: datetime | None = None) -> str:
@@ -742,6 +1264,27 @@ def _run_row(row: sqlite3.Row) -> dict[str, Any]:
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
         "finished_at": row["finished_at"],
+    }
+
+
+def _effect_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "effect_id": str(row["effect_id"]),
+        "run_id": str(row["run_id"]),
+        "tool_name": str(row["tool_name"]),
+        "tool_call_id": row["tool_call_id"],
+        "approval_id": row["approval_id"],
+        "replay_class": str(row["replay_class"]),
+        "arguments_fingerprint": str(row["arguments_fingerprint"]),
+        "status": str(row["status"]),
+        "dispatched_by": str(row["dispatched_by"]),
+        "dispatched_at": str(row["dispatched_at"]),
+        "settled_at": row["settled_at"],
+        "outcome_ref": row["outcome_ref"],
+        "reason": row["reason"],
+        "resolved_by": row["resolved_by"],
+        "resolved_note": row["resolved_note"],
+        "resolved_at": row["resolved_at"],
     }
 
 

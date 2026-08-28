@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coworker import migrations
+from coworker.agent_run_approval import EFFECT_STATEMENTS
 from coworker.migrations import (
     BackupFailed,
     Migration,
@@ -29,11 +30,28 @@ def _digest(path: Path) -> str:
 
 
 def _tree_digest(root: Path) -> dict[str, str]:
-    return {
-        str(path.relative_to(root)): _digest(path)
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
+    """Hash the state a store holds, not SQLite's bookkeeping about it.
+
+    A database in WAL mode recreates its `-shm` and `-wal` sidecars whenever it
+    is opened, including read-only: the journal mode lives in the file header,
+    so merely reading one brings them back. Hashing those turns "this changed
+    nothing" into "nobody opened this", which is a different and weaker claim.
+
+    `-shm` is shared memory and never holds committed data, so it is always
+    skipped. A `-wal` is skipped only while it is empty. A write parked in a
+    WAL that has not been checkpointed still shows up, so a change that hid
+    there rather than in the main file is still caught.
+    """
+    digests: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.name.endswith("-shm"):
+            continue
+        if path.name.endswith("-wal") and path.stat().st_size == 0:
+            continue
+        digests[str(path.relative_to(root))] = _digest(path)
+    return digests
 
 
 def _user_version(path: Path) -> int:
@@ -87,6 +105,7 @@ def _plan_for(plan, store_id):
 def test_registry_names_every_active_durable_store():
     registered = {spec.store_id for spec in migrations.REGISTRY}
     assert registered == {
+        "agent_runs_db",
         "conversation_db",
         "people_db",
         "drive_ingestion",
@@ -729,3 +748,244 @@ def test_backup_files_keep_owner_only_permissions(tmp_path):
     assert oct((backup.path / "club.db").stat().st_mode & 0o777) == "0o600"
     assert oct((backup.path / "manifest.json").stat().st_mode & 0o777) == "0o600"
     assert oct(os.stat(root / migrations.BACKUPS_DIR_NAME).st_mode & 0o777) == "0o700"
+
+
+# --- the Agent Run store: version 1 to 2, the external-effect fence ------
+
+_EFFECT_OBJECTS = {
+    "agent_run_effects",
+    "agent_run_effects_by_run",
+    "agent_run_effects_open",
+    "agent_run_effects_open_as_dispatched",
+    "agent_run_effects_quarantine_is_operator_only",
+    "agent_run_effects_settled_is_final",
+    "agent_run_effects_are_never_deleted",
+}
+
+
+def _break_agent_run_fence(monkeypatch, apply):
+    """Swap the 1 -> 2 step for one that fails partway through.
+
+    `_break_step` builds a 0 -> 1 step, and the Agent Run store on disk is at
+    version 1, so it needs its own.
+    """
+    original = migrations.spec_for("agent_runs_db")
+    broken = migrations.dataclasses.replace(
+        original,
+        migrations=(
+            Migration(
+                from_version=1,
+                to_version=2,
+                description="deliberately failing fence step",
+                count=lambda _context: 0,
+                apply=apply,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        migrations,
+        "REGISTRY",
+        tuple(
+            broken if item.store_id == "agent_runs_db" else item
+            for item in migrations.REGISTRY
+        ),
+    )
+
+
+def test_the_agent_run_store_is_registered_with_a_path_from_version_one(tmp_path):
+    root = build_legacy_state(tmp_path / "state")
+
+    plan = migrations.plan_migrations(root)
+    store = _plan_for(plan, "agent_runs_db")
+
+    assert store.status is StoreStatus.PENDING
+    assert store.from_version == 1
+    assert store.to_version == 2
+    assert [(step.from_version, step.to_version) for step in store.steps] == [(1, 2)]
+    assert "external-effect fence" in store.steps[0].description
+
+
+def test_the_agent_run_fence_is_added_without_disturbing_a_single_run(tmp_path):
+    root = build_legacy_state(tmp_path / "state")
+    path = root / "agent_runs.db"
+    before = _dump_database(path)
+    assert before["user_version"] == 1
+    assert len(before["rows"]["agent_runs"]) == 2
+    assert len(before["rows"]["agent_run_checkpoints"]) == 4
+
+    outcome = migrations.apply_migrations(root)
+
+    assert outcome.error is None
+    applied = [item for item in outcome.applied if item.store_id == "agent_runs_db"]
+    assert [(item.from_version, item.to_version) for item in applied] == [(1, 2)]
+    after = _dump_database(path)
+    assert after["integrity"] == ["ok"]
+    assert after["user_version"] == 2
+    # Every run and checkpoint is exactly as it was.
+    assert after["rows"]["agent_runs"] == before["rows"]["agent_runs"]
+    assert (
+        after["rows"]["agent_run_checkpoints"]
+        == before["rows"]["agent_run_checkpoints"]
+    )
+    # Exactly the fence appeared, and nothing that was there was replaced.
+    names_before = {name for _kind, name, _sql in before["schema"]}
+    names_after = {name for _kind, name, _sql in after["schema"]}
+    assert names_after - names_before == _EFFECT_OBJECTS
+    assert names_before - names_after == set()
+
+
+def test_the_agent_run_store_is_backed_up_before_its_fence_is_added(tmp_path):
+    root = build_legacy_state(tmp_path / "state")
+
+    outcome = migrations.apply_migrations(root)
+
+    backup_dir = root / migrations.BACKUPS_DIR_NAME / outcome.backup_id
+    manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
+    entry = next(
+        item for item in manifest["entries"] if item["store_id"] == "agent_runs_db"
+    )
+    assert entry["content_backed_up"] is True
+    assert entry["store_version"] == 1
+    # The copy is the store as it was: version 1, and no fence in it.
+    copied = _dump_database(backup_dir / "agent_runs.db")
+    assert copied["user_version"] == 1
+    assert {name for _kind, name, _sql in copied["schema"]} & _EFFECT_OBJECTS == set()
+    assert len(copied["rows"]["agent_runs"]) == 2
+
+
+def test_a_failed_fence_step_leaves_the_run_store_at_version_one(tmp_path, monkeypatch):
+    """The rollback has to undo real work, not a no-op."""
+    root = build_legacy_state(tmp_path / "state")
+    path = root / "agent_runs.db"
+    before = _dump_database(path)
+
+    def mutate_then_explode(context):
+        # Land the fence and destroy a run, so an undo is distinguishable.
+        for statement in EFFECT_STATEMENTS:
+            context.connection.execute(statement)
+        context.connection.execute("DELETE FROM agent_runs WHERE run_id = ?",
+                                   ("run-legacy-2",))
+        raise RuntimeError("fence step failed halfway")
+
+    _break_agent_run_fence(monkeypatch, mutate_then_explode)
+
+    outcome = migrations.apply_migrations(root)
+
+    assert outcome.error is not None
+    assert "agent_runs_db" in outcome.rolled_back
+    after = _dump_database(path)
+    assert after["integrity"] == ["ok"]
+    assert after["user_version"] == 1
+    assert after["schema"] == before["schema"]
+    assert after["rows"] == before["rows"]
+    assert {name for _kind, name, _sql in after["schema"]} & _EFFECT_OBJECTS == set()
+
+
+def test_the_fence_step_never_commits_the_transaction_it_runs_inside(tmp_path):
+    """The reason `EFFECT_STATEMENTS` is a tuple and not one script.
+
+    `executescript` issues a COMMIT before it runs. A step that used it would
+    end the transaction `_apply_store` opened, and the rollback above would
+    then have nothing to undo -- silently, with the store left half migrated.
+    """
+    root = build_legacy_state(tmp_path / "state")
+    conn = sqlite3.connect(root / "agent_runs.db")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        context = migrations.MigrationContext(
+            root=root,
+            spec=migrations.spec_for("agent_runs_db"),
+            path=root / "agent_runs.db",
+            connection=conn,
+        )
+        migrations._add_agent_run_effects(context)
+        assert conn.in_transaction, "the fence step ended its own transaction"
+        conn.rollback()
+        surviving = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE name LIKE 'agent_run_effects%'"
+            )
+        }
+    finally:
+        conn.close()
+    assert surviving == set(), "a rolled back fence step left objects behind"
+
+    # Not vacuous: executescript really does end the transaction.
+    other = sqlite3.connect(root / "agent_runs.db")
+    try:
+        other.execute("BEGIN IMMEDIATE")
+        other.executescript("CREATE TABLE probe_that_should_roll_back (x)")
+        assert not other.in_transaction
+        other.rollback()
+        assert other.execute(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'probe_that_should_roll_back'"
+        ).fetchone()[0] == 1, "executescript committed, as documented"
+        other.execute("DROP TABLE probe_that_should_roll_back")
+        other.commit()
+    finally:
+        other.close()
+
+
+def test_rerunning_the_fence_migration_changes_nothing(tmp_path):
+    root = build_legacy_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+    settled = _dump_database(root / "agent_runs.db")
+
+    second = migrations.apply_migrations(root)
+
+    assert second.applied == ()
+    assert _plan_for(migrations.plan_migrations(root), "agent_runs_db").status is (
+        StoreStatus.CURRENT
+    )
+    assert _dump_database(root / "agent_runs.db") == settled
+
+
+def test_the_repository_opens_a_migrated_store_and_uses_its_fence(tmp_path):
+    """The point of the migration: the fence works on a store that predates it."""
+    from coworker.agent_run_approval import EffectStatus
+    from coworker.agent_run_repository import AgentRunRepository
+
+    root = build_legacy_state(tmp_path / "state")
+    migrations.apply_migrations(root)
+
+    repo = AgentRunRepository(root)
+    try:
+        owner = repo.registry.register()
+        started = repo.create_run(
+            session_id="main", trigger="chat", goal="reach out", owner=owner
+        )
+        dispatch = repo.dispatch_effect(
+            started.lease, tool_name="gmail_send", arguments={"to": "d@t.test"}
+        )
+        quarantined = repo.quarantine_effect(
+            dispatch.lease, dispatch.effect["effect_id"], reason="cut"
+        )
+        assert quarantined.effect["status"] == EffectStatus.AMBIGUOUS
+        # The runs that predate the fence are still there and still readable.
+        assert {run["run_id"] for run in repo.list_runs()} >= {
+            "run-legacy-1",
+            "run-legacy-2",
+        }
+    finally:
+        repo.close()
+
+
+def test_starting_the_application_never_upgrades_an_existing_run_store(tmp_path):
+    """Opening a store is not migrating it. Only the registry moves a version."""
+    from coworker.agent_run_repository import AgentRunRepository
+
+    root = build_legacy_state(tmp_path / "state")
+    assert _user_version(root / "agent_runs.db") == 1
+
+    AgentRunRepository(root).close()
+    AgentRunRepository(root).close()
+
+    assert _user_version(root / "agent_runs.db") == 1
+    assert _plan_for(migrations.plan_migrations(root), "agent_runs_db").status is (
+        StoreStatus.PENDING
+    )
+    # And a brand new database is born current, so it needs no migration at all.
+    fresh = tmp_path / "fresh"
+    AgentRunRepository(fresh).close()
+    assert _user_version(fresh / "agent_runs.db") == 2
