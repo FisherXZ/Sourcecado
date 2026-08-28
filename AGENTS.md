@@ -27,12 +27,13 @@ The active runtime is `desktop/`. The previous hosted Next.js/Postgres applicati
 - `desktop/surfaces/gui/` — active React/Vite/Tauri UI
 - `desktop/tests/` and `desktop/surfaces/gui/tests/` — active verification suites
 - `docs/` — current and historical product/engineering records
+- `docs/course/` — Sourcecado Course language and plan. Product language still wins. See `CONTEXT-MAP.md`.
 - `archive/hosted-web/` — read-only historical implementation
 
 ## Documentation precedence
 
 1. `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md` — current product source of truth
-2. `README.md`, this file, `CONTEXT.md`, and `DESIGN.md` — current operating guidance
+2. `README.md`, this file, `CONTEXT.md`, `DESIGN.md`, and `CONTRIBUTING.md` — current operating guidance
 3. Current dated implementation plans and ADRs listed in `docs/README.md`
 4. Older dated specs and plans — historical context only
 

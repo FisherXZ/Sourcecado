@@ -21,6 +21,8 @@ FastAPI sidecar (coworker/)
 
 The Vite development server proxies `/v1` to the sidecar so browser development stays same-origin. Do not hard-code the sidecar port in UI code. The native shell starts and stops the sidecar, injects the API token, and hides to the menu bar on window close.
 
+Engineering notes for this stack live in [desktop/docs](docs/). The map is in [docs/README.md](../docs/README.md).
+
 ## Credentials and state
 
 Copy the root `.env.example` to `~/.config/club/.env`. Existing process environment variables win over values from that file.
@@ -31,13 +33,17 @@ The default local state directory is `~/.config/club/`. Set `CLUB_STATE_DIR` for
 
 Workspace grants and exact host-command approvals are also stored in the local state directory. Docker is optional. When its CLI, daemon, or sandbox image is unavailable, shell commands require an explicit **Not sandboxed** host approval; permanent exact-command approvals remain visible and revocable in Settings.
 
+CI and the lockfile use Python 3.14. `make native` / `tauri dev` still start the sidecar from `desktop/.venv`. A packaged `Sourcecado.app` starts the frozen sidecar instead. See [packaging.md](docs/packaging.md).
+
 ## Run from this directory
+
+Prefer `make setup`, `make sidecar`, and `make gui` from the repository root. From this directory:
 
 Sidecar:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install --require-hashes -r requirements.lock
 .venv/bin/python -m coworker.run
 ```
 

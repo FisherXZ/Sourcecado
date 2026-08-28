@@ -71,6 +71,12 @@ The full person file and handoff record. A compact version of the living brief m
 **Scheduled Job**
 A saved local task that can run on a schedule. Scheduling supports the assistant but is not the product's defining weekly-ranking loop.
 
+**Memory**
+The operator's saved-memory review queue. Preferences and notes about how the director works, not a person file. Unreviewed memory does not silently become sourcing fact.
+
+**Connections, Skills, Settings**
+Supporting destinations in the rail. They configure connectors, skills, workspace grants, updates, and diagnostics. They are not the job.
+
 ## Safety and scope invariants
 
 - Chat is home; the board and person view support it.
