@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from coworker.drive import _redact_credentials
+from coworker.drive import _legal_source_safety, _redact_credentials
 from coworker.drive_evidence import attach, normalize
 from coworker.people import PersonStore
 
@@ -369,3 +369,106 @@ def test_normalize_ignores_a_spoofed_sensitivity_key(tmp_path):
     fields, _idempotency_key = normalize("search_result", raw)
 
     assert fields["sensitivity"] == "restricted"
+
+
+# --- unverified legal sources become a question for a human ---------------
+#
+# Issue #39 criterion 4: a mismatch must produce a knowledge gap, not just a
+# quieter label. `attach` is the one Drive path that knows which person the
+# source belongs to, which is what filing a gap requires.
+
+
+def _legal_read(*, title, body, file_id="legal-read-1"):
+    raw = _read_result(file_id=file_id, name=title)
+    raw["source_safety"] = _legal_source_safety(
+        title, body, artifact_id=f"drive:{file_id}", modified_time=raw["modifiedTime"]
+    )
+    return raw
+
+
+def test_attaching_an_unverified_legal_source_files_a_knowledge_gap(tmp_path):
+    people = PersonStore(tmp_path)
+    ada = _person(people)
+    raw = _legal_read(
+        title="Northwind NDA Template",
+        body=(
+            "NONDISCLOSURE AGREEMENT between Ridgeline Ventures and Harborline "
+            "Analytics. Effective Date: January 4, 2024. Term of this Agreement "
+            "shall be two years."
+        ),
+    )
+
+    # non-vacuous: the read really did produce a not-ready assessment
+    assert raw["source_safety"]["ready_to_use"] is False
+
+    record = attach(
+        people,
+        ada["person_id"],
+        kind="read_source",
+        raw=raw,
+        **_attach_kwargs(),
+    )
+
+    # the operator still gets the source they asked for
+    assert record["type"] == "source_ref"
+    stored = people.get(ada["person_id"], expand_sources=True)
+    gaps = stored["knowledge_gaps"]
+    assert len(gaps) == 1
+    assert gaps[0]["fields"]["kind"] == "legal_artifact_not_ready"
+    assert gaps[0]["fields"]["artifact_id"] == "drive:legal-read-1"
+    assert "Ridgeline Ventures" in gaps[0]["fields"]["question"]
+
+
+def test_attaching_an_ordinary_source_files_no_knowledge_gap(tmp_path):
+    people = PersonStore(tmp_path)
+    ada = _person(people)
+
+    attach(
+        people,
+        ada["person_id"],
+        kind="read_source",
+        raw=_read_result(file_id="notes-1"),
+        **_attach_kwargs(),
+    )
+
+    stored = people.get(ada["person_id"], expand_sources=True)
+    assert stored["knowledge_gaps"] == []
+
+
+def test_reattaching_the_same_legal_source_does_not_duplicate_the_gap(tmp_path):
+    people = PersonStore(tmp_path)
+    ada = _person(people)
+    raw = _legal_read(
+        title="Northwind NDA Template",
+        body="NONDISCLOSURE AGREEMENT between Ridgeline Ventures and Harborline Analytics.",
+        file_id="legal-read-2",
+    )
+
+    attach(people, ada["person_id"], kind="read_source", raw=raw, **_attach_kwargs())
+    attach(people, ada["person_id"], kind="read_source", raw=raw, **_attach_kwargs())
+
+    stored = people.get(ada["person_id"], expand_sources=True)
+    assert len(stored["knowledge_gaps"]) == 1
+
+
+def test_attaching_a_legacy_source_safety_payload_files_no_gap(tmp_path):
+    """A row stored before facets existed is skipped, not crashed on.
+
+    `drive_ingestion` persists `source_safety` as JSON, so an older payload can
+    still be replayed through `attach`.
+    """
+    people = PersonStore(tmp_path)
+    ada = _person(people)
+    raw = _read_result(file_id="legacy-1")
+    raw["source_safety"] = {
+        "legal_document": True,
+        "ready_to_use": False,
+        "status": "party_mismatch",
+        "reasons": ["unexpected_recipient_berkeley_consulting"],
+    }
+
+    attach(people, ada["person_id"], kind="read_source", raw=raw, **_attach_kwargs())
+
+    stored = people.get(ada["person_id"], expand_sources=True)
+    assert stored["knowledge_gaps"] == []
+    assert len(stored["sources"]) == 1

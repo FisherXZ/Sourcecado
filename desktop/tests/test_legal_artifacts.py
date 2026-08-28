@@ -141,13 +141,19 @@ def test_classify_flags_partial_party_match():
     assert assessment["ready_to_use"] is False
 
 
-def test_classify_cannot_verify_parties_without_a_declared_expectation():
-    """No declared counterparty means the facet cannot verify.
+# --- no declared counterparty: the title becomes the expectation ----------
+#
+# This is the shape every connector read hands in. Without it the parties
+# facet had one reachable value and a stale NDA graded the same as a clean
+# template. The title may expose a disagreement. It may never grant anything.
 
-    This is the shape a Drive read hands in: the body's parties are readable,
-    the expectation to check them against is not. Reporting that as a failed
-    match would invent an expectation the caller never made, so it reads
-    `missing` -- and the names still reach the human resolving the gap.
+
+def test_classify_grades_body_parties_against_the_title_when_none_is_declared():
+    """The filename/body mismatch stays visible to a caller with no expectation.
+
+    Title names one organization, body names two others. That is the exact
+    failure issue #39 exists to catch, and a connector read never declares a
+    counterparty of its own.
     """
     assessment = classify(
         artifact_id="drive:nda-undeclared",
@@ -158,12 +164,125 @@ def test_classify_cannot_verify_parties_without_a_declared_expectation():
     )
 
     parties = assessment["facets"]["parties"]
-    assert parties["evidence"] == "missing"
-    assert parties["reason"].startswith("no_expected_party_declared:")
+    assert parties["evidence"] == "absent"
+    assert parties["reason"].startswith("body_parties_absent_from_title:")
     assert "Northwind Distribution" in parties["reason"]
     assert "Ridgeline Ventures" in parties["reason"]
     assert assessment["status"] == "unverified"
     assert assessment["ready_to_use"] is False
+
+
+def test_classify_reads_a_body_that_names_the_titles_organization_as_present():
+    """The inverse guard: a document that agrees with its own title is not flagged.
+
+    A checker that grades every legal file `absent` is the same noise the
+    two-string hotfix was, and noise gets disabled.
+    """
+    assessment = classify(
+        artifact_id="drive:nda-agrees",
+        title="Berkeley Codeology NDA Template",
+        body=_valid_body(),
+        status=None,
+        expected_party="",
+    )
+
+    parties = assessment["facets"]["parties"]
+    assert parties["evidence"] == "present"
+    assert parties["reason"] == "title_party_named_in_body"
+
+
+def test_classify_flags_an_extra_party_the_title_does_not_name():
+    assessment = classify(
+        artifact_id="drive:nda-extra",
+        title="Ridgeline Ventures NDA Template",
+        body=_mismatched_party_body(),
+        status=None,
+        expected_party="",
+    )
+
+    parties = assessment["facets"]["parties"]
+    assert parties["evidence"] == "partial"
+    assert "Northwind Distribution" in parties["reason"]
+    assert "Ridgeline Ventures" not in parties["reason"]
+
+
+def test_classify_cannot_compare_parties_that_are_all_placeholders():
+    """An unfilled template names no real party, so there is nothing to compare."""
+    body = (
+        "NONDISCLOSURE AGREEMENT between [DISCLOSER] and [RECIPIENT]. "
+        "Effective Date: [EFFECTIVE DATE]. Term of this Agreement shall be "
+        "[TERM LENGTH]."
+    )
+    assessment = classify(
+        artifact_id="drive:nda-blank",
+        title="Codeology NDA Template",
+        body=body,
+        status=None,
+        expected_party="",
+    )
+
+    parties = assessment["facets"]["parties"]
+    assert parties["evidence"] == "missing"
+    assert parties["reason"].startswith("no_expected_party_declared:")
+
+
+def test_classify_never_grants_ready_to_use_on_a_title_match_alone():
+    """A filename is never enough to make a document usable.
+
+    Every facet reads clean and the caller declares `approved_template` with a
+    fresh authorized approval. The only expectation the parties facet had was
+    the title, so the artifact is still withheld. Without this gate the title
+    becomes a way to earn readiness by naming a file well.
+    """
+    assessment = classify(
+        artifact_id="drive:nda-title-only",
+        title="Berkeley Codeology NDA Template",
+        body=_valid_body(),
+        status="approved_template",
+        expected_party="",
+        approval=_FRESH_APPROVAL,
+        modified_time="2026-08-01T00:00:00Z",
+    )
+
+    # non-vacuous: nothing else is blocking readiness here
+    assert all(
+        facet["evidence"] == "present" for facet in assessment["facets"].values()
+    )
+    assert assessment["status"] == "approved_template"
+
+    assert assessment["ready_to_use"] is False
+    assert "parties:expectation_taken_from_title_not_declared" in assessment["reasons"]
+
+
+def test_knowledge_gap_question_names_the_party_disagreement():
+    """The question a human reads has to say what is actually wrong.
+
+    `evidence` is the most severe facet, and a connector read never carries an
+    approval record, so it reads `missing` for every artifact. The question is
+    what distinguishes a mismatch from an ordinary unverified file.
+    """
+    mismatch = classify(
+        artifact_id="drive:nda-undeclared",
+        title="Codeology NDA Template",
+        body=_mismatched_party_body(),
+        status=None,
+        expected_party="",
+    )
+    agrees = classify(
+        artifact_id="drive:nda-agrees",
+        title="Berkeley Codeology NDA Template",
+        body=_valid_body(),
+        status=None,
+        expected_party="",
+    )
+
+    mismatch_gap = knowledge_gap_fields(mismatch)
+    agrees_gap = knowledge_gap_fields(agrees)
+
+    assert mismatch_gap["question"] != agrees_gap["question"]
+    assert "Northwind Distribution" in mismatch_gap["question"]
+    assert "Ridgeline Ventures" in mismatch_gap["question"]
+    assert agrees_gap["question"].startswith("Verify parties, dates, terms")
 
 
 def test_classify_flags_missing_dates():

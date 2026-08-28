@@ -744,7 +744,11 @@ def test_drive_read_refuses_a_legal_template_whose_body_names_other_parties(tmp_
     assert safety["modified_time"] == "2026-08-01T00:00:00Z"
     assert safety["facets"]["dates"]["evidence"] == "present"
     assert safety["facets"]["terms"]["evidence"] == "present"
+    # the whole point: the body names nobody the filename names, and the read
+    # says so. A clean template read through the same path grades `present`
+    # (see test_drive_read_does_not_flag_a_body_that_agrees_with_its_title).
     parties = safety["facets"]["parties"]
+    assert parties["evidence"] == "absent"
     assert "Ridgeline Ventures" in parties["reason"]
     assert "Harborline Analytics" in parties["reason"]
 
@@ -753,6 +757,29 @@ def test_drive_read_refuses_a_legal_template_whose_body_names_other_parties(tmp_
     assert safety["status"] == "unverified"
     assert safety["reasons"][0] == "status:unverified"
     assert any(reason.startswith("approval:") for reason in safety["reasons"])
+
+
+def test_drive_read_does_not_flag_a_body_that_agrees_with_its_title(tmp_path):
+    """The inverse of the no-regression case, through the same live path.
+
+    Without this, "every legal file is refused" would pass the mismatch test
+    while telling an operator nothing. The two reads have to differ.
+    """
+    body = (
+        "NONDISCLOSURE AGREEMENT between Northwind Distribution and "
+        "[COUNTERPARTY NAME]. Effective Date: January 4, 2024. Term of this "
+        "Agreement shall be two years."
+    )
+    http = FakeHttp({f"{FILES_URL}/f1": STALE_NDA_META, f"{FILES_URL}/f1/export": body})
+
+    out = _drive(tmp_path, http).read("f1")
+    safety = out["source_safety"]
+
+    assert safety["facets"]["parties"]["evidence"] == "present"
+    # still evidence, not an instrument: a Drive read declares no status and
+    # no counterparty of its own, so it cannot reach ready_to_use.
+    assert safety["ready_to_use"] is False
+    assert safety["status"] == "unverified"
 
 
 def test_drive_read_reports_undeclared_status_as_unverified_not_draft(tmp_path):
@@ -831,7 +858,8 @@ def test_drive_read_source_safety_files_a_knowledge_gap(tmp_path):
     assert gap["fields"]["kind"] == "legal_artifact_not_ready"
     assert gap["fields"]["artifact_id"] == "drive:f1"
     assert gap["fields"]["evidence"] == "missing"
-    assert "Northwind NDA Template" in gap["fields"]["question"]
+    assert "Ridgeline Ventures" in gap["fields"]["question"]
+    assert "Harborline Analytics" in gap["fields"]["question"]
     stored = people.get(person["person_id"], expand_sources=True)
     assert len(stored["knowledge_gaps"]) == 1
 

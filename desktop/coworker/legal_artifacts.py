@@ -127,6 +127,37 @@ _TERM_RE = re.compile(
 _TERM_PLACEHOLDER_RE = re.compile(r"[\[{][^\]}]*term[^\]}]*[\]}]", re.IGNORECASE)
 
 
+# Words that appear in a legal filename without naming a party. Stripped
+# before a title is used as the only available expectation.
+_TITLE_NOISE = frozenset(
+    {
+        "addendum", "agreement", "agreements", "amendment", "conditions",
+        "contract", "contracts", "copy", "disclosure", "doc", "docx",
+        "draft", "executed", "final", "intent", "letter", "moa", "mou",
+        "mutual", "nda", "ndas", "non", "nondisclosure", "pdf", "revised",
+        "signed", "sow", "statement", "template", "templates", "terms",
+        "updated", "version", "work",
+        # structural words a title shares with any other title
+        "and", "between", "for", "the",
+    }
+)
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _significant_tokens(text: str) -> set[str]:
+    """Name-bearing tokens of a title or a party, lowercased.
+
+    Drops the boilerplate every legal filename carries, so "Codeology NDA
+    Template" reduces to {"codeology"} and cannot match a document merely
+    because both are agreements.
+    """
+    return {
+        token
+        for token in _TOKEN_RE.findall(text.casefold())
+        if len(token) > 2 and token not in _TITLE_NOISE and not token.isdigit()
+    }
+
+
 def _clean(value: Any) -> str:
     return str(value or "").strip()
 
@@ -154,18 +185,42 @@ def _extract_parties(body: str) -> list[str]:
     return [p for p in parts if p]
 
 
-def _verify_parties(body: str, expected_party: str) -> tuple[Evidence, str]:
+def _verify_parties_against_title(parties: list[str], title: str) -> tuple[Evidence, str]:
+    """Grade the body's parties against the title, for a caller that declared none.
+
+    The title never *grants* anything. `classify` withholds `ready_to_use`
+    from any artifact whose expectation came from its filename, so a
+    `present` here is a readable signal, never a licence. The title is used
+    to raise suspicion, which is the one thing a filename can honestly do:
+    a body that names nobody the filename names is the filename/body party
+    mismatch issue #39 exists to catch, and a caller with no expectation of
+    its own would otherwise have no way to see it.
+    """
+    title_tokens = _significant_tokens(title)
+    named = [party for party in parties if not _is_placeholder(party)]
+    if not title_tokens or not named:
+        # Nothing to compare: a title of pure boilerplate, or a body whose
+        # parties are all unfilled placeholders.
+        return Evidence.MISSING, "no_expected_party_declared:" + ", ".join(parties)
+    matched: list[str] = []
+    unmatched: list[str] = []
+    for party in named:
+        bucket = matched if _significant_tokens(party) & title_tokens else unmatched
+        bucket.append(party)
+    if not matched:
+        return Evidence.ABSENT, "body_parties_absent_from_title:" + ", ".join(named)
+    if unmatched:
+        return Evidence.PARTIAL, "unexpected_named_party:" + ", ".join(unmatched)
+    return Evidence.PRESENT, "title_party_named_in_body"
+
+
+def _verify_parties(body: str, expected_party: str, title: str) -> tuple[Evidence, str]:
     parties = _extract_parties(body)
     if not parties:
         return Evidence.MISSING, "no_named_parties_found"
     expected_norm = expected_party.strip().casefold()
     if not expected_norm:
-        # The caller declared no counterparty to check against. The body's
-        # parties are readable, but the expectation they should be checked
-        # against is not, so this facet cannot verify. Reporting it as a
-        # failed match would invent an expectation the caller never made,
-        # and the names still have to reach the human who resolves the gap.
-        return Evidence.MISSING, "no_expected_party_declared:" + ", ".join(parties)
+        return _verify_parties_against_title(parties, title)
     found_expected = any(p.casefold() == expected_norm for p in parties)
     unexpected = [p for p in parties if p.casefold() != expected_norm and not _is_placeholder(p)]
     if not found_expected:
@@ -224,27 +279,44 @@ def classify(
 
     Reads `body` for parties, dates, and terms -- never trusts `title` or
     caller metadata for those three, so a filename/body mismatch cannot
-    hide behind a confident-sounding name. `status` and `approval` are
-    facts a body cannot self-attest, so they come from the caller as
-    declared; this function only checks whether that declaration still
-    holds. `authorized` must be boolean `True`; `approved_at` and
+    hide behind a confident-sounding name.
+
+    The one use of `title` is adversarial. When the caller declares no
+    `expected_party`, the title supplies the expectation the body is checked
+    against, so a filename/body disagreement stays visible to a caller with
+    no counterparty of its own to name. A title can only expose that
+    disagreement. It can never make a document `ready_to_use`.
+
+    `status` and `approval` are facts a body cannot self-attest, so they come
+    from the caller as declared; this function only checks whether that
+    declaration still holds. `authorized` must be boolean `True`; `approved_at` and
     `modified_time` must both parse as ISO-8601 timestamps; an approval
     dated before the last body revision is stale, whoever recorded it.
 
-    `ready_to_use` is True only when `status` is `approved_template` and
-    every facet verifies `present`. Any other status -- draft, executed,
+    `ready_to_use` is True only when `status` is `approved_template`, every
+    facet verifies `present`, and the caller declared the `expected_party`
+    the body was checked against. Any other status -- draft, executed,
     stale, or unverified -- is never `ready_to_use`, regardless of how
-    clean the body reads.
+    clean the body reads, and neither is an artifact whose only expectation
+    came from its own filename.
     """
     resolved_status = resolve_status(status)
     facets = {
-        "parties": _verify_parties(body, expected_party),
+        "parties": _verify_parties(body, expected_party, title),
         "dates": _verify_dates(body),
         "terms": _verify_terms(body),
         "approval": _verify_approval(approval, modified_time=modified_time),
     }
     all_present = all(evidence is Evidence.PRESENT for evidence, _ in facets.values())
-    ready_to_use = resolved_status is ArtifactStatus.APPROVED_TEMPLATE and all_present
+    # A parties facet graded against the title read clean only against a
+    # filename, which is not a fact anyone declared. It may expose a
+    # disagreement; it may never be the thing that makes a document usable.
+    declared_expectation = bool(expected_party.strip())
+    ready_to_use = (
+        resolved_status is ArtifactStatus.APPROVED_TEMPLATE
+        and all_present
+        and declared_expectation
+    )
     reasons = [
         f"{facet}:{reason}"
         for facet, (evidence, reason) in facets.items()
@@ -252,6 +324,8 @@ def classify(
     ]
     if resolved_status is not ArtifactStatus.APPROVED_TEMPLATE:
         reasons.insert(0, f"status:{resolved_status.value}")
+    if all_present and not declared_expectation:
+        reasons.append("parties:expectation_taken_from_title_not_declared")
     return {
         "artifact_id": artifact_id,
         "title": title,
@@ -279,6 +353,22 @@ def knowledge_gap_fields(assessment: dict[str, Any]) -> dict[str, Any] | None:
         return None
     facet_evidence = [Evidence(facet["evidence"]) for facet in assessment["facets"].values()]
     worst = _most_severe(facet_evidence)
+    parties = assessment["facets"]["parties"]
+    # A read from a connector always lacks an approval record, so `evidence`
+    # -- the most severe facet -- reads `missing` for every such artifact. The
+    # question is what a human actually reads, so when the parties facet found
+    # a real disagreement it leads with that instead of the generic ask.
+    if parties["evidence"] in {Evidence.ABSENT.value, Evidence.PARTIAL.value}:
+        question = (
+            f'Confirm who "{assessment["title"]}" is actually between '
+            f'({parties["reason"]}), then verify its dates, terms, and approval '
+            "before it can be offered as ready to use."
+        )
+    else:
+        question = (
+            f'Verify parties, dates, terms, and approval for "{assessment["title"]}" '
+            "before it can be offered as ready to use."
+        )
     return {
         "kind": "legal_artifact_not_ready",
         "evidence": worst.value,
@@ -286,10 +376,7 @@ def knowledge_gap_fields(assessment: dict[str, Any]) -> dict[str, Any] | None:
         "title": assessment["title"],
         "status": assessment["status"],
         "reasons": assessment["reasons"],
-        "question": (
-            f'Verify parties, dates, terms, and approval for "{assessment["title"]}" '
-            "before it can be offered as ready to use."
-        ),
+        "question": question,
     }
 
 
