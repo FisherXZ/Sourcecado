@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from coworker.context_projection import (
+    DEFAULT_PROJECTION_POLICY,
     ContextAuthority,
     ContextCategory,
     ContextSensitivity,
@@ -30,9 +31,9 @@ TRANSCRIPT_VERSION = 1
 
 # context-projection-v1 (issue #58). A memory row is model context only after
 # the director classifies it as a person-independent operator preference.
-# Everything else -- a row migrated from before the contract, and every new
-# ambiguous `remember` write -- waits for review and is withheld.
-MEMORY_CATEGORY_LEGACY = "legacy_unclassified"
+# Everything else waits for review and is withheld: a new ambiguous `remember`
+# write as "unclassified", and a row migrated from before the contract as
+# "legacy_unclassified", which coworker/migrations.py writes.
 MEMORY_CATEGORY_UNCLASSIFIED = "unclassified"
 MEMORY_CATEGORY_PREFERENCE = "operator_preference"
 MEMORY_NEEDS_REVIEW = "needs_review"
@@ -60,9 +61,13 @@ _MEMORY_COLUMNS = "id, content, created_at, " + ", ".join(
     column for column, _definition in _MEMORY_CONTEXT_COLUMNS
 )
 
-# Per-item cap for the operator-preference category in DEFAULT_PROJECTION_POLICY.
-# The adapter clips to it; the projector omits anything still over it.
-_MEMORY_ITEM_TOKENS = 64
+# Read from the approved policy rather than restated, so the adapter clips to
+# exactly the cap the projector enforces and the two cannot drift apart.
+_MEMORY_ITEM_TOKENS = next(
+    budget.max_item_tokens
+    for budget in DEFAULT_PROJECTION_POLICY.category_budgets
+    if budget.category is ContextCategory.OPERATOR_PREFERENCE
+)
 
 
 def projection_tokens(text: str) -> int:

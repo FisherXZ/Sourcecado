@@ -14,11 +14,14 @@ import pytest
 from coworker import migrations
 from coworker.migrations import Migration, StoreStatus
 from coworker.store import (
-    MEMORY_CATEGORY_LEGACY,
     MEMORY_CLASSIFIED,
     MEMORY_NEEDS_REVIEW,
     ConversationStore,
 )
+
+# The value the registry step writes, asserted as the literal that lands on
+# disk rather than through a symbol the store could later rename.
+MEMORY_CATEGORY_LEGACY = "legacy_unclassified"
 from tests.state_fixtures import build_current_state, build_legacy_state
 
 
