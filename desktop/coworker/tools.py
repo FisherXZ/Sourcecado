@@ -27,7 +27,12 @@ from coworker.evidence_envelope import (
 )
 from coworker.mcp import mcp_evidence
 from coworker.web import MISSING_KEY as TAVILY_MISSING, search_web, web_evidence
-from coworker.gmail import GmailError, MissingGmail, gmail_evidence
+from coworker.gmail import (
+    GmailError,
+    GmailOutcomeUnknown,
+    MissingGmail,
+    gmail_evidence,
+)
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
 from coworker.drive_ingestion import DRIVE_INDEX_QUERY_SCHEMA, DriveIngestionStore
 from coworker.people import PersonStore
@@ -769,6 +774,10 @@ def execute(
         client = gmail if gmail is not None else MissingGmail()
         try:
             result = client.send(draft_id=draft_id)
+        except GmailOutcomeUnknown:
+            # `ok=False` says nothing happened. Gmail never answered, so that
+            # is not something this layer knows. `guarded_call` quarantines it.
+            raise
         except GmailError as exc:
             return False, {"error": str(exc)}
         except Exception as exc:

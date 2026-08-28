@@ -84,10 +84,19 @@ def validate_event(event: object) -> str | None:
         if not isinstance(event.get("text"), str):
             return "turn_end.text must be a string"
     if event_type == "error":
-        if event.get("state") != "failed":
-            return "error.state must be failed"
+        # `held` is not a softer `failed`. It means a consequential call was
+        # dispatched and never reported back, so the outcome is a person's to
+        # settle. It carries the effect id because the operator's next move is
+        # to open that row, not to try again.
+        if event.get("state") not in {"failed", "held"}:
+            return "error.state must be failed or held"
         if not isinstance(event.get("message"), str):
             return "error.message must be a string"
+        if event.get("state") == "held":
+            if event.get("code") != "outcome_unknown":
+                return "error.code must be outcome_unknown when state is held"
+            if not isinstance(event.get("effect_id"), str) or not event["effect_id"]:
+                return "error.effect_id must be a non-empty string when state is held"
     if event_type in {"permission_required", "tool_started", "tool_finished"}:
         for field in ("id", "name"):
             if not isinstance(event.get(field), str) or not event[field]:

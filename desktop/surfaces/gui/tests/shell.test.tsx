@@ -24,6 +24,7 @@ const api = vi.hoisted(() => ({
   getHealth: vi.fn(),
   getInbox: vi.fn(),
   getMemoryBacklog: vi.fn(),
+  getQuarantinedEffects: vi.fn(),
   getPersona: vi.fn(),
   getPerson: vi.fn(),
   getSchedule: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("../src/api", () => ({
   getHealth: api.getHealth,
   getInbox: api.getInbox,
   getMemoryBacklog: api.getMemoryBacklog,
+  getQuarantinedEffects: api.getQuarantinedEffects,
   getPersona: api.getPersona,
   getPerson: api.getPerson,
   getSchedule: api.getSchedule,
@@ -90,6 +92,7 @@ describe("App shell routing", () => {
     api.getHealth.mockResolvedValue({ status: "ok", piece: "test", slice: 1, model: "test" });
     api.getInbox.mockResolvedValue({ items: [] });
     api.getMemoryBacklog.mockResolvedValue({ needs_review: 0, classified: 0, items: [] });
+    api.getQuarantinedEffects.mockResolvedValue([]);
     api.getPersona.mockResolvedValue({ id: "sourcing", name: "Sourcing Director", tools: [] });
     api.getPerson.mockResolvedValue({
       person: { person_id: "person-1", sequence_state: "open" },

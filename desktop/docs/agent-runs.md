@@ -1,9 +1,11 @@
 # Durable Agent Runs: identity, leases, and checkpoints
 
 Status: active-stack engineering reference. Covers the run store, its ownership
-rules, the external-effect fence, and restart classification. The chat, queue,
-schedule, server, and UI wiring are separate later work and are not implemented
-here: nothing in this document is called by the running application yet.
+rules, the external-effect fence, restart classification, and -- since slice 5
+-- the production paths that enter them. Chat, queued chat, scheduled routines,
+approvals, and the operator review queue all run through the store now;
+`coworker/agent_run_dispatch.py` is the seam and
+`coworker/agent_run_reconcile.py` is the rule for reading two stores at once.
 
 ## What an Agent Run is
 
@@ -213,7 +215,7 @@ decision that cannot wait, because an effect nobody knows the outcome of must
 stop being mistakable for work in progress before anything else looks at the
 run. Resuming and delivering are left to the caller.
 
-## A trap for whoever wires this up
+## The trap, and where the wiring avoids it
 
 A consequential tool **must** open an effect record before it is called.
 `dispatch_effect` commits before the call and `record_effect_outcome` commits
@@ -232,35 +234,91 @@ one code path nobody exercises by hand.
 `permissions.RETRY_SAFE`, and everything outside that list is consequential,
 including a tool the permission module has never heard of.
 
+Slice 5 answers the trap with one function rather than discipline.
+`agent_run_dispatch.guarded_call` is the only way either production path
+reaches a tool, and the ordering is control flow inside it: `dispatch` returns
+only after its transaction committed, and the call cannot run before `dispatch`
+returns. `turn.py` and `server.py` each call it once. Neither calls `execute`
+around it.
+
+Three consequences follow, and each is a test.
+
+- Every tool outside `RETRY_SAFE` is fenced, not a list of the ones anyone
+  thought of. `agent_run_dispatch.needs_fence` is `replay_class` and nothing
+  else.
+- A call that *raises* is quarantined rather than reported. `record_effect_outcome`
+  has no value for "nothing at all", so the guard does not invent one.
+- **A layer below the fence can make that unreachable, and one did.** The guard
+  only ever sees what the tool lets past. `_execute_bound_send` and
+  `tools.execute` caught every Gmail exception and returned `ok=False`, so a
+  send that timed out after the request left the machine was recorded as
+  `failed` and the operator was offered a clean second send. The connector is
+  the only layer that can tell the two apart, so `gmail.GmailOutcomeUnknown` is
+  raised there when no HTTP status was ever observed, and both call sites
+  re-raise it. A status means Gmail answered, and an answer is a fact; no
+  status means the request left and nothing came back. `verify_send_authority`
+  reads before the send, so an unknown from that step stays a plain
+  `SendAuthorityError` and never reaches the queue.
+- A caller that supplied a run store and could not open a run refuses to make
+  the call. A caller that supplied no run store was never fenced, which is the
+  legacy and test path. The two are different values, not the same `None`.
+
 ## Extension points
 
 The following are named seams, not implementations.
 
 - **Heartbeat.** `renew_lease` is the seam a long provider call renews through.
   Losing renewal must abandon the work, not continue it.
-- **Wiring.** Nothing constructs an `AgentRunRepository` for run execution in
-  the running application yet. The process that starts the sidecar registers one
-  owner with `OwnerRegistry.register()` and calls `agent_run_resume.restart()`
-  once, at startup. The repository deliberately does not reconcile in its
-  constructor, because opening a store is not the same event as starting a
-  process.
+- **Wiring.** `create_app` registers one owner with `OwnerRegistry.register()`
+  and calls `agent_run_resume.restart()` once, because that is the function
+  that starts the sidecar process. The repository still does not reconcile in
+  its constructor, because opening a store is not the same event as starting a
+  process, and `create_app` opens it a line earlier than it becomes an owner.
 - **The two halves of at-most-once.** `store.decide_and_claim_inbox_execution`
-  makes an approved send dispatch at most once. This store makes the outcome of
-  that dispatch un-guessable after a crash. Joining them -- so that a quarantined
-  effect and an `interrupted` inbox row are one thing an operator sees -- is
-  wiring, and the run store is the fence of record when they disagree.
-- **The review queue.** `list_quarantined_effects` is what a surface renders.
-  Nothing renders it yet.
+  makes an approved send dispatch at most once: only a `pending` row is
+  claimable, so a claim closed as `interrupted` is never re-executed. This
+  store makes the outcome of that dispatch un-guessable after a crash. Neither
+  re-implements the other -- nothing in `agent_run_reconcile` grants
+  permission to run -- and `agent_run_reconcile.reconciled_status` joins them:
+  **the run store is the fence of record when they disagree**, because its
+  writes bracket the external call and the inbox's do not. The inbox knows a
+  claimant vanished. Only the run store knows a call was dispatched.
+- **The review queue.** `list_quarantined_effects` is what a surface renders,
+  and `GET /v1/agent-run-effects/quarantine` renders it, joined to the approval
+  that authorized each effect. `POST` to the same path with one of the three
+  operator decisions settles one. The route deliberately does not live under
+  `/v1/agent-runs`, where `run_ledger_api` owns `{run_id}` and would swallow a
+  literal segment; and `run_ledger_api` stays read-only, as its docstring says.
 - **Receipts.** `agent_run_approval.external_effect_evidence` maps an unsettled
-  effect onto the `Evidence` vocabulary `run_receipt` already reads. Wiring it
-  into a receipt section is later work.
+  effect onto the `Evidence` vocabulary, and the review queue reads it, so a
+  queue row and a receipt use the same word for the same fact. A run receipt
+  reaches the same conclusion from checkpoints alone: `quarantine_effect`
+  writes `tool_outcome_unknown`, which `run_receipt._tools` already reports as
+  `Evidence.AMBIGUOUS`. `record_effect_outcome` now carries `tool_call_id` on
+  its checkpoint for the same reason `quarantine_effect` always did -- without
+  it a fenced call read as one call that never finished plus one outcome
+  belonging to nothing.
 
 ## Known gaps
 
 - The run store is a separate database from `club.db`, so a run checkpoint and a
-  conversation or approval write are not one transaction. Slice 3 must make the
-  run store the fence of record for external effects rather than relying on
-  cross-store atomicity.
+  conversation or approval write are not one transaction. The run store is the
+  fence of record for external effects instead of relying on cross-store
+  atomicity; `agent_run_reconcile` is where that preference is expressed.
+- An approval decided from the operator surface is executed under a run of the
+  server's own, not the turn's. That avoids a race for one lease between a
+  live turn and the HTTP executor, at the cost of a second run row per such
+  send. The effect still names the approval, which is the key the review queue
+  joins on.
+- A turn cancelled while an approval is outstanding resumes its run with
+  `deny`, because `resume_from_approval` takes allow or deny and a cancel is
+  neither. The word "cancelled" survives in the inbox and the transcript; the
+  run store records the nearest true thing, which is that the call was not
+  authorized.
+- A quarantined effect is joined to its approval by scanning `approval_id`,
+  which carries no index. Adding one is a schema change and therefore a
+  migration. The table holds one row per consequential call and is read when a
+  person opens the queue, so the scan is not on any hot path.
 - Owner marker files are removed when their owner is proven dead and its work
   reclaimed, and when a process releases its own owner. A process killed with
   no runs to reclaim leaves a marker behind.
@@ -274,3 +332,10 @@ The following are named seams, not implementations.
   run eligible to resume, but nothing decides whether resuming a turn whose send
   may already have gone out is what the operator wants. That is a person's next
   decision and no code makes it.
+- **`restart` classifies and only quarantines.** `plan_restart` returns `RESUME`
+  and `DELIVER` verdicts, and `create_app` stores the outcome on
+  `app.state.run_restart` without acting on either. So a safe incomplete run is
+  not continued at startup, a final answer that was generated and recorded but
+  never delivered is not delivered, and a missing person projection is not
+  repaired. Those are three of issue #63's acceptance criteria and they are
+  tracked separately; this file describes what runs, not what is planned.

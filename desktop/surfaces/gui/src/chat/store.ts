@@ -163,6 +163,7 @@ export type SourcecadoEvent =
         | "partial"
         | "cancelled"
         | "failed"
+        | "held"
         | "stopped"
         | "interrupted";
     }
@@ -520,7 +521,9 @@ export class SourcecadoChatStore {
         type: "message_state_changed",
         threadId: event.session_id,
         messageId: event.message_id,
-        state: "failed",
+        // `held` carries through unchanged. Collapsing it into `failed` here
+        // would undo the whole point of the sidecar sending it.
+        state: event.state === "held" ? "held" : "failed",
       });
     }
   }
@@ -802,6 +805,9 @@ export class SourcecadoChatStore {
       const terminalTextState =
         event.state === "cancelled" ||
         event.state === "failed" ||
+        // A held turn is over. Leaving the text part `running` shows a
+        // director a spinner for a send nobody knows the outcome of.
+        event.state === "held" ||
         event.state === "stopped" ||
         event.state === "interrupted"
           ? event.state

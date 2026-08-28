@@ -27,6 +27,7 @@ export type SourcecadoTextPart = {
     | "complete"
     | "cancelled"
     | "failed"
+    | "held"
     | "stopped"
     | "interrupted";
 };
@@ -106,6 +107,7 @@ export type SourcecadoStructuredMessage = {
     | "partial"
     | "cancelled"
     | "failed"
+    | "held"
     | "stopped"
     | "interrupted";
   readonly parts: readonly SourcecadoPart[];
@@ -195,6 +197,8 @@ function textPartStatus(state: SourcecadoTextPart["state"]) {
       return { type: "incomplete" as const, reason: "cancelled" as const };
     case "failed":
       return { type: "incomplete" as const, reason: "error" as const };
+    case "held":
+      return { type: "incomplete" as const, reason: "other" as const };
     case "stopped":
       return { type: "incomplete" as const, reason: "cancelled" as const };
     case "interrupted":
@@ -216,6 +220,8 @@ function messageStatus(state: SourcecadoStructuredMessage["state"]) {
       return { type: "incomplete" as const, reason: "cancelled" as const };
     case "failed":
       return { type: "incomplete" as const, reason: "error" as const };
+    case "held":
+      return { type: "incomplete" as const, reason: "other" as const };
     case "stopped":
       return { type: "incomplete" as const, reason: "cancelled" as const };
     case "interrupted":

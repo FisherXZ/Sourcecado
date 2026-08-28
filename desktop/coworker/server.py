@@ -28,7 +28,20 @@ from coworker.automation.scheduler import (
     next_monday_0900,
     now_iso,
 )
+from coworker.agent_run_dispatch import (
+    AgentRunContext,
+    AgentRunEffectQuarantined,
+    AgentRunUnavailable,
+    guarded_call,
+)
+from coworker.agent_run_approval import AgentRunEffectFenced
+from coworker.agent_run_reconcile import (
+    OPERATOR_DECISIONS,
+    contested_approvals,
+    review_queue,
+)
 from coworker.agent_run_repository import AgentRunRepository
+from coworker.agent_run_resume import restart as agent_run_restart
 from coworker.apollo import (
     ENRICH_CREDIT_COST,
     MISSING_KEY as APOLLO_MISSING_KEY,
@@ -82,6 +95,7 @@ from coworker.effective_tools import (
 from coworker.events import build_event, new_turn_identity, TurnIdentity
 from coworker.gmail import (
     GmailError,
+    GmailOutcomeUnknown,
     MissingGmail,
     SendAuthority,
     SendAuthorityError,
@@ -438,9 +452,19 @@ def create_app(
             people=app.state.people,
         )
     )
-    # Read side only. Registering an owner and reclaiming leases belongs to
-    # whatever starts the sidecar process, not to opening the store.
     app.state.agent_runs = AgentRunRepository(root)
+    # This process becomes an Agent Run owner here, and it is the process that
+    # starts the sidecar, so this is where the marker belongs. The marker holds
+    # an exclusive `flock` for the life of the process, which is what lets a
+    # later start prove this one is gone rather than assume it.
+    app.state.run_owner = app.state.agent_runs.registry.register()
+    # One reconciliation pass, once, at start. Its only write is a quarantine,
+    # because an effect that was dispatched and never reported back has to stop
+    # being mistakable for work in progress before anything else reads the run.
+    # Resuming and delivering are deliberately not done here.
+    app.state.run_restart = agent_run_restart(
+        app.state.agent_runs, app.state.run_owner
+    )
     app.state.run_ledger = RunLedger(app.state.agent_runs, approvals=app.state.store)
     app.include_router(run_ledger_router(ledger=app.state.run_ledger))
     app.state.calendar = calendar_from_secrets(app.state.secrets, http=http)
@@ -522,6 +546,9 @@ def create_app(
                 wait_permission=None,
                 system_prompt_fn=system_prompt,
                 telemetry=app.state.telemetry_recorder,
+                agent_runs=app.state.agent_runs,
+                run_owner=app.state.run_owner,
+                run_trigger="scheduled",
             )
         )
 
@@ -630,6 +657,11 @@ def create_app(
             sent = send_reviewed_draft(app.state.gmail, authority)
         except SendAuthorityError as exc:
             return False, {"error": str(exc), "code": exc.code, "sent": False}
+        except GmailOutcomeUnknown:
+            # Gmail never answered. Reporting `sent: False` here would be a
+            # claim this process cannot make, so the exception carries on to
+            # `guarded_call`, which quarantines the effect for a person.
+            raise
         except GmailError as exc:
             return False, {"error": str(exc), "code": "gmail_failed", "sent": False}
         except Exception as exc:
@@ -709,10 +741,58 @@ def create_app(
             "apollo_id": result.get("apolloId"),
         }
 
+    def _approval_run_context(item: dict[str, Any]) -> AgentRunContext | None:
+        """A run of this executor's own, to fence one approved effect.
+
+        Deliberately not the turn's run. A turn parked on this approval may be
+        alive and about to come back through `resume_from_approval`, and two
+        processes racing for one lease would leave whichever lost unable to
+        checkpoint. A child run avoids the race entirely, and the effect is
+        still joined to the turn by `approval_id`, which is the key the review
+        queue reads anyway.
+
+        Returning None is the fail-closed direction: `guarded_call` then
+        refuses the call outright rather than making it unrecorded.
+        """
+        approval_id = str(item.get("id") or "")
+        parked_run = str(item.get("run_id") or "")
+        resource = item.get("resource") if isinstance(item.get("resource"), dict) else {}
+        try:
+            return AgentRunContext.start(
+                app.state.agent_runs,
+                app.state.run_owner,
+                session_id=(
+                    str(item.get("session_id") or "")
+                    or store.open_session_id()
+                    or "main"
+                ),
+                trigger="chat",
+                goal=f"approved:{item.get('name')}:{approval_id}",
+                person_id=str(resource.get("person_id") or "") or None,
+                parent_run_id=(
+                    parked_run
+                    if parked_run
+                    and app.state.agent_runs.get_run(parked_run) is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            return AgentRunContext.disarmed(
+                app.state.agent_runs,
+                app.state.run_owner,
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+
     async def _execute_claimed_approval(
         item: dict[str, Any], *, claimant: str
     ) -> dict[str, Any] | None:
-        """Run an allow-claimed approval server-side and persist its receipt."""
+        """Run an allow-claimed approval server-side and persist its receipt.
+
+        The claim that got here already made this the only executor. What this
+        adds is the other half: the run store records the dispatch before the
+        call and the outcome after it, so a process that dies in between leaves
+        an effect a person settles rather than a machine retries.
+        """
         approval_span = None
         approval_tool_span = None
         try:
@@ -737,42 +817,76 @@ def create_app(
         except ValueError:
             pass
         bound = _bound_resource(item)
-        try:
+        approval_id = str(item.get("id") or "")
+        run_context = _approval_run_context(item)
+
+        async def _invoke() -> tuple[bool, dict[str, Any]]:
             if bound is not None:
                 runner = (
                     _execute_bound_send
                     if bound["kind"] == "gmail_send_authority"
                     else _execute_bound_enrichment
                 )
-                ok, result = await asyncio.to_thread(runner, item)
-            else:
-                ok, result = await asyncio.to_thread(
-                    execute,
-                    item["name"],
-                    _claimed_arguments(item),
-                    store=app.state.store,
-                    gmail=app.state.gmail,
-                    drive=app.state.drive,
-                    calendar=app.state.calendar,
-                    http=app.state.http,
-                    apollo_key=app.state.apollo_key,
-                    tavily_key=app.state.tavily_key,
-                    skills=app.state.skills,
-                    mcp=app.state.mcp,
-                    people=app.state.people,
-                    workspace_runtime=app.state.workspace_runtime,
-                    approval_granted=True,
-                    approval_scope=str(item.get("scope") or "once"),
-                    approval_fingerprint=(
-                        str((item.get("resource") or {}).get("fingerprint"))
-                        if isinstance(item.get("resource"), dict)
-                        and (item.get("resource") or {}).get("fingerprint")
-                        else None
-                    ),
-                    session_id=str(item.get("session_id") or ""),
-                    actor=str(item.get("actor") or "assistant"),
-                    run_id=str(item.get("run_id") or "") or None,
-                )
+                return await asyncio.to_thread(runner, item)
+            return await asyncio.to_thread(
+                execute,
+                item["name"],
+                _claimed_arguments(item),
+                store=app.state.store,
+                gmail=app.state.gmail,
+                drive=app.state.drive,
+                calendar=app.state.calendar,
+                http=app.state.http,
+                apollo_key=app.state.apollo_key,
+                tavily_key=app.state.tavily_key,
+                skills=app.state.skills,
+                mcp=app.state.mcp,
+                people=app.state.people,
+                workspace_runtime=app.state.workspace_runtime,
+                approval_granted=True,
+                approval_scope=str(item.get("scope") or "once"),
+                approval_fingerprint=(
+                    str((item.get("resource") or {}).get("fingerprint"))
+                    if isinstance(item.get("resource"), dict)
+                    and (item.get("resource") or {}).get("fingerprint")
+                    else None
+                ),
+                session_id=str(item.get("session_id") or ""),
+                actor=str(item.get("actor") or "assistant"),
+                run_id=str(item.get("run_id") or "") or None,
+            )
+
+        try:
+            # Dispatch commits before the call, outcome after. Calling the
+            # runner directly here is the trap `docs/agent-runs.md` names.
+            ok, result = await guarded_call(
+                run_context,
+                tool_name=str(item.get("name") or ""),
+                arguments=_claimed_arguments(item),
+                call=_invoke,
+                tool_call_id=approval_id,
+                approval_id=approval_id,
+            )
+        except AgentRunEffectQuarantined as exc:
+            # The inbox is about to record a terminal status for this claim.
+            # It is not the fence of record: the run store holds `ambiguous`,
+            # and `agent_run_reconcile` is what makes a surface say so.
+            ok, result = False, {
+                "error": (
+                    "The outcome of this action is unknown. It is held for "
+                    "review; do not retry it until it is settled."
+                ),
+                "code": "outcome_unknown",
+                "effect_id": exc.effect_id,
+            }
+        except AgentRunUnavailable as exc:
+            ok, result = False, {
+                "error": (
+                    "Sourcecado could not record this action durably, so it "
+                    f"was not attempted. {exc}"
+                ),
+                "code": "agent_run_unavailable",
+            }
         except asyncio.CancelledError:
             if approval_tool_span is not None:
                 approval_tool_span.cancel()
@@ -788,6 +902,11 @@ def create_app(
             else:
                 approval_tool_span.partial(ErrorKind.TOOL)
                 approval_span.partial(ErrorKind.TOOL)
+        if run_context is not None:
+            # A quarantine already parked this run as `interrupted` and closed
+            # the context, so this is a no-op there and the run keeps saying
+            # the outcome is unknown.
+            run_context.finish("complete" if ok else "partial", status=str(ok))
         receipt = app.state.inbox.complete_execution(
             str(item["id"]),
             claimant=claimant,
@@ -1397,6 +1516,64 @@ def create_app(
         if not claim.decision_recorded:
             response["idempotent"] = True
         return response
+
+    # Not under /v1/agent-runs: `run_ledger_api` already owns
+    # /v1/agent-runs/{run_id} and is registered first, so a literal segment
+    # there would be swallowed by the id route. The resource here is an
+    # external effect anyway, not a run.
+    @app.get("/v1/agent-run-effects/quarantine")
+    async def quarantine_list():
+        """The review queue: every external effect nobody knows the outcome of.
+
+        Joined to the approval that authorized it, so an operator sees what
+        they allowed, not just an effect id. The run store is the fence of
+        record here: a row whose inbox claim disagrees says so on the row.
+        """
+        await _reap_and_publish_expired()
+        rows = review_queue(app.state.agent_runs, app.state.store)
+        return {
+            "effects": rows,
+            "decisions": list(OPERATOR_DECISIONS),
+            # Resolved rows too: an interrupted claim is a resolved approval
+            # whose execution never reported, which is exactly the disagreement
+            # this list exists to name.
+            "contested": contested_approvals(
+                app.state.agent_runs,
+                app.state.store.list_inbox(pending_only=False),
+            ),
+        }
+
+    @app.post("/v1/agent-run-effects/quarantine/{effect_id}")
+    async def quarantine_resolve(effect_id: str, request: Request):
+        """A person settles what the machine could not.
+
+        The three decisions are the operator half of the vocabulary and the
+        store refuses anything else. Settling does not restart the run: what to
+        do with a turn whose send may already have gone out is the operator's
+        next decision, and no code makes it for them.
+        """
+        payload = await request.json()
+        decision = str(payload.get("decision") or "").strip()
+        operator = str(payload.get("operator") or "").strip()
+        note = payload.get("note")
+        try:
+            resolved = await asyncio.to_thread(
+                app.state.agent_runs.resolve_quarantined_effect,
+                effect_id,
+                decision=decision,
+                operator=operator,
+                note=str(note) if note is not None else None,
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                {"error": str(exc), "decisions": list(OPERATOR_DECISIONS)},
+                status_code=400,
+            )
+        except AgentRunEffectFenced as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except KeyError:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"effect": resolved}
 
     @app.post("/v1/schedule/tick")
     def schedule_tick():
@@ -3047,6 +3224,11 @@ def create_app(
                     identity=control.identity,
                     control=control,
                     telemetry=app.state.telemetry_recorder,
+                    agent_runs=app.state.agent_runs,
+                    run_owner=app.state.run_owner,
+                    run_trigger=(
+                        "chat" if queue_item_id is None else "queued_chat"
+                    ),
                 )
                 status = str(result.get("status") or "error")
                 if queue_item_id is not None:
@@ -3060,6 +3242,19 @@ def create_app(
                             queue_item_id,
                             state="interrupted",
                             error="Run cancelled before completion.",
+                        )
+                    elif status == "held":
+                        # Same word problem, third surface. A queue row that
+                        # says "failed" invites the retry the fence exists to
+                        # stop, so the item is interrupted and says why.
+                        store.finish_queue_item(
+                            run_sid,
+                            queue_item_id,
+                            state="interrupted",
+                            error=(
+                                "The outcome of the last action is unknown. "
+                                "It is held for review."
+                            ),
                         )
                     else:
                         store.finish_queue_item(

@@ -652,6 +652,12 @@ class AgentRunRepository:
                 effect_id, lease.run_id, owner_id=lease.owner_id
             )
             payload["tool_name"] = existing["tool_name"]
+            # Carried so a receipt pairs this checkpoint with the `tool_pending`
+            # the dispatch wrote, exactly as `quarantine_effect` does. Without
+            # it a fenced call reads as one call that never finished plus one
+            # outcome belonging to nothing.
+            payload["tool_call_id"] = existing["tool_call_id"]
+            payload["approval_id"] = existing["approval_id"]
             row = self._effect_checkpoint(
                 lease, "tool_completed", "running", payload, stamp, release=False
             )
@@ -813,6 +819,23 @@ class AgentRunRepository:
                 "SELECT * FROM agent_run_effects WHERE run_id = ? "
                 "ORDER BY dispatched_at, rowid",
                 (str(run_id),),
+            ).fetchall()
+        return [_effect_row(row) for row in rows]
+
+    def effects_for_approval(self, approval_id: str) -> list[dict[str, Any]]:
+        """Every effect opened under one approval, whatever run dispatched it.
+
+        Read only. An approval decided from the operator surface is executed by
+        the server under its own run, so the approval -- not the run -- is the
+        key that joins the inbox to this store. There is no index on
+        `approval_id`: adding one is a schema change, and this table holds one
+        row per consequential call, read only when a person opens a receipt.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM agent_run_effects WHERE approval_id = ? "
+                "ORDER BY dispatched_at, rowid",
+                (str(approval_id),),
             ).fetchall()
         return [_effect_row(row) for row in rows]
 

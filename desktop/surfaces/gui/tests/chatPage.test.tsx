@@ -921,6 +921,27 @@ describe("ChatPage Warm Operator thread", () => {
       },
       "Run cancelled.",
     ],
+    [
+      // Nobody knows whether the send went out. "Run failed." would send a
+      // screen-reader user straight to a retry.
+      "an unknown outcome",
+      {
+        version: 2,
+        type: "error",
+        session_id: "thread-alpha",
+        run_id: "run-1",
+        event_id: "terminal-held",
+        message_id: "assistant-1",
+        part_id: "assistant-part-1",
+        state: "held",
+        code: "outcome_unknown",
+        effect_id: "effect-9f2c",
+        message:
+          "The outcome of this action is unknown. It is held for review; do " +
+          "not retry it until it is settled.",
+      },
+      "Run held for review.",
+    ],
   ] as const)("announces run %s outside the transcript", async (_label, terminal, expected) => {
     api.getSession.mockResolvedValue({
       id: "thread-alpha",

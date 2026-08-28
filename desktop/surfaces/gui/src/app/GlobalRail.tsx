@@ -50,6 +50,7 @@ type Props = {
   sessions: SessionRow[] | null;
   scheduledApprovalCount: number;
   memoryReviewCount: number;
+  heldEffectCount: number;
   onNewChat: () => void;
   onOpenSession: (session: SessionRow) => void;
   onPin: (session: SessionRow) => void;
@@ -58,7 +59,7 @@ type Props = {
   onClose: () => void;
 };
 
-export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memoryReviewCount, onNewChat, onOpenSession, onPin, onRename, onSearch, onClose }: Props) {
+export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memoryReviewCount, heldEffectCount, onNewChat, onOpenSession, onPin, onRename, onSearch, onClose }: Props) {
   const pinned = sessions?.filter((session) => session.pinned) || [];
   const recent = sessions?.filter((session) => !session.pinned) || [];
   const railRef = useRef<HTMLElement>(null);
@@ -140,6 +141,14 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
             badgeLabel={`Saved memory: ${memoryReviewCount} waiting for review`}
           >
             Memory
+          </RailLink>
+          <RailLink
+            href="#/quarantine"
+            current={route.kind === "quarantine"}
+            badge={heldEffectCount}
+            badgeLabel={`Held actions: ${heldEffectCount} waiting for your answer`}
+          >
+            Needs your answer
           </RailLink>
         </div>
         <div className="thread-groups">
