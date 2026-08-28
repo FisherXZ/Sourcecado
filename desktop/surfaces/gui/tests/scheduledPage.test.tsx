@@ -204,6 +204,37 @@ describe("ScheduledPage", () => {
     expect(within(receipts).getByText("1 approval waiting in Inbox")).toBeInTheDocument();
   });
 
+  it("renders a genuinely unknown status as needs-review, not failed", async () => {
+    api.getSchedule.mockResolvedValue(
+      schedule({
+        jobs: [job],
+        runs: [run({ status: "unknown", summary: "Status could not be recognized." })],
+      }),
+    );
+
+    render(<ScheduledPage />);
+
+    const routine = await screen.findByRole("article", { name: "Weekly priority review" });
+    const receipts = within(routine).getByRole("list", { name: "Run receipts" });
+    expect(within(receipts).getByText("Needs review")).toBeInTheDocument();
+    expect(within(receipts).queryByText("Failed")).not.toBeInTheDocument();
+  });
+
+  it("shows legacy zero-duration runs as 'Legacy run' instead of 0ms", async () => {
+    api.getSchedule.mockResolvedValue(
+      schedule({
+        jobs: [job],
+        runs: [run({ durationMs: 0, summary: "Found three priority contacts." })],
+      }),
+    );
+
+    render(<ScheduledPage />);
+
+    const routine = await screen.findByRole("article", { name: "Weekly priority review" });
+    expect(within(routine).getByText("Legacy run")).toBeInTheDocument();
+    expect(within(routine).queryByText("0ms")).not.toBeInTheDocument();
+  });
+
   it("shows artifact metadata and opens the isolated scheduled thread", async () => {
     api.getSchedule.mockResolvedValue(
       schedule({

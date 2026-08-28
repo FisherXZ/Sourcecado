@@ -127,6 +127,35 @@ describe("schedule API boundary", () => {
     expect(JSON.stringify(schedule)).not.toContain("secret-never-render");
   });
 
+  it("marks a genuinely unrecognized run status as unknown instead of coercing it to failed", async () => {
+    fetchMock.mockResolvedValue(
+      response({
+        jobs: [],
+        runs: [
+          {
+            id: 11,
+            job_id: 4,
+            status: "some_future_status_this_client_has_never_seen",
+            result: "",
+            summary: "",
+            created_at: "2026-08-25T10:01:00Z",
+            started_at: "2026-08-25T10:01:00Z",
+            finished_at: "2026-08-25T10:01:02Z",
+            duration_ms: 500,
+            session_id: "sched-4",
+            waiting_approval_count: 0,
+            artifacts: [],
+          },
+        ],
+        templates: [],
+      }),
+    );
+
+    const schedule = await getSchedule();
+
+    expect(schedule.runs[0].status).toBe("unknown");
+  });
+
   it("creates a routine through the schedule endpoint", async () => {
     fetchMock.mockResolvedValue(
       response({
