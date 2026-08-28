@@ -279,7 +279,8 @@ def record_tool_on_person(
     """Bind a first one-person keep to this session, then file connector events on the bound person."""
     if name == "people_keep" and ok:
         kept = result.get("kept") or []
-        if len(kept) == 1:
+        selected_count = int(result.get("selected_row_count") or len(kept))
+        if selected_count == 1 and len(kept) == 1:
             person_id = kept[0].get("person_id") if isinstance(kept[0], dict) else None
             if person_id and people.session_for_person(str(person_id)) is None:
                 people.bind_session(session_id, str(person_id))

@@ -7,6 +7,7 @@ import time
 from fastapi.testclient import TestClient
 
 from coworker.events import new_turn_identity
+from coworker.gmail import FakeGmail
 from coworker.inbox import Inbox
 from coworker.provider import FakeProvider, ToolCall
 from coworker.server import TOKEN_HEADER, create_app
@@ -307,7 +308,9 @@ def test_ws_allow_for_a_dead_turn_executes_server_side_instead_of_wedging(
             {"deltas": ("drafted",)},
         ]
     )
-    built = create_app(token=TOKEN, provider=fake, state=tmp_path)
+    built = create_app(
+        token=TOKEN, provider=fake, state=tmp_path, gmail=FakeGmail()
+    )
     # Bare TestClient: each ws context has its own portal, so leaving the first
     # context kills the turn's task outright — the dead-before-claim variant.
     client = TestClient(built)

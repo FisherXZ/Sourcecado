@@ -56,7 +56,8 @@ def test_keep_row_with_blank_apollo_fields_keeps_what_the_file_has(tmp_path):
                     "title": "",
                     "organizationName": "   ",
                 }
-            ]
+            ],
+            "target": "club research dinner",
         },
         people=people,
     )
@@ -76,7 +77,7 @@ def test_keep_same_apollo_id_twice_does_not_fork(tmp_path):
     people = PersonStore(tmp_path)
     first = execute(
         "people_keep",
-        {"people": [_alyssa()]},
+        {"people": [_alyssa()], "target": "initial outreach"},
         people=people,
     )[1]["kept"][0]
     ok, result = execute(
@@ -117,7 +118,8 @@ def test_keep_two_rows_returns_two_person_ids(tmp_path):
                     "title": "Founder",
                     "organizationName": "Analytic",
                 },
-            ]
+            ],
+            "target": "director-authored target",
         },
         people=people,
     )
@@ -139,6 +141,27 @@ def test_keep_empty_list_succeeds(tmp_path):
     assert result["kept"] == []
 
 
+def test_people_keep_reports_partial_rows_without_losing_success(tmp_path):
+    people = PersonStore(tmp_path)
+
+    ok, result = execute(
+        "people_keep",
+        {
+            "people": [_alyssa(), {"firstName": "Missing Apollo identity"}],
+            "target": "Director-authored target",
+        },
+        people=people,
+    )
+
+    assert ok is True
+    assert result["status"] == "partial"
+    assert result["selected_row_count"] == 2
+    assert [row["apollo_id"] for row in result["kept"]] == ["abc123"]
+    assert result["failed"] == [
+        {"row_index": 1, "apollo_id": None, "code": "missing_apollo_id"}
+    ]
+
+
 def test_people_keep_is_auto():
     from coworker.permissions import decide
 
@@ -157,3 +180,12 @@ def test_versioned_prompt_and_tool_catalog_support_keep_after_search(tmp_path):
     assert "people_keep" in tool_names
     assert "search for People" in prompt
     assert "never invent" in prompt
+
+
+def test_people_keep_schema_requires_the_director_target():
+    from coworker.tools import PEOPLE_KEEP_SCHEMA
+
+    assert PEOPLE_KEEP_SCHEMA["function"]["parameters"]["required"] == [
+        "people",
+        "target",
+    ]
