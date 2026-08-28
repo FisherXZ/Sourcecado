@@ -170,6 +170,81 @@ def test_api_cancels_at_checkpoint_and_resumes_same_job(tmp_path):
         assert completed["id"] == job_id
 
 
+def test_disconnected_resume_keeps_paused_job_resumable(tmp_path):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class Drive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            entered.set()
+            assert release.wait(2)
+            return {"files": [], "nextPageToken": None}
+
+    connected = {"drive": Drive()}
+    state = tmp_path / "state"
+    store = DriveIngestionStore(state)
+    coordinator = DriveIngestionCoordinator(store, lambda: connected["drive"])
+    app = FastAPI()
+    app.include_router(
+        drive_ingestion_router(
+            store=store,
+            coordinator=coordinator,
+            people=PersonStore(tmp_path / "people"),
+        )
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/v1/drive-ingestions",
+            json={"folder_id": "root", "resolved_path": "Sourcing/Fall 2026"},
+        )
+        job_id = started.json()["job"]["id"]
+        assert entered.wait(1)
+
+        cancelling = client.post(f"/v1/drive-ingestions/{job_id}/cancel")
+        assert cancelling.status_code == 202
+        release.set()
+        for _ in range(100):
+            paused = client.get(f"/v1/drive-ingestions/{job_id}").json()["job"]
+            if paused["status"] == "paused":
+                break
+            time.sleep(0.01)
+        assert paused["status"] == "paused"
+
+        connected["drive"] = None
+        resume = client.post(f"/v1/drive-ingestions/{job_id}/resume")
+        assert resume.status_code == 409
+        assert resume.json() == {"error": "Drive is not connected"}
+
+        after_resume = client.get(f"/v1/drive-ingestions/{job_id}")
+        assert after_resume.status_code == 200
+        assert after_resume.json()["job"]["status"] == "paused"
+
+        persisted = DriveIngestionStore(state)
+        reopened_app = FastAPI()
+        reopened_app.include_router(
+            drive_ingestion_router(
+                store=persisted,
+                coordinator=DriveIngestionCoordinator(persisted, lambda: None),
+                people=PersonStore(tmp_path / "people-reopen"),
+            )
+        )
+        restarted = TestClient(reopened_app).get(f"/v1/drive-ingestions/{job_id}")
+        assert restarted.status_code == 200
+        assert restarted.json()["job"]["status"] == "paused"
+
+        connected["drive"] = Drive()
+        recovered = client.post(f"/v1/drive-ingestions/{job_id}/resume")
+        assert recovered.status_code == 202
+        for _ in range(100):
+            completed = client.get(f"/v1/drive-ingestions/{job_id}").json()["job"]
+            if completed["status"] == "completed":
+                break
+            time.sleep(0.01)
+        assert completed["status"] == "completed"
+        assert completed["id"] == job_id
+
+
 def test_api_requires_separate_review_action_before_board_write(tmp_path):
     source = {
         "id": "brief",
@@ -314,6 +389,111 @@ def test_api_reruns_completed_job_from_new_generation(tmp_path):
         assert drive.read_calls == ["brief", "brief"]
 
 
+def test_disconnected_rerun_keeps_completed_index_queryable(tmp_path):
+    source = {
+        "id": "brief",
+        "name": "Brief.txt",
+        "mimeType": "text/plain",
+        "modifiedTime": "2026-08-27T10:00:00Z",
+        "parents": ["root"],
+        "webViewLink": "https://drive.example/brief",
+    }
+
+    class Drive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            return {"files": [source], "nextPageToken": None}
+
+        def read(self, file_id, max_chars=20000):
+            return {
+                **source,
+                "content": "Fall research dinner evidence.",
+                "status": "read",
+                "sources": [],
+                "sensitive_content_redacted": False,
+                "redaction_count": 0,
+            }
+
+    connected = {"drive": Drive()}
+    state = tmp_path / "state"
+    store = DriveIngestionStore(state)
+    coordinator = DriveIngestionCoordinator(store, lambda: connected["drive"])
+    app = FastAPI()
+    app.include_router(
+        drive_ingestion_router(
+            store=store,
+            coordinator=coordinator,
+            people=PersonStore(tmp_path / "people"),
+        )
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/v1/drive-ingestions",
+            json={"folder_id": "root", "resolved_path": "Sourcing/Fall 2026"},
+        )
+        job_id = started.json()["job"]["id"]
+        for _ in range(100):
+            job = client.get(f"/v1/drive-ingestions/{job_id}").json()["job"]
+            if job["status"] == "completed":
+                break
+            time.sleep(0.01)
+        assert job["status"] == "completed"
+        assert job["generation"] == 1
+        queried = client.get(
+            f"/v1/drive-ingestions/{job_id}/query",
+            params={"q": "brief"},
+        )
+        assert queried.status_code == 200
+        assert queried.json()["matches"][0]["drive_id"] == "brief"
+
+        connected["drive"] = None
+        rerun = client.post(f"/v1/drive-ingestions/{job_id}/rerun")
+        assert rerun.status_code == 409
+        assert rerun.json() == {"error": "Drive is not connected"}
+
+        after_rerun = client.get(f"/v1/drive-ingestions/{job_id}")
+        assert after_rerun.status_code == 200
+        assert after_rerun.json()["job"]["status"] == "completed"
+        assert after_rerun.json()["job"]["generation"] == 1
+        still_indexed = client.get(
+            f"/v1/drive-ingestions/{job_id}/query",
+            params={"q": "brief"},
+        )
+        assert still_indexed.status_code == 200
+        assert still_indexed.json()["matches"][0]["drive_id"] == "brief"
+
+        persisted = DriveIngestionStore(state)
+        reopened_app = FastAPI()
+        reopened_app.include_router(
+            drive_ingestion_router(
+                store=persisted,
+                coordinator=DriveIngestionCoordinator(persisted, lambda: None),
+                people=PersonStore(tmp_path / "people-reopen"),
+            )
+        )
+        restarted = TestClient(reopened_app).get(f"/v1/drive-ingestions/{job_id}")
+        assert restarted.status_code == 200
+        assert restarted.json()["job"]["status"] == "completed"
+        assert restarted.json()["job"]["generation"] == 1
+        restarted_query = TestClient(reopened_app).get(
+            f"/v1/drive-ingestions/{job_id}/query",
+            params={"q": "brief"},
+        )
+        assert restarted_query.status_code == 200
+        assert restarted_query.json()["matches"][0]["drive_id"] == "brief"
+
+        connected["drive"] = Drive()
+        recovered = client.post(f"/v1/drive-ingestions/{job_id}/rerun")
+        assert recovered.status_code == 202
+        for _ in range(100):
+            job = client.get(f"/v1/drive-ingestions/{job_id}").json()["job"]
+            if job["status"] == "completed" and job["generation"] == 2:
+                break
+            time.sleep(0.01)
+        assert job["status"] == "completed"
+        assert job["generation"] == 2
+
+
 def test_api_marks_operator_added_global_source_out_of_scope(tmp_path):
     class Drive:
         def list_folder(self, folder_id, max_results=1000, page_token=None):
@@ -390,6 +570,124 @@ def test_api_marks_operator_added_global_source_out_of_scope(tmp_path):
         assert included.json()["matches"][0]["drive_id"] == "global"
         assert included.json()["matches"][0]["out_of_scope"] is True
         assert included.json()["matches"][0]["extraction_status"] == "read"
+
+
+def test_disconnected_explicit_source_keeps_completed_index_queryable(tmp_path):
+    source = {
+        "id": "brief",
+        "name": "Brief.txt",
+        "mimeType": "text/plain",
+        "modifiedTime": "2026-08-27T10:00:00Z",
+        "parents": ["root"],
+        "webViewLink": "https://drive.example/brief",
+    }
+
+    class Drive:
+        def list_folder(self, folder_id, max_results=1000, page_token=None):
+            return {"files": [source], "nextPageToken": None}
+
+        def read(self, file_id, max_chars=20000):
+            return {
+                **source,
+                "content": "Fall research dinner evidence.",
+                "status": "read",
+                "sources": [],
+                "sensitive_content_redacted": False,
+                "redaction_count": 0,
+            }
+
+    connected = {"drive": Drive()}
+    state = tmp_path / "state"
+    store = DriveIngestionStore(state)
+    coordinator = DriveIngestionCoordinator(store, lambda: connected["drive"])
+    app = FastAPI()
+    app.include_router(
+        drive_ingestion_router(
+            store=store,
+            coordinator=coordinator,
+            people=PersonStore(tmp_path / "people"),
+        )
+    )
+
+    with TestClient(app) as client:
+        started = client.post(
+            "/v1/drive-ingestions",
+            json={"folder_id": "root", "resolved_path": "Sourcing/Fall 2026"},
+        )
+        job_id = started.json()["job"]["id"]
+        for _ in range(100):
+            job = client.get(f"/v1/drive-ingestions/{job_id}").json()["job"]
+            if job["status"] == "completed":
+                break
+            time.sleep(0.01)
+        assert job["status"] == "completed"
+        queried = client.get(
+            f"/v1/drive-ingestions/{job_id}/query",
+            params={"q": "brief"},
+        )
+        assert queried.status_code == 200
+        assert queried.json()["matches"][0]["drive_id"] == "brief"
+
+        connected["drive"] = None
+        added = client.post(
+            f"/v1/drive-ingestions/{job_id}/external-sources",
+            json={
+                "drive_id": "global",
+                "name": "Global.txt",
+                "parent_id": "elsewhere",
+                "display_path": "External/Global.txt",
+                "mime_type": "text/plain",
+                "modified_time": "2026-08-27T10:00:00Z",
+                "web_view_link": "https://drive.example/global",
+            },
+        )
+        assert added.status_code == 409
+        assert added.json() == {"error": "Drive is not connected"}
+
+        after_add = client.get(f"/v1/drive-ingestions/{job_id}")
+        assert after_add.status_code == 200
+        assert after_add.json()["job"]["status"] == "completed"
+        assert after_add.json()["job"]["generation"] == 1
+        still_indexed = client.get(
+            f"/v1/drive-ingestions/{job_id}/query",
+            params={"q": "brief"},
+        )
+        assert still_indexed.status_code == 200
+        assert still_indexed.json()["matches"][0]["drive_id"] == "brief"
+
+        persisted = DriveIngestionStore(state)
+        reopened_app = FastAPI()
+        reopened_app.include_router(
+            drive_ingestion_router(
+                store=persisted,
+                coordinator=DriveIngestionCoordinator(persisted, lambda: None),
+                people=PersonStore(tmp_path / "people-reopen"),
+            )
+        )
+        restarted = TestClient(reopened_app).get(f"/v1/drive-ingestions/{job_id}")
+        assert restarted.status_code == 200
+        assert restarted.json()["job"]["status"] == "completed"
+        restarted_query = TestClient(reopened_app).get(
+            f"/v1/drive-ingestions/{job_id}/query",
+            params={"q": "brief"},
+        )
+        assert restarted_query.status_code == 200
+        assert restarted_query.json()["matches"][0]["drive_id"] == "brief"
+
+        connected["drive"] = Drive()
+        recovered = client.post(
+            f"/v1/drive-ingestions/{job_id}/external-sources",
+            json={
+                "drive_id": "global",
+                "name": "Global.txt",
+                "parent_id": "elsewhere",
+                "display_path": "External/Global.txt",
+                "mime_type": "text/plain",
+                "modified_time": "2026-08-27T10:00:00Z",
+                "web_view_link": "https://drive.example/global",
+            },
+        )
+        assert recovered.status_code == 202
 
 
 def test_active_sidecar_mounts_ingestion_under_local_auth_and_state(tmp_path):

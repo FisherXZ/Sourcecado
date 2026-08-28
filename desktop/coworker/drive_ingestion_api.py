@@ -85,6 +85,8 @@ def drive_ingestion_router(
         if job["status"] != "paused":
             return JSONResponse({"error": "job_not_paused"}, status_code=409)
         try:
+            if coordinator.drive_factory() is None:
+                raise ValueError("Drive is not connected")
             store.prepare_resume(job_id)
             await coordinator.start(job_id)
         except ValueError as exc:
@@ -94,6 +96,8 @@ def drive_ingestion_router(
     @router.post("/v1/drive-ingestions/{job_id}/rerun")
     async def rerun_drive_ingestion(job_id: str):
         try:
+            if coordinator.drive_factory() is None:
+                raise ValueError("Drive is not connected")
             store.prepare_rerun(job_id)
             await coordinator.start(job_id)
         except ValueError as exc:
@@ -107,6 +111,8 @@ def drive_ingestion_router(
             body = await request.json()
             if not isinstance(body, dict):
                 raise ValueError("request body must be an object")
+            if coordinator.drive_factory() is None:
+                raise ValueError("Drive is not connected")
             store.add_explicit_source(
                 job_id,
                 drive_id=str(body.get("drive_id") or ""),
