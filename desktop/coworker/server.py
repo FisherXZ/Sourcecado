@@ -82,6 +82,7 @@ from coworker.meeting_evidence import MeetingEvidenceStore
 from coworker.brief import build_brief
 from coworker.people import PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
+from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.prompt_contract import (
     AssembledSystemPrompt,
     PromptDefinition,
@@ -1706,6 +1707,16 @@ def create_app(
     @app.get("/v1/board")
     def board_get():
         return app.state.people.list_board()
+
+    @app.post("/v1/replies/refresh")
+    def replies_refresh():
+        """Read inbound Gmail since the cursor and file what it can attribute.
+
+        Read and filing only. The reader handed to the refresh exposes four
+        Gmail read calls, so nothing on this path can enrich, draft, or send.
+        """
+        result = refresh_replies(app.state.people, InboundReader(app.state.gmail))
+        return {"refresh": result, "board": app.state.people.list_board()}
 
     @app.post("/v1/apollo/curate")
     async def apollo_curate(request: Request):

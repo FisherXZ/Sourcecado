@@ -18,4 +18,19 @@ describe("Board and person-file styles", () => {
       /\.person-chat-action button\s*\{[^}]*min-height:\s*44px;/,
     );
   });
+
+  it("keeps the follow-up flag on warm tokens and the reply check touch sized", () => {
+    // DESIGN.md reserves colour on a dense row for real attention, and the
+    // warm "needs attention" pair is already defined in both themes. A
+    // hardcoded colour here would break dark mode silently.
+    expect(styles).toMatch(
+      /\.board-row-flag\s*\{[^}]*background:\s*var\(--warn-bg\);[^}]*color:\s*var\(--warn\);/,
+    );
+    expect(styles).toMatch(
+      /\.board-page-actions button\s*\{[^}]*min-height:\s*44px;/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.board-page-actions button\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/,
+    );
+  });
 });

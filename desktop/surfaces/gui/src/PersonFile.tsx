@@ -14,6 +14,7 @@ import {
   setPersonSequence,
   type DriveEvidenceCandidate,
   type PersonFile,
+  type PersonKnowledgeGap,
 } from "./api";
 
 const STATES = [
@@ -21,6 +22,48 @@ const STATES = [
   { id: "in_conversation", label: "In conversation" },
   { id: "done", label: "Done" },
 ] as const;
+
+const FOLLOW_UP_LINE: Record<string, string> = {
+  reply_unanswered: "They replied and are waiting on a response.",
+  reply_needs_review: "A reply arrived that could not be tied to this person.",
+};
+
+type InboundReply = {
+  eventId: string;
+  from: string;
+  subject: string;
+  snippet: string;
+  receivedAt: string | null;
+  threadId: string | null;
+  messageId: string | null;
+  url: string | null;
+};
+
+/** The inbound replies filed on this person, newest last, from the ledger. */
+function inboundReplies(file: PersonFile): InboundReply[] {
+  return file.timeline
+    .filter((event) => event.payload?.direction === "inbound")
+    .map((event) => {
+      const source = (event.payload.source_ref ?? {}) as Record<string, unknown>;
+      return {
+        eventId: event.event_id,
+        from: String(event.payload.from ?? "Unknown sender"),
+        subject: String(event.payload.subject ?? "No subject"),
+        snippet: String(event.payload.snippet ?? ""),
+        receivedAt:
+          typeof event.payload.received_at === "string" ? event.payload.received_at : null,
+        threadId: typeof source.thread_id === "string" ? source.thread_id : null,
+        messageId: typeof source.message_id === "string" ? source.message_id : null,
+        url: typeof source.url === "string" ? source.url : null,
+      };
+    });
+}
+
+function unassignedReplyGaps(file: PersonFile): PersonKnowledgeGap[] {
+  return (file.person.knowledge_gaps ?? []).filter(
+    (gap) => gap.fields?.kind === "unassigned_reply",
+  );
+}
 
 export function PersonFileView({ personId }: { personId: string }) {
   const [file, setFile] = useState<PersonFile | null>(null);
@@ -201,6 +244,8 @@ export function PersonFileView({ personId }: { personId: string }) {
   const driveSources = (file.person.sources ?? []).filter(
     (source) => source.fields?.provider === "Google Drive",
   );
+  const replies = inboundReplies(file);
+  const replyGaps = unassignedReplyGaps(file);
 
   return (
     <main className="route-page person-page">
@@ -284,6 +329,63 @@ export function PersonFileView({ personId }: { personId: string }) {
           typeof file.person.email === "string" ? file.person.email : null
         }
       />
+
+      <section className="person-section" aria-labelledby="person-replies-heading">
+        <h2 id="person-replies-heading">Replies</h2>
+        <p className="person-followup-line">
+          {file.person.follow_up?.needed
+            ? (FOLLOW_UP_LINE[file.person.follow_up.reason ?? ""] ??
+              "This person needs attention.")
+            : file.person.replied
+              ? "The last message on this thread was ours."
+              : "No reply yet."}
+        </p>
+        {replies.length === 0 ? (
+          <p className="person-empty">No inbound reply filed yet.</p>
+        ) : (
+          <div className="person-timeline">
+            {replies.map((reply) => (
+              <article key={reply.eventId} className="person-timeline-entry">
+                <p className="person-timeline-meta">
+                  Gmail · {reply.receivedAt ?? "time unknown"}
+                </p>
+                <p>
+                  {reply.from} — {reply.subject}
+                </p>
+                {reply.snippet ? <p>{reply.snippet}</p> : null}
+                <p className="person-timeline-meta">
+                  {reply.url ? (
+                    <a href={reply.url} target="_blank" rel="noreferrer">
+                      Open Gmail thread {reply.threadId}
+                    </a>
+                  ) : (
+                    `Gmail thread ${reply.threadId ?? "unknown"}`
+                  )}
+                  {reply.messageId ? ` · message ${reply.messageId}` : null}
+                </p>
+              </article>
+            ))}
+          </div>
+        )}
+        {replyGaps.length > 0 ? (
+          <div className="person-meeting-proposals">
+            <h3>Unassigned replies</h3>
+            {replyGaps.map((gap) => (
+              <article key={gap.id} className="person-timeline-entry">
+                <p className="person-timeline-meta">
+                  Gmail thread {String(gap.fields?.thread_id ?? "unknown")} ·{" "}
+                  {String(gap.fields?.received_at ?? "time unknown")}
+                </p>
+                <p>{String(gap.fields?.question ?? "Which person does this reply belong to?")}</p>
+                <p className="person-timeline-meta">
+                  Nothing was filed on this person. Reason:{" "}
+                  {String(gap.fields?.reason ?? "unknown")}.
+                </p>
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </section>
 
       <section className="person-section" aria-labelledby="person-meetings-heading">
         <div className="person-section-heading-row">

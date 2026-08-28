@@ -348,6 +348,13 @@ export async function renameSession(id: string, title: string): Promise<{ id: st
   return res.json();
 }
 
+export type FollowUpReason = "reply_unanswered" | "reply_needs_review";
+
+export type FollowUp = {
+  needed: boolean;
+  reason: FollowUpReason | null;
+};
+
 export type BoardPerson = {
   person_id: string;
   first_name: string | null;
@@ -355,6 +362,11 @@ export type BoardPerson = {
   title: string | null;
   company: string | null;
   sequence_state: string | null;
+  last_contact_at?: string | null;
+  last_contact_direction?: "outbound" | "inbound" | null;
+  replied?: boolean;
+  replied_at?: string | null;
+  follow_up?: FollowUp;
 };
 
 export type Board = {
@@ -373,8 +385,30 @@ export type PersonSourceRef = {
   fields?: Record<string, unknown>;
 };
 
+export type PersonKnowledgeGap = {
+  id: string;
+  person_id: string;
+  type: "knowledge_gap";
+  restricted: boolean;
+  fields?: Record<string, unknown>;
+};
+
+export type ReplyRefreshResult = {
+  status: "ok" | "failed";
+  mode: string;
+  scanned: number;
+  filed: number;
+  unassigned: number;
+  cursor?: string | null;
+  error?: string;
+};
+
 export type PersonFile = {
-  person: BoardPerson & Record<string, unknown> & { sources?: PersonSourceRef[] };
+  person: BoardPerson &
+    Record<string, unknown> & {
+      sources?: PersonSourceRef[];
+      knowledge_gaps?: PersonKnowledgeGap[];
+    };
   brief: {
     who: string;
     why: string;
@@ -478,6 +512,18 @@ export type ApolloCurationResult = {
 export async function getBoard(): Promise<Board> {
   const res = await get("/v1/board");
   if (!res.ok) throw new Error(`board ${res.status}`);
+  return res.json();
+}
+
+export async function refreshReplies(): Promise<{
+  refresh: ReplyRefreshResult;
+  board: Board;
+}> {
+  const res = await fetch(`${httpBase()}/v1/replies/refresh`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken() },
+  });
+  if (!res.ok) throw new Error(`reply refresh ${res.status}`);
   return res.json();
 }
 
