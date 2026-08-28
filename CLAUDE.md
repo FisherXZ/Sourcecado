@@ -27,3 +27,4 @@ When the request matches an available skill, invoke it before acting.
 - Diff review → `/review`
 - Visual review → `/design-review`
 - Shipping and pull requests → `/ship`
+- Post-ship or repo doc upkeep → `/document-release`

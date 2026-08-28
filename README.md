@@ -20,7 +20,7 @@ The current product specification is [Sourcecado as the sourcing director's assi
 ## Prerequisites
 
 - macOS for the native Tauri window
-- Python 3.13+
+- Python 3.14 (CI and `desktop/requirements.lock` are pinned to 3.14)
 - Node.js 24 (see `.nvmrc`)
 - Rust via `rustup` for the native build only
 
@@ -66,6 +66,16 @@ make build
 
 Run the deterministic baseline/candidate agent harness separately with `make eval`. It writes ignored, potentially sensitive local artifacts under `desktop/.eval-artifacts/`; see [the evaluation harness guide](desktop/docs/evaluations.md).
 
+## Operate
+
+The root `Makefile` wraps the usual commands. The long versions live next to the code:
+
+- [Doctor](desktop/docs/doctor.md) — inspect local state. `make doctor` changes nothing. `make doctor-repair` applies only automatic repairs.
+- [Secret scan](desktop/docs/secret-scan.md) — confirm a rotated credential is gone from local state without printing it. `make secret-scan`
+- [Evaluations](desktop/docs/evaluations.md) — `make eval` and `make eval-sourcing`. Artifacts stay under `desktop/.eval-artifacts/` and are gitignored.
+- [Packaging](desktop/docs/packaging.md) — freeze the sidecar and build `Sourcecado.app`
+- [Preview updates](desktop/docs/update-channel.md) — signed manifests, drain, rollback
+
 ## Repository map
 
 - `desktop/coworker/` — local FastAPI sidecar, agent loop, tools, connectors, permissions, and persistence
@@ -76,7 +86,18 @@ Run the deterministic baseline/candidate agent harness separately with `make eva
 - `archive/hosted-web/` — retired Next.js/Postgres implementation, kept intact for reference
 - `scratchpad/` — non-authoritative working artifacts
 
-See [docs/README.md](docs/README.md) for the documentation map and [archive/README.md](archive/README.md) for archive policy.
+## Docs
+
+- [Product spec](docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md) — what Sourcecado is for
+- [Domain language](CONTEXT.md)
+- [Design system](DESIGN.md)
+- [Agent guardrails](AGENTS.md)
+- [Desktop stack](desktop/README.md)
+- [Documentation map](docs/README.md)
+- [Course](docs/course/CONTEXT.md) — learning context, not a second product
+- [How to contribute](CONTRIBUTING.md)
+
+See [archive/README.md](archive/README.md) for archive policy.
 
 ## Local state
 

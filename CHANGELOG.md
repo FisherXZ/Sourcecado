@@ -23,6 +23,8 @@ All notable changes to Sourcecado will be documented in this file.
 
 ## [0.2.0.0] - 2026-06-17
 
+This entry is the hosted Next.js app, not the current desktop product. Current work is under [Unreleased].
+
 ### Added
 - Next.js 15 web app shell replacing the CLI-only interface — open `npm run dev` to launch the browser app
 - `/chat` route with a Research Chat placeholder page — ready to wire up to sourcing memory

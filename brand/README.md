@@ -14,6 +14,8 @@ Masters for the painted owl mascot. The owl wears an avocado satchel. Personalit
 | `marketing/social-card-light.jpg` | Landing social card (light) | GitHub README preview |
 | `marketing/social-card-dark.jpg` | Landing social card (dark) | Stored for GitHub/LinkedIn social preview |
 
+## Desktop wiring
+
 The GUI serves this folder at `/brand/` via `desktop/surfaces/gui/public/brand`.
 
 ## Regenerating app icons
