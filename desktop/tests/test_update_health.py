@@ -34,7 +34,7 @@ from coworker.update_channel.apply import SIDECAR_RELATIVE, sidecar_health_check
 # a valid interpreter path there), so the stub is /bin/sh wrapping that same
 # interpreter.
 STUB_PY = '''
-import argparse, json, os, sys
+import argparse, json, os, socketserver, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 STATUS = os.environ.get("STUB_HEALTH", "ok")
@@ -64,19 +64,21 @@ class Handler(BaseHTTPRequestHandler):
 class ReuseHTTPServer(HTTPServer):
     allow_reuse_address = True
 
+    def server_bind(self):
+        # Deliberately not HTTPServer.server_bind. That calls
+        # socket.getfqdn(host) between bind() and listen(); on the GitHub
+        # macOS runner the lookup hangs, leaving the socket bound and never
+        # listening, which refuses every connection (#140). server_name is
+        # unused here.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
     def handle_error(self, request, client_address):
         import traceback
         traceback.print_exc(file=sys.stderr)
         sys.stderr.flush()
-
-import socket, time as _t
-_t0 = _t.monotonic()
-try:
-    socket.getfqdn("127.0.0.1")
-    _fqdn = f"{_t.monotonic() - _t0:.2f}s"
-except Exception as _exc:
-    _fqdn = f"failed {_exc}"
-print(f"getfqdn took {_fqdn}", file=sys.stderr, flush=True)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--host", default="127.0.0.1")
@@ -173,6 +175,28 @@ def _health_diagnostics(install) -> list[str]:
 
     probe("wrapper smoke", wrapper_smoke)
     probe("stub head", lambda: repr(binary.with_name("health-stub.py").read_text()[:80]))
+
+    def getfqdn_duration():
+        """Bounded on purpose. An unbounded call is what hangs (#140)."""
+        import socket as _s
+        import threading
+
+        result = {}
+
+        def run():
+            started = time.monotonic()
+            try:
+                _s.getfqdn("127.0.0.1")
+                result["v"] = f"{time.monotonic() - started:.2f}s"
+            except Exception as exc:
+                result["v"] = f"failed {exc}"
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(timeout=10)
+        return result.get("v", "STILL RUNNING after 10s (this is the bug)")
+
+    probe("getfqdn", getfqdn_duration)
     try:
         proc = subprocess.Popen(
             [str(binary), "--host", "127.0.0.1", "--port", str(port)],
