@@ -1757,3 +1757,164 @@
   font-size: 12px;
   line-height: 1.45;
 }
+}
+
+/* The external-effect review queue. A held action is not an alarm and not a
+   failure: it is an open question, so it reads in the warn register rather
+   than the error one, and the three answers carry equal visual weight so the
+   surface never nudges an operator toward the convenient one. */
+.quarantine-page {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+.quarantine-empty {
+  margin-top: 24px;
+  color: var(--muted);
+}
+
+.quarantine-operator {
+  display: grid;
+  gap: 6px;
+  margin: 24px 0 0;
+  max-width: 320px;
+}
+
+.quarantine-operator span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.quarantine-operator input,
+.quarantine-note input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.quarantine-list {
+  display: grid;
+  gap: 16px;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+
+.quarantine-card {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.quarantine-card header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quarantine-card h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.quarantine-card time {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.quarantine-lede {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.quarantine-facts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+.quarantine-facts > div {
+  display: flex;
+  gap: 8px;
+}
+
+.quarantine-facts dt {
+  min-width: 80px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.quarantine-facts dd {
+  margin: 0;
+  font-size: 13px;
+}
+
+.quarantine-reason,
+.quarantine-contested {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.quarantine-contested {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.quarantine-note {
+  display: grid;
+  gap: 6px;
+}
+
+.quarantine-note span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.quarantine-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quarantine-actions button {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.quarantine-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.quarantine-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.quarantine-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--error-bg);
+  color: var(--error);
+  font-size: 13px;
+}

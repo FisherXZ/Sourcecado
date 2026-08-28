@@ -10,6 +10,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable
 
+from coworker.agent_run_dispatch import (
+    AgentRunContext,
+    AgentRunEffectQuarantined,
+    AgentRunUnavailable,
+    guarded_call,
+    needs_fence,
+)
 from coworker.compaction import (
     CompactionContext,
     SessionCompactor,
@@ -631,6 +638,17 @@ def _record_person_file(
     record_tool_on_person(people, sid, call.name, call.arguments, result, ok=ok)
 
 
+def _bound_person_id(execute_kwargs: dict, sid: str) -> str | None:
+    """The person this session works, so a run receipt names them."""
+    people = execute_kwargs.get("people")
+    if people is None:
+        return None
+    try:
+        return people.person_for_session(sid)
+    except Exception:
+        return None
+
+
 def _persist_closed(
     store: ConversationStore,
     sid: str,
@@ -672,6 +690,9 @@ async def run_turn(
     run_budget_policy: RunBudgetPolicy | None = None,
     context_projection: Any = None,
     projection_identity: Any = None,
+    agent_runs: Any = None,
+    run_owner: Any = None,
+    run_trigger: str = "chat",
 ) -> dict[str, Any]:
     workspace_runtime = execute_kwargs.get("workspace_runtime")
     events = TurnEventStream(
@@ -709,6 +730,31 @@ async def run_turn(
     turn_span = recorder.start_span(
         AgentTurnSpan(operation="agent.turn"), trace_context
     )
+    # The durable Agent Run, sharing the turn's own run id so a receipt, a
+    # person event, and a checkpoint all point at one identity.
+    #
+    # A run store that will not open a run does not stop the turn, and it does
+    # not quietly let it through either: `guarded_call` refuses every
+    # consequential tool while `run_context` is None, exactly as it does for a
+    # context that lost its lease. Reading work still runs; sending does not.
+    try:
+        run_context = AgentRunContext.start(
+            agent_runs,
+            run_owner,
+            session_id=sid,
+            trigger=run_trigger,
+            goal=text,
+            run_id=events.identity.run_id,
+            person_id=_bound_person_id(execute_kwargs, sid),
+            provider_model_id=str(getattr(provider, "model_id", "") or "") or None,
+        )
+    except Exception as exc:
+        # A caller that supplied a run store and got no run is fenced shut, not
+        # unfenced. Reading work still runs; every consequential tool refuses.
+        run_context = AgentRunContext.disarmed(
+            agent_runs, run_owner, reason=f"{type(exc).__name__}: {exc}"
+        )
+    model_step = 0
 
     async def _emit(event: dict[str, Any]) -> None:
         await events.send(event)
@@ -764,7 +810,20 @@ async def run_turn(
         )
         _record_person_file(sid, call, ok, result, execute_kwargs)
 
+    def _end_run(state: str, text_so_far: str) -> None:
+        """Close the durable run in the same shape the operator was told.
+
+        Shape only. The answer itself is in the transcript; the run row carries
+        how it ended and how long it was, never what it said.
+        """
+        if run_context is None:
+            return
+        run_context.finish(state, status=state, text=text_so_far)
+
     async def _terminal(event: dict[str, Any]) -> None:
+        _end_run(
+            str(event.get("state") or "failed"), str(event.get("text") or "")
+        )
         if control is None:
             await _emit(event)
         else:
@@ -814,6 +873,7 @@ async def run_turn(
     ) -> dict[str, Any]:
         turn_span.cancel()
         _persist_closed(store, sid, history, workspace_runtime)
+        _end_run("stopped", text_so_far)
         if control is not None:
             await control.finish_stopped(text_so_far)
         else:
@@ -936,6 +996,20 @@ async def run_turn(
             if budget_stop is not None:
                 break
             budget.start_model_turn()
+            model_step += 1
+            if run_context is not None:
+                run_context.note(
+                    "model_pending",
+                    state="running",
+                    payload={
+                        "step": model_step,
+                        "attempt_id": f"model-{events.identity.run_id}-{model_step}",
+                        "provider": _telemetry_provider_name(selected_provider),
+                        "model_id": str(
+                            getattr(selected_provider, "model_id", "") or ""
+                        ),
+                    },
+                )
             _persist_closed(store, sid, history, workspace_runtime)
             # The canonical view. Compaction reads it and never writes it; the
             # transcript on disk stays the record of what actually happened.
@@ -1159,6 +1233,39 @@ async def run_turn(
                 # The same typed values the provider span just recorded, so
                 # the budget is measured from telemetry rather than re-derived.
                 budget.record_request(provider_usage, provider_cost)
+                if run_context is not None:
+                    run_context.note(
+                        "model_completed",
+                        state="running",
+                        payload={
+                            "step": model_step,
+                            "attempt_id": (
+                                f"model-{events.identity.run_id}-{model_step}"
+                            ),
+                            "provider": _telemetry_provider_name(attempt_provider),
+                            "model_id": str(
+                                getattr(attempt_provider, "model_id", "") or ""
+                            ),
+                            "status": str(
+                                _telemetry_stop_reason(
+                                    provider_finish_reason, used_tools=bool(calls)
+                                ).value
+                            ),
+                        },
+                        usage=(
+                            {}
+                            if provider_usage is None
+                            else {
+                                "input_tokens": provider_usage.input_tokens,
+                                "output_tokens": provider_usage.output_tokens,
+                                "total_tokens": provider_usage.total_tokens,
+                            }
+                        ),
+                        provider_model_id=str(
+                            getattr(attempt_provider, "model_id", "") or ""
+                        )
+                        or None,
+                    )
                 if provider_usage is not None:
                     # The provider's own count of the prompt it just read.
                     # Preferred over the estimate when sizing the next step.
@@ -1292,9 +1399,24 @@ async def run_turn(
                             **({"resource": resource} if resource else {}),
                         }
                     )
+                    # Park the durable run on the person too. The lease is
+                    # released with this write, so a crash while the operator
+                    # is deciding leaves a run nobody owns and nothing resumes.
+                    if run_context is not None:
+                        run_context.park(
+                            call.id, tool_name=call.name, step=model_step
+                        )
                     if wait_permission is None:
                         return {"status": "waiting", "text": last_text}
                     choice = await wait_permission(call.id)
+                    # Back through the approval door, which is the only way in
+                    # to a parked run. A cancel did not authorize the call, and
+                    # the door takes allow or deny only; the inbox and the
+                    # transcript keep the word "cancelled".
+                    if run_context is not None:
+                        run_context.resume(
+                            call.id, "allow" if choice == "allow" else "deny"
+                        )
                     if choice == "cancel":
                         cancelled = inbox.cancel(call.id)
                         if cancelled is not None:
@@ -1404,6 +1526,21 @@ async def run_turn(
                     }
                 )
                 tool_span = turn_span.child(_telemetry_tool_span(call.name))
+                # A fenced tool gets its `tool_pending` from the dispatch, in
+                # the same transaction as the effect row. A retry-safe one has
+                # no effect record, so the checkpoint is written here or the
+                # receipt shows no reading work at all.
+                fenced = needs_fence(call.name)
+                if run_context is not None and not fenced:
+                    run_context.note(
+                        "tool_pending",
+                        state="running",
+                        payload={
+                            "step": model_step,
+                            "tool_name": call.name,
+                            "tool_call_id": call.id,
+                        },
+                    )
                 try:
                     kw = {
                         k: v for k, v in execute_kwargs.items() if not k.startswith("_")
@@ -1415,9 +1552,42 @@ async def run_turn(
                     kw["approval_fingerprint"] = approval_fingerprint
                     if approval_claimant is not None:
                         kw["actor"] = str(claim.item.get("actor") or "operator")
-                    ok, result = await asyncio.to_thread(
-                        execute, call.name, call.arguments, **kw
+
+                    async def _invoke() -> tuple[bool, dict[str, Any]]:
+                        return await asyncio.to_thread(
+                            execute, call.name, call.arguments, **kw
+                        )
+
+                    # The one door to a tool in this loop. `guarded_call`
+                    # commits the dispatch before the call and the outcome
+                    # after it for everything outside `permissions.RETRY_SAFE`;
+                    # calling `execute` directly here would be the trap
+                    # `docs/agent-runs.md` names.
+                    ok, result = await guarded_call(
+                        run_context,
+                        tool_name=call.name,
+                        arguments=call.arguments,
+                        call=_invoke,
+                        tool_call_id=call.id,
+                        approval_id=(
+                            call.id if approval_claimant is not None else None
+                        ),
+                        step=model_step,
                     )
+                except AgentRunEffectQuarantined:
+                    # The call may have reached a real person. The turn ends
+                    # rather than continuing as if it had merely failed.
+                    tool_span.partial(ErrorKind.TOOL)
+                    raise
+                except AgentRunUnavailable as exc:
+                    tool_span.partial(ErrorKind.TOOL)
+                    ok, result = False, {
+                        "error": (
+                            "Sourcecado could not record this action durably, "
+                            f"so it was not attempted. {exc}"
+                        ),
+                        "code": "agent_run_unavailable",
+                    }
                 except asyncio.CancelledError:
                     tool_span.cancel()
                     raise
@@ -1427,6 +1597,20 @@ async def run_turn(
                     tool_span.finish()
                 else:
                     tool_span.partial(ErrorKind.TOOL)
+                if run_context is not None and not fenced:
+                    run_context.note(
+                        "tool_completed",
+                        state="running",
+                        payload={
+                            "step": model_step,
+                            "tool_name": call.name,
+                            "tool_call_id": call.id,
+                            "status": "succeeded" if ok else "failed",
+                            "error_class": (
+                                None if ok else str(result.get("code") or "tool_error")
+                            ),
+                        },
+                    )
                 if (
                     call.name in {"remember", "memory_update", "memory_forget"}
                     and system_prompt_fn

@@ -2123,3 +2123,92 @@ export async function exportDiagnosticBundle(
     (payload) => payload.bundle as DiagnosticBundleResult,
   );
 }
+
+// --- the external-effect review queue --------------------------------------
+//
+// An effect Sourcecado dispatched and never got an answer about. Neither
+// "sent" nor "not sent": a person decides which, and until they do nothing
+// retries it. `inboxClaim` is what the approval record says about the same
+// action, kept separate on purpose -- when the two disagree the run store is
+// the fence of record and `supersedesInbox` says so.
+
+export type QuarantineDecision =
+  | "resolved_succeeded"
+  | "resolved_failed"
+  | "abandoned";
+
+export type QuarantinedEffect = {
+  effectId: string;
+  runId: string;
+  toolName: string;
+  approvalId: string | null;
+  dispatchedAt: string | null;
+  reason: string | null;
+  status: string;
+  inboxClaim: string | null;
+  supersedesInbox: boolean;
+  needsAPerson: boolean;
+  sessionId: string | null;
+  personId: string | null;
+  approval: {
+    id: string;
+    name: string;
+    requestedAt: string | null;
+    resource: Record<string, unknown> | null;
+  } | null;
+};
+
+function readQuarantinedEffect(raw: any): QuarantinedEffect {
+  const approval = raw?.approval;
+  return {
+    effectId: String(raw?.effect_id || ""),
+    runId: String(raw?.run_id || ""),
+    toolName: String(raw?.tool_name || ""),
+    approvalId: raw?.approval_id ?? null,
+    dispatchedAt: raw?.dispatched_at ?? null,
+    reason: raw?.reason ?? null,
+    status: String(raw?.status || ""),
+    inboxClaim: raw?.inbox_claim ?? null,
+    supersedesInbox: Boolean(raw?.supersedes_inbox),
+    needsAPerson: Boolean(raw?.needs_a_person),
+    sessionId: raw?.session_id ?? null,
+    personId: raw?.person_id ?? null,
+    approval: approval
+      ? {
+          id: String(approval.id || ""),
+          name: String(approval.name || ""),
+          requestedAt: approval.requested_at ?? null,
+          resource:
+            approval.resource && typeof approval.resource === "object"
+              ? (approval.resource as Record<string, unknown>)
+              : null,
+        }
+      : null,
+  };
+}
+
+export async function getQuarantinedEffects(): Promise<QuarantinedEffect[]> {
+  const res = await get("/v1/agent-run-effects/quarantine");
+  if (!res.ok) throw new Error(`quarantine ${res.status}`);
+  const payload = await res.json();
+  const rows = Array.isArray(payload?.effects) ? payload.effects : [];
+  return rows.map(readQuarantinedEffect);
+}
+
+export async function settleQuarantinedEffect(
+  effectId: string,
+  decision: QuarantineDecision,
+  operator: string,
+  note?: string,
+): Promise<void> {
+  const res = await fetch(
+    `${httpBase()}/v1/agent-run-effects/quarantine/${encodeURIComponent(effectId)}`,
+    {
+      method: "POST",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, operator, note }),
+    },
+  );
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload?.error || `settle ${res.status}`);
+}

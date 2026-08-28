@@ -4,6 +4,7 @@ import {
   createSession,
   getInbox,
   getMemoryBacklog,
+  getQuarantinedEffects,
   getSessions,
   pinSession,
   renameSession,
@@ -15,6 +16,7 @@ import { PersonFileView } from "../PersonFile";
 import { ChatPage } from "../routes/ChatPage";
 import { ConnectionsPage } from "../routes/ConnectionsPage";
 import { MemoryPage } from "../routes/MemoryPage";
+import { QuarantinePage } from "../routes/QuarantinePage";
 import { ScheduledPage } from "../routes/ScheduledPage";
 import { SettingsPage } from "../routes/SettingsPage";
 import { SkillsPage } from "../routes/SkillsPage";
@@ -38,6 +40,7 @@ export function AppShell() {
   const [railOpen, setRailOpen] = useState(false);
   const [scheduledApprovalCount, setScheduledApprovalCount] = useState(0);
   const [memoryReviewCount, setMemoryReviewCount] = useState(0);
+  const [heldEffectCount, setHeldEffectCount] = useState(0);
   const railTriggerRef = useRef<HTMLButtonElement>(null);
   const railFocusTimerRef = useRef<number | null>(null);
   const railWasOpenedRef = useRef(false);
@@ -112,12 +115,27 @@ export function AppShell() {
         () => {},
       );
     };
+    // Held external effects, on the same cadence. A held action is not an
+    // approval waiting for a decision, so it gets its own count: one asks
+    // "may I?" and the other asks "did it happen?".
+    const refreshHeld = () => {
+      getQuarantinedEffects().then(
+        (effects) => {
+          if (!active) return;
+          setHeldEffectCount(effects.length);
+        },
+        () => {},
+      );
+    };
     refreshInbox();
+    refreshHeld();
     window.addEventListener("focus", refreshInbox);
+    window.addEventListener("focus", refreshHeld);
     window.addEventListener("sourcecado:inbox-changed", refreshInbox);
     return () => {
       active = false;
       window.removeEventListener("focus", refreshInbox);
+      window.removeEventListener("focus", refreshHeld);
       window.removeEventListener("sourcecado:inbox-changed", refreshInbox);
     };
   }, []);
@@ -267,6 +285,8 @@ export function AppShell() {
     outlet = <MemoryPage />;
   } else if (route.kind === "scheduled") {
     outlet = <ScheduledPage />;
+  } else if (route.kind === "quarantine") {
+    outlet = <QuarantinePage />;
   } else if (route.kind === "connections") {
     outlet = <ConnectionsPage connectorId={route.connectorId} />;
   } else if (route.kind === "settings") {
@@ -308,6 +328,7 @@ export function AppShell() {
         sessions={sessions}
         scheduledApprovalCount={scheduledApprovalCount}
         memoryReviewCount={memoryReviewCount}
+        heldEffectCount={heldEffectCount}
         onNewChat={() => void handleNewChat()}
         onOpenSession={handleOpenSession}
         onPin={(session) => void handlePin(session)}
