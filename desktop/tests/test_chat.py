@@ -1580,8 +1580,21 @@ def test_ws_remember_survives_new_sidecar(tmp_path):
         ws.send_json({"type": "chat", "text": "what do I drink?"})
         _drain(ws)
     system = second.calls[0][0]["content"]
-    assert "oat lattes" in system
-    assert "[#1]" in system
+    # A model `remember` write is not the director explicitly asking for a
+    # person-independent preference to persist, so the row waits for
+    # classification instead of returning to the prompt (issue #58). It is
+    # durable and visible in the backlog the whole time.
+    assert "oat lattes" not in system
+
+    from coworker.server import system_prompt
+    from coworker.store import ConversationStore
+
+    store = ConversationStore(tmp_path)
+    assert store.memory_backlog()["needs_review"] == 1
+    store.memory_classify(1)
+    classified_prompt = system_prompt(store)
+    assert "oat lattes" in classified_prompt
+    assert "[#1]" in classified_prompt
 
 
 def test_close_open_tool_calls_inserts_missing_results():

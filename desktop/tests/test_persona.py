@@ -79,6 +79,7 @@ def test_runtime_dynamic_context_is_ordered_bounded_and_total_bounded(tmp_path):
 
     store = ConversationStore(tmp_path)
     store.remember("m" * 5_000)
+    store.memory_classify(1)
     skill_root = tmp_path / "skill-fixtures"
     skill_dir = skill_root / "large-skill"
     skill_dir.mkdir(parents=True)
@@ -118,7 +119,12 @@ def test_runtime_dynamic_context_is_ordered_bounded_and_total_bounded(tmp_path):
         "skill_catalog",
         "person_file",
     )
-    assert tuple(item.chars for item in dynamic[:2]) == (4_000, 3_000)
+    # Saved memory is now the bounded operator-preference projection, so the
+    # oversized row is clipped to one whole item far below its 4,000-character
+    # envelope rather than filling it (issue #58).
+    assert dynamic[0].budget_chars == 4_000
+    assert 0 < dynamic[0].chars <= 200
+    assert dynamic[1].chars == 3_000
     # The person file is the bounded brief projection. It stops on a whole
     # claim under its budget and states the count it left out, rather than
     # being cut mid-claim at exactly the cap.
@@ -134,6 +140,8 @@ def test_runtime_prompt_diagnostics_never_store_dynamic_content(tmp_path):
 
     store = ConversationStore(tmp_path)
     store.remember("PRIVATE DYNAMIC SENTINEL")
+    store.memory_classify(1)
+    assert "PRIVATE DYNAMIC SENTINEL" in server.system_prompt(store)
 
     diagnostics = server.system_prompt_assembly(store).diagnostics
     encoded = repr(asdict(diagnostics))

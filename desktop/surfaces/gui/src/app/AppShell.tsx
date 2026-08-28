@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   createSession,
   getInbox,
+  getMemoryBacklog,
   getSessions,
   pinSession,
   renameSession,
@@ -13,6 +14,7 @@ import { BoardView } from "../Board";
 import { PersonFileView } from "../PersonFile";
 import { ChatPage } from "../routes/ChatPage";
 import { ConnectionsPage } from "../routes/ConnectionsPage";
+import { MemoryPage } from "../routes/MemoryPage";
 import { ScheduledPage } from "../routes/ScheduledPage";
 import { SettingsPage } from "../routes/SettingsPage";
 import { SkillsPage } from "../routes/SkillsPage";
@@ -34,6 +36,7 @@ export function AppShell() {
   const [stale, setStale] = useState(Boolean(cachedListing));
   const [railOpen, setRailOpen] = useState(false);
   const [scheduledApprovalCount, setScheduledApprovalCount] = useState(0);
+  const [memoryReviewCount, setMemoryReviewCount] = useState(0);
   const railTriggerRef = useRef<HTMLButtonElement>(null);
   const railFocusTimerRef = useRef<number | null>(null);
   const railWasOpenedRef = useRef(false);
@@ -117,6 +120,26 @@ export function AppShell() {
       window.removeEventListener("sourcecado:inbox-changed", refreshInbox);
     };
   }, []);
+  useEffect(() => {
+    let active = true;
+    // Migrating to context-projection-v1 withholds every unclassified memory
+    // row from the model. The count is how a director sees that Sourcecado is
+    // waiting on them rather than that it forgot (issue #58).
+    const refreshMemory = () => {
+      getMemoryBacklog().then(
+        ({ needs_review }) => {
+          if (active) setMemoryReviewCount(needs_review);
+        },
+        () => {},
+      );
+    };
+    refreshMemory();
+    window.addEventListener("focus", refreshMemory);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshMemory);
+    };
+  }, [route]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -239,6 +262,8 @@ export function AppShell() {
     outlet = <PersonFileView personId={route.personId} />;
   } else if (route.kind === "skills") {
     outlet = <SkillsPage />;
+  } else if (route.kind === "memory") {
+    outlet = <MemoryPage />;
   } else if (route.kind === "scheduled") {
     outlet = <ScheduledPage />;
   } else if (route.kind === "connections") {
@@ -280,6 +305,7 @@ export function AppShell() {
         route={route}
         sessions={sessions}
         scheduledApprovalCount={scheduledApprovalCount}
+        memoryReviewCount={memoryReviewCount}
         onNewChat={() => void handleNewChat()}
         onOpenSession={handleOpenSession}
         onPin={(session) => void handlePin(session)}

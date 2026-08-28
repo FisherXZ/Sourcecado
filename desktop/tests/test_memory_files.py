@@ -39,12 +39,15 @@ def test_forget_removes_index_line(tmp_path):
     assert not (tmp_path / "memory" / f"{a['id']}.md").exists()
 
 
-def test_system_prompt_uses_index_when_over_cap(tmp_path):
+def test_system_prompt_stays_bounded_when_many_preferences_are_classified(tmp_path):
     from coworker.server import system_prompt
 
     store = ConversationStore(tmp_path)
     for i in range(80):
         store.remember("x" * 60 + f" {i}")
+        store.memory_classify(i + 1)
     prompt = system_prompt(store)
-    assert "Memory index" in prompt or "[#1]" in prompt
+    assert "## Saved memory" in prompt
     assert len(prompt) < 20000
+    # The category budget, not the store size, decides how much gets in.
+    assert prompt.count("sourcecado:memory/") < 80

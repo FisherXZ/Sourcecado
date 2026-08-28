@@ -1019,6 +1019,45 @@ export async function getSkills(): Promise<{ skills: SkillInfo[] }> {
   return res.json();
 }
 
+export type MemoryRow = {
+  id: number;
+  content: string;
+  category: string;
+  classification_status: string | null;
+  created_at: string;
+};
+
+export type MemoryBacklog = {
+  needs_review: number;
+  classified: number;
+  items: MemoryRow[];
+};
+
+export async function getMemoryBacklog(): Promise<MemoryBacklog> {
+  const res = await get("/v1/memory/classification");
+  if (!res.ok) throw new Error(`memory ${res.status}`);
+  return res.json();
+}
+
+export async function classifyMemory(id: number): Promise<{ memory: MemoryRow }> {
+  const res = await fetch(`${httpBase()}/v1/memory/${id}/classification`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ category: "operator_preference" }),
+  });
+  if (!res.ok) throw new Error(`memory classify ${res.status}`);
+  return res.json();
+}
+
+export async function forgetMemory(id: number): Promise<{ forgotten: boolean; id: number }> {
+  const res = await fetch(`${httpBase()}/v1/memory/${id}`, {
+    method: "DELETE",
+    headers: { "X-Club-Token": apiToken() },
+  });
+  if (!res.ok) throw new Error(`memory forget ${res.status}`);
+  return res.json();
+}
+
 const SCHEDULE_RUN_STATUSES = new Set<ScheduleRunStatus>([
   "running",
   "success",

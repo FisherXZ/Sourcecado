@@ -14,7 +14,8 @@
 }
 
 .skills-page,
-.settings-page {
+.settings-page,
+.memory-page {
   width: 100%;
   max-width: 1040px;
   margin: 0 auto;
@@ -23,6 +24,97 @@
 .skills-page > [role="status"],
 .settings-page > [role="status"] {
   margin-top: 18px;
+}
+
+/* Saved-memory review. A backlog to drain is a low-density moment, so the
+   count carries the warmth and the rows stay quiet and scannable. */
+.memory-counts {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 16px 0 0;
+}
+
+.memory-counts strong {
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.memory-counts span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.memory-explainer {
+  max-width: 620px;
+  margin: 12px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.memory-list {
+  display: grid;
+  gap: 8px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.memory-content {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.memory-meta {
+  display: flex;
+  gap: 12px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-id {
+  font-family: "Geist Mono", ui-monospace, monospace;
+}
+
+.memory-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.memory-actions button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.memory-keep {
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}
+
+.memory-actions button:hover {
+  background: var(--raised);
 }
 
 .skill-list {
@@ -481,6 +573,15 @@
   .persona-options button,
   .route-error button {
     min-height: 44px;
+  }
+
+  .memory-actions {
+    flex-direction: column;
+  }
+
+  .memory-actions button {
+    min-height: 44px;
+    min-width: 44px;
   }
 
   .workspace-add-form,

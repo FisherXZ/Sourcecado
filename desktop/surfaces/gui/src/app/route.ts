@@ -5,6 +5,7 @@ export type AppRoute =
   | { kind: "scheduled" }
   | { kind: "settings" }
   | { kind: "skills" }
+  | { kind: "memory" }
   | { kind: "chat"; sessionId?: string; personId?: string };
 
 export function parseHash(hash: string): AppRoute {
@@ -33,6 +34,7 @@ export function parseHash(hash: string): AppRoute {
   if (hash === "#/scheduled") return { kind: "scheduled" };
   if (hash === "#/settings") return { kind: "settings" };
   if (hash === "#/skills") return { kind: "skills" };
+  if (hash === "#/memory") return { kind: "memory" };
   if (hash.startsWith("#/chat/") && hash.includes("/person/")) {
     const [sessionId, personId] = hash.slice("#/chat/".length).split("/person/", 2);
     if (sessionId && personId) {

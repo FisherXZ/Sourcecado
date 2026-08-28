@@ -199,12 +199,12 @@ def test_legacy_conversation_db_upgrades_from_the_pre_registry_shape(tmp_path):
     store_plan = _plan_for(plan, "conversation_db")
     assert store_plan.status is StoreStatus.PENDING
     assert store_plan.from_version == 0
-    assert store_plan.to_version == 1
+    assert store_plan.to_version == 2
     assert store_plan.record_count > 0
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
-    assert _user_version(db) == 1
+    assert _user_version(db) == 2
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -383,7 +383,7 @@ def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
     assert len(WorkspaceGrantStore(root).list_all()) == 1
 
     # Constructing the stores must not knock the recorded version off current.
-    assert _user_version(root / "club.db") == 1
+    assert _user_version(root / "club.db") == 2
     assert _user_version(root / "people.db") == 1
 
 
@@ -555,19 +555,23 @@ def test_a_failed_backup_aborts_the_migration_and_leaves_state_untouched(tmp_pat
 
 
 def _break_step(store_id, monkeypatch, apply):
-    """Swap one store's migration for a step that fails partway through."""
+    """Swap a store's first migration for a step that fails partway through.
+
+    Later steps are kept as they are, so the chain still reaches the store's
+    current version and the plan stays PENDING rather than becoming
+    MIGRATION_PATH_MISSING. The first step fails, so they never run.
+    """
     original = migrations.spec_for(store_id)
+    failing = Migration(
+        from_version=0,
+        to_version=1,
+        description="deliberately failing step",
+        count=lambda _context: 1,
+        apply=apply,
+    )
     broken = migrations.dataclasses.replace(
         original,
-        migrations=(
-            Migration(
-                from_version=0,
-                to_version=1,
-                description="deliberately failing step",
-                count=lambda _context: 1,
-                apply=apply,
-            ),
-        ),
+        migrations=(failing,) + original.migrations[1:],
     )
     monkeypatch.setattr(
         migrations,
