@@ -1747,3 +1747,100 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
     },
   };
 }
+
+// --- diagnostic bundle -----------------------------------------------------
+
+export type DiagnosticEvidenceCategory = {
+  id: string;
+  title: string;
+  description: string;
+  included: boolean;
+};
+
+export type DiagnosticBundlePreview = {
+  bundle_version: number;
+  subject: { kind: string; run_id?: string; check?: string | null; store_id?: string | null };
+  evidence_categories: DiagnosticEvidenceCategory[];
+  excluded: string[];
+  members: string[];
+  counts: {
+    log_records: number;
+    findings: number;
+    connectors: number;
+    runs_considered: number;
+  };
+  run: {
+    run_id: string | null;
+    state: string | null;
+    outcome_status: string | null;
+    finished_at: string | null;
+  } | null;
+  state: { healthy: boolean | null; blocked: boolean | null };
+  findings: {
+    check: string | null;
+    store_id: string | null;
+    severity: string | null;
+    summary: string | null;
+  }[];
+  log_records: Record<string, unknown>[];
+};
+
+export type DiagnosticBundleResult = {
+  bundle_id: string;
+  generated_at: string;
+  path: string;
+  sha256: string;
+  size_bytes: number;
+  members: string[];
+};
+
+/** A scan match. The sidecar never sends the matched value, only where it was. */
+export type DiagnosticScanMatch = { category: string; location: string };
+
+export type DiagnosticBundleStart = {
+  run_id?: string;
+  check?: string;
+  store_id?: string;
+};
+
+export type DiagnosticBundleOutcome<T> =
+  | { status: "ok"; value: T }
+  | { status: "refused"; matches: DiagnosticScanMatch[] };
+
+async function diagnosticsPost<T>(
+  path: string,
+  start: DiagnosticBundleStart,
+  read: (payload: Record<string, unknown>) => T,
+): Promise<DiagnosticBundleOutcome<T>> {
+  const res = await fetch(`${httpBase()}${path}`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify(start),
+  });
+  const payload = await res.json();
+  if (res.status === 409 && payload?.error === "scan_refused") {
+    return { status: "refused", matches: payload.matches ?? [] };
+  }
+  if (!res.ok) throw new Error(payload?.error || `diagnostics ${res.status}`);
+  return { status: "ok", value: read(payload) };
+}
+
+export async function previewDiagnosticBundle(
+  start: DiagnosticBundleStart,
+): Promise<DiagnosticBundleOutcome<DiagnosticBundlePreview>> {
+  return diagnosticsPost(
+    "/v1/diagnostics/bundle/preview",
+    start,
+    (payload) => payload.preview as DiagnosticBundlePreview,
+  );
+}
+
+export async function exportDiagnosticBundle(
+  start: DiagnosticBundleStart,
+): Promise<DiagnosticBundleOutcome<DiagnosticBundleResult>> {
+  return diagnosticsPost(
+    "/v1/diagnostics/bundle/export",
+    start,
+    (payload) => payload.bundle as DiagnosticBundleResult,
+  );
+}
