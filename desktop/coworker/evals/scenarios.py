@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+from coworker.evals.environment import ConnectorFixtures
 from coworker.provider import ModelUsage, ToolCall
 
 
@@ -18,15 +19,81 @@ class ProviderStep:
 
 
 @dataclass(frozen=True, slots=True)
+class AttachmentExpectation:
+    """One durable person-file attachment: artifact, knowledge_gap, or source_ref."""
+
+    record_type: str
+    fields: tuple[tuple[str, Any], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class PersonExpectation:
     apollo_id: str
     fields: tuple[tuple[str, Any], ...]
+    attachments: tuple[AttachmentExpectation, ...] = ()
+    events: tuple[tuple[str, str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceExpectation:
     path: str
     content: str
+
+
+@dataclass(frozen=True, slots=True)
+class GmailDraftExpectation:
+    to: str
+    subject: str
+
+
+@dataclass(frozen=True, slots=True)
+class GmailSendExpectation:
+    draft_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalDecision:
+    """The director's answer to one parked approval, keyed by tool-call id."""
+
+    call_id: str
+    decision: str
+
+    def __post_init__(self) -> None:
+        if self.decision not in {"allow", "deny", "cancel"}:
+            raise ValueError(f"unknown approval decision {self.decision}")
+
+
+@dataclass(frozen=True, slots=True)
+class SeedAttachment:
+    record_type: str
+    fields: tuple[tuple[str, Any], ...]
+    idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class SeedEvent:
+    source: str
+    kind: str
+    summary: str
+    tool: str | None = None
+    payload: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SeedPerson:
+    """Durable person-file state that already existed when the scene starts."""
+
+    apollo_id: str
+    first_name: str | None = None
+    last_name_obfuscated: str | None = None
+    title: str | None = None
+    company: str | None = None
+    target: str | None = None
+    attachments: tuple[SeedAttachment, ...] = ()
+    events: tuple[SeedEvent, ...] = ()
+    sequence_state: str | None = None
+    outcome: str | None = None
+    bind_session: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +107,14 @@ class EvalScenario:
     expected_workspace_files: tuple[WorkspaceExpectation, ...] = ()
     forbidden_tools: tuple[str, ...] = ()
     initial_messages: tuple[dict[str, Any], ...] = ()
+    seed_people: tuple[SeedPerson, ...] = ()
+    fixtures: ConnectorFixtures = field(default_factory=ConnectorFixtures)
+    approvals: tuple[ApprovalDecision, ...] = ()
+    expected_event_ledger: tuple[tuple[str, str], ...] | None = None
+    expected_gmail_drafts: tuple[GmailDraftExpectation, ...] = ()
+    expected_gmail_sends: tuple[GmailSendExpectation, ...] = ()
+    expected_memories: tuple[str, ...] | None = None
+    expected_catalog_violation: str | None = None
 
 
 def _usage(input_tokens: int, output_tokens: int) -> ModelUsage:
