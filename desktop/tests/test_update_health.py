@@ -13,6 +13,7 @@ undo, so it never does.
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -21,7 +22,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 import update_fixtures as fx  # noqa: E402
 from coworker.update_channel.apply import SIDECAR_RELATIVE, sidecar_health_check  # noqa: E402
 
-STUB = '''#!{python}
+# The installed sidecar is a real executable. The test stand-in has to be too,
+# because sidecar_health_check execs it the way the shell would. Putting
+# sys.executable on a shebang fails on the macOS 26 runner (Python.app is not
+# a valid interpreter path there), so the stub is /bin/sh wrapping that same
+# interpreter.
+STUB_PY = '''
 import argparse, json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -39,31 +45,39 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         # Prove the launch check gave us a throwaway state directory.
-        body = json.dumps({{
+        body = json.dumps({
             "status": STATUS,
             "state_dir": os.environ.get("CLUB_STATE_DIR", ""),
-        }}).encode()
+        }).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+class ReuseHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--port", type=int, required=True)
 args = parser.parse_args()
-HTTPServer((args.host, args.port), Handler).serve_forever()
+ReuseHTTPServer((args.host, args.port), Handler).serve_forever()
 '''
 
 
 def _install_with_sidecar(tmp_path, *, health: str = "ok"):
     install = fx.installation(tmp_path, version="0.0.2")
-    fx.app_tree(
-        install.bundle_path.parent,
-        version="0.0.2",
-        sidecar=STUB.format(python=sys.executable),
+    fx.app_tree(install.bundle_path.parent, version="0.0.2", sidecar="#!/bin/sh\nexit 1\n")
+    binary = install.bundle_path / SIDECAR_RELATIVE
+    script = binary.with_name("health-stub.py")
+    script.write_text(STUB_PY, encoding="utf-8")
+    binary.write_text(
+        "#!/bin/sh\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} \"$@\"\n",
+        encoding="utf-8",
     )
+    binary.chmod(0o755)
     os.environ["STUB_HEALTH"] = health
     return install
 
