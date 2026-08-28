@@ -188,5 +188,5 @@ class LiveMcp:
             ):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
-                out = await session.call_tool(tool, arguments)
-                return {"ok": True, **tool_result_payload(out)}
+                    out = await session.call_tool(tool, arguments)
+                    return {"ok": True, **tool_result_payload(out)}

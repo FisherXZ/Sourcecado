@@ -230,3 +230,122 @@ def test_meeting_api_survives_restart_and_never_crosses_people(tmp_path):
 
     assert len(ada_file["meeting_evidence"]["attached"]) == 1
     assert grace_file["meeting_evidence"]["attached"] == []
+
+
+class _ClosedResourceError(Exception):
+    pass
+
+
+class _OpenMcpSession:
+    def __init__(self, *_args, **_kwargs):
+        self._open = False
+
+    async def __aenter__(self):
+        self._open = True
+        return self
+
+    async def __aexit__(self, *_exc):
+        self._open = False
+
+    async def initialize(self):
+        if not self._open:
+            raise _ClosedResourceError(
+                "Attempted to send a request from a closed resource."
+            )
+
+    async def call_tool(self, _name, _arguments):
+        if not self._open:
+            raise _ClosedResourceError(
+                "Attempted to send a request from a closed resource."
+            )
+
+        class Result:
+            structuredContent = {
+                "meetings": [
+                    {
+                        "id": "granola-live-1",
+                        "title": "Partner sync",
+                        "startTime": "2026-09-02T10:00:00Z",
+                        "participants": [
+                            {
+                                "email": "ada@example.test",
+                                "name": "Ada Lovelace",
+                            }
+                        ],
+                        "notes": "Discussed hiring",
+                        "url": "https://granola.test/granola-live-1",
+                    }
+                ]
+            }
+            content = []
+
+        return Result()
+
+
+class _AsyncCM:
+    def __init__(self, value):
+        self._value = value
+
+    async def __aenter__(self):
+        return self._value
+
+    async def __aexit__(self, *_exc):
+        return None
+
+
+def test_live_granola_refresh_attaches_notes_from_an_open_mcp_session(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("mcp.ClientSession", _OpenMcpSession)
+    monkeypatch.setattr(
+        "mcp.client.streamable_http.streamable_http_client",
+        lambda *_args, **_kwargs: _AsyncCM((object(), object(), None)),
+    )
+    monkeypatch.setattr(
+        "mcp.shared._httpx_utils.create_mcp_http_client",
+        lambda *_args, **_kwargs: _AsyncCM(object()),
+    )
+    calendar = ReadOnlyCalendar(
+        [
+            {
+                "id": "cal-live",
+                "summary": "Calendar review",
+                "start": {"dateTime": "2026-09-01T10:00:00Z"},
+                "end": {"dateTime": "2026-09-01T10:30:00Z"},
+                "attendees": [
+                    {
+                        "email": "ada@example.test",
+                        "displayName": "Ada Lovelace",
+                    }
+                ],
+                "htmlLink": "https://calendar.test/cal-live",
+            }
+        ]
+    )
+    app = create_app(token=TOKEN, provider=FakeProvider(), state=tmp_path)
+    app.state.calendar = calendar
+    app.state.secrets.put("mcp-oauth:granola", {"access_token": "at"})
+    ada = _keep(
+        app,
+        apollo_id="ada-live",
+        first="Ada",
+        last="Lovelace",
+        email="ada@example.test",
+    )
+
+    refresh = TestClient(app).post(
+        f"/v1/people/{ada['person_id']}/meetings/refresh", headers=_auth()
+    )
+
+    assert refresh.status_code == 200
+    body = refresh.json()
+    assert body["sources"]["calendar"] == {"status": "ok", "records": 1}
+    assert body["sources"]["granola"] == {"status": "ok", "records": 1}
+    granola = next(
+        meeting
+        for meeting in body["meeting_evidence"]["attached"]
+        if meeting["provider"] == "granola"
+    )
+    assert granola["title"] == "Partner sync"
+    assert granola["notes"] == "Discussed hiring"
+    assert any("Discussed hiring" in line for line in body["brief"]["learned"])
