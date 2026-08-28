@@ -124,6 +124,62 @@ def test_a_dispatch_committed_after_the_call_leaves_the_window_unrecorded(
     ]
 
 
+def test_the_same_reversal_in_the_turn_loop_is_caught_the_same_way(
+    tmp_path, monkeypatch
+):
+    """Both dispatch sites, one guard, one mutation each.
+
+    `turn.py` and `server.py` reach a tool through the same function, so this
+    is not a second guard -- it is the second call site, held to the contract
+    by the same observation.
+    """
+    import sqlite3
+
+    repository, owner = _runs(tmp_path / "honest")
+
+    def _watcher(store):
+        def _execute(name, arguments, **kwargs):
+            connection = sqlite3.connect(store.path)
+            try:
+                store.seen = connection.execute(
+                    "SELECT tool_name, status FROM agent_run_effects"
+                ).fetchall()
+            finally:
+                connection.close()
+            return True, {"ok": True}
+
+        return _execute
+
+    monkeypatch.setattr(turn_module, "execute", _watcher(repository))
+    _turn(
+        tmp_path / "honest",
+        provider=OneToolProvider("gmail_send"),
+        repository=repository,
+        owner=owner,
+        wait="allow",
+    )
+    assert [tuple(map(str, row)) for row in repository.seen] == [
+        ("gmail_send", str(EffectStatus.DISPATCHED))
+    ]
+
+    monkeypatch.setattr(turn_module, "guarded_call", _dispatch_after_the_call)
+
+    broken, broken_owner = _runs(tmp_path / "broken")
+    monkeypatch.setattr(turn_module, "execute", _watcher(broken))
+    _turn(
+        tmp_path / "broken",
+        provider=OneToolProvider("gmail_send"),
+        repository=broken,
+        owner=broken_owner,
+        wait="allow",
+    )
+
+    assert broken.seen == []
+    assert [effect["status"] for effect in _effects(broken)] == [
+        str(EffectStatus.SUCCEEDED)
+    ]
+
+
 # --- mutation: a consequential tool wired without the fence ----------------
 
 

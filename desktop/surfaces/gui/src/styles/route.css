@@ -1757,7 +1757,6 @@
   font-size: 12px;
   line-height: 1.45;
 }
-}
 
 /* The external-effect review queue. A held action is not an alarm and not a
    failure: it is an open question, so it reads in the warn register rather
@@ -1802,6 +1801,7 @@
   margin: 20px 0 0;
   padding: 0;
   list-style: none;
+}
 
 .quarantine-card {
   display: grid;

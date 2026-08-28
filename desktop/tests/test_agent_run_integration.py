@@ -275,6 +275,54 @@ def test_the_dispatch_is_committed_before_the_send_and_the_outcome_after(tmp_pat
     assert settled[0]["replay_class"] == str(ReplayClass.CONSEQUENTIAL)
 
 
+def test_the_turn_loop_also_commits_its_dispatch_before_the_call(tmp_path, monkeypatch):
+    """The same contract at the other dispatch site.
+
+    There are two places in the product that make a consequential call: the
+    turn loop and the server's approved-execution path. The test above covers
+    the second. This covers the first the same way -- by reading the run store
+    from a separate connection from inside the tool.
+    """
+    import coworker.turn as turn_module
+
+    repository, owner = _runs(tmp_path)
+    seen: list[list[tuple[str, str]]] = []
+
+    def _execute(name, arguments, **kwargs):
+        connection = sqlite3.connect(repository.path)
+        try:
+            seen.append(
+                [
+                    (str(row[0]), str(row[1]))
+                    for row in connection.execute(
+                        "SELECT tool_name, status FROM agent_run_effects"
+                    ).fetchall()
+                ]
+            )
+        finally:
+            connection.close()
+        return True, {"ok": True}
+
+    monkeypatch.setattr(turn_module, "execute", _execute)
+
+    _turn(
+        tmp_path,
+        provider=OneToolProvider("gmail_send"),
+        repository=repository,
+        owner=owner,
+        wait="allow",
+    )
+
+    # Non-vacuity: the tool really ran, once.
+    assert len(seen) == 1, "the turn never reached the tool"
+    # What was committed while the call was in flight.
+    assert seen[0] == [("gmail_send", str(EffectStatus.DISPATCHED))]
+    # And after.
+    assert [effect["status"] for effect in _effects(repository)] == [
+        str(EffectStatus.SUCCEEDED)
+    ]
+
+
 def test_a_send_that_fails_is_failed_and_not_ambiguous(tmp_path):
     """A tool that returns said what happened. Only silence is ambiguous."""
 
