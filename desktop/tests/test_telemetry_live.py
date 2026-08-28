@@ -632,7 +632,7 @@ def test_task_cancellation_settles_the_active_tool_and_agent_spans(
     assert terminals[starts[AgentTurnSpan]] is SpanStatus.CANCELLED
 
 
-def test_step_limit_settles_the_agent_span_instead_of_leaving_it_running(tmp_path):
+def test_a_budget_stop_settles_the_agent_span_instead_of_leaving_it_running(tmp_path):
     provider = StepProvider(
         [
             [
@@ -662,4 +662,7 @@ def test_step_limit_settles_the_agent_span_instead_of_leaving_it_running(tmp_pat
         if isinstance(record, SpanSettledRecord)
         and record.span_id == agent_start.span_id
     )
-    assert agent_terminal.status is SpanStatus.CANCELLED
+    # A run policy stopped it. That is real but unfinished work, not a
+    # cancellation the director asked for.
+    assert agent_terminal.status is SpanStatus.PARTIAL
+    assert agent_terminal.error_kind is ErrorKind.POLICY
