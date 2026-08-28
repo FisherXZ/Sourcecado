@@ -1222,6 +1222,61 @@ def test_the_refresh_route_files_a_reply_without_touching_send_draft_or_apollo(t
     ]
 
 
+def test_a_filed_reply_still_leaves_the_diagnostic_preview_current_main_serves(
+    tmp_path,
+):
+    """Stacked #109 cannot merge onto current main; checking it out drops #110.
+
+    Public seam: POST /v1/replies/refresh, GET /v1/board, and
+    POST /v1/diagnostics/bundle/preview. Issue #67's unique work files a reply
+    through the first two. Current main also serves the diagnostic preview.
+    The published stacked send commit conflicts on gmail.py, people.py, and
+    PersonFile.tsx, so GitHub will not merge, and that tree does not carry
+    the preview route.
+    """
+    app = create_app(token=TOKEN, provider=None, state=tmp_path, gmail=_gmail())
+    people = app.state.people
+    gmail = app.state.gmail
+    person = _person(people)
+    sent = _sent(people, gmail, person)
+    gmail.deliver(
+        thread_id=sent["threadId"],
+        message_id="in_ada_1",
+        sender="ada@analytic.example",
+        to=ACCOUNT,
+        subject="Re: Thursday?",
+        snippet="Thursday works.",
+    )
+    client = TestClient(app)
+
+    refreshed = client.post("/v1/replies/refresh", headers=HEADERS)
+    assert refreshed.status_code == 200
+    assert refreshed.json()["refresh"]["filed"] == 1
+
+    board = client.get("/v1/board", headers=HEADERS)
+    assert board.status_code == 200
+    talking = board.json()["in_conversation"]
+    assert [row["person_id"] for row in talking] == [person["person_id"]]
+    assert talking[0]["follow_up"] == {"needed": True, "reason": "reply_unanswered"}
+
+    preview = client.post(
+        "/v1/diagnostics/bundle/preview",
+        json={"check": "permissions", "store_id": "state_root"},
+        headers=HEADERS,
+    )
+    assert preview.status_code == 200
+    body = preview.json()["preview"]
+    assert body["bundle_version"] == 1
+    assert body["subject"] == {
+        "kind": "doctor_finding",
+        "check": "permissions",
+        "store_id": "state_root",
+    }
+    assert body["run"] is None
+    diagnostics = tmp_path / "diagnostics"
+    assert not diagnostics.exists()
+
+
 # --- criteria 6 and 7: the operating picture ----------------------------
 
 
