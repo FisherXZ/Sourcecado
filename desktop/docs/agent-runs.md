@@ -1,8 +1,9 @@
 # Durable Agent Runs: identity, leases, and checkpoints
 
-Status: active-stack engineering reference. Covers the run store and its
-ownership rules only. Approval fencing, restart resume, and the chat, queue,
-schedule, and UI wiring are separate later work and are not implemented here.
+Status: active-stack engineering reference. Covers the run store, its ownership
+rules, the external-effect fence, and restart classification. The chat, queue,
+schedule, server, and UI wiring are separate later work and are not implemented
+here: nothing in this document is called by the running application yet.
 
 ## What an Agent Run is
 
@@ -18,7 +19,10 @@ read, the artifacts it produced, the usage it spent, and how it ended.
 The run store is its own SQLite database, `agent_runs.db`, in the local state
 directory. It declares `SCHEMA_VERSION` in `coworker/agent_run_repository.py`
 and stamps it in `PRAGMA user_version`, which is the contract the migration
-registry reads.
+registry reads. Version 2 adds `agent_run_effects`. The store is not in the
+migration registry, and the table is created by the same idempotent script that
+creates the run tables, so a version 1 store gains it on open with nothing to
+migrate.
 
 ### States
 
@@ -94,23 +98,126 @@ it may leave behind. `coworker/agent_run_state.py` holds that one table, and
 state reachability is derived from it rather than restated, so the store, later
 resume paths, and Doctor cannot drift apart.
 
+## External effects
+
+Some effects reach a real person and cost real money. `gmail_send` is the case
+the fence exists for. Between dispatching one and recording what happened there
+is a window, and a process that dies inside it leaves a fact nobody holds: the
+mail may have gone out, or it may not have. That is not `failed` and it is not
+`succeeded`, and calling it either is the mistake with no undo.
+
+So the store records the dispatch **before** the call and the outcome **after**
+it. The ordering is the whole recovery argument. A process that dies before the
+dispatch commit made no call. A process that dies after it may or may not have,
+and an effect with a dispatch and no outcome is `ambiguous`: quarantined until a
+person settles it.
+
+`coworker/agent_run_approval.py` holds the vocabulary, and it is two disjoint
+halves.
+
+| Half | Values | Who may write it | From |
+| --- | --- | --- | --- |
+| Machine | `succeeded`, `failed` | only the process that dispatched | `dispatched` |
+| Operator | `resolved_succeeded`, `resolved_failed`, `abandoned` | a named person | `ambiguous` |
+
+No value belongs to both, so "the machine concluded this" and "a person
+concluded this" can never be confused when the record is read back. The
+database enforces the separation itself. `EFFECT_SCHEMA` carries a `CHECK` that
+refuses an operator status without a `resolved_by`, and triggers that abort an
+update crossing out of `ambiguous` into a machine outcome, an update that
+changes a settled outcome, an insert that opens anywhere but `dispatched`, and
+any delete at all. A retry, a resume, a second owner, and a raw SQL edit all hit
+the same wall.
+
+The effect row is content-free for the same reason a checkpoint is. It carries
+the tool name, the approval id, the call id, and a SHA-256 fingerprint of the
+arguments. The recipient, subject, and body stay in the transcript and the
+approval record; what the run store needs is only whether the call it is about
+to make is the call it already dispatched.
+
+An effect record is never deleted. `prune_checkpoints` drops step detail for old
+runs and touches `agent_run_effects` never, because the record that something
+left the machine is not step detail.
+
+### Which tools are fenced
+
+`coworker/permissions.py` already owns this decision and the fence does not
+restate it. `RETRY_SAFE` is the list of tools that can re-run without producing
+a second external effect, and `agent_run_approval.replay_class` reads it:
+anything outside that list is `consequential`. `gmail_send` is deliberately
+absent from `RETRY_SAFE`, which is what stops a provider retry replaying a send,
+and it is the same absence that makes the run store fence it. A tool the
+permission module has never heard of is consequential, so the fence fails
+closed rather than guessing.
+
+### The approval door
+
+`acquire_lease` refuses waiting states on purpose: a parked run belongs to a
+person. `resume_from_approval` is the one way back, and it is narrow. It needs
+the id of an approval the run actually raised, and it grants the lease and moves
+the run to `running` in a single transaction, so the run never rests parked and
+leased at once -- a pair Doctor reports as a record contradicting itself.
+
+A run parked in `waiting_external` is not opened by that door at all. Its effect
+is quarantined, and an approval decision says nothing about whether a send
+already went out.
+
+## Restart
+
+`coworker/agent_run_resume.py` decides and never runs. Restart asks two
+questions in order.
+
+Which leases are free? `reclaim_dead_owner_leases` answers that from expiry and
+from proven death, and it never takes a lease from a live owner. Whatever is
+still held after it runs is genuinely held.
+
+Of the work that is now free, which is safe to continue? `classify_resume`
+reaches one of five verdicts from the run row, its checkpoints, and its effects.
+
+| Verdict | When |
+| --- | --- |
+| `nothing` | Terminal, parked on a person, or still owned by another process. |
+| `quarantine` | An effect was dispatched and never reported back. |
+| `review` | Already quarantined, or a consequential tool with no effect record. |
+| `deliver` | A terminal result is on record and its delivery is not. |
+| `resume` | Safe incomplete work, under the same run identity. |
+
+Effects outrank the run's own state. What the run was doing matters less than
+whether something already left the machine.
+
+`deliver` exists so that a crash after the model produced the final answer does
+not buy that answer twice. The run row already carries the shape of the result
+-- status, message id, text length -- written in the same transaction as the
+checkpoint that recorded it, and the text itself is in the transcript. Asking
+the model again would spend tokens to produce a different answer.
+
+`restart()` performs exactly one kind of write: it quarantines. That is the only
+decision that cannot wait, because an effect nobody knows the outcome of must
+stop being mistakable for work in progress before anything else looks at the
+run. Resuming and delivering are left to the caller.
+
 ## Extension points
 
 The following are named seams, not implementations.
 
-- **Approval fencing.** `acquire_lease` refuses waiting states on purpose. A
-  resolution-gated acquire belongs beside it, so that only a resolved approval
-  can return a lease to a parked run.
-- **Restart and resume.** `reclaim_dead_owner_leases` classifies interrupted
-  work and stops. Deciding what is safe to replay is separate, and a tool whose
-  outcome is unknown must not be replayed by default.
 - **Heartbeat.** `renew_lease` is the seam a long provider call renews through.
   Losing renewal must abandon the work, not continue it.
-- **Wiring.** Nothing constructs an `AgentRunRepository` in the running
-  application yet. The process that starts the sidecar registers one owner with
-  `OwnerRegistry.register()` and calls `reclaim_dead_owner_leases()` once, at
-  startup. The repository deliberately does not reconcile in its constructor,
-  because opening a store is not the same event as starting a process.
+- **Wiring.** Nothing constructs an `AgentRunRepository` for run execution in
+  the running application yet. The process that starts the sidecar registers one
+  owner with `OwnerRegistry.register()` and calls `agent_run_resume.restart()`
+  once, at startup. The repository deliberately does not reconcile in its
+  constructor, because opening a store is not the same event as starting a
+  process.
+- **The two halves of at-most-once.** `store.decide_and_claim_inbox_execution`
+  makes an approved send dispatch at most once. This store makes the outcome of
+  that dispatch un-guessable after a crash. Joining them -- so that a quarantined
+  effect and an `interrupted` inbox row are one thing an operator sees -- is
+  wiring, and the run store is the fence of record when they disagree.
+- **The review queue.** `list_quarantined_effects` is what a surface renders.
+  Nothing renders it yet.
+- **Receipts.** `agent_run_approval.external_effect_evidence` maps an unsettled
+  effect onto the `Evidence` vocabulary `run_receipt` already reads. Wiring it
+  into a receipt section is later work.
 
 ## Known gaps
 
@@ -121,3 +228,13 @@ The following are named seams, not implementations.
 - Owner marker files are removed when their owner is proven dead and its work
   reclaimed, and when a process releases its own owner. A process killed with
   no runs to reclaim leaves a marker behind.
+- A process whose lease expired, whose effect was quarantined by someone else,
+  and which then wakes up genuinely knowing the send succeeded cannot write what
+  it knows. `record_effect_outcome` raises instead. That is deliberate -- a
+  person may already have acted on the quarantine -- but the observation is
+  lost unless the caller logs it. There is no way to attach a late, non-binding
+  observation to a quarantined effect.
+- A quarantined run comes to rest `interrupted`. Settling its effect makes the
+  run eligible to resume, but nothing decides whether resuming a turn whose send
+  may already have gone out is what the operator wants. That is a person's next
+  decision and no code makes it.
