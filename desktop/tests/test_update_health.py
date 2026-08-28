@@ -142,6 +142,37 @@ def _health_diagnostics(install) -> list[str]:
 
     port = _free_diagnostic_port()
     probe("diagnostic port", lambda: port)
+
+    # Can this interpreter run anything at all? The stub's first statement
+    # writes to stderr, and on the failing runner that line never appears,
+    # so the question is whether the interpreter itself starts (#140).
+    def interpreter_smoke():
+        done = subprocess.run(
+            [sys.executable, "-c", "import sys; sys.stderr.write('ALIVE\\n')"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return f"rc={done.returncode} out={done.stdout!r} err={done.stderr!r}"
+
+    probe("interpreter smoke", interpreter_smoke)
+
+    # And can the wrapper itself run a trivial program the same way sh execs it?
+    def wrapper_smoke():
+        script = binary.with_name("smoke-probe.py")
+        script.write_text("import sys; sys.stderr.write('WRAPPER_ALIVE\\n')\n")
+        wrapper = binary.with_name("smoke-wrapper.sh")
+        wrapper.write_text(
+            f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(script))}\n"
+        )
+        wrapper.chmod(0o755)
+        done = subprocess.run(
+            [str(wrapper)], capture_output=True, text=True, timeout=15
+        )
+        return f"rc={done.returncode} out={done.stdout!r} err={done.stderr!r}"
+
+    probe("wrapper smoke", wrapper_smoke)
+    probe("stub head", lambda: repr(binary.with_name("health-stub.py").read_text()[:80]))
     try:
         proc = subprocess.Popen(
             [str(binary), "--host", "127.0.0.1", "--port", str(port)],
@@ -158,6 +189,8 @@ def _health_diagnostics(install) -> list[str]:
     try:
         time.sleep(0.5)
         probe("poll after 0.5s", proc.poll)
+        time.sleep(3.0)
+        probe("poll after 3.5s", proc.poll)
 
         def raw_connect():
             import socket as _s
