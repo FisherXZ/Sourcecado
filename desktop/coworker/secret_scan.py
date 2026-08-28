@@ -21,6 +21,19 @@ the *current* credential, and `secrets.json`'s own registry entry says it is
 "Never read into a report". This scan reads it once, to learn the value to
 search for, and never opens it as a target.
 
+Doctor's own backups are scanned too. `<state>/backups/<id>/` holds a copy of
+whatever a repair touched, taken *before* the change, so a backup made before
+a credential was rotated still carries the old value -- a store that reads
+clean today can still have a pre-remediation copy sitting a few directories
+over. Each backup finding is reported under its own id
+(`backup:<backup_id>:<store_id>`), never folded into the live store's
+finding, because "the live store is clean but a backup is not" calls for a
+different action than "the live store still has it". The vault exclusion is
+re-checked independently for backup content: Doctor's backup writer never
+copies a secret-bearing store to begin with, but this does not trust that --
+it skips any `secret_bearing` store id by its own registry lookup, regardless
+of what a backup's manifest claims was copied.
+
 Output discipline matches `coworker/doctor.py`: bounded, and never the
 matched value. A finding names a store id, a record or file identity -- a
 table and rowid, a transcript file and line number, a JSON document's path --
@@ -70,6 +83,7 @@ class ScanReport:
     secret_key: str | None
     needle_count: int
     stores_scanned: tuple[str, ...]
+    backups_scanned: tuple[str, ...]
     findings: tuple[StoreFinding, ...]
     unreadable: tuple[str, ...] = ()
 
@@ -84,6 +98,7 @@ class ScanReport:
             "secret_key": self.secret_key,
             "values_searched": self.needle_count,
             "stores_scanned": list(self.stores_scanned),
+            "backups_scanned": list(self.backups_scanned),
             "clean": self.clean,
             "findings": [item.to_dict() for item in self.findings],
             "unreadable": list(self.unreadable),
@@ -145,9 +160,9 @@ def _matched(
     return any(match.category == "registered_secret" for match in matches)
 
 
-def _scan_sqlite(spec: migrations.StoreSpec, root: Path, needles: frozenset[str], home: Path) -> list[str]:
+def _scan_sqlite(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str]:
     identities: list[str] = []
-    conn = open_readonly(store_path(root, spec))
+    conn = open_readonly(path)
     try:
         for table in sorted(migrations.table_names(conn)):
             try:
@@ -181,21 +196,8 @@ def _scan_jsonl_file(path: Path, root: Path, needles: frozenset[str], home: Path
     return identities
 
 
-def _scan_jsonl_store(spec: migrations.StoreSpec, root: Path, needles: frozenset[str], home: Path) -> list[str]:
-    if spec.kind is StoreKind.JSONL_DIR:
-        files = sorted(store_path(root, spec).glob("*.jsonl"))
-    else:
-        path = store_path(root, spec)
-        files = [path] if path.is_file() else []
-    identities: list[str] = []
-    for path in files:
-        identities.extend(_scan_jsonl_file(path, root, needles, home))
-    return identities
-
-
-def _scan_one_file(spec: migrations.StoreSpec, root: Path, needles: frozenset[str], home: Path) -> list[str]:
+def _scan_one_file(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str]:
     """A JSON document or an opaque file that is not secret-bearing: one blob of text."""
-    path = store_path(root, spec)
     text = path.read_text(encoding="utf-8", errors="replace")
     relative = _relative(path, root)
     if _matched(text, needles, home=home, root=root, location=relative):
@@ -203,32 +205,94 @@ def _scan_one_file(spec: migrations.StoreSpec, root: Path, needles: frozenset[st
     return []
 
 
-def _scan_directory(spec: migrations.StoreSpec, root: Path, needles: frozenset[str], home: Path) -> list[str]:
+def _scan_directory(path: Path, root: Path, needles: frozenset[str], home: Path) -> list[str]:
     identities: list[str] = []
-    for path in sorted(store_path(root, spec).rglob("*")):
-        if not path.is_file():
+    for file in sorted(path.rglob("*")):
+        if not file.is_file():
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        relative = _relative(path, root)
+        text = file.read_text(encoding="utf-8", errors="replace")
+        relative = _relative(file, root)
         if _matched(text, needles, home=home, root=root, location=relative):
             identities.append(relative)
     return identities
 
 
-def _scan_store(spec: migrations.StoreSpec, root: Path, needles: frozenset[str], home: Path) -> list[str] | None:
-    """None means the store could not be read; distinct from a clean empty list."""
+def _scan_path(
+    kind: StoreKind, path: Path, root: Path, needles: frozenset[str], home: Path
+) -> list[str] | None:
+    """Dispatch by kind only. Works the same for a live store or a backup copy
+    of one, since a backup is a byte-for-byte copy in the same layout.
+
+    None means the path could not be read; distinct from a clean empty list.
+    """
     try:
-        if spec.kind is StoreKind.SQLITE:
-            return _scan_sqlite(spec, root, needles, home)
-        if spec.kind in (StoreKind.JSONL_DIR, StoreKind.JSONL_LOG):
-            return _scan_jsonl_store(spec, root, needles, home)
-        if spec.kind in (StoreKind.JSON_DOCUMENT, StoreKind.OPAQUE_FILE):
-            return _scan_one_file(spec, root, needles, home)
-        if spec.kind is StoreKind.DIRECTORY:
-            return _scan_directory(spec, root, needles, home)
+        if kind is StoreKind.SQLITE:
+            return _scan_sqlite(path, root, needles, home)
+        if kind is StoreKind.JSONL_DIR:
+            identities: list[str] = []
+            for file in sorted(path.glob("*.jsonl")):
+                identities.extend(_scan_jsonl_file(file, root, needles, home))
+            return identities
+        if kind is StoreKind.JSONL_LOG:
+            return _scan_jsonl_file(path, root, needles, home) if path.is_file() else []
+        if kind in (StoreKind.JSON_DOCUMENT, StoreKind.OPAQUE_FILE):
+            return _scan_one_file(path, root, needles, home)
+        if kind is StoreKind.DIRECTORY:
+            return _scan_directory(path, root, needles, home)
     except (OSError, sqlite3.Error, UnicodeError):
         return None
     return []  # pragma: no cover - every current StoreKind is handled above
+
+
+def _scan_store(spec: migrations.StoreSpec, root: Path, needles: frozenset[str], home: Path) -> list[str] | None:
+    return _scan_path(spec.kind, store_path(root, spec), root, needles, home)
+
+
+# --- backup scanning ---------------------------------------------------------
+
+
+def _scan_backups(
+    root: Path, needles: frozenset[str], home: Path
+) -> tuple[list[StoreFinding], list[str], list[str]]:
+    """Scan every store a Doctor backup actually copied.
+
+    A backup is taken *before* a repair changes a store, so a backup made
+    before a credential was rotated can still hold the old value even once
+    every live store is clean. `migrations.list_backups` is the same reader
+    Doctor's own `backups` command uses, so this sees exactly what an
+    operator would see listed.
+
+    The vault exclusion is re-checked here independently of the backup
+    writer: Doctor never copies a `secret_bearing` store's content and always
+    records `content_backed_up: false` for it, but this does not trust a
+    manifest's word for that -- it looks the store id up in the registry and
+    skips it if `secret_bearing` is set, regardless of what the manifest claims.
+    """
+    findings: list[StoreFinding] = []
+    backups_scanned: list[str] = []
+    unreadable: list[str] = []
+    for manifest in migrations.list_backups(root):
+        backup_id = str(manifest.get("backup_id") or "")
+        if not backup_id:
+            continue
+        backup_dir = root / migrations.BACKUPS_DIR_NAME / backup_id
+        backups_scanned.append(backup_id)
+        for entry in manifest.get("entries") or []:
+            if not entry.get("content_backed_up"):
+                continue
+            try:
+                spec = migrations.spec_for(str(entry.get("store_id")))
+            except KeyError:
+                continue
+            if spec.secret_bearing or not store_present(backup_dir, spec):
+                continue
+            label = f"backup:{backup_id}:{spec.store_id}"
+            identities = _scan_path(spec.kind, store_path(backup_dir, spec), root, needles, home)
+            if identities is None:
+                unreadable.append(label)
+            elif identities:
+                findings.append(StoreFinding(label, len(identities), _bounded(identities)))
+    return findings, backups_scanned, unreadable
 
 
 # --- the scan ---------------------------------------------------------------
@@ -269,11 +333,16 @@ def scan_state(
         elif identities:
             findings.append(StoreFinding(spec.store_id, len(identities), _bounded(identities)))
 
+    backup_findings, backups_scanned, backup_unreadable = _scan_backups(root, needles, home)
+    findings.extend(backup_findings)
+    unreadable.extend(backup_unreadable)
+
     return ScanReport(
         generated_at=datetime.now(UTC).isoformat(),
         secret_key=secret_key,
         needle_count=len(needles),
         stores_scanned=tuple(stores_scanned),
+        backups_scanned=tuple(backups_scanned),
         findings=tuple(findings),
         unreadable=tuple(unreadable),
     )
@@ -287,6 +356,7 @@ def _render(report: ScanReport) -> str:
     lines.append(f"secret key       {report.secret_key or '(all registered)'}")
     lines.append(f"values searched  {report.needle_count}")
     lines.append(f"stores scanned   {len(report.stores_scanned)}")
+    lines.append(f"backups scanned  {len(report.backups_scanned)}")
     if report.unreadable:
         lines.append(f"unreadable       {', '.join(report.unreadable)}")
     lines.append("")

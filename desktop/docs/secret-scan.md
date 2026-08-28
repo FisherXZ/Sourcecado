@@ -62,6 +62,24 @@ next time this runs:
 | JSON document | The file's raw text. |
 | Directory | The raw text of every file inside it. |
 
+**Every Doctor backup is scanned too**, not just the live stores.
+`<state>/backups/<id>/` holds a copy of whatever a repair touched, taken
+*before* the change, so a backup made before a credential was rotated can
+still hold the old value even once every live store reads clean. The scan
+reads `<state>/backups/`'s manifests the same way `doctor backups` does and
+scans whatever each one actually copied. A backup match is reported under its
+own id, `backup:<backup_id>:<store_id>`, never folded into the live store's
+finding -- "the live store is clean but a backup is not" needs a different
+fix (delete or replace the backup) than "the live store still has it" does.
+The vault exclusion applies here too, checked independently of what a backup's
+manifest claims: Doctor never copies a `secret_bearing` store into a backup in
+the first place, and this scan skips one by its own registry lookup even if a
+manifest said otherwise.
+
+**Not scanned:** the vault stores above (live or inside a backup), and
+`agent_runs.db`, which is not yet in `migrations.REGISTRY` -- it will be
+picked up automatically, with no code change here, once it is registered.
+
 ## Bounded and never the value
 
 A finding names a store id, a record or file identity -- a table and rowid, a

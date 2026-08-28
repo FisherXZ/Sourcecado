@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from coworker import migrations
 from coworker.secret_scan import (
     MAX_DETAIL_ROWS,
     NoRegisteredSecret,
@@ -37,6 +38,29 @@ def _probe_value() -> str:
 
 def _write_secrets(root: Path, payload: dict) -> None:
     (root / "secrets.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_backup(root: Path, backup_id: str, entries: list[dict]) -> Path:
+    """A hand-built backup directory, shaped like `migrations.create_backup` writes one.
+
+    Built by hand rather than via `create_backup` so a test can plant an entry
+    the real writer would never produce -- see the adversarial-manifest test
+    below, which claims a secret-bearing store was copied when the real writer
+    never does that.
+    """
+    backup_dir = root / migrations.BACKUPS_DIR_NAME / backup_id
+    backup_dir.mkdir(parents=True)
+    manifest = {
+        "version": 1,
+        "backup_id": backup_id,
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "reason": "test",
+        "entries": entries,
+    }
+    (backup_dir / migrations.BACKUP_MANIFEST_NAME).write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    return backup_dir
 
 
 # --- finds a real leak, never prints it -------------------------------------
@@ -132,6 +156,82 @@ def test_a_store_with_many_matches_is_capped_not_printed_in_full(tmp_path):
     assert probe not in payload
     # The overflow line, not 25 individual detail lines, is what stands in.
     assert rendered.count(" line ") == MAX_DETAIL_ROWS - 1
+
+
+# --- backups: a pre-remediation copy the live store no longer carries -------
+
+
+def test_a_value_surviving_only_in_a_backup_is_found_and_never_printed(tmp_path):
+    root = tmp_path / "state"
+    root.mkdir()
+    probe = _probe_value()
+    _write_secrets(root, {"probe": {"api_key": probe}})
+    # The live store is clean -- the value only survives in a backup taken
+    # before remediation, which is exactly the scenario a live-store-only
+    # scan would miss.
+    backup_dir = _write_backup(
+        root,
+        "doctor-20260101T000000000000Z",
+        [
+            {
+                "store_id": "workspace_grants",
+                "kind": "json_document",
+                "relative_path": "workspace_grants.json",
+                "content_backed_up": True,
+                "mode": "0o600",
+            }
+        ],
+    )
+    (backup_dir / "workspace_grants.json").write_text(
+        json.dumps({"grants": [{"id": "g1", "label": f"pre-rotation note {probe}"}]}),
+        encoding="utf-8",
+    )
+
+    report = scan_state(root, secret_key="probe")
+
+    # Non-vacuous: the backup finding actually exists before checking output.
+    label = "backup:doctor-20260101T000000000000Z:workspace_grants"
+    finding = next(item for item in report.findings if item.store_id == label)
+    assert finding.count == 1
+    assert "doctor-20260101T000000000000Z" in report.backups_scanned
+    assert not report.clean
+
+    rendered = report.render()
+    payload = json.dumps(report.to_dict())
+    assert probe not in rendered
+    assert probe not in payload
+
+
+def test_a_secret_bearing_entry_inside_a_backup_stays_excluded_even_if_the_manifest_lies(tmp_path):
+    root = tmp_path / "state"
+    root.mkdir()
+    probe = _probe_value()
+    _write_secrets(root, {"probe": {"api_key": probe}})
+    # The real backup writer never copies a secret-bearing store and always
+    # records content_backed_up: false for it. This plants the file anyway and
+    # claims otherwise, to prove the exclusion does not take the manifest's word.
+    backup_dir = _write_backup(
+        root,
+        "doctor-adversarial",
+        [
+            {
+                "store_id": "secrets",
+                "kind": "opaque_file",
+                "relative_path": "secrets.json",
+                "content_backed_up": True,
+                "mode": "0o600",
+            }
+        ],
+    )
+    (backup_dir / "secrets.json").write_text(
+        json.dumps({"probe": {"api_key": probe}}), encoding="utf-8"
+    )
+
+    report = scan_state(root, secret_key="probe")
+
+    assert "doctor-adversarial" in report.backups_scanned  # the backup was inspected
+    assert report.clean
+    assert not any(item.store_id.startswith("backup:") for item in report.findings)
 
 
 # --- the CLI -----------------------------------------------------------------
