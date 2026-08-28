@@ -16,6 +16,7 @@ import { ConnectionsPage } from "../routes/ConnectionsPage";
 import { ScheduledPage } from "../routes/ScheduledPage";
 import { SettingsPage } from "../routes/SettingsPage";
 import { SkillsPage } from "../routes/SkillsPage";
+import { PreviewChannelBadge } from "../routes/UpdateChannel";
 import { UnavailableThreadPage } from "../routes/UnavailableThreadPage";
 import { WelcomePage } from "../routes/WelcomePage";
 import { CommandSearch } from "./CommandSearch";
@@ -258,6 +259,7 @@ export function AppShell() {
   }
   return (
     <div className="app-shell">
+      <PreviewChannelBadge />
       <button
         ref={railTriggerRef}
         type="button"

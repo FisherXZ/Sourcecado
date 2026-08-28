@@ -500,3 +500,38 @@ h1 {
     animation: none;
   }
 }
+
+/* Preview builds say so, permanently, in a corner nothing else uses. Fixed
+   rather than in the flex row so it cannot shift the shell layout, and below
+   the alert layer so a real problem still wins. */
+.preview-channel-badge {
+  position: fixed;
+  z-index: 55;
+  top: 12px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.preview-channel-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--pit);
+}
+
+.preview-channel-badge code {
+  color: inherit;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}

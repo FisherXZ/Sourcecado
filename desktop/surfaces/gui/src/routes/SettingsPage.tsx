@@ -10,6 +10,7 @@ import {
   type WorkspaceDiagnostics,
 } from "../api";
 import { DiagnosticBundle } from "./DiagnosticBundle";
+import { ReleaseChannelSettings } from "./UpdateChannel";
 import { WorkspaceSettings } from "./WorkspaceSettings";
 
 type SettingsState =
@@ -281,6 +282,8 @@ export function SettingsPage() {
               )
             }
           />
+
+          <ReleaseChannelSettings />
 
           <DiagnosticBundle />
         </div>
