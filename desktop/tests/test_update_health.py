@@ -64,6 +64,20 @@ class Handler(BaseHTTPRequestHandler):
 class ReuseHTTPServer(HTTPServer):
     allow_reuse_address = True
 
+    def handle_error(self, request, client_address):
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+
+import socket, time as _t
+_t0 = _t.monotonic()
+try:
+    socket.getfqdn("127.0.0.1")
+    _fqdn = f"{_t.monotonic() - _t0:.2f}s"
+except Exception as _exc:
+    _fqdn = f"failed {_exc}"
+print(f"getfqdn took {_fqdn}", file=sys.stderr, flush=True)
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--port", type=int, required=True)
@@ -145,18 +159,32 @@ def _health_diagnostics(install) -> list[str]:
         time.sleep(0.5)
         probe("poll after 0.5s", proc.poll)
 
+        def raw_connect():
+            import socket as _s
+
+            started = time.monotonic()
+            with _s.create_connection(("127.0.0.1", port), timeout=5):
+                return f"tcp connect ok in {time.monotonic() - started:.2f}s"
+
         def handshake():
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            started = time.monotonic()
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             try:
                 conn.request(
                     "GET", "/v1/health", headers={"X-Club-Token": "diag-token"}
                 )
+                sent = time.monotonic() - started
                 resp = conn.getresponse()
-                return f"{resp.status} {resp.read()!r}"
+                body = resp.read()
+                return (
+                    f"{resp.status} {body!r} "
+                    f"(request {sent:.2f}s, total {time.monotonic() - started:.2f}s)"
+                )
             finally:
                 conn.close()
 
         if proc.poll() is None:
+            probe("tcp", raw_connect)
             probe("http", handshake)
         else:
             details.append("http: skipped, process already exited")
