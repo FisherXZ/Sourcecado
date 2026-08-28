@@ -127,6 +127,58 @@ _TERM_RE = re.compile(
 _TERM_PLACEHOLDER_RE = re.compile(r"[\[{][^\]}]*term[^\]}]*[\]}]", re.IGNORECASE)
 
 
+# Tokens that name no one in particular. A title and a body party that
+# overlap only here have not been shown to be the same organization, and a
+# title made only of these carries no expectation at all. Both directions
+# matter: without the corporate forms, "Acme Robotics LLC - NDA" matched
+# "Widget Labs LLC" on `llc` and reported a clean bill of health.
+_GENERIC_TOKENS = frozenset(
+    {
+        # document type
+        "addendum", "agreement", "agreements", "amendment", "conditions",
+        "confidential", "confidentiality", "contract", "contracts", "copy",
+        "disclosure", "doc", "docx", "draft", "executed", "final", "form",
+        "intent", "letter", "memorandum", "moa", "mou", "mutual", "nda",
+        "ndas", "pdf", "policy", "proposal", "reciprocal", "revised",
+        "sample", "signed", "sow", "statement", "template", "templates",
+        "terms", "understanding", "updated", "version",
+        # subject matter, which names a kind of deal and not a party
+        "client", "clients", "consulting", "contractor", "employment",
+        "engagement", "general", "independent", "lease", "license",
+        "licensing", "master", "partnership", "professional", "purchase",
+        "recruiting", "recruitment", "referral", "referrals", "retainer",
+        "sale", "service", "services", "standard", "subcontract",
+        "subcontractor", "supply", "vendor", "vendors", "work",
+        # corporate form, shared by every company there is
+        "companies", "company", "corp", "corporation", "gmbh", "holdings",
+        "inc", "incorporated", "llc", "llp", "ltd", "partners", "plc",
+        "pllc", "group",
+        # structural words any two titles share
+        "and", "between", "for", "non", "nondisclosure", "the",
+    }
+)
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _significant_tokens(text: str) -> set[str]:
+    """Name-bearing tokens of a title or a party, lowercased.
+
+    Drops the boilerplate every legal filename carries, so "Codeology NDA
+    Template" reduces to {"codeology"} and "Acme Robotics LLC" to
+    {"acme", "robotics"}. An empty result means the text named nobody.
+    """
+    # The length and digit rules are a second, independent way for a name to
+    # vanish: "3M", "BP", and "EY" reduce to nothing here, as does any name
+    # made only of generic words. A vanished name is still reported to the
+    # human and still counts as unmatched, so it can only over-ask, never
+    # silence -- see _verify_parties_against_title.
+    return {
+        token
+        for token in _TOKEN_RE.findall(text.casefold())
+        if len(token) > 2 and token not in _GENERIC_TOKENS and not token.isdigit()
+    }
+
+
 def _clean(value: Any) -> str:
     return str(value or "").strip()
 
@@ -154,11 +206,47 @@ def _extract_parties(body: str) -> list[str]:
     return [p for p in parts if p]
 
 
-def _verify_parties(body: str, expected_party: str) -> tuple[Evidence, str]:
+def _verify_parties_against_title(parties: list[str], title: str) -> tuple[Evidence, str]:
+    """Grade the body's parties against the title, for a caller that declared none.
+
+    The title never *grants* anything. `classify` withholds `ready_to_use`
+    from any artifact whose expectation came from its filename, so a
+    `present` here is a readable signal, never a licence. The title is used
+    to raise suspicion, which is the one thing a filename can honestly do:
+    a body that names nobody the filename names is the filename/body party
+    mismatch issue #39 exists to catch, and a caller with no expectation of
+    its own would otherwise have no way to see it.
+    """
+    title_tokens = _significant_tokens(title)
+    named = [party for party in parties if not _is_placeholder(party)]
+    # An organization whose whole name is generic ("Partners Group") reduces
+    # to no tokens. It still gets reported to the human -- it is one of the
+    # parties -- but it cannot be the thing that makes the comparison possible.
+    comparable = [party for party in named if _significant_tokens(party)]
+    if not title_tokens or not comparable:
+        # Nothing to compare. Either the title is pure document boilerplate
+        # ("Master Services Agreement") and names no organization to expect,
+        # or the body names none that can be checked against one.
+        return Evidence.MISSING, "no_expected_party_declared:" + ", ".join(parties)
+    matched: list[str] = []
+    unmatched: list[str] = []
+    for party in named:
+        bucket = matched if _significant_tokens(party) & title_tokens else unmatched
+        bucket.append(party)
+    if not matched:
+        return Evidence.ABSENT, "body_parties_absent_from_title:" + ", ".join(named)
+    if unmatched:
+        return Evidence.PARTIAL, "unexpected_named_party:" + ", ".join(unmatched)
+    return Evidence.PRESENT, "title_party_named_in_body"
+
+
+def _verify_parties(body: str, expected_party: str, title: str) -> tuple[Evidence, str]:
     parties = _extract_parties(body)
     if not parties:
         return Evidence.MISSING, "no_named_parties_found"
     expected_norm = expected_party.strip().casefold()
+    if not expected_norm:
+        return _verify_parties_against_title(parties, title)
     found_expected = any(p.casefold() == expected_norm for p in parties)
     unexpected = [p for p in parties if p.casefold() != expected_norm and not _is_placeholder(p)]
     if not found_expected:
@@ -217,27 +305,44 @@ def classify(
 
     Reads `body` for parties, dates, and terms -- never trusts `title` or
     caller metadata for those three, so a filename/body mismatch cannot
-    hide behind a confident-sounding name. `status` and `approval` are
-    facts a body cannot self-attest, so they come from the caller as
-    declared; this function only checks whether that declaration still
-    holds. `authorized` must be boolean `True`; `approved_at` and
+    hide behind a confident-sounding name.
+
+    The one use of `title` is adversarial. When the caller declares no
+    `expected_party`, the title supplies the expectation the body is checked
+    against, so a filename/body disagreement stays visible to a caller with
+    no counterparty of its own to name. A title can only expose that
+    disagreement. It can never make a document `ready_to_use`.
+
+    `status` and `approval` are facts a body cannot self-attest, so they come
+    from the caller as declared; this function only checks whether that
+    declaration still holds. `authorized` must be boolean `True`; `approved_at` and
     `modified_time` must both parse as ISO-8601 timestamps; an approval
     dated before the last body revision is stale, whoever recorded it.
 
-    `ready_to_use` is True only when `status` is `approved_template` and
-    every facet verifies `present`. Any other status -- draft, executed,
+    `ready_to_use` is True only when `status` is `approved_template`, every
+    facet verifies `present`, and the caller declared the `expected_party`
+    the body was checked against. Any other status -- draft, executed,
     stale, or unverified -- is never `ready_to_use`, regardless of how
-    clean the body reads.
+    clean the body reads, and neither is an artifact whose only expectation
+    came from its own filename.
     """
     resolved_status = resolve_status(status)
     facets = {
-        "parties": _verify_parties(body, expected_party),
+        "parties": _verify_parties(body, expected_party, title),
         "dates": _verify_dates(body),
         "terms": _verify_terms(body),
         "approval": _verify_approval(approval, modified_time=modified_time),
     }
     all_present = all(evidence is Evidence.PRESENT for evidence, _ in facets.values())
-    ready_to_use = resolved_status is ArtifactStatus.APPROVED_TEMPLATE and all_present
+    # A parties facet graded against the title read clean only against a
+    # filename, which is not a fact anyone declared. It may expose a
+    # disagreement; it may never be the thing that makes a document usable.
+    declared_expectation = bool(expected_party.strip())
+    ready_to_use = (
+        resolved_status is ArtifactStatus.APPROVED_TEMPLATE
+        and all_present
+        and declared_expectation
+    )
     reasons = [
         f"{facet}:{reason}"
         for facet, (evidence, reason) in facets.items()
@@ -245,6 +350,8 @@ def classify(
     ]
     if resolved_status is not ArtifactStatus.APPROVED_TEMPLATE:
         reasons.insert(0, f"status:{resolved_status.value}")
+    if all_present and not declared_expectation:
+        reasons.append("parties:expectation_taken_from_title_not_declared")
     return {
         "artifact_id": artifact_id,
         "title": title,
@@ -272,6 +379,22 @@ def knowledge_gap_fields(assessment: dict[str, Any]) -> dict[str, Any] | None:
         return None
     facet_evidence = [Evidence(facet["evidence"]) for facet in assessment["facets"].values()]
     worst = _most_severe(facet_evidence)
+    parties = assessment["facets"]["parties"]
+    # A read from a connector always lacks an approval record, so `evidence`
+    # -- the most severe facet -- reads `missing` for every such artifact. The
+    # question is what a human actually reads, so when the parties facet found
+    # a real disagreement it leads with that instead of the generic ask.
+    if parties["evidence"] in {Evidence.ABSENT.value, Evidence.PARTIAL.value}:
+        question = (
+            f'Confirm who "{assessment["title"]}" is actually between '
+            f'({parties["reason"]}), then verify its dates, terms, and approval '
+            "before it can be offered as ready to use."
+        )
+    else:
+        question = (
+            f'Verify parties, dates, terms, and approval for "{assessment["title"]}" '
+            "before it can be offered as ready to use."
+        )
     return {
         "kind": "legal_artifact_not_ready",
         "evidence": worst.value,
@@ -279,10 +402,7 @@ def knowledge_gap_fields(assessment: dict[str, Any]) -> dict[str, Any] | None:
         "title": assessment["title"],
         "status": assessment["status"],
         "reasons": assessment["reasons"],
-        "question": (
-            f'Verify parties, dates, terms, and approval for "{assessment["title"]}" '
-            "before it can be offered as ready to use."
-        ),
+        "question": question,
     }
 
 

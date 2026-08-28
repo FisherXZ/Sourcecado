@@ -16,7 +16,9 @@ from coworker.connectors.google_oauth import (
     save_google,
 )
 from coworker.drive import DriveApi
+from coworker.legal_artifacts import attach_gap
 from coworker.ledger import event_from_tool
+from coworker.people import PersonStore
 from coworker.permissions import decide
 from coworker.provider import FakeProvider, ToolCall
 from coworker.secrets import SecretStore
@@ -698,30 +700,168 @@ def test_drive_read_does_not_redact_ordinary_security_prose(tmp_path):
     assert out["redaction_count"] == 0
 
 
-def test_drive_read_flags_mismatched_legal_template_as_not_ready(tmp_path):
+# --- legal artifact classification on the Drive read path -----------------
+#
+# Fixture bodies model the quarantined stale-NDA scenario with obviously
+# fictional parties. No real company or agreement text belongs in a fixture.
+
+STALE_NDA_META = {
+    "id": "f1",
+    "name": "Northwind NDA Template",
+    "mimeType": "application/vnd.google-apps.document",
+    "modifiedTime": "2026-08-01T00:00:00Z",
+}
+STALE_NDA_BODY = (
+    "NONDISCLOSURE AGREEMENT between Ridgeline Ventures and Harborline "
+    "Analytics. Effective Date: January 4, 2024. Term of this Agreement "
+    "shall be two years."
+)
+
+
+def _drive(tmp_path, http):
     secrets = SecretStore(tmp_path / "secrets.json")
     save_google(secrets, {"refresh_token": "rt", "access_token": "at", "scopes": [DRIVE_SCOPE]})
+    return DriveApi(secrets, http=http, client_id="cid", client_secret="sec")
+
+
+def test_drive_read_refuses_a_legal_template_whose_body_names_other_parties(tmp_path):
+    """No-regression for the stale-NDA shape the removed hotfix hardcoded.
+
+    The hotfix matched two literal strings in one document. The engine reads
+    whichever parties the body actually names, so the same document is still
+    refused -- by classification, not by a name match.
+    """
+    http = FakeHttp({f"{FILES_URL}/f1": STALE_NDA_META, f"{FILES_URL}/f1/export": STALE_NDA_BODY})
+
+    out = _drive(tmp_path, http).read("f1")
+    safety = out["source_safety"]
+
+    # non-vacuous: the body was read and every facet was actually evaluated
+    # before we assert the document is withheld.
+    assert safety["legal_document"] is True
+    assert safety["artifact_id"] == "drive:f1"
+    assert safety["title"] == "Northwind NDA Template"
+    assert safety["modified_time"] == "2026-08-01T00:00:00Z"
+    assert safety["facets"]["dates"]["evidence"] == "present"
+    assert safety["facets"]["terms"]["evidence"] == "present"
+    # the whole point: the body names nobody the filename names, and the read
+    # says so. A clean template read through the same path grades `present`
+    # (see test_drive_read_does_not_flag_a_body_that_agrees_with_its_title).
+    parties = safety["facets"]["parties"]
+    assert parties["evidence"] == "absent"
+    assert "Ridgeline Ventures" in parties["reason"]
+    assert "Harborline Analytics" in parties["reason"]
+
+    # only now: a read document is evidence, not a usable instrument
+    assert safety["ready_to_use"] is False
+    assert safety["status"] == "unverified"
+    assert safety["reasons"][0] == "status:unverified"
+    assert any(reason.startswith("approval:") for reason in safety["reasons"])
+
+
+def test_drive_read_does_not_flag_a_body_that_agrees_with_its_title(tmp_path):
+    """The inverse of the no-regression case, through the same live path.
+
+    Without this, "every legal file is refused" would pass the mismatch test
+    while telling an operator nothing. The two reads have to differ.
+    """
+    body = (
+        "NONDISCLOSURE AGREEMENT between Northwind Distribution and "
+        "[COUNTERPARTY NAME]. Effective Date: January 4, 2024. Term of this "
+        "Agreement shall be two years."
+    )
+    http = FakeHttp({f"{FILES_URL}/f1": STALE_NDA_META, f"{FILES_URL}/f1/export": body})
+
+    out = _drive(tmp_path, http).read("f1")
+    safety = out["source_safety"]
+
+    assert safety["facets"]["parties"]["evidence"] == "present"
+    # still evidence, not an instrument: a Drive read declares no status and
+    # no counterparty of its own, so it cannot reach ready_to_use.
+    assert safety["ready_to_use"] is False
+    assert safety["status"] == "unverified"
+
+
+def test_drive_read_reports_undeclared_status_as_unverified_not_draft(tmp_path):
+    """A Drive read declares no lifecycle status, so it resolves to unverified.
+
+    `draft` would read as "in progress"; `unverified` reads as "unplaced, do
+    not offer". Nothing on the read path may promote a document past that.
+    """
+    body = (
+        "NONDISCLOSURE AGREEMENT between Ridgeline Ventures and "
+        "[COUNTERPARTY NAME]. Effective Date: [EFFECTIVE DATE]. "
+        "Term of this Agreement shall be [TERM LENGTH]."
+    )
     http = FakeHttp(
         {
-            f"{FILES_URL}/f1": {
-                "id": "f1",
-                "name": "Codeology NDA Template",
-                "mimeType": "application/vnd.google-apps.document",
-            },
-            f"{FILES_URL}/f1/export": (
-                "NONDISCLOSURE AGREEMENT between De Beers and Berkeley Consulting."
-            ),
+            f"{FILES_URL}/f1": {**STALE_NDA_META, "name": "Ridgeline NDA Template"},
+            f"{FILES_URL}/f1/export": body,
         }
     )
 
-    out = DriveApi(secrets, http=http, client_id="cid", client_secret="sec").read("f1")
+    out = _drive(tmp_path, http).read("f1")
+    safety = out["source_safety"]
 
-    assert out["source_safety"] == {
-        "legal_document": True,
-        "ready_to_use": False,
-        "status": "party_mismatch",
-        "reasons": ["unexpected_recipient_berkeley_consulting"],
-    }
+    # non-vacuous: this body is as clean as a read can get -- dates and terms
+    # both verify -- and it still does not become usable.
+    assert safety["facets"]["dates"]["evidence"] == "present"
+    assert safety["facets"]["terms"]["evidence"] == "present"
+
+    assert safety["status"] == "unverified"
+    assert safety["status"] != "draft"
+    assert safety["ready_to_use"] is False
+
+
+def test_drive_read_reports_per_document_facet_evidence(tmp_path):
+    """The verdict is read from this body, not stamped on every legal file."""
+    http = FakeHttp(
+        {
+            f"{FILES_URL}/f1": {**STALE_NDA_META, "name": "Harborline NDA Template"},
+            f"{FILES_URL}/f1/export": "NONDISCLOSURE AGREEMENT for the parties below.",
+        }
+    )
+
+    out = _drive(tmp_path, http).read("f1")
+    facets = out["source_safety"]["facets"]
+
+    assert facets["parties"]["evidence"] == "missing"
+    assert facets["parties"]["reason"] == "no_named_parties_found"
+    assert facets["dates"]["evidence"] == "missing"
+    assert facets["terms"]["evidence"] == "missing"
+
+
+def test_drive_read_source_safety_files_a_knowledge_gap(tmp_path):
+    """`source_safety` is an assessment `attach_gap` consumes unchanged.
+
+    Issue #39 criterion 4: the mismatch has to become a knowledge gap a human
+    can resolve, through the existing attachment mechanism -- not a second,
+    Drive-specific gap format.
+    """
+    http = FakeHttp({f"{FILES_URL}/f1": STALE_NDA_META, f"{FILES_URL}/f1/export": STALE_NDA_BODY})
+    out = _drive(tmp_path, http).read("f1")
+    people = PersonStore(tmp_path / "people")
+    person = people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="Lovelace",
+        title="Founder",
+        company="Analytic",
+    )
+
+    # non-vacuous: the read produced a real not-ready assessment first
+    assert out["source_safety"]["ready_to_use"] is False
+
+    gap = attach_gap(people, person["person_id"], out["source_safety"], actor="director")
+
+    assert gap["type"] == "knowledge_gap"
+    assert gap["fields"]["kind"] == "legal_artifact_not_ready"
+    assert gap["fields"]["artifact_id"] == "drive:f1"
+    assert gap["fields"]["evidence"] == "missing"
+    assert "Ridgeline Ventures" in gap["fields"]["question"]
+    assert "Harborline Analytics" in gap["fields"]["question"]
+    stored = people.get(person["person_id"], expand_sources=True)
+    assert len(stored["knowledge_gaps"]) == 1
 
 
 def test_drive_read_does_not_classify_ordinary_agreement_prose_as_legal(tmp_path):

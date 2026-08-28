@@ -6,12 +6,17 @@ folder-ingestion job in ``drive_ingestion.py`` (#43). It never re-indexes a
 folder tree, never writes to Drive, and never copies raw file bodies into the
 person record - only the metadata needed to judge scope, freshness,
 extraction truth, and sensitivity.
+
+``attach`` is also where an unverified legal source becomes a question for a
+human: it is the one Drive path that already knows which person the source
+belongs to, which is what filing a knowledge gap requires.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from coworker.legal_artifacts import attach_gap
 from coworker.people import PersonStore
 
 EVIDENCE_KINDS = frozenset({"search_result", "folder_child", "read_source"})
@@ -103,9 +108,16 @@ def attach(
     idempotent. A changed source gets a new idempotency key, so it lands as a
     new, inspectable source reference alongside the old one rather than a
     silent overwrite.
+
+    A source carrying a not-ready legal assessment also files a knowledge gap
+    on the same person (issue #39: a mismatch must become something a human is
+    asked to resolve, not just a quieter label). The gap is a second
+    attachment, never a replacement for the source ref -- the operator still
+    gets the source they asked for, plus the question it raises. Both writes
+    are keyed idempotently, so re-attaching the same revision adds neither.
     """
     fields, idempotency_key = normalize(kind, raw, folder_id=folder_id)
-    return people.upsert_attachment(
+    reference = people.upsert_attachment(
         person_id,
         record_type="source_ref",
         fields=fields,
@@ -115,3 +127,14 @@ def attach(
         session_id=session_id,
         run_id=run_id,
     )
+    safety = raw.get("source_safety")
+    if isinstance(safety, dict) and "facets" in safety:
+        attach_gap(
+            people,
+            person_id,
+            safety,
+            actor=actor,
+            session_id=session_id,
+            run_id=run_id,
+        )
+    return reference

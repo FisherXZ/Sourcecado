@@ -29,4 +29,30 @@ Any facet short of `present` blocks `ready_to_use` and produces a reason like `p
 
 It does not decide who counts as an authorized approver (`approval["authorized"]` is a caller-declared fact), and it does not author or judge legal language -- only structural placeholders (`[COUNTERPARTY NAME]`, `[EFFECTIVE DATE]`) and generic markers. Recording real approval, and authoring the canonical Berkeley Codeology template text, are human/counsel actions outside this module's scope.
 
-It is not yet wired into any live path -- `coworker/drive.py`'s existing `_legal_source_safety` hotfix and `coworker/drive_evidence.py`'s `normalize()` are unchanged. Wiring `classify()` into the Drive-read and tool-call path is follow-up integration work.
+## Where it runs
+
+`coworker/drive.py`'s `_legal_source_safety` is the live call site. A Drive read that looks like a legal document (by filename or by the opening of its body) is classified, and the assessment is returned as the read result's `source_safety` field, alongside `legal_document: True`. That field is the same one `drive_evidence.normalize()` and `drive_ingestion` already read to mark a source `sensitive`, so it now carries facet evidence instead of a two-string name match.
+
+A Drive read declares nothing. It has no lifecycle status, no approval record, and no expected counterparty, so `status` resolves to `unverified` and `ready_to_use` is `False` for every legal document read from Drive. The facets still vary per document: which parties the body names, whether it carries a date, whether it states a term. The body is untrusted external text and never gets to declare its own standing.
+
+## The title as a last-resort expectation
+
+`_verify_parties` normally checks the body's parties against a counterparty the caller declared. A connector read declares none, and with no expectation at all the facet had one reachable value: a stale NDA graded the same as a clean template, which is the failure this module exists to catch.
+
+So when `expected_party` is empty, the title supplies the expectation. Generic tokens are stripped from both sides first -- document type (`nda`, `agreement`, `template`), subject matter (`master`, `services`, `consulting`, `referral`), and corporate form (`llc`, `inc`, `ltd`, `group`) -- leaving only name-bearing tokens. "Codeology NDA Template" reduces to `codeology`, and "Acme Robotics LLC" to `acme, robotics`. A body naming nobody the title names reads `absent`. A body naming the title's organization plus someone else reads `partial`. A body that agrees reads `present`.
+
+An organization whose entire name is generic -- "Partners Group" -- reduces to nothing. It is still reported to the human as one of the parties; it simply cannot carry the comparison. When such a name is the *title*, a real mismatch degrades from `absent` to `missing`: the gap is still filed and readiness is still refused, but the specific question is lost. That is the safe direction, and it is the price of inferring an expectation instead of declaring one.
+
+Stripping both sides is what keeps the heuristic honest in both directions. Without the corporate forms, "Acme Robotics LLC - NDA" matched "Widget Labs LLC" on `llc` alone and reported a clean bill of health, which is the worse failure: it silences the question. Without the subject-matter words, a filename that describes the deal rather than the parties -- "Master Services Agreement" -- graded a correctly-formed contract `absent`, which is the noise that gets a checker disabled. A title left with no name-bearing tokens, or a party left with none, is not comparable and reads `missing`.
+
+The title can only expose a disagreement. It can never grant anything: `classify` withholds `ready_to_use` from any artifact whose expectation came from its own filename, and records `parties:expectation_taken_from_title_not_declared` when that is the only thing left blocking. Otherwise a well-named file would be a way to earn readiness.
+
+## Where the gap gets filed
+
+`coworker/drive_evidence.py`'s `attach()` files it. That is the one Drive path that already knows which person a source belongs to, which is what a knowledge gap needs. Attaching a source whose assessment is not ready writes the gap as a second attachment on the same person; the operator still gets the source reference they asked for. Both writes are keyed idempotently, so re-attaching the same revision adds neither. A `source_safety` payload with no `facets` -- a row stored before this shape existed -- is skipped rather than crashed on.
+
+`attach_gap(people, person_id, result["source_safety"], actor=...)` remains callable directly by any other path that has a person in hand.
+
+## Still to do
+
+Nothing in the product records a declared status, an approval, or an expected counterparty for a Drive file yet, so no read can reach `ready_to_use`. Recording those is human work (see issue #39). `coworker/drive_ingestion.py`'s bulk folder job does not file gaps, because it is not person-scoped and there is no person to file against.
