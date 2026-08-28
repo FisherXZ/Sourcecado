@@ -47,7 +47,7 @@ What should the reviewer challenge or verify carefully?
 
 - [ ] No credential, OAuth grant, token, private user data, or raw authorization material was committed or pasted into the PR.
 - [ ] External effects remain behind the correct permission and approval policy.
-- [ ] Paid or credit-sensitive behavior is not required by the course change.
+- [ ] Paid or credit-sensitive actions remain deliberate, approval-gated, and outside mandatory course work.
 - [ ] Source references and restricted data remain scoped correctly when applicable.
 
 ## Reviewer checklist
@@ -58,4 +58,3 @@ What should the reviewer challenge or verify carefully?
 - [ ] The live behavior demonstration is credible when required.
 - [ ] The diff is understandable and safe to merge.
 - [ ] I am giving meaningful Peer Approval, not a rubber stamp.
-

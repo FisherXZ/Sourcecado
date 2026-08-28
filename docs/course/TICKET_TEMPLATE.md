@@ -57,4 +57,3 @@ Required when the ticket changes agent or integration behavior. State the scenar
 - [ ] The live behavior demonstration passes when required.
 - [ ] The PR explains known limits and uncertainty.
 - [ ] The AI Accountability Note is complete.
-

@@ -52,7 +52,7 @@ Analyzed the living tree against code, CI, and Makefile on 2026-08-28. Current b
 | Evals | evaluations.md | evaluations.md, README | none | evaluations.md |
 | Workspace / shell | desktop/CONTEXT, ADR 0002 | ADR 0002 | none | ADR 0002 |
 | Course | docs/course/*, CONTEXT-MAP | TICKET_TEMPLATE, PR template | COURSE_PLAN, TEACHING_DECKS | CONTEXT-MAP |
-| Brand / owl | brand/README, DESIGN | `python3 desktop/packaging/make_icon.py` | none | DESIGN |
+| Brand / owl | brand/README, DESIGN | no current generator; the existing script remains geometric | none | DESIGN |
 | Memory rail | GUI only | none | none | context-projection.md (partial) |
 | CONTRIBUTING | missing | missing | missing | missing |
 | VERSION / changelog | mismatched | none | none | CHANGELOG Unreleased vs 0.2.0.0 |
@@ -611,12 +611,12 @@ Expected: both hit. Spec still item 1.
 **Interfaces:**
 
 - Consumes: `brand/README.md` mapping (flight = dock, mapping = empty thread, landing-hero = welcome, light social card = README)
-- Produces: DESIGN that names the owl without turning the table into a mascot
+- Produces: DESIGN that names the intended owl placement without claiming it is already wired
 
 The dirty-tree diff is the right change. Keep it:
 
-- Memorable thing: owl with avocado satchel is mascot and dock icon. Masters in `brand/`. Owl in dock, rail mark, first-run welcome, empty states. Never on the board or dense tables. Geometric pit stays color/shape, not the app icon.
-- Decisions log row dated 2026-08-28.
+- Memorable thing: owl with avocado satchel is mascot and intended dock icon. Masters in `brand/`. Owl is intended for the dock, rail mark, first-run welcome, and empty states. Never on the board or dense tables. Desktop icon wiring stays a separate change.
+- Decisions log row dated 2026-08-28 says the owl was selected to replace the geometric icon; it does not claim the wiring landed.
 
 - [ ] **Step 1: Confirm brand files exist**
 
@@ -624,7 +624,7 @@ The dirty-tree diff is the right change. Keep it:
 ls brand/app-icon.png brand/mascot/owl-flight.jpg brand/mascot/owl-mapping.jpg brand/mascot/owl-meadow.jpg brand/marketing/landing-hero.jpg brand/marketing/social-card-light.jpg brand/marketing/social-card-dark.jpg
 ```
 
-Expected: all exist.
+Expected: all exist. The current `desktop/packaging/make_icon.py` still renders the geometric avocado and does not consume these masters.
 
 - [ ] **Step 2: Apply the DESIGN.md lines if the branch copy dropped them**
 
