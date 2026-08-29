@@ -11,7 +11,7 @@ The current product is the Python sidecar and React/Tauri desktop app in `deskto
 - Chat is home: the sourcing director gives Sourcecado a target and works with the assistant in a thread.
 - Apollo supplies candidate people; enrichment is deliberate because it spends credits.
 - Gmail, Drive, Calendar, Granola, and web research add context to a person file.
-- The board tracks people through Open, In conversation, and Done.
+- The board shows kept people in Backlog, then tracks active sequences through Open, In conversation, and Done.
 - Sending requires a human approval in Sourcecado. There is no auto-send or background bulk enrichment.
 - State and credentials remain local for the current one-operator build.
 
