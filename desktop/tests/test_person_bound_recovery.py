@@ -8,6 +8,7 @@ from coworker.inbox import Inbox
 from coworker.people import PersonStore
 from coworker.provider import FakeProvider, StreamChunk
 from coworker.provider_retry import RetryPolicy
+from coworker.run_ledger import RunLedger
 from coworker.store import ConversationStore
 from coworker.turn import run_turn
 
@@ -243,3 +244,13 @@ def test_exhausted_provider_recovery_records_one_classified_final_failure(tmp_pa
     assert checkpoint["payload"]["provider"] == "openai"
     assert checkpoint["payload"]["model_id"] == "gpt-4o-mini"
     assert "PRIVATE" not in str(checkpoint)
+
+    receipt = RunLedger(repository).receipt(run["run_id"])
+    assert receipt is not None
+    assert receipt["model_attempts"]["attempt_count"] == 1
+    attempt = receipt["model_attempts"]["attempts"][0]
+    assert attempt["provider"] == "openai"
+    assert attempt["model_id"] == "gpt-4o-mini"
+    assert attempt["status"] == "failed"
+    assert attempt["error_class"] == "provider_runtime_error"
+    assert attempt["outcome"] == "failed"

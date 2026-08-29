@@ -859,6 +859,7 @@ async def run_turn(
                 state="running",
                 payload={
                     "step": model_step,
+                    "attempt_id": f"model-{events.identity.run_id}-{model_step}",
                     "provider": failure["provider"],
                     "model_id": failure["model"],
                     "status": "failed",
