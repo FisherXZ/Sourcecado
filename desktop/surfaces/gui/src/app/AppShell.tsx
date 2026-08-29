@@ -314,7 +314,9 @@ export function AppShell() {
         const persistNavigationAfterBoot =
           deferDestinationPersistenceRef.current &&
           shouldPersistDestination(currentHash, cacheStillOwnsHash);
-        bootRestoreHashRef.current = null;
+        if (!cacheStillOwnsHash) {
+          bootRestoreHashRef.current = null;
+        }
         deferDestinationPersistenceRef.current = false;
         if (persistNavigationAfterBoot) {
           setLastDestination(currentHash).catch(() => {});

@@ -897,6 +897,72 @@ describe("App shell routing", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
+  it("keeps stale person-chat recovery intact across exhausted retries", async () => {
+    window.location.hash = "";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [
+        {
+          session_id: "missing",
+          title: "Stale person chat",
+          n_msgs: 2,
+          pinned: false,
+          opened_at: "1",
+          updated_at: "1",
+        },
+      ],
+      open_id: "missing",
+      last_destination: "#/chat/missing/person/person-old",
+    }));
+    window.localStorage.setItem("sourcecado.chat.draft.v1:missing", "Unsent note");
+    api.getSessions.mockRejectedValue(new Error("sidecar offline"));
+    api.createSession.mockResolvedValue({
+      id: "recovered-draft",
+      title: null,
+      n_msgs: 0,
+    });
+    api.getSession.mockResolvedValue({
+      id: "recovered-draft",
+      title: null,
+      messages: [],
+      events: [],
+    });
+
+    render(<App />);
+
+    const alert = await screen.findByRole("alert", undefined, { timeout: 2_500 });
+    expect(api.getSessions).toHaveBeenCalledTimes(4);
+    api.getSessions.mockResolvedValueOnce({
+      sessions: [
+        {
+          session_id: "alpha",
+          title: "Alpha",
+          n_msgs: 1,
+          pinned: false,
+          opened_at: "2",
+          updated_at: "2",
+        },
+      ],
+      open_id: "alpha",
+      last_destination: "#/chat/missing/person/person-old",
+    });
+    await waitFor(() =>
+      expect(api.getSession).toHaveBeenCalledWith("missing", "person-old"),
+    );
+    const staleLoadsBeforeRetry = api.getSession.mock.calls.filter(
+      ([sessionId, personId]) => sessionId === "missing" && personId === "person-old",
+    ).length;
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(window.location.hash).toBe("#/chat/recovered-draft"));
+    expect(await screen.findByLabelText("Message Sourcecado")).toHaveValue("Unsent note");
+    expect(
+      api.getSession.mock.calls.filter(
+        ([sessionId, personId]) => sessionId === "missing" && personId === "person-old",
+      ),
+    ).toHaveLength(staleLoadsBeforeRetry);
+  });
+
   it("renders cached thread navigation as stale when reconnect fails", async () => {
     window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
       sessions: [
