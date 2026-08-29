@@ -578,9 +578,9 @@ class PersonStore:
         """File the durable receipt for one approved send, then open the person.
 
         Keyed on the Gmail message id, so re-filing the same message can never
-        produce a second receipt. Advancing to Open only happens when the person
-        is not already on the board; an in-conversation or done person is left
-        where the director put them.
+        produce a second receipt. Advancing to Open happens when the person is
+        not already in one of the three valid sequence states; an open,
+        in-conversation, or done person is left where the director put them.
         """
         if not message_id.strip():
             raise ValueError("message_id is required")
@@ -632,7 +632,7 @@ class PersonStore:
                     (person_id, external_key),
                 ).fetchone()
             )
-            needs_open = not str(row["sequence_state"] or "").strip()
+            needs_open = row["sequence_state"] not in SEQUENCE_STATES
         person = (
             self.set_sequence(
                 person_id,
