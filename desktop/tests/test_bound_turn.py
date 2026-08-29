@@ -1,6 +1,8 @@
 import asyncio
 import json
 
+import pytest
+
 from coworker.apollo import MATCH_URL, FakeHttp
 from coworker.gmail import FakeGmail
 from coworker.inbox import Inbox
@@ -49,7 +51,10 @@ def _run(*, tmp_path, sid, text, provider, people, gmail=None, drive=None, wait=
     )
 
 
-def test_restored_apollo_mask_never_reaches_the_next_model_request(tmp_path):
+@pytest.mark.parametrize("masked_last_name", ["L***e", "张***李"])
+def test_restored_apollo_mask_never_reaches_the_next_model_request(
+    tmp_path, masked_last_name
+):
     store = ConversationStore(tmp_path)
     store.append("sess-legacy-enrichment", {"role": "user", "content": "Enrich Ada"})
     store.append(
@@ -66,7 +71,7 @@ def test_restored_apollo_mask_never_reaches_the_next_model_request(tmp_path):
                         "arguments": json.dumps(
                             {
                                 "firstName": "Ada",
-                                "lastName": "L***e",
+                                "lastName": masked_last_name,
                                 "organizationName": "Analytic",
                             }
                         ),
@@ -96,7 +101,7 @@ def test_restored_apollo_mask_never_reaches_the_next_model_request(tmp_path):
 
     model_request = json.dumps(provider.calls[0])
     assert "surname hidden by Apollo" in model_request
-    assert "L***e" not in model_request
+    assert masked_last_name not in model_request
 
 
 def test_keep_one_person_binds_that_session_only(tmp_path):

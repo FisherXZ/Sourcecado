@@ -629,41 +629,46 @@ describe("Apollo people result", () => {
     );
   });
 
-  it("renders a masked enrichment name as an honest incomplete identity", () => {
-    const { container } = renderApollo(
-      apolloEnrich({
-        result: {
-          name: "Ada L***e",
-          title: "Founder",
-          organizationName: "Analytic",
-          email: "ada@analytic.example",
-          phone: null,
-          linkedinUrl: "https://www.linkedin.com/in/ada",
-        },
-      }),
-    );
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Enriched contact with Apollo · Completed",
-      }),
-    );
+  it.each(["Ada L***e", "Ada 张***李"])(
+    "renders a masked enrichment name as an honest incomplete identity: %s",
+    (maskedName) => {
+      const { container } = renderApollo(
+        apolloEnrich({
+          result: {
+            name: maskedName,
+            title: "Founder",
+            organizationName: "Analytic",
+            email: "ada@analytic.example",
+            phone: null,
+            linkedinUrl: "https://www.linkedin.com/in/ada",
+          },
+        }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Enriched contact with Apollo · Completed",
+        }),
+      );
 
-    expect(
-      screen.getByRole("button", {
-        name: "Inspect enriched contact Ada (surname hidden by Apollo)",
-      }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Missing verified full name", { exact: false })).toBeInTheDocument();
-    expect(container).not.toHaveTextContent("L***e");
+      expect(
+        screen.getByRole("button", {
+          name: "Inspect enriched contact Ada (surname hidden by Apollo)",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Missing verified full name", { exact: false }),
+      ).toBeInTheDocument();
+      expect(container).not.toHaveTextContent(maskedName);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Inspect Enriched contact with Apollo" }),
-    );
-    fireEvent.click(screen.getByText("Result"));
-    const inspector = screen.getByRole("complementary", { name: "Inspector" });
-    expect(inspector).toHaveTextContent("Ada (surname hidden by Apollo)");
-    expect(inspector).not.toHaveTextContent("L***e");
-  });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Inspect Enriched contact with Apollo" }),
+      );
+      fireEvent.click(screen.getByText("Result"));
+      const inspector = screen.getByRole("complementary", { name: "Inspector" });
+      expect(inspector).toHaveTextContent("Ada (surname hidden by Apollo)");
+      expect(inspector).not.toHaveTextContent(maskedName);
+    },
+  );
 
   it("does not present Apollo enrichment as running before approval", () => {
     renderApollo(

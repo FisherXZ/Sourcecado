@@ -5,7 +5,19 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_MASKED_TOKEN = re.compile(r"(?<!\S)[^\s*]*[A-Za-z][^\s*]*\*+[^\s]*(?!\S)")
+_MASKED_TOKEN = re.compile(r"(?<!\S)\S*\*+\S*(?!\S)")
+
+
+def _replace_masked_token(match: re.Match[str]) -> str:
+    token = match.group(0)
+    # Preserve ordinary Markdown emphasis and horizontal rules. Apollo name
+    # masks contain at least one real Unicode letter or number outside the
+    # asterisks, regardless of script.
+    if token.startswith("*") and token.endswith("*"):
+        return token
+    if not any(character.isalnum() for character in token if character != "*"):
+        return token
+    return "(surname hidden by Apollo)"
 
 
 def apollo_surname_is_masked(value: object) -> bool:
@@ -16,7 +28,7 @@ def without_apollo_name_masks(value: object) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    return _MASKED_TOKEN.sub("(surname hidden by Apollo)", text)
+    return _MASKED_TOKEN.sub(_replace_masked_token, text)
 
 
 def sanitize_apollo_name_masks(value: Any) -> Any:

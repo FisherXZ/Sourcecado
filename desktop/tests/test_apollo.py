@@ -75,11 +75,12 @@ def test_apollo_search_model_evidence_never_contains_the_masked_surname():
     assert "Zh***g" not in rendered
 
 
-def test_apollo_enrichment_model_evidence_never_contains_a_masked_name():
+@pytest.mark.parametrize("masked_name", ["Ada L***e", "Ada 张***李"])
+def test_apollo_enrichment_model_evidence_never_contains_a_masked_name(masked_name):
     parts = apollo_evidence(
         "apollo_enrich_contact",
         {
-            "name": "Ada L***e",
+            "name": masked_name,
             "title": "Founder",
             "organizationName": "Analytic",
             "email": "ada@analytic.example",
@@ -89,7 +90,7 @@ def test_apollo_enrichment_model_evidence_never_contains_a_masked_name():
     rendered = str(model_payload(parts))
 
     assert "Ada (surname hidden by Apollo)" in rendered
-    assert "L***e" not in rendered
+    assert masked_name not in rendered
 
 
 def test_apollo_enrich_returns_contact(tmp_path):
