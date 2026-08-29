@@ -537,6 +537,26 @@ def test_a_stored_handoff_replaces_the_generated_one_and_versions(tmp_path):
     )
 
 
+def test_a_legacy_handoff_does_not_invent_a_saved_version(tmp_path):
+    store = PersonStore(tmp_path)
+    person = _person(store)
+    pid = person["person_id"]
+    store.set_handoff(
+        pid,
+        who="Ada Lovelace, founder at Analytic",
+        wanted="A research-dinner speaker",
+        happened="No reply yet",
+        they_want="Unknown",
+    )
+
+    handoff = handoff_draft(person_brief(store, pid))
+
+    assert handoff["generated"] is False
+    assert handoff["version"] is None
+    assert handoff["saved_at"] is None
+    assert handoff["freshness_unknown"] is True
+
+
 # --- 10. restart / version history and revert ----------------------------
 
 

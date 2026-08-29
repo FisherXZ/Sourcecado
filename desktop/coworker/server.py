@@ -2111,6 +2111,29 @@ def create_app(
             return JSONResponse(
                 {"error": "a handoff needs at least one field"}, status_code=400
             )
+        current = app.state.people.get(person_id)
+        assert current is not None
+        if int(current["version"]) != expected_version:
+            return JSONResponse(
+                {
+                    "error": (
+                        "stale record version: "
+                        f"expected {expected_version}, current {current['version']}"
+                    )
+                },
+                status_code=409,
+            )
+        unchanged = all(
+            str(current.get(name) or "").strip() == value for name, value in fields.items()
+        )
+        if unchanged:
+            return {
+                "person": app.state.people.get(person_id, expand_sources=True),
+                "brief": brief_payload(person_brief(app.state.people, person_id)),
+                "versions": app.state.people.versions(person_id),
+                "saved": False,
+                "unchanged": True,
+            }
         try:
             app.state.people.patch(
                 person_id,
@@ -2128,6 +2151,8 @@ def create_app(
             "person": app.state.people.get(person_id, expand_sources=True),
             "brief": brief_payload(person_brief(app.state.people, person_id)),
             "versions": app.state.people.versions(person_id),
+            "saved": True,
+            "unchanged": False,
         }
 
     def _granola_meetings() -> dict[str, Any]:

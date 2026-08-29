@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from coworker.brief import brief_payload, project
 from coworker.people import ATTACHMENT_TYPES, PersonStore
 
 _ATTACHMENT_SCHEMA = {"type": "string", "enum": sorted(ATTACHMENT_TYPES)}
@@ -12,14 +13,16 @@ BOARD_GET_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "board_get",
-        "description": "Read one person file by id. Optional source expansion.",
+        "description": (
+            "Read one complete living brief and four-field successor handoff. "
+            "In a person-bound chat, Sourcecado resolves the bound person; "
+            "person_id is only needed outside one. This tool never saves a handoff."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
                 "person_id": {"type": "string"},
-                "expand_sources": {"type": "boolean"},
             },
-            "required": ["person_id"],
             "additionalProperties": False,
         },
     },
@@ -127,6 +130,17 @@ BOARD_TOOL_SCHEMAS = [
 BOARD_TOOL_NAMES = frozenset(schema["function"]["name"] for schema in BOARD_TOOL_SCHEMAS)
 
 
+def _partial_board_read(code: str, message: str) -> tuple[bool, dict[str, Any]]:
+    return False, {
+        "status": "partial",
+        "partial": True,
+        "code": code,
+        "error": message,
+        "partial_sources": ["board"],
+        "unavailable_sources": [{"source": "board", "code": code}],
+    }
+
+
 def execute_board_tool(
     name: str,
     arguments: dict[str, Any],
@@ -141,15 +155,73 @@ def execute_board_tool(
     actor = "assistant" if actor == "assistant" else "director"
     try:
         if name == "board_get":
-            person = people.get(
-                str(args.get("person_id") or ""),
-                expand_sources=bool(args.get("expand_sources")),
-                allowed_source_ids=allowed_source_ids,
-            )
-            return (True, {"person": person}) if person is not None else (
-                False,
-                {"status": "failed", "error": "record not found or not granted"},
-            )
+            requested_person_id = str(args.get("person_id") or "").strip() or None
+            try:
+                bound_person_id = (
+                    people.person_for_session(session_id) if session_id else None
+                )
+            except Exception:
+                return _partial_board_read(
+                    "board_binding_failed",
+                    "The bound person for this Board read is unavailable.",
+                )
+            if (
+                bound_person_id is not None
+                and requested_person_id is not None
+                and requested_person_id != bound_person_id
+            ):
+                return _partial_board_read(
+                    "bound_person_mismatch",
+                    "The requested person does not match this conversation.",
+                )
+            person_id = bound_person_id or requested_person_id
+            if person_id is None:
+                return _partial_board_read(
+                    "person_context_required",
+                    "Open a person-bound conversation or provide a person id.",
+                )
+            try:
+                person = people.get(
+                    person_id,
+                    expand_sources=True,
+                    allowed_source_ids=allowed_source_ids,
+                )
+                if person is None:
+                    return _partial_board_read(
+                        "board_person_unavailable",
+                        "The Board person file is unavailable.",
+                    )
+                brief = brief_payload(
+                    project(
+                        person,
+                        people.timeline(person_id),
+                        session_id=session_id,
+                    )
+                )
+                person_receipt = {
+                    key: value
+                    for key, value in person.items()
+                    if key
+                    not in {
+                        "attachments",
+                        "sources",
+                        "artifacts",
+                        "knowledge_gaps",
+                        "restricted_source_count",
+                    }
+                }
+            except Exception:
+                return _partial_board_read(
+                    "board_read_failed",
+                    "The Board person-file read is unavailable.",
+                )
+            return True, {
+                "status": "complete",
+                "partial": False,
+                "person_id": person_id,
+                "person": person_receipt,
+                "brief": brief,
+            }
         if name == "board_query":
             records = people.query(
                 sequence=str(args.get("sequence") or "") or None,
@@ -186,9 +258,12 @@ def execute_board_tool(
         action = str(args.get("action") or "")
         expected_version = int(args.get("expected_version") or 0)
         if action == "patch":
+            fields = (
+                args.get("fields") if isinstance(args.get("fields"), dict) else {}
+            )
             person = people.patch(
                 person_id,
-                fields=args.get("fields") if isinstance(args.get("fields"), dict) else {},
+                fields=fields,
                 expected_version=expected_version,
                 **identity,
             )

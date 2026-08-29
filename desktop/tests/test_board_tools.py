@@ -36,6 +36,95 @@ def test_board_tools_are_person_file_operations_not_a_second_crm():
         "knowledge_gap",
         "source_ref",
     }
+    board_get = next(
+        schema for schema in OPENAI_TOOLS if schema["function"]["name"] == "board_get"
+    )
+    assert "person_id" not in board_get["function"]["parameters"].get("required", [])
+
+
+def test_bound_board_get_returns_the_complete_living_brief_and_handoff(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    opened = store.set_sequence(ada["person_id"], "open", actor="director")
+    store.bind_session("sess-ada", ada["person_id"])
+    versions_before = store.versions(ada["person_id"])
+    events_before = store.timeline(ada["person_id"])
+
+    ok, result = execute(
+        "board_get",
+        {},
+        people=store,
+        session_id="sess-ada",
+        run_id="run-brief",
+    )
+
+    assert ok is True
+    assert result["status"] == "complete"
+    assert result["partial"] is False
+    assert result["person_id"] == ada["person_id"]
+    assert result["person"]["version"] == opened["version"]
+    assert "attachments" not in result["person"]
+    assert result["brief"]["state"]["sequence"] == "open"
+    assert set(result["brief"]["handoff"]) >= {
+        "who",
+        "wanted",
+        "happened",
+        "they_want",
+        "generated",
+    }
+    assert result["brief"]["handoff"]["generated"] is True
+    assert store.versions(ada["person_id"]) == versions_before
+    assert store.timeline(ada["person_id"]) == events_before
+
+
+def test_bound_board_get_refuses_a_different_person(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    other = store.keep_from_apollo(
+        apollo_id="other",
+        first_name="Grace",
+        last_name_obfuscated="Hopper",
+        title="Admiral",
+        company="US Navy",
+    )
+    store.bind_session("sess-ada", ada["person_id"])
+
+    ok, result = execute(
+        "board_get",
+        {"person_id": other["person_id"]},
+        people=store,
+        session_id="sess-ada",
+    )
+
+    assert ok is False
+    assert result["status"] == "partial"
+    assert result["code"] == "bound_person_mismatch"
+    assert result["partial_sources"] == ["board"]
+
+
+def test_board_get_failure_is_structured_and_names_the_unavailable_source(
+    tmp_path, monkeypatch
+):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    store.bind_session("sess-ada", ada["person_id"])
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("private sqlite detail")
+
+    monkeypatch.setattr(store, "get", unavailable)
+    ok, result = execute("board_get", {}, people=store, session_id="sess-ada")
+
+    assert ok is False
+    assert result == {
+        "status": "partial",
+        "partial": True,
+        "code": "board_read_failed",
+        "error": "The Board person-file read is unavailable.",
+        "partial_sources": ["board"],
+        "unavailable_sources": [{"source": "board", "code": "board_read_failed"}],
+    }
+    assert "sqlite" not in str(result)
 
 
 def test_board_upsert_does_not_create_a_person_or_fill_open(tmp_path):

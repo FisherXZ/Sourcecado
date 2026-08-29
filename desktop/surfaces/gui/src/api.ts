@@ -434,7 +434,11 @@ export type BriefHandoff = {
   they_want: string;
   generated: boolean;
   source_refs: string[];
-  version: number;
+  version: number | null;
+  saved_at: string | null;
+  stale: boolean;
+  stale_fields: Array<"who" | "wanted" | "happened" | "they_want">;
+  freshness_unknown: boolean;
 };
 
 export type LivingBrief = {
@@ -975,7 +979,12 @@ export async function savePersonHandoff(
     theyWant: string;
     expectedVersion: number;
   },
-): Promise<{ person: PersonFile["person"]; brief: LivingBrief }> {
+): Promise<{
+  person: PersonFile["person"];
+  brief: LivingBrief;
+  saved: boolean;
+  unchanged: boolean;
+}> {
   const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}/handoff`, {
     method: "POST",
     headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
