@@ -312,9 +312,29 @@ export class SourcecadoChatStore {
     message: string,
     recoverable = true,
   ): void {
+    let messages = this.messagesFor(threadId);
+    let occurrences = 1;
+    if (!recoverable) {
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const candidate = messages[index];
+        const notice = candidate?.parts.find((part) => part.type === "notice");
+        if (notice?.type === "notice" && !notice.recoverable && notice.code === code) {
+          occurrences = (notice.occurrences ?? 1) + 1;
+          messages = messages.filter((_message, messageIndex) => messageIndex !== index);
+          break;
+        }
+        if (
+          candidate?.role === "assistant" &&
+          candidate.state === "complete" &&
+          candidate.parts.some((part) => part.type === "text" || part.type === "tool")
+        ) {
+          break;
+        }
+      }
+    }
     const messageId = `${threadId}:notice:${++this.noticeNumber}`;
     this.threads.set(threadId, [
-      ...this.messagesFor(threadId),
+      ...messages,
       {
         id: messageId,
         role: "assistant",
@@ -324,8 +344,12 @@ export class SourcecadoChatStore {
             type: "notice",
             id: `${messageId}:part`,
             code,
-            message,
+            message:
+              occurrences > 1
+                ? `${message} ${occurrences} consecutive failed turns had this same classified outcome.`
+                : message,
             recoverable,
+            ...(occurrences > 1 ? { occurrences } : {}),
           },
         ],
       },
@@ -537,9 +561,10 @@ export class SourcecadoChatStore {
         // is not a failure.
         this.addNotice(
           event.session_id,
-          typeof event.error_kind === "string" && event.error_kind
+          event.failure?.code ??
+            (typeof event.error_kind === "string" && event.error_kind
             ? event.error_kind
-            : "error",
+            : "error"),
           event.message,
           false,
         );

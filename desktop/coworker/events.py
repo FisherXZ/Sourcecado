@@ -97,6 +97,22 @@ def validate_event(event: object) -> str | None:
                 return "error.code must be outcome_unknown when state is held"
             if not isinstance(event.get("effect_id"), str) or not event["effect_id"]:
                 return "error.effect_id must be a non-empty string when state is held"
+        failure = event.get("failure")
+        if failure is not None:
+            if not isinstance(failure, dict):
+                return "error.failure must be an object"
+            for field in ("code", "provider", "model"):
+                if not isinstance(failure.get(field), str) or not failure[field]:
+                    return f"error.failure.{field} must be a non-empty string"
+            if not isinstance(failure.get("attempts"), int) or failure["attempts"] < 1:
+                return "error.failure.attempts must be a positive integer"
+            if (
+                not isinstance(failure.get("recovery_count"), int)
+                or failure["recovery_count"] < 0
+            ):
+                return "error.failure.recovery_count must be a non-negative integer"
+            if not isinstance(failure.get("exhausted"), bool):
+                return "error.failure.exhausted must be a boolean"
     if event_type in {"permission_required", "tool_started", "tool_finished"}:
         for field in ("id", "name"):
             if not isinstance(event.get(field), str) or not event[field]:

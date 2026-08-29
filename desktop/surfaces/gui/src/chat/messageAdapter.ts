@@ -77,6 +77,7 @@ export type SourcecadoNoticePart = {
   readonly code: string;
   readonly message: string;
   readonly recoverable: boolean;
+  readonly occurrences?: number;
 };
 
 export type SourcecadoSourcePart = ProvenanceSource & {

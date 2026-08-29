@@ -31,6 +31,7 @@ CHECKPOINT_KINDS = frozenset(
         "run_started",
         "model_pending",
         "model_completed",
+        "model_failed",
         "tool_pending",
         "tool_completed",
         "tool_outcome_unknown",
