@@ -6,16 +6,18 @@ import re
 from typing import Any
 
 _MASKED_TOKEN = re.compile(r"(?<!\S)\S*\*+\S*(?!\S)")
+_SURROUNDING_PUNCTUATION = "\"'“”‘’()[]{}.,!?;:"
 
 
 def _replace_masked_token(match: re.Match[str]) -> str:
     token = match.group(0)
+    core = token.strip(_SURROUNDING_PUNCTUATION)
     # Preserve ordinary Markdown emphasis and horizontal rules. Apollo name
     # masks contain at least one real Unicode letter or number outside the
     # asterisks, regardless of script.
-    if token.startswith("*") and token.endswith("*"):
+    if core.startswith("*") and core.endswith("*"):
         return token
-    if not any(character.isalnum() for character in token if character != "*"):
+    if not any(character.isalnum() for character in core if character != "*"):
         return token
     return "(surname hidden by Apollo)"
 

@@ -99,9 +99,13 @@ def test_restored_apollo_mask_never_reaches_the_next_model_request(
         people=PersonStore(tmp_path),
     )
 
-    model_request = json.dumps(provider.calls[0])
-    assert "surname hidden by Apollo" in model_request
-    assert masked_last_name not in model_request
+    restored_call = next(
+        message
+        for message in provider.calls[0]
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    )["tool_calls"][0]
+    restored_arguments = json.loads(restored_call["function"]["arguments"])
+    assert restored_arguments["lastName"] == "(surname hidden by Apollo)"
 
 
 def test_keep_one_person_binds_that_session_only(tmp_path):

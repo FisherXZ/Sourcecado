@@ -131,6 +131,29 @@ def test_person_patch_refuses_an_obfuscated_canonical_surname(tmp_path):
     assert loaded["last_name_status"] == "hidden_by_apollo"
 
 
+def test_person_handoff_preserves_ordinary_markdown_emphasis(tmp_path):
+    store = PersonStore(tmp_path)
+    person = store.keep_from_apollo(
+        apollo_id="abc123",
+        first_name="Alyssa",
+        last_name_obfuscated="W***n",
+        title="Partner",
+        company="Codeology",
+    )
+    prose = "This is **important**. Use *carefully*, please."
+
+    updated = store.patch(
+        person["person_id"],
+        fields={"handoff_happened": prose},
+        expected_version=person["version"],
+        actor="director",
+        rationale_summary="Preserve the director's formatting.",
+    )
+
+    assert updated["handoff_happened"] == prose
+    assert PersonStore(tmp_path).get(person["person_id"])["handoff_happened"] == prose
+
+
 def _ada(store: PersonStore) -> dict:
     return store.keep_from_apollo(
         apollo_id="ada",

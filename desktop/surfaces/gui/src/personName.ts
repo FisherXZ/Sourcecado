@@ -6,8 +6,9 @@ export function withoutApolloNameMasks(value: string): string {
   return value
     .split(/\s+/)
     .map((token) => {
-      const markdownEmphasis = token.startsWith("*") && token.endsWith("*");
-      const hasUnicodeLetterOrNumber = /[\p{L}\p{N}]/u.test(token.replaceAll("*", ""));
+      const core = token.replace(/^["'“”‘’()[\]{}.,!?;:]+|["'“”‘’()[\]{}.,!?;:]+$/gu, "");
+      const markdownEmphasis = core.startsWith("*") && core.endsWith("*");
+      const hasUnicodeLetterOrNumber = /[\p{L}\p{N}]/u.test(core.replaceAll("*", ""));
       return token.includes("*") && hasUnicodeLetterOrNumber && !markdownEmphasis
         ? "(surname hidden by Apollo)"
         : token;
