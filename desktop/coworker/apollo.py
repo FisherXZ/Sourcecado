@@ -14,7 +14,10 @@ from coworker.evidence_envelope import (
     external,
     opaque,
 )
-from coworker.person_identity import apollo_surname_is_masked
+from coworker.person_identity import (
+    apollo_surname_is_masked,
+    without_apollo_name_masks,
+)
 
 SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"
 MATCH_URL = "https://api.apollo.io/api/v1/people/match"
@@ -425,14 +428,22 @@ def apollo_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
             envelopes=combined.envelopes,
         )
     if tool_name == "apollo_enrich_contact":
+        raw_name = str(payload.get("name") or "").strip()
+        safe_name = without_apollo_name_masks(raw_name) or "Apollo contact"
         return external(
             "apollo",
             identity=("contact", payload.get("email"), payload.get("linkedinUrl")),
-            title=str(payload.get("name") or "Apollo contact"),
+            title=safe_name,
             body="\n".join(
-                f"{key}: {payload.get(key)}"
-                for key in ("name", "title", "organizationName", "email", "phone")
-                if payload.get(key)
+                f"{key}: {value}"
+                for key, value in (
+                    ("name", safe_name if raw_name else None),
+                    ("title", payload.get("title")),
+                    ("organizationName", payload.get("organizationName")),
+                    ("email", payload.get("email")),
+                    ("phone", payload.get("phone")),
+                )
+                if value
             ),
             url=payload.get("linkedinUrl"),
             sensitivity="sensitive",

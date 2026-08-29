@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { toolPresentation } from "./toolRegistry";
 import { CalendarApprovalSummary } from "../generative/CalendarEventResult";
 import { GmailDraftBody } from "../generative/GmailDraftResult";
-import { withoutApolloNameMasks } from "../personName";
+import { sanitizeApolloNameMasks, withoutApolloNameMasks } from "../personName";
 
 type ApprovalState =
   | "pending"
@@ -185,12 +185,7 @@ function displayedArguments(
   args: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
   if (toolName !== "apollo_enrich_contact") return args;
-  return Object.fromEntries(
-    Object.entries(args).map(([key, value]) => [
-      key,
-      typeof value === "string" ? withoutApolloNameMasks(value) : value,
-    ]),
-  );
+  return sanitizeApolloNameMasks(args) as Readonly<Record<string, unknown>>;
 }
 
 function resolvedLabel(state: ApprovalState): string {

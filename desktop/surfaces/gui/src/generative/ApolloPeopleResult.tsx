@@ -8,7 +8,7 @@ import {
 import { usePopulateComposer } from "../chat/ComposerDraftContext";
 import { useInspector } from "../chat/Inspector";
 import type { DomainRendererProps } from "../chat/toolRegistry";
-import { hasApolloNameMask } from "../personName";
+import { hasApolloNameMask, withoutApolloNameMasks } from "../personName";
 
 type ApolloCandidate = {
   readonly id: string;
@@ -121,7 +121,13 @@ export function ApolloPeopleResult({
   }
   const raw = record(result);
   if (toolName === "apollo_enrich_contact") {
-    const name = text(raw?.name);
+    const rawName = text(raw?.name);
+    const nameMasked = hasApolloNameMask(rawName);
+    const name = rawName
+      ? nameMasked
+        ? withoutApolloNameMasks(rawName)
+        : rawName
+      : null;
     const title = text(raw?.title);
     const company = text(raw?.organizationName);
     const email = text(raw?.email);
@@ -138,6 +144,7 @@ export function ApolloPeopleResult({
     const contactName = name ?? "Enriched contact";
     const missing = [
       !name ? "name" : null,
+      nameMasked ? "verified full name" : null,
       !title ? "title" : null,
       !company ? "company" : null,
       !email ? "email" : null,

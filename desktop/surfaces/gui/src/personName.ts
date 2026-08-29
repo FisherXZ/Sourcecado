@@ -12,3 +12,14 @@ export function withoutApolloNameMasks(value: string): string {
     )
     .join(" ");
 }
+
+export function sanitizeApolloNameMasks(value: unknown): unknown {
+  if (typeof value === "string") return withoutApolloNameMasks(value);
+  if (Array.isArray(value)) return value.map(sanitizeApolloNameMasks);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, sanitizeApolloNameMasks(item)]),
+    );
+  }
+  return value;
+}

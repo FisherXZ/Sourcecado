@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 from coworker.apollo import MATCH_URL, FakeHttp
 from coworker.gmail import FakeGmail
@@ -46,6 +47,56 @@ def _run(*, tmp_path, sid, text, provider, people, gmail=None, drive=None, wait=
             wait_permission=_wait if wait is not None else None,
         )
     )
+
+
+def test_restored_apollo_mask_never_reaches_the_next_model_request(tmp_path):
+    store = ConversationStore(tmp_path)
+    store.append("sess-legacy-enrichment", {"role": "user", "content": "Enrich Ada"})
+    store.append(
+        "sess-legacy-enrichment",
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "legacy-enrich",
+                    "type": "function",
+                    "function": {
+                        "name": "apollo_enrich_contact",
+                        "arguments": json.dumps(
+                            {
+                                "firstName": "Ada",
+                                "lastName": "L***e",
+                                "organizationName": "Analytic",
+                            }
+                        ),
+                    },
+                }
+            ],
+        },
+    )
+    store.append(
+        "sess-legacy-enrichment",
+        {
+            "role": "tool",
+            "name": "apollo_enrich_contact",
+            "tool_call_id": "legacy-enrich",
+            "content": json.dumps({"error": "Director denied this enrichment."}),
+        },
+    )
+    provider = FakeProvider(deltas=("Understood.",))
+
+    _run(
+        tmp_path=tmp_path,
+        sid="sess-legacy-enrichment",
+        text="Leave the person incomplete",
+        provider=provider,
+        people=PersonStore(tmp_path),
+    )
+
+    model_request = json.dumps(provider.calls[0])
+    assert "surname hidden by Apollo" in model_request
+    assert "L***e" not in model_request
 
 
 def test_keep_one_person_binds_that_session_only(tmp_path):

@@ -75,6 +75,23 @@ def test_apollo_search_model_evidence_never_contains_the_masked_surname():
     assert "Zh***g" not in rendered
 
 
+def test_apollo_enrichment_model_evidence_never_contains_a_masked_name():
+    parts = apollo_evidence(
+        "apollo_enrich_contact",
+        {
+            "name": "Ada L***e",
+            "title": "Founder",
+            "organizationName": "Analytic",
+            "email": "ada@analytic.example",
+        },
+    )
+
+    rendered = str(model_payload(parts))
+
+    assert "Ada (surname hidden by Apollo)" in rendered
+    assert "L***e" not in rendered
+
+
 def test_apollo_enrich_returns_contact(tmp_path):
     http = FakeHttp(
         {
