@@ -115,7 +115,7 @@ export function ThreadView({
         ) : loadError ? (
           <div className="sourcecado-load-error" role="alert">
             <p>We couldn’t load this conversation.</p>
-            <p>Your draft is still here. Retry when the sidecar is available.</p>
+            <p>Your draft is still here. Retry, or choose another conversation.</p>
             <button type="button" onClick={onRetry}>
               Retry loading conversation
             </button>

@@ -36,6 +36,7 @@ export function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
   const [bootAttempt, setBootAttempt] = useState(0);
+  const [bootPending, setBootPending] = useState(true);
   const [stale, setStale] = useState(Boolean(cachedListing));
   const [railOpen, setRailOpen] = useState(false);
   const [scheduledApprovalCount, setScheduledApprovalCount] = useState(0);
@@ -211,6 +212,7 @@ export function AppShell() {
   useEffect(() => {
     let active = true;
     setBootError(null);
+    setBootPending(true);
     if (cachedListing && isRootHash(window.location.hash)) {
       const restored = cachedListing.last_destination ||
         (cachedListing.open_id ? `#/chat/${encodeURIComponent(cachedListing.open_id)}` : "");
@@ -234,24 +236,23 @@ export function AppShell() {
         const currentHash = window.location.hash;
         const cacheStillOwnsHash = cachedRestoreHashRef.current === currentHash;
         if (isRootHash(currentHash) || cacheStillOwnsHash) {
-          const restored = listing.last_destination ||
-            (listing.open_id ? `#/chat/${encodeURIComponent(listing.open_id)}` : "");
+          const restored = restoreHash(listing);
           if (restored) {
             window.location.hash = restored;
             setRoute(parseHash(restored));
-          } else if (listing.sessions.length > 0) {
-            // Sessions exist but neither open_id nor last_destination named one:
-            // escape the root "Restoring workspace" skeleton instead of hanging on it.
-            window.location.hash = "#/chat";
+          } else if (cacheStillOwnsHash) {
+            window.location.hash = "#/";
             setRoute({ kind: "chat" });
           }
         }
         cachedRestoreHashRef.current = null;
         deferDestinationPersistenceRef.current = false;
+        setBootPending(false);
       })
       .catch((error: unknown) => {
         if (!active) return;
         deferDestinationPersistenceRef.current = false;
+        setBootPending(false);
         setBootError(error instanceof Error ? error.message : String(error));
       });
     return () => {
@@ -269,6 +270,17 @@ export function AppShell() {
   } else if (isRootHash(window.location.hash) && sessions?.length === 0) {
     outlet = <WelcomePage onStartChat={() => void handleNewChat()} />;
   } else if (isRootHash(window.location.hash)) {
+    outlet = (
+      <main className="route-page boot-page" aria-busy="true">
+        <h1>Sourcecado</h1>
+        <div className="route-skeleton" aria-label="Restoring workspace" />
+      </main>
+    );
+  } else if (
+    bootPending &&
+    route.kind === "chat" &&
+    cachedRestoreHashRef.current === window.location.hash
+  ) {
     outlet = (
       <main className="route-page boot-page" aria-busy="true">
         <h1>Sourcecado</h1>
@@ -373,4 +385,27 @@ export function AppShell() {
 
 function isRootHash(hash: string) {
   return hash === "" || hash === "#" || hash === "#/";
+}
+
+function restoreHash(listing: {
+  sessions: SessionRow[];
+  open_id: string | null;
+  last_destination?: string | null;
+}): string {
+  const sessionIds = new Set(listing.sessions.map((session) => session.session_id));
+  const lastDestination = listing.last_destination || "";
+  if (lastDestination) {
+    const lastRoute = parseHash(lastDestination);
+    if (lastRoute.kind !== "chat") return lastDestination;
+    if (lastRoute.sessionId && sessionIds.has(lastRoute.sessionId)) {
+      return lastDestination;
+    }
+  }
+  if (listing.open_id && sessionIds.has(listing.open_id)) {
+    return `#/chat/${encodeURIComponent(listing.open_id)}`;
+  }
+  const firstSession = listing.sessions[0];
+  return firstSession
+    ? `#/chat/${encodeURIComponent(firstSession.session_id)}`
+    : "";
 }
