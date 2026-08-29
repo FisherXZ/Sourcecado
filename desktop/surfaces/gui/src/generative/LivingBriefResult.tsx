@@ -9,14 +9,14 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function fieldLabels(brief: LivingBrief): string {
+function fieldLabels(fields: readonly string[]): string {
   const labels: Record<string, string> = {
     who: "Who this is",
     wanted: "What we wanted",
     happened: "What happened",
     they_want: "What they want",
   };
-  const values = brief.handoff.stale_fields.map((field) => labels[field] ?? field);
+  const values = fields.map((field) => labels[field] ?? field);
   if (values.length < 2) return values[0] ?? "";
   return `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`;
 }
@@ -30,6 +30,24 @@ export function LivingBriefResult({ result, status }: DomainRendererProps) {
   const headingId = useId();
   const payload = record(result);
   const brief = record(payload?.brief) as LivingBrief | null;
+  if (status === "loading") {
+    return (
+      <section className="sourcecado-living-brief" aria-label="Loading living brief">
+        <h3>Reading the living brief…</h3>
+      </section>
+    );
+  }
+  if (status === "success" && !brief) {
+    return (
+      <section className="sourcecado-living-brief" aria-label="Legacy person-file receipt">
+        <h3>Person file read completed</h3>
+        <p>
+          This earlier receipt predates the complete living-brief view. Open the current
+          person file or ask Sourcecado to read it again.
+        </p>
+      </section>
+    );
+  }
   if (status === "error" || payload?.partial === true || !brief) {
     return (
       <section
@@ -129,7 +147,14 @@ export function LivingBriefResult({ result, status }: DomainRendererProps) {
         ) : (
           <p>Saved at version {handoff.version}.</p>
         )}
-        {handoff.stale ? <p>Review outdated fields: {fieldLabels(brief)}.</p> : null}
+        {handoff.stale ? (
+          <p>Review outdated fields: {fieldLabels(handoff.stale_fields)}.</p>
+        ) : null}
+        {handoff.truncated_fields.length > 0 ? (
+          <p>
+            Shortened for this chat view: {fieldLabels(handoff.truncated_fields)}.
+          </p>
+        ) : null}
       </section>
     </section>
   );

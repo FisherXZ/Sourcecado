@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from coworker.brief import brief_payload, project
+from coworker.brief import CHAT_HANDOFF_FIELD_CHARS, brief_payload, project
 from coworker.people import ATTACHMENT_TYPES, PersonStore
 
 _ATTACHMENT_SCHEMA = {"type": "string", "enum": sorted(ATTACHMENT_TYPES)}
@@ -196,7 +196,8 @@ def execute_board_tool(
                         person,
                         people.timeline(person_id),
                         session_id=session_id,
-                    )
+                    ),
+                    handoff_field_chars=CHAT_HANDOFF_FIELD_CHARS,
                 )
                 person_receipt = {
                     key: value
@@ -208,6 +209,10 @@ def execute_board_tool(
                         "artifacts",
                         "knowledge_gaps",
                         "restricted_source_count",
+                        "handoff_who",
+                        "handoff_wanted",
+                        "handoff_happened",
+                        "handoff_they_want",
                     }
                 }
             except Exception:

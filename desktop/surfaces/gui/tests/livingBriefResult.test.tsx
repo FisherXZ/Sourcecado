@@ -72,4 +72,41 @@ describe("living brief result", () => {
     );
     expect(result).not.toHaveTextContent("private");
   });
+
+  it("keeps a successful legacy Board receipt truthful on restore", () => {
+    renderBoardResult({
+      person: {
+        person_id: "person one",
+        first_name: "Alyssa",
+        last_name: "Lee",
+        sequence_state: "open",
+      },
+    });
+
+    const result = screen.getByRole("region", { name: "Legacy person-file receipt" });
+    expect(result).toHaveTextContent("Person file read completed");
+    expect(result).toHaveTextContent(
+      "This earlier receipt predates the complete living-brief view.",
+    );
+    expect(result).not.toHaveTextContent("Board is unavailable");
+  });
+
+  it("discloses handoff fields shortened only for the chat result", () => {
+    renderBoardResult({
+      status: "complete",
+      partial: false,
+      person_id: "person one",
+      brief: livingBrief({
+        handoff: {
+          ...livingBrief().handoff,
+          truncated_fields: ["happened", "they_want"],
+        },
+      }),
+    });
+
+    const result = screen.getByRole("region", { name: "Living brief for Alyssa Lee" });
+    expect(result).toHaveTextContent(
+      "Shortened for this chat view: What happened and What they want.",
+    );
+  });
 });

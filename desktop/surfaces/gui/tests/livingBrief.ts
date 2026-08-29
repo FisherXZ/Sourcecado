@@ -98,6 +98,8 @@ export function livingBrief(over: Partial<LivingBrief> = {}): LivingBrief {
       saved_at: null,
       stale: false,
       stale_fields: [],
+      truncated_fields: [],
+      freshness_unknown: false,
     },
     person_version: 2,
     ...over,

@@ -321,6 +321,136 @@ def test_reverting_to_a_saved_handoff_reports_its_original_version(tmp_path):
     assert handoff["stale_fields"] == []
 
 
+def test_newer_reply_remains_stale_after_reverting_to_the_saved_handoff(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    saved = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace, founder at Analytic",
+            "wanted": "A research-dinner speaker",
+            "happened": "No reply yet",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    saved_version = saved["person"]["version"]
+    app.state.people.append_event(
+        pid,
+        source="gmail",
+        kind="mail",
+        summary="Ada replied with a date",
+        payload={"direction": "inbound", "snippet": "The 21st works."},
+    )
+
+    reverted = client.post(
+        f"/v1/people/{pid}/revert",
+        headers=HEADERS,
+        json={
+            "to_version": saved_version,
+            "expected_version": saved_version,
+            "rationale_summary": "Restore the reviewed handoff fields.",
+        },
+    )
+
+    assert reverted.status_code == 200
+    handoff = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"][
+        "handoff"
+    ]
+    assert handoff["version"] == saved_version
+    assert handoff["stale"] is True
+    assert handoff["stale_fields"] == ["happened", "they_want"]
+
+
+def test_reverting_to_a_later_snapshot_keeps_the_original_handoff_save_version(
+    tmp_path,
+):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    saved = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace, founder at Analytic",
+            "wanted": "A research-dinner speaker",
+            "happened": "No reply yet",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    saved_version = saved["person"]["version"]
+    later = app.state.people.patch(
+        pid,
+        fields={"title": "Later title"},
+        expected_version=saved_version,
+        actor="director",
+        rationale_summary="Later identity correction.",
+    )
+
+    reverted = client.post(
+        f"/v1/people/{pid}/revert",
+        headers=HEADERS,
+        json={
+            "to_version": later["version"],
+            "expected_version": later["version"],
+            "rationale_summary": "Restore the later snapshot.",
+        },
+    )
+
+    assert reverted.status_code == 200
+    handoff = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"][
+        "handoff"
+    ]
+    assert handoff["version"] == saved_version
+
+
+def test_a_new_handoff_saved_after_revert_uses_the_new_save_version(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    first = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace",
+            "wanted": "First target",
+            "happened": "First state",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    reverted = client.post(
+        f"/v1/people/{pid}/revert",
+        headers=HEADERS,
+        json={
+            "to_version": person["version"],
+            "expected_version": first["person"]["version"],
+            "rationale_summary": "Remove the first reviewed handoff.",
+        },
+    ).json()
+
+    second = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace",
+            "wanted": "Second target",
+            "happened": "Second state",
+            "they_want": "The 21st",
+            "expected_version": reverted["person"]["version"],
+        },
+    ).json()
+
+    assert second["brief"]["handoff"]["version"] == second["person"]["version"]
+    assert second["brief"]["handoff"]["wanted"] == "Second target"
+
+
 def test_a_handoff_needs_a_version_and_at_least_one_field(tmp_path):
     app = _app(tmp_path)
     client = TestClient(app)

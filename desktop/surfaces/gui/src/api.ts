@@ -438,6 +438,7 @@ export type BriefHandoff = {
   saved_at: string | null;
   stale: boolean;
   stale_fields: Array<"who" | "wanted" | "happened" | "they_want">;
+  truncated_fields: Array<"who" | "wanted" | "happened" | "they_want">;
   freshness_unknown: boolean;
 };
 

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -100,6 +102,46 @@ def test_bound_board_get_refuses_a_different_person(tmp_path):
     assert result["status"] == "partial"
     assert result["code"] == "bound_person_mismatch"
     assert result["partial_sources"] == ["board"]
+
+
+def test_board_get_bounds_large_stored_handoffs_without_changing_the_file(tmp_path):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    large = "x" * 100_000
+    saved = store.patch(
+        ada["person_id"],
+        fields={
+            "handoff_who": large,
+            "handoff_wanted": large,
+            "handoff_happened": large,
+            "handoff_they_want": large,
+        },
+        expected_version=ada["version"],
+        actor="director",
+        rationale_summary="Store the reviewed handoff.",
+    )
+    store.bind_session("sess-ada", ada["person_id"])
+
+    ok, result = execute("board_get", {}, people=store, session_id="sess-ada")
+
+    assert ok is True
+    assert len(json.dumps(result)) < 50_000
+    assert not {
+        "handoff_who",
+        "handoff_wanted",
+        "handoff_happened",
+        "handoff_they_want",
+    } & result["person"].keys()
+    handoff = result["brief"]["handoff"]
+    assert handoff["truncated_fields"] == [
+        "who",
+        "wanted",
+        "happened",
+        "they_want",
+    ]
+    assert all(len(handoff[field]) <= 2_001 for field in handoff["truncated_fields"])
+    assert store.get(ada["person_id"])["handoff_who"] == large
+    assert store.get(ada["person_id"])["version"] == saved["version"]
 
 
 def test_board_get_failure_is_structured_and_names_the_unavailable_source(
