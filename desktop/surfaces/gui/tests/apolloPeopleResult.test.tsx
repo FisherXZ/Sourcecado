@@ -106,13 +106,25 @@ describe("Apollo people result", () => {
     api.openPersonSourcingChat.mockReset();
   });
 
+  it("shows an honest incomplete name without rendering Apollo's mask", () => {
+    const { container } = renderApollo();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+    );
+
+    expect(screen.getByText("Tim")).toBeInTheDocument();
+    expect(screen.getByText("Surname hidden by Apollo")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select Tim" })).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("Zh***g");
+  });
+
   it("lets the director select several candidates and review before keeping", async () => {
     renderApollo();
     fireEvent.click(
       screen.getByRole("button", { name: "Searched Apollo · Completed" }),
     );
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
     fireEvent.change(
       screen.getByRole("textbox", { name: "Target for selected people" }),
@@ -125,7 +137,8 @@ describe("Apollo people result", () => {
     const review = screen.getByRole("region", {
       name: "Review selected Apollo candidates",
     });
-    expect(review).toHaveTextContent("Tim Zh***g");
+    expect(review).toHaveTextContent("Tim");
+    expect(review).not.toHaveTextContent("Zh***g");
     expect(review).toHaveTextContent("Maya");
     expect(review).toHaveTextContent(
       "Invite senior operators to the director's dinner.",
@@ -159,7 +172,8 @@ describe("Apollo people result", () => {
           version: 1,
           operation: "created",
           first_name: "Tim",
-          last_name: "Zh***g",
+          last_name: null,
+          last_name_status: "hidden_by_apollo",
           title: "CEO",
           company: "Apollo.io",
           sourcing_chat: { session_id: "thread-apollo" },
@@ -175,7 +189,7 @@ describe("Apollo people result", () => {
     });
     renderApollo();
     fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
       target: { value: "Director-authored target" },
     });
@@ -188,7 +202,9 @@ describe("Apollo people result", () => {
       ),
     );
     expect(
-      await screen.findByRole("button", { name: "Open sourcing chat for Tim Zh***g" }),
+      await screen.findByRole("button", {
+        name: "Open sourcing chat for Tim (surname hidden by Apollo)",
+      }),
     ).toBeInTheDocument();
     expect(screen.queryByText(/original target conversation remains unbound/i)).not.toBeInTheDocument();
   });
@@ -209,7 +225,7 @@ describe("Apollo people result", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
 
-    expect(screen.getAllByRole("checkbox", { name: "Select Tim Zh***g" })).toHaveLength(1);
+    expect(screen.getAllByRole("checkbox", { name: "Select Tim" })).toHaveLength(1);
     expect(screen.getByText("1 candidate")).toBeInTheDocument();
     expect(screen.queryByText("Duplicate must not replace first")).not.toBeInTheDocument();
   });
@@ -227,7 +243,8 @@ describe("Apollo people result", () => {
           version: 1,
           operation: "created",
           first_name: "Tim",
-          last_name: "Zh***g",
+          last_name: null,
+          last_name_status: "hidden_by_apollo",
           title: "CEO",
           company: "Apollo.io",
           sourcing_chat: null,
@@ -240,6 +257,7 @@ describe("Apollo people result", () => {
           operation: "created",
           first_name: "Maya",
           last_name: null,
+          last_name_status: "missing",
           title: null,
           company: "Apollo.io",
           sourcing_chat: null,
@@ -256,11 +274,11 @@ describe("Apollo people result", () => {
     api.openPersonSourcingChat.mockResolvedValueOnce({
       created: true,
       session: { id: "thread-tim", title: "Sourcing · Tim", n_msgs: 0 },
-      active_person: { person_id: "person-tim-file", version: 1, label: "Tim Zh***g" },
+      active_person: { person_id: "person-tim-file", version: 1, label: "Tim" },
     });
     renderApollo();
     fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
       target: { value: "Director-authored target" },
@@ -269,13 +287,17 @@ describe("Apollo people result", () => {
     fireEvent.click(screen.getByRole("button", { name: "Keep 2 people" }));
 
     expect(
-      await screen.findByRole("link", { name: "Open person file for Tim Zh***g" }),
+      await screen.findByRole("link", {
+        name: "Open person file for Tim (surname hidden by Apollo)",
+      }),
     ).toHaveAttribute("href", "#/people/person-tim-file");
     expect(
       screen.getByRole("link", { name: "Open person file for Maya" }),
     ).toHaveAttribute("href", "#/people/person-maya-file");
     fireEvent.click(
-      screen.getByRole("button", { name: "Create sourcing chat for Tim Zh***g" }),
+      screen.getByRole("button", {
+        name: "Create sourcing chat for Tim (surname hidden by Apollo)",
+      }),
     );
     await waitFor(() =>
       expect(api.openPersonSourcingChat).toHaveBeenCalledWith("person-tim-file", 1),
@@ -298,7 +320,8 @@ describe("Apollo people result", () => {
           version: 1,
           operation: "created",
           first_name: "Tim",
-          last_name: "Zh***g",
+          last_name: null,
+          last_name_status: "hidden_by_apollo",
           title: "CEO",
           company: "Apollo.io",
           sourcing_chat: null,
@@ -315,14 +338,16 @@ describe("Apollo people result", () => {
     api.openPersonSourcingChat.mockRejectedValueOnce(new Error("stale person version"));
     renderApollo();
     fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
       target: { value: "Director-authored target" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Review 1 selected candidate" }));
     fireEvent.click(screen.getByRole("button", { name: "Keep 1 person" }));
     fireEvent.click(
-      await screen.findByRole("button", { name: "Create sourcing chat for Tim Zh***g" }),
+      await screen.findByRole("button", {
+        name: "Create sourcing chat for Tim (surname hidden by Apollo)",
+      }),
     );
 
     expect(
@@ -344,7 +369,8 @@ describe("Apollo people result", () => {
             version: 1,
             operation: "created",
             first_name: "Tim",
-            last_name: "Zh***g",
+            last_name: null,
+            last_name_status: "hidden_by_apollo",
             title: "CEO",
             company: "Apollo.io",
             sourcing_chat: null,
@@ -373,6 +399,7 @@ describe("Apollo people result", () => {
             operation: "created",
             first_name: "Maya",
             last_name: null,
+            last_name_status: "missing",
             title: null,
             company: "Apollo.io",
             sourcing_chat: null,
@@ -388,7 +415,7 @@ describe("Apollo people result", () => {
       });
     renderApollo();
     fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim Zh***g" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
       target: { value: "Director-authored target" },
@@ -399,7 +426,11 @@ describe("Apollo people result", () => {
     expect(
       await screen.findByText("Maya needs review (invalid candidate)."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open person file for Tim Zh***g" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: "Open person file for Tim (surname hidden by Apollo)",
+      }),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Retry 1 failed candidate" }));
 
     await waitFor(() => expect(api.curateApolloCandidates).toHaveBeenCalledTimes(2));
@@ -408,7 +439,11 @@ describe("Apollo people result", () => {
       expect.objectContaining({ apolloId: "person-partial" }),
     ]);
     expect(retry.bindOriginal).toBe(false);
-    expect(screen.getByRole("link", { name: "Open person file for Tim Zh***g" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: "Open person file for Tim (surname hidden by Apollo)",
+      }),
+    ).toBeInTheDocument();
     expect(
       await screen.findByRole("link", { name: "Open person file for Maya" }),
     ).toBeInTheDocument();
@@ -531,11 +566,11 @@ describe("Apollo people result", () => {
       screen.getByText("Enrichment uses Apollo credits and requires approval."),
     ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Inspect candidate Tim Zh***g" }),
+      screen.getByRole("button", { name: "Inspect candidate Tim" }),
     );
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
     expect(within(inspector).getByRole("heading", { level: 2 })).toHaveTextContent(
-      "Tim Zh***g",
+      "Tim",
     );
     expect(within(inspector).getByText("Apollo")).toBeInTheDocument();
 
@@ -618,7 +653,8 @@ describe("Apollo people result", () => {
       screen.getByRole("heading", { name: "Apollo shortlist" }),
     ).toBeInTheDocument();
     expect(screen.getByText("2 candidates")).toBeInTheDocument();
-    expect(screen.getByText("Tim Zh***g")).toBeInTheDocument();
+    expect(screen.getByText("Tim")).toBeInTheDocument();
+    expect(screen.getByText("Surname hidden by Apollo")).toBeInTheDocument();
     expect(screen.getByText("CEO · Apollo.io")).toBeInTheDocument();
     expect(screen.getByText("Email available after enrichment")).toBeInTheDocument();
     expect(

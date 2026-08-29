@@ -17,7 +17,9 @@ def test_keeping_apollo_row_files_person_without_email(tmp_path):
     assert loaded is not None
     assert loaded["apollo_id"] == "abc123"
     assert loaded["first_name"] == "Alyssa"
-    assert loaded["last_name"] == "W***n"
+    assert loaded["last_name"] is None
+    assert loaded["last_name_status"] == "hidden_by_apollo"
+    assert "W***n" not in str(loaded)
     assert loaded["title"] == "Partner"
     assert loaded["company"] == "Codeology"
     assert loaded["target"] == "club research dinner"
@@ -74,7 +76,8 @@ def test_keeping_a_thinner_apollo_row_does_not_blank_the_person_file(tmp_path):
         company=None,
     )
     assert again["person_id"] == kept["person_id"]
-    assert again["last_name"] == "W***n"
+    assert again["last_name"] is None
+    assert again["last_name_status"] == "hidden_by_apollo"
     assert again["title"] == "Partner"
     assert again["company"] == "Codeology"
     assert again["target"] == "club research dinner"
@@ -97,9 +100,35 @@ def test_blank_apollo_fields_count_as_missing_not_as_a_value(tmp_path):
         company="   ",
     )
     assert again["first_name"] == "Alyssa"
-    assert again["last_name"] == "W***n"
+    assert again["last_name"] is None
+    assert again["last_name_status"] == "hidden_by_apollo"
     assert again["title"] == "Partner"
     assert again["company"] == "Codeology"
+
+
+def test_person_patch_refuses_an_obfuscated_canonical_surname(tmp_path):
+    store = PersonStore(tmp_path)
+    person = store.keep_from_apollo(
+        apollo_id="abc123",
+        first_name="Alyssa",
+        last_name_obfuscated="W***n",
+        title="Partner",
+        company="Codeology",
+    )
+
+    with pytest.raises(ValueError, match="obfuscated"):
+        store.patch(
+            person["person_id"],
+            fields={"last_name": "W***n"},
+            expected_version=person["version"],
+            actor="director",
+            rationale_summary="Do not store Apollo's mask as a name.",
+        )
+
+    loaded = store.get(person["person_id"])
+    assert loaded is not None
+    assert loaded["last_name"] is None
+    assert loaded["last_name_status"] == "hidden_by_apollo"
 
 
 def _ada(store: PersonStore) -> dict:

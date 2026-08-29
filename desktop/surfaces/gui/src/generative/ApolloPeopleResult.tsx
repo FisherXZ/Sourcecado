@@ -8,12 +8,14 @@ import {
 import { usePopulateComposer } from "../chat/ComposerDraftContext";
 import { useInspector } from "../chat/Inspector";
 import type { DomainRendererProps } from "../chat/toolRegistry";
+import { hasApolloNameMask } from "../personName";
 
 type ApolloCandidate = {
   readonly id: string;
   readonly name: string;
   readonly title: string | null;
   readonly company: string | null;
+  readonly surnameHidden: boolean;
   readonly hasEmail: boolean;
   readonly phoneStatus: string | null;
   readonly missing: readonly string[];
@@ -39,12 +41,14 @@ function candidateOf(value: unknown, index: number): ApolloCandidate | null {
   const raw = record(value);
   if (!raw) return null;
   const firstName = text(raw.firstName);
-  const lastName = text(raw.lastNameObfuscated);
+  const apolloLastName = text(raw.lastNameObfuscated);
+  const surnameHidden = hasApolloNameMask(apolloLastName);
+  const lastName = surnameHidden ? null : apolloLastName;
   const title = text(raw.title);
   const company = text(raw.organizationName);
   const missing = [
     !title ? "title" : null,
-    !firstName || !lastName ? "full name" : null,
+    !firstName || (!lastName && !surnameHidden) ? "full name" : null,
     !company ? "company" : null,
   ].filter((field): field is string => field !== null);
   return {
@@ -52,6 +56,7 @@ function candidateOf(value: unknown, index: number): ApolloCandidate | null {
     name: [firstName, lastName].filter(Boolean).join(" ") || "Unnamed candidate",
     title,
     company,
+    surnameHidden,
     hasEmail: raw.hasEmail === true,
     phoneStatus: text(raw.directPhoneStatus),
     missing,
@@ -275,7 +280,10 @@ export function ApolloPeopleResult({
   }
 
   function keptName(person: ApolloCurationResult["kept"][number]): string {
-    return [person.first_name, person.last_name].filter(Boolean).join(" ") || "Person";
+    const name = [person.first_name, person.last_name].filter(Boolean).join(" ") || "Person";
+    return person.last_name_status === "hidden_by_apollo"
+      ? `${name} (surname hidden by Apollo)`
+      : name;
   }
 
   async function openKeptChat(person: ApolloCurationResult["kept"][number]) {
@@ -397,6 +405,7 @@ export function ApolloPeopleResult({
               </span>
               {candidate.phoneStatus ? ` · Phone: ${candidate.phoneStatus}` : ""}
             </p>
+            {candidate.surnameHidden ? <p>Surname hidden by Apollo</p> : null}
             {missingLabel(candidate.missing) ? (
               <p>{missingLabel(candidate.missing)} from Apollo source.</p>
             ) : null}

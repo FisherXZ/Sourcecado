@@ -2172,7 +2172,8 @@ describe("ChatPage Warm Operator thread", () => {
         name: "Searched Apollo · Completed",
       }),
     );
-    expect(screen.getByText("Restored Le***")).toBeInTheDocument();
+    expect(screen.getByText("Restored")).toBeInTheDocument();
+    expect(screen.getByText("Surname hidden by Apollo")).toBeInTheDocument();
     expect(screen.getByText("Director at Abridge")).toBeInTheDocument();
 
     const live = {
@@ -2233,7 +2234,8 @@ describe("ChatPage Warm Operator thread", () => {
       });
     });
 
-    expect(await screen.findByText("Live Ki***")).toBeInTheDocument();
+    expect(await screen.findByText("Live")).toBeInTheDocument();
+    expect(screen.getAllByText("Surname hidden by Apollo")).toHaveLength(2);
     expect(screen.getByText("VP Talent at Acme")).toBeInTheDocument();
     expect(
       screen.queryByRole("list", { name: "Loading Apollo candidates" }),

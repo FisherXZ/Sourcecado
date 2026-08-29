@@ -27,7 +27,8 @@ def test_keep_one_apollo_row_files_person_without_email(tmp_path):
     person = people.get(kept[0]["person_id"])
     assert person is not None
     assert person["first_name"] == "Alyssa"
-    assert person["last_name"] == "W***n"
+    assert person["last_name"] is None
+    assert person["last_name_status"] == "hidden_by_apollo"
     assert person["title"] == "Partner"
     assert person["company"] == "Codeology"
     assert person["target"] == "club research dinner"
@@ -67,7 +68,8 @@ def test_keep_row_with_blank_apollo_fields_keeps_what_the_file_has(tmp_path):
     assert again["kept"][0]["company"] == "Codeology"
 
     person = people.get(person_id)
-    assert person["last_name"] == "W***n"
+    assert person["last_name"] is None
+    assert person["last_name_status"] == "hidden_by_apollo"
     assert person["title"] == "Partner"
     assert person["company"] == "Codeology"
     assert person["target"] == "club research dinner"

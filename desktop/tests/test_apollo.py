@@ -2,8 +2,18 @@ import os
 
 import pytest
 
-from coworker.apollo import MATCH_URL, SEARCH_URL, FakeHttp, LiveHttp, search_people
+from coworker.apollo import (
+    MATCH_URL,
+    SEARCH_URL,
+    FakeHttp,
+    LiveHttp,
+    enrichment_match,
+    enrichment_resource,
+    apollo_evidence,
+    search_people,
+)
 from coworker.people import PersonStore
+from coworker.evidence_envelope import model_payload
 from coworker.tools import execute
 
 
@@ -40,6 +50,29 @@ def test_apollo_search_does_not_invent_emails():
     assert "email" not in person
     assert "should-not-leak" not in str(result)
     assert http.calls[0]["headers"]["x-api-key"] == "test-key"
+
+
+def test_apollo_search_model_evidence_never_contains_the_masked_surname():
+    parts = apollo_evidence(
+        "apollo_search_people",
+        {
+            "people": [
+                {
+                    "apolloId": "person-fisher",
+                    "firstName": "Fisher",
+                    "lastNameObfuscated": "Zh***g",
+                    "title": "Building GTM AI",
+                    "organizationName": "The Hog",
+                }
+            ]
+        },
+    )
+
+    rendered = str(model_payload(parts))
+
+    assert "Fisher" in rendered
+    assert "surname hidden by Apollo" in rendered
+    assert "Zh***g" not in rendered
 
 
 def test_apollo_enrich_returns_contact(tmp_path):
@@ -149,6 +182,24 @@ def test_a_masked_surname_falls_back_to_the_person_files_apollo_id(tmp_path):
     # The mask must never travel to Apollo.
     assert body["last_name"] is None
     assert people.get(person["person_id"])["email"] == "fisher@thehog.example"
+
+
+def test_enrichment_approval_names_an_incomplete_person_without_the_mask(tmp_path):
+    people = PersonStore(tmp_path)
+    person = people.keep_from_apollo(
+        apollo_id="679c7e37",
+        first_name="Fisher",
+        last_name_obfuscated="Zh***g",
+        title="Building GTM AI",
+        company="The Hog",
+    )
+    match = enrichment_match(person)
+    assert match is not None
+
+    resource = enrichment_resource(person, match)
+
+    assert resource["person"] == "Fisher (surname hidden by Apollo)"
+    assert "Zh***g" not in str(resource)
 
 
 def test_a_masked_surname_with_no_apollo_id_refuses_rather_than_spending(tmp_path):

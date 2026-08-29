@@ -254,7 +254,7 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
     assert store_plan.record_count > 0
 
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(db) == 1
+    assert _user_version(db) == 2
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -275,6 +275,104 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
         assert {"person_attachments", "person_versions"} <= tables
     finally:
         conn.close()
+
+
+def test_people_v2_moves_masked_surnames_out_of_canonical_history(tmp_path):
+    from coworker.people import PersonStore
+    from coworker.store import ConversationStore
+
+    root = tmp_path / "state"
+    conversations = ConversationStore(root)
+    conversations.create_session("sourcing-fisher")
+    conversations.rename_session("sourcing-fisher", "Sourcing · Fisher Zh***g")
+    store = PersonStore(root)
+    person = store.keep_from_apollo(
+        apollo_id="apollo-fisher",
+        first_name="Fisher",
+        last_name_obfuscated="Zhang",
+        title="Building GTM AI",
+        company="The Hog",
+    )
+    store.bind_session("sourcing-fisher", person["person_id"])
+    event = store.append_event(
+        person["person_id"],
+        source="apollo",
+        kind="search",
+        summary="Kept from the Apollo shortlist",
+        actor="assistant",
+    )
+    snapshot = json.loads(
+        store._conn.execute(
+            "SELECT person_json FROM person_versions WHERE person_id = ? AND version = 1",
+            (person["person_id"],),
+        ).fetchone()[0]
+    )
+    snapshot["last_name"] = "Zh***g"
+    snapshot["handoff_who"] = "Fisher Zh***g"
+    snapshot.pop("last_name_status", None)
+    store._conn.execute(
+        "UPDATE people SET last_name = 'Zh***g', "
+        "apollo_last_name_obfuscated = NULL, handoff_who = 'Fisher Zh***g' "
+        "WHERE person_id = ?",
+        (person["person_id"],),
+    )
+    store._conn.execute(
+        "UPDATE person_versions SET person_json = ? WHERE person_id = ? AND version = 1",
+        (json.dumps(snapshot), person["person_id"]),
+    )
+    store._conn.execute("PRAGMA user_version = 1")
+    store._conn.commit()
+
+    plan = _plan_for(migrations.plan_migrations(root), "people_db")
+    assert plan.status is StoreStatus.PENDING
+    assert plan.from_version == 1
+    assert plan.to_version == 2
+
+    outcome = migrations.apply_migrations(root)
+
+    assert outcome.error is None
+    assert _user_version(root / "people.db") == 2
+    loaded = PersonStore(root).get(person["person_id"])
+    assert loaded is not None
+    assert loaded["person_id"] == person["person_id"]
+    assert loaded["apollo_id"] == "apollo-fisher"
+    assert loaded["last_name"] is None
+    assert loaded["last_name_status"] == "hidden_by_apollo"
+    assert loaded["handoff_who"] == "Fisher (surname hidden by Apollo)"
+    assert "Zh***g" not in str(loaded)
+    assert PersonStore(root).person_for_session("sourcing-fisher") == person["person_id"]
+    assert PersonStore(root).timeline(person["person_id"])[0]["event_id"] == event["event_id"]
+    migrated_conn = sqlite3.connect(root / "people.db")
+    try:
+        migrated_snapshot = json.loads(
+            migrated_conn.execute(
+                "SELECT person_json FROM person_versions "
+                "WHERE person_id = ? AND version = 1",
+                (person["person_id"],),
+            ).fetchone()[0]
+        )
+    finally:
+        migrated_conn.close()
+    assert migrated_snapshot["last_name"] is None
+    assert migrated_snapshot["last_name_status"] == "hidden_by_apollo"
+    assert migrated_snapshot["handoff_who"] == "Fisher (surname hidden by Apollo)"
+    assert "Zh***g" not in str(migrated_snapshot)
+    from coworker.server import TOKEN_HEADER, create_app
+    from fastapi.testclient import TestClient
+
+    app = create_app(token="migration-test-token", provider=None, state=root)
+    migrated_title = app.state.store.index("sourcing-fisher")["title"]
+    assert "Fisher" in migrated_title
+    assert "Zh***g" not in migrated_title
+    sessions = TestClient(app).get(
+        "/v1/sessions",
+        headers={TOKEN_HEADER: "migration-test-token"},
+    ).json()["sessions"]
+    title = next(
+        row["title"] for row in sessions if row["session_id"] == "sourcing-fisher"
+    )
+    assert "Fisher" in title
+    assert "Zh***g" not in title
 
 
 def test_legacy_meeting_evidence_db_upgrades_from_the_pre_registry_shape(tmp_path):
@@ -384,7 +482,7 @@ def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
 
     # Constructing the stores must not knock the recorded version off current.
     assert _user_version(root / "club.db") == 2
-    assert _user_version(root / "people.db") == 1
+    assert _user_version(root / "people.db") == 2
 
 
 # --- failing closed ------------------------------------------------------
@@ -654,15 +752,16 @@ def test_a_partially_applied_migration_does_not_leave_other_stores_half_done(
     original = migrations.spec_for("people_db")
     broken = migrations.dataclasses.replace(
         original,
-        migrations=(
-            Migration(
+            migrations=(
+                Migration(
                 from_version=0,
                 to_version=1,
                 description="deliberately failing step",
                 count=lambda _context: 1,
-                apply=explode,
+                    apply=explode,
+                ),
+                *original.migrations[1:],
             ),
-        ),
     )
     monkeypatch.setattr(
         migrations,
