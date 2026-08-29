@@ -169,6 +169,23 @@ def test_board_get_failure_is_structured_and_names_the_unavailable_source(
     assert "sqlite" not in str(result)
 
 
+def test_board_projection_failure_has_a_distinct_safe_ledger_code(tmp_path, monkeypatch):
+    store = PersonStore(tmp_path)
+    ada = _ada(store)
+    store.bind_session("sess-ada", ada["person_id"])
+
+    def invalid_projection(*_args, **_kwargs):
+        raise ValueError("foreign private source detail")
+
+    monkeypatch.setattr("coworker.board_tools.project", invalid_projection)
+    ok, result = execute("board_get", {}, people=store, session_id="sess-ada")
+
+    assert ok is False
+    assert result["code"] == "board_projection_failed"
+    assert result["error"] == "The Board person file could not be projected safely."
+    assert "private" not in str(result)
+
+
 def test_board_upsert_does_not_create_a_person_or_fill_open(tmp_path):
     store = PersonStore(tmp_path)
     ok, result = execute(

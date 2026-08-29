@@ -109,4 +109,17 @@ describe("living brief result", () => {
       "Shortened for this chat view: What happened and What they want.",
     );
   });
+
+  it("falls back safely for an incomplete restored brief object", () => {
+    renderBoardResult({
+      status: "complete",
+      partial: false,
+      person_id: "person one",
+      brief: { who: "Alyssa Lee" },
+    });
+
+    const result = screen.getByRole("region", { name: "Legacy person-file receipt" });
+    expect(result).toHaveTextContent("Person file read completed");
+    expect(result).not.toHaveTextContent("Board is unavailable");
+  });
 });

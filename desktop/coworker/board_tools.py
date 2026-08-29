@@ -191,10 +191,17 @@ def execute_board_tool(
                         "board_person_unavailable",
                         "The Board person file is unavailable.",
                     )
+                timeline = people.timeline(person_id)
+            except Exception:
+                return _partial_board_read(
+                    "board_read_failed",
+                    "The Board person-file read is unavailable.",
+                )
+            try:
                 brief = brief_payload(
                     project(
                         person,
-                        people.timeline(person_id),
+                        timeline,
                         session_id=session_id,
                     ),
                     handoff_field_chars=CHAT_HANDOFF_FIELD_CHARS,
@@ -217,8 +224,8 @@ def execute_board_tool(
                 }
             except Exception:
                 return _partial_board_read(
-                    "board_read_failed",
-                    "The Board person-file read is unavailable.",
+                    "board_projection_failed",
+                    "The Board person file could not be projected safely.",
                 )
             return True, {
                 "status": "complete",

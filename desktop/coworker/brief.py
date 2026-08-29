@@ -734,7 +734,7 @@ def project(
         "they_want": _clean(person.get("handoff_they_want")) or "",
     }
     handoff_version, handoff_saved_at, stale_handoff_fields = _handoff_metadata(
-        events
+        events, handoff
     )
     return LivingBrief(
         person_id=str(person["person_id"]),
@@ -765,8 +765,9 @@ _HANDOFF_FIELD_LABELS = {
 
 def _handoff_metadata(
     events: list[dict[str, Any]],
+    handoff: dict[str, str],
 ) -> tuple[int | None, str | None, tuple[str, ...]]:
-    """Locate the saved handoff receipt and name fields invalidated afterward."""
+    """Track each handoff field's save and later invalidations independently."""
     saves: list[tuple[int, int | None, str | None, set[str]]] = []
     reverts: list[tuple[int, int | None]] = []
     for index, event in enumerate(events):
@@ -803,59 +804,81 @@ def _handoff_metadata(
         return None, None, ()
 
     revert_index: int | None = None
-    selected = saves[-1]
+    effective_saves = list(saves)
     if reverts:
         revert_index, to_version = reverts[-1]
-        if selected[0] > revert_index:
-            # A reviewed save after the revert is the current handoff origin.
-            revert_index = None
-        else:
-            eligible = [
-                save
-                for save in saves
-                if to_version is not None
-                and save[1] is not None
-                and int(save[1]) <= to_version
-            ]
-            if eligible:
-                selected = eligible[-1]
-            else:
-                return None, None, ()
+        before_revert = [
+            save
+            for save in saves
+            if save[0] < revert_index
+            and to_version is not None
+            and save[1] is not None
+            and int(save[1]) <= to_version
+        ]
+        after_revert = [save for save in saves if save[0] > revert_index]
+        effective_saves = [*before_revert, *after_revert]
+    if not effective_saves:
+        return None, None, ()
 
-    saved_index, saved_version, saved_at, saved_fields = selected
-
-    stale = {
-        label
+    field_saves: dict[str, tuple[int, int | None, str | None, set[str]]] = {}
+    for save in effective_saves:
+        for field in save[3]:
+            field_saves[field] = save
+    required_fields = {
+        field
         for field, label in _HANDOFF_FIELD_LABELS.items()
-        if field not in saved_fields
+        if handoff.get(label)
     }
-    for index, event in enumerate(events[saved_index + 1 :], start=saved_index + 1):
-        if event.get("source") == "sourcecado" and event.get("kind") == "revert":
+    unknown_fields = required_fields - field_saves.keys()
+    latest_save = max(field_saves.values(), key=lambda save: save[0])
+    saved_version = None if unknown_fields else latest_save[1]
+    saved_at = None if unknown_fields else latest_save[2]
+
+    stale: set[str] = set()
+    for storage_field, label in _HANDOFF_FIELD_LABELS.items():
+        saved = field_saves.get(storage_field)
+        if saved is None:
             continue
-        if (
-            revert_index is not None
-            and index < revert_index
-            and event.get("source") == "sourcecado"
-        ):
-            # Person-file mutations before the latest revert were undone.
-            # Connector evidence is append-only, so it still affects freshness.
-            continue
-        payload = _payload(event)
-        stale.add("happened")
-        if (
-            payload.get("direction") == "inbound"
-            or event.get("kind") == "meeting"
-            or event.get("source") == "granola"
-        ):
-            stale.add("they_want")
-        fields = payload.get("fields")
-        if isinstance(fields, dict):
-            if {"first_name", "last_name", "title", "company"} & fields.keys():
-                stale.add("who")
-            if "target" in fields:
-                stale.add("wanted")
-        if event.get("source") == "apollo" and event.get("kind") == "enrich":
-            stale.add("who")
+        for index, event in enumerate(events[saved[0] + 1 :], start=saved[0] + 1):
+            payload = _payload(event)
+            fields = payload.get("fields")
+            is_handoff_patch = (
+                event.get("source") == "sourcecado"
+                and event.get("kind") == "patch"
+                and isinstance(fields, dict)
+                and bool(_HANDOFF_FIELD_LABELS.keys() & fields.keys())
+            )
+            if is_handoff_patch or (
+                event.get("source") == "sourcecado" and event.get("kind") == "revert"
+            ):
+                continue
+            if (
+                revert_index is not None
+                and index < revert_index
+                and event.get("source") == "sourcecado"
+            ):
+                continue
+            invalidates = label == "happened"
+            if label == "they_want":
+                invalidates = bool(
+                    payload.get("direction") == "inbound"
+                    or event.get("kind") == "meeting"
+                    or event.get("source") == "granola"
+                )
+            elif label == "who":
+                invalidates = bool(
+                    isinstance(fields, dict)
+                    and {"first_name", "last_name", "title", "company"}
+                    & fields.keys()
+                ) or bool(
+                    event.get("source") == "apollo"
+                    and event.get("kind") == "enrich"
+                )
+            elif label == "wanted":
+                invalidates = isinstance(fields, dict) and "target" in fields
+            if invalidates:
+                stale.add(label)
+                break
     ordered = tuple(
         field for field in ("who", "wanted", "happened", "they_want") if field in stale
     )

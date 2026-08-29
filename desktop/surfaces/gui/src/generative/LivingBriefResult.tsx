@@ -9,6 +9,112 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function textOrNull(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function claim(value: unknown): boolean {
+  const item = record(value);
+  return Boolean(
+    item &&
+      typeof item.id === "string" &&
+      typeof item.text === "string" &&
+      typeof item.state === "string" &&
+      typeof item.authority === "string" &&
+      typeof item.updated_at === "string" &&
+      typeof item.truncated === "boolean" &&
+      stringArray(item.source_refs),
+  );
+}
+
+function claimOrNull(value: unknown): boolean {
+  return value === null || claim(value);
+}
+
+function claimArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every(claim);
+}
+
+function sourceRef(value: unknown): boolean {
+  const item = record(value);
+  return Boolean(
+    item &&
+      typeof item.id === "string" &&
+      typeof item.provider === "string" &&
+      textOrNull(item.locator) &&
+      textOrNull(item.title) &&
+      typeof item.observed_at === "string" &&
+      textOrNull(item.modified_at) &&
+      typeof item.fresh === "boolean" &&
+      typeof item.evidence === "string" &&
+      typeof item.truncated === "boolean",
+  );
+}
+
+function livingBriefOf(value: unknown): LivingBrief | null {
+  const item = record(value);
+  const state = record(item?.state);
+  const lastContact = record(item?.last_contact);
+  const followUp = record(lastContact?.follow_up);
+  const handoff = record(item?.handoff);
+  if (
+    !item ||
+    typeof item.version !== "string" ||
+    typeof item.who !== "string" ||
+    typeof item.why !== "string" ||
+    !stringArray(item.learned) ||
+    !stringArray(item.missing) ||
+    !stringArray(item.sources) ||
+    !claim(item.identity) ||
+    !claimOrNull(item.target) ||
+    !state ||
+    !textOrNull(state.sequence) ||
+    !claimOrNull(state.claim) ||
+    !claimOrNull(item.outcome) ||
+    !lastContact ||
+    !textOrNull(lastContact.at) ||
+    !textOrNull(lastContact.direction) ||
+    typeof lastContact.replied !== "boolean" ||
+    !followUp ||
+    typeof followUp.needed !== "boolean" ||
+    !textOrNull(followUp.reason) ||
+    !claimOrNull(lastContact.claim) ||
+    !claim(item.wants) ||
+    !claimArray(item.evidence) ||
+    !claimArray(item.conflicts) ||
+    !claimArray(item.gaps) ||
+    !claimArray(item.artifacts) ||
+    !claimArray(item.claims) ||
+    !Array.isArray(item.source_refs) ||
+    !item.source_refs.every(sourceRef) ||
+    typeof item.restricted_source_count !== "number" ||
+    typeof item.partial !== "boolean" ||
+    !stringArray(item.partial_sources) ||
+    typeof item.omitted !== "number" ||
+    !handoff ||
+    typeof handoff.who !== "string" ||
+    typeof handoff.wanted !== "string" ||
+    typeof handoff.happened !== "string" ||
+    typeof handoff.they_want !== "string" ||
+    typeof handoff.generated !== "boolean" ||
+    !stringArray(handoff.source_refs) ||
+    !(handoff.version === null || typeof handoff.version === "number") ||
+    !textOrNull(handoff.saved_at) ||
+    typeof handoff.stale !== "boolean" ||
+    !stringArray(handoff.stale_fields) ||
+    !stringArray(handoff.truncated_fields) ||
+    typeof handoff.freshness_unknown !== "boolean" ||
+    typeof item.person_version !== "number"
+  ) {
+    return null;
+  }
+  return item as unknown as LivingBrief;
+}
+
 function fieldLabels(fields: readonly string[]): string {
   const labels: Record<string, string> = {
     who: "Who this is",
@@ -29,7 +135,7 @@ function stateLabel(value: string | null): string {
 export function LivingBriefResult({ result, status }: DomainRendererProps) {
   const headingId = useId();
   const payload = record(result);
-  const brief = record(payload?.brief) as LivingBrief | null;
+  const brief = livingBriefOf(payload?.brief);
   if (status === "loading") {
     return (
       <section className="sourcecado-living-brief" aria-label="Loading living brief">

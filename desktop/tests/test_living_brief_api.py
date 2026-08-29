@@ -451,6 +451,40 @@ def test_a_new_handoff_saved_after_revert_uses_the_new_save_version(tmp_path):
     assert second["brief"]["handoff"]["wanted"] == "Second target"
 
 
+def test_partial_handoff_patch_does_not_stale_unchanged_reviewed_fields(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    saved = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace",
+            "wanted": "A research-dinner speaker",
+            "happened": "No reply yet",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    patched = app.state.people.patch(
+        pid,
+        fields={"handoff_happened": "Drafted, not sent"},
+        expected_version=saved["person"]["version"],
+        actor="director",
+        rationale_summary="Review the latest happened field.",
+    )
+
+    handoff = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"][
+        "handoff"
+    ]
+
+    assert handoff["version"] == patched["version"]
+    assert handoff["happened"] == "Drafted, not sent"
+    assert handoff["stale"] is False
+    assert handoff["stale_fields"] == []
+
+
 def test_a_handoff_needs_a_version_and_at_least_one_field(tmp_path):
     app = _app(tmp_path)
     client = TestClient(app)
