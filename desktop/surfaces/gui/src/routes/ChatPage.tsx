@@ -27,6 +27,7 @@ import {
 } from "../chat/persistedQueue";
 import { SourcecadoChatStore } from "../chat/store";
 import { ThreadView } from "../chat/ThreadView";
+import { readDraft, writeDraft } from "../chat/draftStorage";
 import {
   RecoveryProvider,
   type RecoveryAction,
@@ -40,29 +41,6 @@ function appendText(message: AppendMessage): string {
     .map((part) => (part.type === "text" ? part.text : ""))
     .join("")
     .trim();
-}
-
-function draftKey(threadId: string): string {
-  return `sourcecado.chat.draft.v1:${encodeURIComponent(threadId)}`;
-}
-
-function readDraft(threadId: string): string {
-  if (!threadId) return "";
-  try {
-    return window.localStorage.getItem(draftKey(threadId)) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeDraft(threadId: string, draft: string): void {
-  if (!threadId) return;
-  try {
-    if (draft) window.localStorage.setItem(draftKey(threadId), draft);
-    else window.localStorage.removeItem(draftKey(threadId));
-  } catch {
-    // Draft persistence is best-effort; the live composer remains usable.
-  }
 }
 
 export function ChatPage({

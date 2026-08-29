@@ -454,6 +454,148 @@ describe("App shell routing", () => {
     expect(screen.queryByText("We couldn’t load this conversation.")).not.toBeInTheDocument();
   });
 
+  it("reconciles a webview-restored person chat hash before loading it", async () => {
+    window.location.hash = "#/chat/missing/person/person-old";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [
+        {
+          session_id: "missing",
+          title: "Stale person chat",
+          n_msgs: 2,
+          pinned: false,
+          opened_at: "1",
+          updated_at: "1",
+        },
+      ],
+      open_id: "missing",
+      last_destination: "#/chat/missing/person/person-old",
+    }));
+    const listing = deferred<{
+      sessions: Array<{
+        session_id: string;
+        title: string;
+        n_msgs: number;
+        pinned: boolean;
+        opened_at: string;
+        updated_at: string;
+      }>;
+      open_id: string;
+      last_destination: string;
+    }>();
+    api.getSessions.mockReturnValue(listing.promise);
+    api.getSession.mockImplementation(async (id: string) => {
+      if (id === "missing") throw new Error("session 404");
+      return { id, title: "Alpha", messages: [], events: [] };
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(api.getSessions).toHaveBeenCalledTimes(1));
+    expect(api.getSession).not.toHaveBeenCalled();
+
+    listing.resolve({
+      sessions: [
+        {
+          session_id: "alpha",
+          title: "Alpha",
+          n_msgs: 1,
+          pinned: false,
+          opened_at: "2",
+          updated_at: "2",
+        },
+      ],
+      open_id: "alpha",
+      last_destination: "#/chat/missing/person/person-old",
+    });
+
+    await waitFor(() => expect(window.location.hash).toBe("#/chat/alpha"));
+    await waitFor(() => expect(api.getSession).toHaveBeenCalledWith("alpha"));
+    expect(api.getSession).not.toHaveBeenCalledWith("missing", "person-old");
+  });
+
+  it("recovers a stale person-chat draft in a new unbound conversation", async () => {
+    window.location.hash = "";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [
+        {
+          session_id: "missing",
+          title: "Stale person chat",
+          n_msgs: 2,
+          pinned: false,
+          opened_at: "1",
+          updated_at: "1",
+        },
+      ],
+      open_id: "missing",
+      last_destination: "#/chat/missing/person/person-old",
+    }));
+    window.localStorage.setItem("sourcecado.chat.draft.v1:missing", "Unsent note");
+    api.getSessions.mockResolvedValue({
+      sessions: [
+        {
+          session_id: "alpha",
+          title: "Another person",
+          n_msgs: 1,
+          pinned: false,
+          opened_at: "2",
+          updated_at: "2",
+        },
+      ],
+      open_id: "alpha",
+      last_destination: "#/chat/missing/person/person-old",
+    });
+    api.createSession.mockResolvedValue({ id: "recovered-draft", title: null, n_msgs: 0 });
+    api.getSession.mockImplementation(async (id: string) => ({
+      id,
+      title: null,
+      messages: [],
+      events: [],
+    }));
+
+    render(<App />);
+
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(window.location.hash).toBe("#/chat/recovered-draft"));
+    expect(await screen.findByLabelText("Message Sourcecado")).toHaveValue("Unsent note");
+    expect(api.getSession).not.toHaveBeenCalledWith("alpha");
+  });
+
+  it("creates a usable empty conversation when no restored session survives", async () => {
+    window.location.hash = "";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [
+        {
+          session_id: "missing",
+          title: "Stale chat",
+          n_msgs: 2,
+          pinned: false,
+          opened_at: "1",
+          updated_at: "1",
+        },
+      ],
+      open_id: "missing",
+      last_destination: "#/chat/missing",
+    }));
+    api.getSessions.mockResolvedValue({
+      sessions: [],
+      open_id: null,
+      last_destination: "#/chat/missing",
+    });
+    api.createSession.mockResolvedValue({ id: "new-chat", title: null, n_msgs: 0 });
+    api.getSession.mockResolvedValue({
+      id: "new-chat",
+      title: null,
+      messages: [],
+      events: [],
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(window.location.hash).toBe("#/chat/new-chat"));
+    expect(await screen.findByLabelText("Message Sourcecado")).toBeEnabled();
+  });
+
   it("does not persist a cached destination before fresh session state resolves", async () => {
     window.location.hash = "";
     window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({

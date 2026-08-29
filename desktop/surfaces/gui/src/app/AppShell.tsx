@@ -14,6 +14,7 @@ import {
 import { BoardView } from "../Board";
 import { PersonFileView } from "../PersonFile";
 import { ChatPage } from "../routes/ChatPage";
+import { moveDraft, readDraft } from "../chat/draftStorage";
 import { ConnectionsPage } from "../routes/ConnectionsPage";
 import { MemoryPage } from "../routes/MemoryPage";
 import { QuarantinePage } from "../routes/QuarantinePage";
@@ -30,6 +31,9 @@ import { readShellCache, writeShellCache } from "./sessionCache";
 
 export function AppShell() {
   const [cachedListing] = useState(() => readShellCache());
+  const cachedChatRestoreHash = cachedListing && isRestorableChatHash(window.location.hash)
+    ? window.location.hash
+    : null;
   const [route, setRoute] = useState(() => parseHash(window.location.hash));
   const [sessions, setSessions] = useState<SessionRow[] | null>(cachedListing?.sessions || null);
   const [openSessionId, setOpenSessionId] = useState<string | null>(cachedListing?.open_id || null);
@@ -46,8 +50,10 @@ export function AppShell() {
   const railFocusTimerRef = useRef<number | null>(null);
   const railWasOpenedRef = useRef(false);
   const searchReturnFocusRef = useRef<HTMLElement | null>(null);
-  const deferDestinationPersistenceRef = useRef(isRootHash(window.location.hash));
-  const cachedRestoreHashRef = useRef<string | null>(null);
+  const deferDestinationPersistenceRef = useRef(
+    isRootHash(window.location.hash) || Boolean(cachedChatRestoreHash),
+  );
+  const bootRestoreHashRef = useRef<string | null>(cachedChatRestoreHash);
   function openSearch() {
     searchReturnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -93,8 +99,8 @@ export function AppShell() {
   useEffect(() => {
     if (deferDestinationPersistenceRef.current) return;
     if (isRootHash(window.location.hash)) return;
-    if (cachedRestoreHashRef.current === window.location.hash) return;
-    cachedRestoreHashRef.current = null;
+    if (bootRestoreHashRef.current === window.location.hash) return;
+    bootRestoreHashRef.current = null;
     if (route.kind === "chat" && route.sessionId?.startsWith("sched-")) return;
     setLastDestination(window.location.hash).catch(() => {});
   }, [route]);
@@ -217,24 +223,70 @@ export function AppShell() {
       const restored = cachedListing.last_destination ||
         (cachedListing.open_id ? `#/chat/${encodeURIComponent(cachedListing.open_id)}` : "");
       if (restored) {
-        cachedRestoreHashRef.current = restored;
+        bootRestoreHashRef.current = restored;
         window.location.hash = restored;
         setRoute(parseHash(restored));
       } else if (cachedListing.sessions.length > 0) {
-        cachedRestoreHashRef.current = "#/chat";
+        bootRestoreHashRef.current = "#/chat";
         window.location.hash = "#/chat";
         setRoute({ kind: "chat" });
       }
     }
     getSessions()
-      .then((listing) => {
+      .then(async (listing) => {
         if (!active) return;
+        const restoreRoute = bootRestoreHashRef.current
+          ? parseHash(bootRestoreHashRef.current)
+          : null;
+        const missingRestoreSessionId = restoreRoute?.kind === "chat" &&
+          restoreRoute.sessionId &&
+          !listing.sessions.some((session) => session.session_id === restoreRoute.sessionId)
+            ? restoreRoute.sessionId
+            : null;
+        const hasRecoverableDraft = Boolean(
+          missingRestoreSessionId && readDraft(missingRestoreSessionId),
+        );
+        if (
+          missingRestoreSessionId &&
+          (hasRecoverableDraft || listing.sessions.length === 0)
+        ) {
+          const created = await createSession();
+          if (!active) return;
+          if (hasRecoverableDraft) {
+            moveDraft(missingRestoreSessionId, created.id);
+          }
+          const now = new Date().toISOString();
+          const recoveredSession: SessionRow = {
+            session_id: created.id,
+            title: created.title,
+            n_msgs: created.n_msgs,
+            pinned: false,
+            opened_at: now,
+            updated_at: now,
+          };
+          const recoveredHash = `#/chat/${encodeURIComponent(created.id)}`;
+          const recoveredListing = {
+            sessions: [recoveredSession, ...listing.sessions],
+            open_id: created.id,
+            last_destination: recoveredHash,
+          };
+          setSessions(recoveredListing.sessions);
+          setOpenSessionId(created.id);
+          setStale(false);
+          writeShellCache(recoveredListing);
+          window.location.hash = recoveredHash;
+          setRoute(parseHash(recoveredHash));
+          bootRestoreHashRef.current = null;
+          deferDestinationPersistenceRef.current = false;
+          setBootPending(false);
+          return;
+        }
         setSessions(listing.sessions);
         setOpenSessionId(listing.open_id);
         setStale(false);
         writeShellCache(listing);
         const currentHash = window.location.hash;
-        const cacheStillOwnsHash = cachedRestoreHashRef.current === currentHash;
+        const cacheStillOwnsHash = bootRestoreHashRef.current === currentHash;
         if (isRootHash(currentHash) || cacheStillOwnsHash) {
           const restored = restoreHash(listing);
           if (restored) {
@@ -245,7 +297,7 @@ export function AppShell() {
             setRoute({ kind: "chat" });
           }
         }
-        cachedRestoreHashRef.current = null;
+        bootRestoreHashRef.current = null;
         deferDestinationPersistenceRef.current = false;
         setBootPending(false);
       })
@@ -279,7 +331,7 @@ export function AppShell() {
   } else if (
     bootPending &&
     route.kind === "chat" &&
-    cachedRestoreHashRef.current === window.location.hash
+    bootRestoreHashRef.current === window.location.hash
   ) {
     outlet = (
       <main className="route-page boot-page" aria-busy="true">
@@ -385,6 +437,13 @@ export function AppShell() {
 
 function isRootHash(hash: string) {
   return hash === "" || hash === "#" || hash === "#/";
+}
+
+function isRestorableChatHash(hash: string): boolean {
+  const route = parseHash(hash);
+  return route.kind === "chat" &&
+    Boolean(route.sessionId) &&
+    !route.sessionId?.startsWith("sched-");
 }
 
 function restoreHash(listing: {
