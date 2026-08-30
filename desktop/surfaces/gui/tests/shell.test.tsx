@@ -634,7 +634,10 @@ describe("App shell routing", () => {
     expect(api.setLastDestination).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("link", { name: "Skills" }));
-    await waitFor(() => expect(api.setLastDestination).toHaveBeenCalledWith("#/skills"));
+    await waitFor(
+      () => expect(api.setLastDestination).toHaveBeenCalledWith("#/skills"),
+      { timeout: 2_500 },
+    );
   });
 
   it("escapes the boot skeleton when sessions exist but no restore target is known", async () => {
@@ -785,20 +788,179 @@ describe("App shell routing", () => {
     expect(document.querySelector("img.app-mark")).toHaveAttribute("src", "/favicon.png");
   });
 
-  it("keeps navigation usable through boot failure and retry", async () => {
+  it("automatically retries a transient first-paint session-list failure", async () => {
+    window.location.hash = "#/skills";
     api.getSessions
-      .mockRejectedValueOnce(new Error("sidecar offline"))
-      .mockResolvedValueOnce({ sessions: [], open_id: null, last_destination: "#/skills" });
+      .mockRejectedValueOnce(new Error("Load failed"))
+      .mockResolvedValueOnce({
+        sessions: [
+          {
+            session_id: "thread-alpha",
+            title: "QA Full User Trail",
+            n_msgs: 4,
+            pinned: false,
+            opened_at: "1",
+            updated_at: "2",
+          },
+        ],
+        open_id: "thread-alpha",
+        last_destination: "#/skills",
+      });
 
     render(<App />);
 
-    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(api.getSessions).toHaveBeenCalledTimes(2), {
+      timeout: 2_000,
+    });
+    expect(await screen.findByRole("link", { name: "QA Full User Trail" })).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn’t refresh conversations/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cached conversations may be stale/i)).not.toBeInTheDocument();
+  });
+
+  it("does not call cached conversations stale while a bounded retry is pending", async () => {
+    window.location.hash = "#/skills";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [
+        {
+          session_id: "cached",
+          title: "Cached conversation",
+          n_msgs: 3,
+          pinned: false,
+          opened_at: "1",
+          updated_at: "1",
+        },
+      ],
+      open_id: "cached",
+      last_destination: "#/skills",
+    }));
+    const listing = deferred<{
+      sessions: Array<{
+        session_id: string;
+        title: string;
+        n_msgs: number;
+        pinned: boolean;
+        opened_at: string;
+        updated_at: string;
+      }>;
+      open_id: string;
+      last_destination: string;
+    }>();
+    api.getSessions
+      .mockRejectedValueOnce(new Error("Load failed"))
+      .mockReturnValueOnce(listing.promise);
+
+    render(<App />);
+
+    await waitFor(() => expect(api.getSessions).toHaveBeenCalledTimes(2), {
+      timeout: 2_000,
+    });
+    expect(screen.getByRole("link", { name: "Cached conversation" })).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn’t refresh conversations/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cached conversations may be stale/i)).not.toBeInTheDocument();
+
+    listing.resolve({
+      sessions: [
+        {
+          session_id: "fresh",
+          title: "Fresh conversation",
+          n_msgs: 4,
+          pinned: false,
+          opened_at: "2",
+          updated_at: "2",
+        },
+      ],
+      open_id: "fresh",
+      last_destination: "#/skills",
+    });
+
+    expect(await screen.findByRole("link", { name: "Fresh conversation" })).toBeInTheDocument();
+    expect(screen.queryByText(/Cached conversations may be stale/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps navigation usable after bounded boot retries are exhausted", async () => {
+    api.getSessions.mockRejectedValue(new Error("sidecar offline"));
+
+    render(<App />);
+
+    const alert = await screen.findByRole("alert", undefined, { timeout: 2_500 });
     expect(alert).toHaveTextContent("sidecar offline");
+    expect(api.getSessions).toHaveBeenCalledTimes(4);
     expect(screen.getByRole("navigation", { name: "Sourcecado" })).toBeInTheDocument();
+    api.getSessions.mockResolvedValueOnce({
+      sessions: [],
+      open_id: null,
+      last_destination: "#/skills",
+    });
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
 
-    await waitFor(() => expect(api.getSessions).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.getSessions).toHaveBeenCalledTimes(5));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("keeps stale person-chat recovery intact across exhausted retries", async () => {
+    window.location.hash = "";
+    window.localStorage.setItem("sourcecado.shell.sessions.v1", JSON.stringify({
+      sessions: [
+        {
+          session_id: "missing",
+          title: "Stale person chat",
+          n_msgs: 2,
+          pinned: false,
+          opened_at: "1",
+          updated_at: "1",
+        },
+      ],
+      open_id: "missing",
+      last_destination: "#/chat/missing/person/person-old",
+    }));
+    window.localStorage.setItem("sourcecado.chat.draft.v1:missing", "Unsent note");
+    api.getSessions.mockRejectedValue(new Error("sidecar offline"));
+    api.createSession.mockResolvedValue({
+      id: "recovered-draft",
+      title: null,
+      n_msgs: 0,
+    });
+    api.getSession.mockResolvedValue({
+      id: "recovered-draft",
+      title: null,
+      messages: [],
+      events: [],
+    });
+
+    render(<App />);
+
+    const alert = await screen.findByRole("alert", undefined, { timeout: 2_500 });
+    expect(api.getSessions).toHaveBeenCalledTimes(4);
+    api.getSessions.mockResolvedValueOnce({
+      sessions: [
+        {
+          session_id: "alpha",
+          title: "Alpha",
+          n_msgs: 1,
+          pinned: false,
+          opened_at: "2",
+          updated_at: "2",
+        },
+      ],
+      open_id: "alpha",
+      last_destination: "#/chat/missing/person/person-old",
+    });
+    await waitFor(() =>
+      expect(api.getSession).toHaveBeenCalledWith("missing", "person-old"),
+    );
+    const staleLoadsBeforeRetry = api.getSession.mock.calls.filter(
+      ([sessionId, personId]) => sessionId === "missing" && personId === "person-old",
+    ).length;
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(api.createSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(window.location.hash).toBe("#/chat/recovered-draft"));
+    expect(await screen.findByLabelText("Message Sourcecado")).toHaveValue("Unsent note");
+    expect(
+      api.getSession.mock.calls.filter(
+        ([sessionId, personId]) => sessionId === "missing" && personId === "person-old",
+      ),
+    ).toHaveLength(staleLoadsBeforeRetry);
   });
 
   it("renders cached thread navigation as stale when reconnect fails", async () => {
@@ -814,7 +976,13 @@ describe("App shell routing", () => {
     render(<App />);
 
     expect(await screen.findByRole("link", { name: "Cached search" })).toBeInTheDocument();
-    expect(screen.getByText(/Cached conversations may be stale/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        /Cached conversations may be stale/i,
+        undefined,
+        { timeout: 2_500 },
+      ),
+    ).toBeInTheDocument();
   });
 
   it("renders a recoverable one-line state for a missing thread", async () => {
