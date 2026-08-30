@@ -362,6 +362,7 @@ export type BoardPerson = {
   title: string | null;
   company: string | null;
   sequence_state: string | null;
+  board_lane?: "backlog" | "open" | "in_conversation" | "done";
   last_contact_at?: string | null;
   last_contact_direction?: "outbound" | "inbound" | null;
   replied?: boolean;
@@ -370,6 +371,7 @@ export type BoardPerson = {
 };
 
 export type Board = {
+  backlog: BoardPerson[];
   open: BoardPerson[];
   in_conversation: BoardPerson[];
   done: BoardPerson[];

@@ -216,6 +216,52 @@ def test_a_reply_on_the_sent_thread_files_on_that_person_and_opens_the_conversat
     assert _gaps(people, person["person_id"]) == []
 
 
+def test_operator_person_file_never_receives_another_persons_reply_attention(tmp_path):
+    people = PersonStore(tmp_path)
+    gmail = _gmail()
+    operator = _person(
+        people,
+        first="Fisher",
+        last="Zhang",
+        email=ACCOUNT,
+        apollo_id="apollo-operator",
+    )
+    bob = _person(
+        people,
+        first="Bob",
+        last="Builder",
+        email="bob@analytic.example",
+        apollo_id="apollo-bob",
+    )
+    sent = _sent(people, gmail, bob)
+    _baseline(people, gmail)
+
+    gmail.deliver(
+        thread_id=sent["threadId"],
+        message_id="in_bob_operator_person_1",
+        sender="bob@analytic.example",
+        to=ACCOUNT,
+        subject="Re: Thursday?",
+        snippet="Thursday works.",
+    )
+    result = refresh_replies(people, _reader(gmail))
+
+    assert result["scanned"] == 1
+    assert result["filed"] == 1
+    assert result["unassigned"] == 0
+    board = people.list_board()
+    operator_row = next(
+        row for row in board["backlog"] if row["person_id"] == operator["person_id"]
+    )
+    bob_row = next(
+        row for row in board["in_conversation"] if row["person_id"] == bob["person_id"]
+    )
+    assert operator_row["replied"] is False
+    assert operator_row["follow_up"] == {"needed": False, "reason": None}
+    assert bob_row["replied"] is True
+    assert bob_row["follow_up"] == {"needed": True, "reason": "reply_unanswered"}
+
+
 def test_a_reply_leaves_a_person_the_director_already_moved_where_they_are(tmp_path):
     people = PersonStore(tmp_path)
     gmail = _gmail()
