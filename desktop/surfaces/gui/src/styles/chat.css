@@ -559,7 +559,6 @@
 }
 
 .sourcecado-approval-actions button,
-.sourcecado-starters button,
 .sourcecado-load-error button {
   min-height: 38px;
   padding: 0 11px;
@@ -582,38 +581,31 @@
   width: min(620px, 100%);
   margin: auto;
   padding: 24px;
+}
+
+.sourcecado-load-error {
   border: 1px solid var(--border);
   border-radius: 11px;
   background: var(--surface);
 }
 
-.sourcecado-empty-mascot {
-  display: block;
-  width: 96px;
-  height: 96px;
-  margin: 0 0 12px;
-  border-radius: 8px;
-  object-fit: cover;
+.sourcecado-empty-thread {
+  text-align: center;
 }
 
-.sourcecado-empty-thread > p:not(.eyebrow),
+.sourcecado-empty-thread h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(24px, 4vw, 30px);
+  font-weight: 550;
+  letter-spacing: -0.025em;
+}
+
+.sourcecado-empty-thread > p,
 .sourcecado-load-error p {
   margin: 7px 0 0;
   color: var(--muted);
   line-height: 1.55;
-}
-
-.sourcecado-starters {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 18px;
-}
-
-.sourcecado-starters button {
-  min-height: 54px;
-  padding: 9px 11px;
-  text-align: left;
 }
 
 .sourcecado-load-error {
@@ -667,49 +659,139 @@
   border: 0;
 }
 
-.sourcecado-composer {
-  display: grid;
+.sourcecado-composer-zone {
   width: min(808px, calc(100% - 48px));
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
   justify-self: center;
+  padding: 0 0 18px;
+}
+
+.sourcecado-suggestion {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 8px 8px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.sourcecado-suggestion:hover,
+.sourcecado-suggestion:focus-visible {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.sourcecado-suggestion:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sourcecado-suggestion-icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.sourcecado-suggestion-icon svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.sourcecado-composer {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "input action"
+    "status status";
+  gap: 8px;
   align-items: end;
-  padding: 14px 0 18px;
-  border-top: 1px solid var(--border);
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .sourcecado-composer textarea {
+  grid-area: input;
   width: 100%;
   min-width: 0;
   min-height: 44px;
   max-height: 160px;
   overflow-y: auto;
   resize: none;
-  padding: 11px 13px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  padding: 10px 4px;
+  border: 0;
+  outline: 0;
+  background: transparent;
   color: var(--text);
   font-family: inherit;
   font-size: 15px;
   line-height: 1.45;
 }
 
-.sourcecado-composer > button {
-  min-width: 68px;
+.sourcecado-composer-action {
+  grid-area: action;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
   min-height: 44px;
-  padding: 0 14px;
+  padding: 0;
   border: 1px solid var(--accent);
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--accent);
   color: var(--surface);
-  font: inherit;
-  font-weight: 650;
+  display: grid;
+  place-items: center;
   cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
-.sourcecado-composer > button:disabled {
+.sourcecado-composer-action svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.sourcecado-stop-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: currentcolor;
+}
+
+.sourcecado-composer-action:focus-visible {
+  outline: 2px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+
+.sourcecado-composer-action:disabled {
   border-color: var(--border);
   background: var(--raised);
   color: var(--muted);
@@ -718,9 +800,16 @@
 
 .sourcecado-composer-running {
   grid-column: 1 / -1;
+  grid-area: status;
+  min-height: 17px;
   margin: 0;
   color: var(--muted);
   font-size: 12px;
+  visibility: hidden;
+}
+
+.sourcecado-composer-running.is-visible {
+  visibility: visible;
 }
 
 @media (max-width: 767px) {
@@ -746,19 +835,19 @@
     font-size: 15px;
   }
 
-  .sourcecado-starters {
-    grid-template-columns: 1fr;
-  }
-
-  .sourcecado-starters button,
   .sourcecado-approval-actions button,
   .sourcecado-load-error button {
     min-height: 44px;
   }
 
-  .sourcecado-composer {
+  .sourcecado-composer-zone {
     width: calc(100% - 32px);
     padding-bottom: 12px;
+  }
+
+  .sourcecado-suggestion {
+    min-height: 44px;
+    margin-left: 0;
   }
 
   .sourcecado-composer textarea {
@@ -781,6 +870,13 @@
 @media (max-height: 520px) {
   .sourcecado-composer textarea {
     max-height: 96px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-suggestion,
+  .sourcecado-composer-action {
+    transition: none;
   }
 }
 

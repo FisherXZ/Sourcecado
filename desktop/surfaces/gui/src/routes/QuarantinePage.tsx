@@ -203,7 +203,7 @@ export function QuarantinePage() {
   if (state.status === "loading") {
     return (
       <main className="route-page" aria-busy="true">
-        <h1>Needs your answer</h1>
+        <h1>Inbox</h1>
         <div className="route-skeleton" aria-label="Loading held actions" />
       </main>
     );
@@ -212,7 +212,7 @@ export function QuarantinePage() {
   if (state.status === "failed") {
     return (
       <main className="route-page">
-        <h1>Needs your answer</h1>
+        <h1>Inbox</h1>
         <p>Could not load held actions.</p>
         <button type="button" onClick={load}>
           Try again
@@ -223,7 +223,7 @@ export function QuarantinePage() {
 
   return (
     <main className="route-page quarantine-page">
-      <h1>Needs your answer</h1>
+      <h1>Inbox</h1>
       <p className="route-lede">
         Actions that reach the outside world are recorded before Sourcecado
         attempts them. If it stops before recording what happened, the action
