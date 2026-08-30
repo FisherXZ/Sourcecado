@@ -185,6 +185,52 @@ describe("Board and person-file routes", () => {
     expect(screen.getByRole("region", { name: "In conversation" })).toHaveTextContent("None");
   });
 
+  it("labels an Apollo-hidden surname honestly on Board and person file", async () => {
+    api.getBoard.mockResolvedValue({
+      open: [
+        {
+          person_id: "person one",
+          first_name: "Hudson",
+          last_name: null,
+          last_name_status: "hidden_by_apollo",
+          title: "CEO",
+          company: "The Hog",
+          sequence_state: "open",
+        },
+      ],
+      in_conversation: [],
+      done: [],
+    });
+    api.getPerson.mockResolvedValue({
+      ...(await api.getPerson()),
+      person: {
+        person_id: "person one",
+        first_name: "Hudson",
+        last_name: null,
+        last_name_status: "hidden_by_apollo",
+        sequence_state: "open",
+        version: 2,
+        sources: [],
+      },
+      brief: livingBrief({
+        who: "Hudson, CEO at The Hog",
+        why: "YC F25 target",
+        learned: [],
+        missing: [],
+        sources: [],
+      }),
+    });
+
+    const board = render(<BoardView />);
+    expect(await screen.findByText("Surname hidden by Apollo")).toBeInTheDocument();
+    expect(board.container).not.toHaveTextContent("***");
+    board.unmount();
+
+    const person = render(<PersonFileView personId="person one" />);
+    expect(await screen.findByText(/Enrich to verify the full name/i)).toBeInTheDocument();
+    expect(person.container).not.toHaveTextContent("***");
+  });
+
   it("renders kept people in Backlog without starting their sequence", async () => {
     api.getBoard.mockResolvedValue({
       backlog: [

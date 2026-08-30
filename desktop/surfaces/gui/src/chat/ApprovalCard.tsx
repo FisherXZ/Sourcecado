@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { toolPresentation } from "./toolRegistry";
 import { CalendarApprovalSummary } from "../generative/CalendarEventResult";
 import { GmailDraftBody } from "../generative/GmailDraftResult";
+import { sanitizeApolloNameMasks, withoutApolloNameMasks } from "../personName";
 
 type ApprovalState =
   | "pending"
@@ -179,6 +180,14 @@ function scopeStatement(toolName: string): string {
   return "Scope: allow once.";
 }
 
+function displayedArguments(
+  toolName: string,
+  args: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (toolName !== "apollo_enrich_contact") return args;
+  return sanitizeApolloNameMasks(args) as Readonly<Record<string, unknown>>;
+}
+
 function resolvedLabel(state: ApprovalState): string {
   switch (state) {
     case "allowed":
@@ -219,6 +228,7 @@ export function ApprovalCard({
   const pending = audit.approvalState === "pending";
   const presentation = toolPresentation(part.toolName);
   const args = part.args as Readonly<Record<string, unknown>>;
+  const safeArgs = displayedArguments(part.toolName, args);
   const fields = decisionFields(part.toolName, args);
   const gmailDraft =
     part.toolName === "gmail_draft" || part.toolName === "gmail_create_draft";
@@ -230,6 +240,11 @@ export function ApprovalCard({
     gmailDraft && typeof args.body === "string" ? args.body : null;
   const shellCommand =
     part.toolName === "shell_exec" ? shellCommandResourceOf(part) : null;
+  const approvalReason = part.approval?.reason
+    ? part.toolName === "apollo_enrich_contact"
+      ? withoutApolloNameMasks(part.approval.reason)
+      : part.approval.reason
+    : "This external action needs your approval.";
 
   useEffect(() => {
     if (pending) headingRef.current?.focus();
@@ -423,7 +438,7 @@ export function ApprovalCard({
           Apollo enrichment uses credits. No credit is spent until you choose Allow once.
         </p>
       ) : null}
-      <p>{part.approval?.reason ?? "This external action needs your approval."}</p>
+      <p>{approvalReason}</p>
       <button
         type="button"
         aria-expanded={showDetails}
@@ -439,7 +454,7 @@ export function ApprovalCard({
               Exact fingerprint: {shellCommand?.fingerprint?.slice(0, 16) ?? "unavailable"}
             </p>
           ) : (
-            <pre>{JSON.stringify(args, null, 2)}</pre>
+            <pre>{JSON.stringify(safeArgs, null, 2)}</pre>
           )}
           <p>{scopeStatement(part.toolName)}</p>
         </div>

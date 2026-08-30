@@ -368,6 +368,9 @@ export function PersonFileView({ personId }: { personId: string }) {
         <a className="person-back-link" href="#/board">← Board</a>
         <p className="eyebrow">Person file</p>
         <h1>{file.brief.who || "Person"}</h1>
+        {file.person.last_name_status === "hidden_by_apollo" ? (
+          <p>Surname hidden by Apollo. Enrich to verify the full name.</p>
+        ) : null}
         {file.brief.why ? <p>{file.brief.why}</p> : null}
         <div className="person-chat-action">
           <button

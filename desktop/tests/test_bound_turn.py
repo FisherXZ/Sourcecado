@@ -1,4 +1,7 @@
 import asyncio
+import json
+
+import pytest
 
 from coworker.apollo import MATCH_URL, FakeHttp
 from coworker.gmail import FakeGmail
@@ -46,6 +49,63 @@ def _run(*, tmp_path, sid, text, provider, people, gmail=None, drive=None, wait=
             wait_permission=_wait if wait is not None else None,
         )
     )
+
+
+@pytest.mark.parametrize("masked_last_name", ["L***e", "张***李"])
+def test_restored_apollo_mask_never_reaches_the_next_model_request(
+    tmp_path, masked_last_name
+):
+    store = ConversationStore(tmp_path)
+    store.append("sess-legacy-enrichment", {"role": "user", "content": "Enrich Ada"})
+    store.append(
+        "sess-legacy-enrichment",
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "legacy-enrich",
+                    "type": "function",
+                    "function": {
+                        "name": "apollo_enrich_contact",
+                        "arguments": json.dumps(
+                            {
+                                "firstName": "Ada",
+                                "lastName": masked_last_name,
+                                "organizationName": "Analytic",
+                            }
+                        ),
+                    },
+                }
+            ],
+        },
+    )
+    store.append(
+        "sess-legacy-enrichment",
+        {
+            "role": "tool",
+            "name": "apollo_enrich_contact",
+            "tool_call_id": "legacy-enrich",
+            "content": json.dumps({"error": "Director denied this enrichment."}),
+        },
+    )
+    provider = FakeProvider(deltas=("Understood.",))
+
+    _run(
+        tmp_path=tmp_path,
+        sid="sess-legacy-enrichment",
+        text="Leave the person incomplete",
+        provider=provider,
+        people=PersonStore(tmp_path),
+    )
+
+    restored_call = next(
+        message
+        for message in provider.calls[0]
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    )["tool_calls"][0]
+    restored_arguments = json.loads(restored_call["function"]["arguments"])
+    assert restored_arguments["lastName"] == "(surname hidden by Apollo)"
 
 
 def test_keep_one_person_binds_that_session_only(tmp_path):

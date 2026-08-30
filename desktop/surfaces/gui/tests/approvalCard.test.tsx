@@ -264,6 +264,34 @@ describe("ApprovalCard", () => {
     expect(onDecision).toHaveBeenCalledWith(true);
   });
 
+  it("sanitizes a restored Apollo approval that contains a masked surname", () => {
+    const { container } = render(
+      <ApprovalCard
+        part={{
+          ...approvalPart(),
+          toolName: "apollo_enrich_contact",
+          args: {
+            firstName: "Fisher",
+            lastName: "Zh***g",
+            organizationName: "The Hog",
+          },
+          approval: {
+            id: "approval-apollo-restored",
+            reason:
+              "Spends 1 Apollo credit to look up Fisher Zh***g by Apollo ID.",
+          },
+        } as ToolCallMessagePartProps}
+        onDecision={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review full request and policy" }),
+    );
+    expect(container).toHaveTextContent("Fisher (surname hidden by Apollo)");
+    expect(container).not.toHaveTextContent("Zh***g");
+  });
+
   it("does not re-offer a queued decision and explains it is waiting for the connection", async () => {
     const onDecision = vi.fn().mockResolvedValue("queued");
     render(<ApprovalCard part={approvalPart()} onDecision={onDecision} />);

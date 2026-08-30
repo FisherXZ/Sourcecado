@@ -10,6 +10,7 @@ import type { ToolFailure } from "./protocol";
 import { useRecoveryActions } from "./recovery";
 import { useInspector } from "./Inspector";
 import { EvidenceSetResult } from "../generative/EvidenceSetResult";
+import { sanitizeApolloNameMasks } from "../personName";
 
 type ActivityState =
   | "Running"
@@ -248,6 +249,12 @@ function ActivityRow({ tool }: { readonly tool: ToolCallMessagePart }) {
   const { act } = useRecoveryActions();
   const { select } = useInspector();
   const [showDetails, setShowDetails] = useState(false);
+  const inspectorArgs = tool.toolName.startsWith("apollo_")
+    ? sanitizeApolloNameMasks(tool.args)
+    : tool.args;
+  const inspectorResult = tool.toolName.startsWith("apollo_")
+    ? sanitizeApolloNameMasks(tool.result)
+    : tool.result;
   return (
     <li
       data-tool-call-id={tool.toolCallId}
@@ -268,8 +275,8 @@ function ActivityRow({ tool }: { readonly tool: ToolCallMessagePart }) {
                 id: tool.toolCallId,
                 title: presentation.label,
                 status: "success",
-                args: tool.args,
-                result: tool.result,
+                args: inspectorArgs,
+                result: inspectorResult,
                 timing: tool.timing,
               },
               event.currentTarget,

@@ -93,6 +93,7 @@ from coworker.effective_tools import (
     effective_tool_catalog,
 )
 from coworker.events import build_event, new_turn_identity, TurnIdentity
+from coworker.person_identity import without_apollo_name_masks
 from coworker.gmail import (
     GmailError,
     GmailOutcomeUnknown,
@@ -631,6 +632,35 @@ def create_app(
                 except Exception:
                     app.state.live_event_senders.discard(registration)
 
+    def _sync_person_sourcing_title(person_id: str) -> str | None:
+        """Keep Sourcecado-generated person-chat titles on the canonical name."""
+        try:
+            session_id = app.state.people.session_for_person(person_id)
+        except ValueError:
+            return None
+        if session_id is None:
+            return None
+        row = app.state.store.index(session_id)
+        person = app.state.people.get(person_id)
+        if row is None or person is None:
+            return None
+        current = str(row.get("title") or "")
+        if current.startswith("Sourcing ·") or not current:
+            brief = build_brief(person, app.state.people.timeline(person_id))
+            safe = f"Sourcing · {str(brief['who'] or 'Person')}"
+        else:
+            safe = without_apollo_name_masks(current)
+        if safe != current:
+            app.state.store.rename_session(session_id, safe)
+        return safe
+
+    # Older builds wrote Apollo's mask into bound chat titles. Repair those
+    # titles once while the sidecar is opening, before any surface can read
+    # them. Approved enrichment calls this helper again to promote the full
+    # verified name without making a read endpoint mutate durable state.
+    for existing_person in app.state.people.list_people():
+        _sync_person_sourcing_title(str(existing_person["person_id"]))
+
     def _bound_resource(item: dict[str, Any]) -> dict[str, Any] | None:
         """The person-bound authority this approval was parked with, if any."""
         resource = item.get("resource")
@@ -733,6 +763,7 @@ def create_app(
         )
         if filed is None:
             return False, {"error": "unknown person"}
+        _sync_person_sourcing_title(person_id)
         return True, {
             "person_id": person_id,
             "credits": ENRICH_CREDIT_COST,
@@ -2314,6 +2345,7 @@ def create_app(
                 status_code=409,
             )
         if existing_session_id is not None:
+            _sync_person_sourcing_title(person_id)
             existing = app.state.store.index(existing_session_id)
             if existing is None:
                 return JSONResponse(

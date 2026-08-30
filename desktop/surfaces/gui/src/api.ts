@@ -359,6 +359,7 @@ export type BoardPerson = {
   person_id: string;
   first_name: string | null;
   last_name: string | null;
+  last_name_status?: "known" | "hidden_by_apollo" | "missing";
   title: string | null;
   company: string | null;
   sequence_state: string | null;
@@ -558,6 +559,7 @@ export type ApolloCurationKept = {
   operation: "created" | "updated";
   first_name: string | null;
   last_name: string | null;
+  last_name_status: "known" | "hidden_by_apollo" | "missing";
   title: string | null;
   company: string | null;
   sourcing_chat: { session_id: string } | null;
@@ -779,6 +781,17 @@ export async function curateApolloCandidates(input: {
     ) {
       throw new Error("Apollo curation payload malformed");
     }
+    const rawLastName = nullableText(item.last_name);
+    const lastNameIsMasked = Boolean(rawLastName?.includes("*"));
+    const lastNameStatus = ["known", "hidden_by_apollo", "missing"].includes(
+      String(item.last_name_status),
+    )
+      ? String(item.last_name_status)
+      : lastNameIsMasked
+        ? "hidden_by_apollo"
+        : rawLastName
+          ? "known"
+          : "missing";
     return {
       row_index: item.row_index as number,
       apollo_id: item.apollo_id,
@@ -786,7 +799,8 @@ export async function curateApolloCandidates(input: {
       version: item.version as number,
       operation: item.operation as "created" | "updated",
       first_name: nullableText(item.first_name),
-      last_name: nullableText(item.last_name),
+      last_name: lastNameIsMasked ? null : rawLastName,
+      last_name_status: lastNameStatus as ApolloCurationKept["last_name_status"],
       title: nullableText(item.title),
       company: nullableText(item.company),
       sourcing_chat: chat ? { session_id: chat.session_id as string } : null,
