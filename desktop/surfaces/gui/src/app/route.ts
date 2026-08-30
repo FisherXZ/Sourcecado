@@ -2,7 +2,7 @@ export type AppRoute =
   | { kind: "board" }
   | { kind: "person"; personId: string }
   | { kind: "connections"; connectorId?: string }
-  | { kind: "scheduled" }
+  | { kind: "scheduled"; jobId?: number }
   | { kind: "settings" }
   | { kind: "skills" }
   | { kind: "memory" }
@@ -33,6 +33,14 @@ export function parseHash(hash: string): AppRoute {
     }
   }
   if (hash === "#/scheduled") return { kind: "scheduled" };
+  if (hash.startsWith("#/scheduled/")) {
+    const rawJobId = hash.slice("#/scheduled/".length);
+    const jobId = Number(rawJobId);
+    if (/^\d+$/.test(rawJobId) && Number.isSafeInteger(jobId) && jobId > 0) {
+      return { kind: "scheduled", jobId };
+    }
+    return { kind: "scheduled" };
+  }
   if (hash === "#/settings") return { kind: "settings" };
   if (hash === "#/skills") return { kind: "skills" };
   if (hash === "#/memory") return { kind: "memory" };
