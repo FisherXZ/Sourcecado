@@ -33,6 +33,7 @@ from coworker.evidence_envelope import (
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
 from coworker.permissions import RETRY_SAFE, decide
+from coworker.person_identity import sanitize_apollo_name_masks
 from coworker.provider import (
     ModelUsage,
     ProviderErrorKind,
@@ -70,10 +71,46 @@ from coworker.telemetry import (
 from coworker.tools import evidence_for, execute
 
 INTERRUPTED_TOOL = '{"error": "tool call interrupted"}'
+_APOLLO_TOOLS = frozenset({"apollo_search_people", "apollo_enrich_contact"})
 
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _safe_apollo_json(value: object) -> str:
+    if not isinstance(value, str):
+        return json.dumps(sanitize_apollo_name_masks(value))
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return str(sanitize_apollo_name_masks(value))
+    return json.dumps(sanitize_apollo_name_masks(decoded))
+
+
+def _model_safe_apollo_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Project legacy Apollo transcript records without exposing name masks."""
+    safe = dict(message)
+    calls = message.get("tool_calls")
+    if isinstance(calls, list):
+        safe_calls: list[Any] = []
+        for call in calls:
+            if not isinstance(call, dict):
+                safe_calls.append(call)
+                continue
+            safe_call = dict(call)
+            function = call.get("function")
+            if isinstance(function, dict) and function.get("name") in _APOLLO_TOOLS:
+                safe_function = dict(function)
+                safe_function["arguments"] = _safe_apollo_json(
+                    function.get("arguments") or "{}"
+                )
+                safe_call["function"] = safe_function
+            safe_calls.append(safe_call)
+        safe["tool_calls"] = safe_calls
+    if message.get("role") == "tool" and message.get("name") in _APOLLO_TOOLS:
+        safe["content"] = _safe_apollo_json(message.get("content") or "{}")
+    return safe
 
 
 def _telemetry_provider_name(provider: Any) -> str:
@@ -600,7 +637,11 @@ def _assistant_tool_message(text: str, calls: list[ToolCall]) -> dict[str, Any]:
                 "type": "function",
                 "function": {
                     "name": call.name,
-                    "arguments": json.dumps(call.arguments),
+                    "arguments": json.dumps(
+                        sanitize_apollo_name_masks(call.arguments)
+                        if call.name in _APOLLO_TOOLS
+                        else call.arguments
+                    ),
                 },
             }
             for call in calls
@@ -1066,7 +1107,9 @@ async def run_turn(
             # The canonical view. Compaction reads it and never writes it; the
             # transcript on disk stays the record of what actually happened.
             canonical_messages = [
-                {k: v for k, v in message.items() if k != "message_id"}
+                _model_safe_apollo_message(
+                    {k: v for k, v in message.items() if k != "message_id"}
+                )
                 for message in history
             ]
             step_budget = context_budget(

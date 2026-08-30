@@ -1,4 +1,7 @@
 import asyncio
+import json
+
+import pytest
 
 from coworker.apollo import MATCH_URL, FakeHttp
 from coworker.gmail import FakeGmail
@@ -48,6 +51,63 @@ def _run(*, tmp_path, sid, text, provider, people, gmail=None, drive=None, wait=
     )
 
 
+@pytest.mark.parametrize("masked_last_name", ["L***e", "张***李"])
+def test_restored_apollo_mask_never_reaches_the_next_model_request(
+    tmp_path, masked_last_name
+):
+    store = ConversationStore(tmp_path)
+    store.append("sess-legacy-enrichment", {"role": "user", "content": "Enrich Ada"})
+    store.append(
+        "sess-legacy-enrichment",
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "legacy-enrich",
+                    "type": "function",
+                    "function": {
+                        "name": "apollo_enrich_contact",
+                        "arguments": json.dumps(
+                            {
+                                "firstName": "Ada",
+                                "lastName": masked_last_name,
+                                "organizationName": "Analytic",
+                            }
+                        ),
+                    },
+                }
+            ],
+        },
+    )
+    store.append(
+        "sess-legacy-enrichment",
+        {
+            "role": "tool",
+            "name": "apollo_enrich_contact",
+            "tool_call_id": "legacy-enrich",
+            "content": json.dumps({"error": "Director denied this enrichment."}),
+        },
+    )
+    provider = FakeProvider(deltas=("Understood.",))
+
+    _run(
+        tmp_path=tmp_path,
+        sid="sess-legacy-enrichment",
+        text="Leave the person incomplete",
+        provider=provider,
+        people=PersonStore(tmp_path),
+    )
+
+    restored_call = next(
+        message
+        for message in provider.calls[0]
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    )["tool_calls"][0]
+    restored_arguments = json.loads(restored_call["function"]["arguments"])
+    assert restored_arguments["lastName"] == "(surname hidden by Apollo)"
+
+
 def test_keep_one_person_binds_that_session_only(tmp_path):
     people = PersonStore(tmp_path)
     fake = FakeProvider(
@@ -75,6 +135,86 @@ def test_keep_one_person_binds_that_session_only(tmp_path):
     assert person_id is not None
     assert people.get(person_id)["first_name"] == "Alyssa"
     assert people.person_for_session("sess-b") is None
+
+
+def test_board_read_failure_finishes_partial_and_preserves_other_evidence(
+    tmp_path, monkeypatch
+):
+    people = PersonStore(tmp_path)
+    person = people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="Lovelace",
+        title="Founder",
+        company="Analytic",
+    )
+    people.bind_session("sess-brief", person["person_id"])
+    original_get = people.get
+
+    def fail_board_read(*args, **kwargs):
+        if kwargs.get("expand_sources"):
+            raise RuntimeError("private board storage failure")
+        return original_get(*args, **kwargs)
+
+    monkeypatch.setattr(people, "get", fail_board_read)
+    gmail = FakeGmail()
+    monkeypatch.setattr(
+        gmail,
+        "read",
+        lambda *, message_id: {
+            "id": message_id,
+            "threadId": "thread-1",
+            "from": "ada@analytic.example",
+            "to": "operator@example.com",
+            "subject": "Dinner",
+            "body": "The 21st works.",
+        },
+    )
+    provider = FakeProvider(
+        steps=[
+            {
+                "tool_calls": [
+                    ToolCall(
+                        id="read-mail",
+                        name="gmail_read",
+                        arguments={"message_id": "mail-1"},
+                    ),
+                    ToolCall(id="read-board", name="board_get", arguments={}),
+                ]
+            },
+            {"deltas": ("The brief is partial because Board is unavailable.",)},
+        ]
+    )
+
+    result = _run(
+        tmp_path=tmp_path,
+        sid="sess-brief",
+        text="Give me the living brief and handoff",
+        provider=provider,
+        people=people,
+        gmail=gmail,
+    )
+
+    assert result == {
+        "status": "partial",
+        "text": "The brief is partial because Board is unavailable.",
+    }
+    tool_messages = [
+        message for message in provider.calls[-1] if message.get("role") == "tool"
+    ]
+    assert [message["name"] for message in tool_messages] == ["gmail_read", "board_get"]
+    assert "The 21st works" in str(tool_messages[0])
+    assert '"partial_sources": ["board"]' in str(tool_messages[1])
+    events = ConversationStore(tmp_path).load_events("sess-brief")
+    board_receipt = next(
+        event
+        for event in events
+        if event.get("type") == "tool_finished" and event.get("name") == "board_get"
+    )
+    assert board_receipt["ok"] is False
+    assert board_receipt["result"]["code"] == "board_read_failed"
+    assert events[-1]["type"] == "turn_end"
+    assert events[-1]["state"] == "partial"
 
 
 def test_keep_existing_person_from_another_thread_preserves_chat_and_turn(tmp_path):

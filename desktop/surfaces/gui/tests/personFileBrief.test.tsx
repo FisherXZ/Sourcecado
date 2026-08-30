@@ -37,6 +37,8 @@ describe("the living brief on the person file", () => {
     api.savePersonHandoff.mockResolvedValue({
       person: { person_id: "person one" },
       brief: livingBrief(),
+      saved: true,
+      unchanged: false,
     });
   });
 
@@ -246,6 +248,11 @@ describe("the living brief on the person file", () => {
             generated: false,
             source_refs: [],
             version: 7,
+            saved_at: "2026-08-26T10:00:00+00:00",
+            stale: false,
+            stale_fields: [],
+            truncated_fields: [],
+            freshness_unknown: false,
           },
         }),
       ),
@@ -257,6 +264,87 @@ describe("the living brief on the person file", () => {
     expect(within(section).getByLabelText("What they want")).toHaveValue(
       "A date after the 15th",
     );
+  });
+
+  it("does not invent a version for a legacy saved handoff", async () => {
+    api.getPerson.mockResolvedValue(
+      personFile(
+        livingBrief({
+          handoff: {
+            who: "Alyssa Lee, sourcing lead at Codeology",
+            wanted: "A research-dinner speaker",
+            happened: "No reply yet",
+            they_want: "Unknown",
+            generated: false,
+            source_refs: [],
+            version: null,
+            saved_at: null,
+            stale: false,
+            stale_fields: [],
+            truncated_fields: [],
+            freshness_unknown: true,
+          },
+        }),
+      ),
+    );
+    render(<PersonFileView personId="person one" />);
+
+    const section = await screen.findByRole("region", { name: "Successor handoff" });
+    expect(section).toHaveTextContent(
+      "Saved handoff. Its saved version was not recorded; review every field.",
+    );
+    expect(section).not.toHaveTextContent("Saved at version");
+  });
+
+  it("labels stale saved handoff fields without rewriting them", async () => {
+    api.getPerson.mockResolvedValue(
+      personFile(
+        livingBrief({
+          handoff: {
+            who: "Alyssa Lee, sourcing lead at Codeology",
+            wanted: "A research-dinner speaker",
+            happened: "No reply yet",
+            they_want: "Unknown",
+            generated: false,
+            source_refs: [],
+            version: 7,
+            saved_at: "2026-08-26T10:00:00+00:00",
+            stale: true,
+            stale_fields: ["happened", "they_want"],
+            truncated_fields: [],
+            freshness_unknown: false,
+          },
+        }),
+      ),
+    );
+    render(<PersonFileView personId="person one" />);
+
+    const section = await screen.findByRole("region", { name: "Successor handoff" });
+    expect(section).toHaveTextContent(
+      "Review outdated fields: What happened and What they want.",
+    );
+    expect(within(section).getByLabelText("What happened")).toHaveValue("No reply yet");
+    expect(within(section).getByLabelText("What they want")).toHaveValue("Unknown");
+  });
+
+  it("reports an unchanged handoff without claiming a new version", async () => {
+    api.savePersonHandoff.mockResolvedValueOnce({
+      person: { person_id: "person one" },
+      brief: livingBrief(),
+      saved: false,
+      unchanged: true,
+    });
+    render(<PersonFileView personId="person one" />);
+    const form = within(
+      await screen.findByRole("region", { name: "Successor handoff" }),
+    );
+
+    fireEvent.click(form.getByRole("button", { name: "Save handoff version" }));
+
+    expect(await screen.findByText("No handoff changes to save.")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Saved as a new person-file version."),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps a failed handoff save visible without losing the edit", async () => {

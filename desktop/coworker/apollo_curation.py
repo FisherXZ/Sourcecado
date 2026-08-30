@@ -68,6 +68,7 @@ def curate_apollo_candidates(
                 "operation": "updated" if existing is not None else "created",
                 "first_name": person["first_name"],
                 "last_name": person["last_name"],
+                "last_name_status": person["last_name_status"],
                 "title": person["title"],
                 "company": person["company"],
                 "sourcing_chat": (

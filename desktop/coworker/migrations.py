@@ -40,6 +40,10 @@ from coworker.agent_run_approval import EFFECT_STATEMENTS
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
 from coworker.mcp import SCHEMA_VERSION as MCP_CONFIG_VERSION
 from coworker.people import SCHEMA_VERSION as PEOPLE_DB_VERSION
+from coworker.person_identity import (
+    apollo_surname_is_masked,
+    without_apollo_name_masks,
+)
 from coworker.secrets import SCHEMA_VERSION as SECRETS_VERSION
 from coworker.store import SCHEMA_VERSION as CONVERSATION_DB_VERSION
 from coworker.store import TRANSCRIPT_VERSION
@@ -458,6 +462,12 @@ _PEOPLE_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("people", "deleted_at", "TEXT"),
 )
 
+_PEOPLE_APOLLO_SURNAME_COLUMN = (
+    "people",
+    "apollo_last_name_obfuscated",
+    "TEXT",
+)
+
 _PEOPLE_ADDED_TABLES = {
     "session_people": """
         CREATE TABLE IF NOT EXISTS session_people (
@@ -639,6 +649,107 @@ def _adopt_people_db(context: MigrationContext) -> int:
 
 def _count_people_db(context: MigrationContext) -> int:
     return _sqlite_adoption_count(context, _PEOPLE_ADDED_COLUMNS, _PEOPLE_ADDED_TABLES)
+
+
+def _count_masked_people_names(context: MigrationContext) -> int:
+    conn = context.connection
+    assert conn is not None
+    if "people" not in table_names(conn):
+        return 0
+    touched = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM people WHERE last_name LIKE '%*%'"
+        ).fetchone()[0]
+    )
+    if "apollo_last_name_obfuscated" not in column_names(conn, "people"):
+        touched += 1
+    if "person_versions" in table_names(conn):
+        for row in conn.execute("SELECT person_json FROM person_versions").fetchall():
+            try:
+                person = json.loads(str(row[0]))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(person, dict) and apollo_surname_is_masked(
+                person.get("last_name")
+            ):
+                touched += 1
+    return touched
+
+
+def _separate_masked_people_names(context: MigrationContext) -> int:
+    """Keep Apollo's masked hint without treating it as a person's surname."""
+    conn = context.connection
+    assert conn is not None
+    touched = _count_masked_people_names(context)
+    table, column, definition = _PEOPLE_APOLLO_SURNAME_COLUMN
+    if column not in column_names(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    conn.execute(
+        """
+        UPDATE people SET
+            apollo_last_name_obfuscated = last_name,
+            last_name = NULL
+        WHERE last_name LIKE '%*%'
+        """
+    )
+    handoff_fields = (
+        "handoff_who",
+        "handoff_wanted",
+        "handoff_happened",
+        "handoff_they_want",
+    )
+    available_people_columns = column_names(conn, "people")
+    present_handoff_fields = [
+        field for field in handoff_fields if field in available_people_columns
+    ]
+    if present_handoff_fields:
+        rows = conn.execute(
+            f"SELECT person_id, {', '.join(present_handoff_fields)} FROM people"
+        ).fetchall()
+        for row in rows:
+            updates = {
+                field: without_apollo_name_masks(row[index + 1])
+                for index, field in enumerate(present_handoff_fields)
+                if row[index + 1]
+                and without_apollo_name_masks(row[index + 1]) != row[index + 1]
+            }
+            if not updates:
+                continue
+            assignments = ", ".join(f"{field} = ?" for field in updates)
+            conn.execute(
+                f"UPDATE people SET {assignments} WHERE person_id = ?",
+                (*updates.values(), row[0]),
+            )
+    if "person_versions" in table_names(conn):
+        rows = conn.execute(
+            "SELECT rowid, person_json FROM person_versions"
+        ).fetchall()
+        for rowid, raw_person in rows:
+            try:
+                person = json.loads(str(raw_person))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(person, dict):
+                continue
+            changed = False
+            if apollo_surname_is_masked(person.get("last_name")):
+                person["last_name"] = None
+                person["last_name_status"] = "hidden_by_apollo"
+                changed = True
+            for field in handoff_fields:
+                if not person.get(field):
+                    continue
+                safe = without_apollo_name_masks(person[field])
+                if safe != person[field]:
+                    person[field] = safe
+                    changed = True
+            if not changed:
+                continue
+            conn.execute(
+                "UPDATE person_versions SET person_json = ? WHERE rowid = ?",
+                (json.dumps(person, sort_keys=True), rowid),
+            )
+    return touched
 
 
 # DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
@@ -860,6 +971,18 @@ REGISTRY: tuple[StoreSpec, ...] = (
             "Adopt the person schema shipped before the registry existed.",
             _count_people_db,
             _adopt_people_db,
+        )
+        + (
+            Migration(
+                from_version=1,
+                to_version=2,
+                description=(
+                    "Move Apollo-masked surnames out of canonical person names "
+                    "and make historical person snapshots safe to restore."
+                ),
+                count=_count_masked_people_names,
+                apply=_separate_masked_people_names,
+            ),
         ),
         json_columns=(
             ("events", "payload"),

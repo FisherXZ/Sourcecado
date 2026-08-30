@@ -50,6 +50,13 @@ const HANDOFF_FIELDS = [
   { key: "theyWant", label: "What they want" },
 ] as const;
 
+const STALE_HANDOFF_LABELS: Record<string, string> = {
+  who: "Who this is",
+  wanted: "What we wanted",
+  happened: "What happened",
+  they_want: "What they want",
+};
+
 type HandoffDraft = Record<(typeof HANDOFF_FIELDS)[number]["key"], string>;
 
 /** One brief claim: what it says, how far it holds, and what backs it. */
@@ -306,12 +313,16 @@ export function PersonFileView({ personId }: { personId: string }) {
     setHandoffBusy(true);
     setHandoffStatus(null);
     try {
-      await savePersonHandoff(personId, {
+      const result = await savePersonHandoff(personId, {
         ...handoff,
         expectedVersion: file.brief.person_version,
       });
       setFile(await getPerson(personId));
-      setHandoffStatus("Saved as a new person-file version.");
+      setHandoffStatus(
+        result.saved
+          ? "Saved as a new person-file version."
+          : "No handoff changes to save.",
+      );
     } catch {
       setHandoffStatus(
         "Couldn\u2019t save the handoff. Refresh the person file and try again.",
@@ -357,6 +368,9 @@ export function PersonFileView({ personId }: { personId: string }) {
         <a className="person-back-link" href="#/board">← Board</a>
         <p className="eyebrow">Person file</p>
         <h1>{file.brief.who || "Person"}</h1>
+        {file.person.last_name_status === "hidden_by_apollo" ? (
+          <p>Surname hidden by Apollo. Enrich to verify the full name.</p>
+        ) : null}
         {file.brief.why ? <p>{file.brief.why}</p> : null}
         <div className="person-chat-action">
           <button
@@ -448,8 +462,24 @@ export function PersonFileView({ personId }: { personId: string }) {
         <p>
           {file.brief.handoff.generated
             ? "Drafted from the claims below. Review each field, then save it as a version."
-            : `Saved at version ${file.brief.handoff.version}.`}
+            : file.brief.handoff.freshness_unknown
+              ? "Saved handoff. Its saved version was not recorded; review every field."
+              : `Saved at version ${file.brief.handoff.version}.`}
         </p>
+        {file.brief.handoff.stale ? (
+          <p className="person-attention">
+            Review outdated fields:{" "}
+            {file.brief.handoff.stale_fields
+              .map((key) => STALE_HANDOFF_LABELS[key])
+              .filter((label): label is string => Boolean(label))
+              .map((label, index, labels) =>
+                index === labels.length - 1 && labels.length > 1
+                  ? `and ${label}`
+                  : label,
+              )
+              .join(file.brief.handoff.stale_fields.length > 2 ? ", " : " ")}.
+          </p>
+        ) : null}
         <form className="person-handoff" onSubmit={(event) => void saveHandoff(event)}>
           {HANDOFF_FIELDS.map((field) => (
             <p key={field.key}>
