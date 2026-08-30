@@ -1037,12 +1037,39 @@ export async function getPersona(): Promise<PersonaInfo> {
   return res.json();
 }
 
-export type SkillInfo = { name: string; description: string };
+export type SkillInfo = {
+  name: string;
+  purpose: string;
+  useWhen: string;
+  source: "builtin" | "workspace";
+  status: "ready";
+  instructions: string;
+};
+
+function normalizeSkill(value: unknown): SkillInfo | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  if (!name) return null;
+  return {
+    name,
+    purpose: typeof raw.purpose === "string" ? raw.purpose : "",
+    useWhen: typeof raw.use_when === "string" ? raw.use_when : "",
+    source: raw.source === "builtin" ? "builtin" : "workspace",
+    status: "ready",
+    instructions: typeof raw.instructions === "string" ? raw.instructions : "",
+  };
+}
 
 export async function getSkills(): Promise<{ skills: SkillInfo[] }> {
   const res = await get("/v1/skills");
   if (!res.ok) throw new Error(`skills ${res.status}`);
-  return res.json();
+  const body = await res.json() as { skills?: unknown };
+  return {
+    skills: Array.isArray(body.skills)
+      ? body.skills.map(normalizeSkill).filter((skill): skill is SkillInfo => skill !== null)
+      : [],
+  };
 }
 
 export type MemoryRow = {

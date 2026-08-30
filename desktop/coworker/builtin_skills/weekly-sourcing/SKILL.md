@@ -1,6 +1,7 @@
 ---
 name: weekly-sourcing
-description: Weekly check-in playbook for who to work next and why-now.
+description: Builds a compact shortlist from active Person Files, current sequence state, source-backed why-now evidence, and known knowledge gaps.
+use-when: The director asks for a weekly sourcing check-in, who to work next, or a prioritized why-now review.
 ---
 
 When Fisher asks for a weekly sourcing check-in, produce a prioritized review of
