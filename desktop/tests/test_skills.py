@@ -184,6 +184,8 @@ use-when: Use for path-boundary review.
 - Network note: \\\\private-server\\operator\\notes.md
 - Public reference: https://sourcecado.example/docs/skills
 - Relative reference: docs/skills/catalog.md
+- Dot-relative reference: ./docs/skills/catalog.md
+- Parent-relative reference: ../docs/skills/catalog.md
 """,
         encoding="utf-8",
     )
@@ -197,5 +199,7 @@ use-when: Use for path-boundary review.
         "- Windows note: [REDACTED PATH]\n"
         "- Network note: [REDACTED PATH]\n"
         "- Public reference: https://sourcecado.example/docs/skills\n"
-        "- Relative reference: docs/skills/catalog.md"
+        "- Relative reference: docs/skills/catalog.md\n"
+        "- Dot-relative reference: ./docs/skills/catalog.md\n"
+        "- Parent-relative reference: ../docs/skills/catalog.md"
     )
