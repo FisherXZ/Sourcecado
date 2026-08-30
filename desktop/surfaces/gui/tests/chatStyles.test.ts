@@ -42,6 +42,42 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
+  it("keeps one fixed composer action slot when Send becomes Stop", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-composer\s*\{[^}]*grid-template-areas:\s*"input action"\s*"status status";/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-composer-action\s*\{[^}]*grid-area:\s*action;[^}]*width:\s*44px;[^}]*height:\s*44px;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-composer-running\s*\{[^}]*min-height:\s*17px;[^}]*visibility:\s*hidden;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-composer-running\.is-visible\s*\{[^}]*visibility:\s*visible;/,
+    );
+  });
+
+  it("keeps the empty-thread suggestion understated above the composer", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-composer-zone\s*\{[^}]*width:\s*min\(808px, calc\(100% - 48px\)\);/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-suggestion\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/,
+    );
+  });
+
+  it("keeps the new composer actions usable on narrow and reduced-motion layouts", () => {
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-composer-zone\s*\{[^}]*width:\s*calc\(100% - 32px\);/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-suggestion\s*\{[^}]*min-height:\s*44px;/,
+    );
+    expect(styles).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-suggestion[\s\S]*?\.sourcecado-composer-action\s*\{[^}]*transition:\s*none;/,
+    );
+  });
+
   it("keeps persisted queue rows bounded with touch-sized narrow controls", () => {
     expect(styles).toMatch(
       /\.sourcecado-queue\s*\{[^}]*min-width:\s*0;[^}]*max-width:[^;]+;/,

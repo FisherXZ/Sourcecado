@@ -25,19 +25,29 @@ export function Composer({
         rows={2}
         onChange={(event) => onDraftChange(event.currentTarget.value)}
       />
-      <ComposerPrimitive.Send aria-label="Send message">
-        Send
-      </ComposerPrimitive.Send>
       {running ? (
-        <ComposerPrimitive.Cancel aria-label="Stop run">
-          Stop
+        <ComposerPrimitive.Cancel
+          className="sourcecado-composer-action"
+          aria-label="Stop run"
+        >
+          <span className="sourcecado-stop-icon" aria-hidden="true" />
         </ComposerPrimitive.Cancel>
-      ) : null}
-      {running ? (
-        <p className="sourcecado-composer-running">
-          You can keep drafting while Sourcecado works.
-        </p>
-      ) : null}
+      ) : (
+        <ComposerPrimitive.Send
+          className="sourcecado-composer-action"
+          aria-label="Send message"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path d="M10 15.5v-11M5.5 9 10 4.5 14.5 9" />
+          </svg>
+        </ComposerPrimitive.Send>
+      )}
+      <p
+        className={`sourcecado-composer-running ${running ? "is-visible" : ""}`}
+        aria-hidden={!running}
+      >
+        You can keep drafting while Sourcecado works.
+      </p>
     </ComposerPrimitive.Root>
   );
 }

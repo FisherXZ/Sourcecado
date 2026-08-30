@@ -300,6 +300,10 @@ describe("App shell routing", () => {
     expect(within(nav).getByRole("link", { name: "Scheduled" })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: "Connections" })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: "Skills" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("link", { name: "Inbox" })).toHaveAttribute(
+      "href",
+      "#/quarantine",
+    );
     expect(within(nav).getByRole("link", { name: "Settings" })).toBeInTheDocument();
   });
 

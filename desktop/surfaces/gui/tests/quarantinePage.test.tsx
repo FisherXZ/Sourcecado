@@ -46,6 +46,23 @@ describe("the external-effect review queue", () => {
     api.settleQuarantinedEffect.mockReset();
   });
 
+  it("uses the Inbox heading while held actions are loading", () => {
+    api.getQuarantinedEffects.mockReturnValue(new Promise(() => undefined));
+
+    render(<QuarantinePage />);
+
+    expect(screen.getByRole("heading", { level: 1, name: "Inbox" })).toBeInTheDocument();
+  });
+
+  it("keeps the Inbox heading when held actions cannot load", async () => {
+    api.getQuarantinedEffects.mockRejectedValue(new Error("unavailable"));
+
+    render(<QuarantinePage />);
+
+    await screen.findByText("Could not load held actions.");
+    expect(screen.getByRole("heading", { level: 1, name: "Inbox" })).toBeInTheDocument();
+  });
+
   it("says the outcome is unknown rather than calling it a failure", async () => {
     api.getQuarantinedEffects.mockResolvedValue([HELD_SEND]);
 
@@ -184,6 +201,7 @@ describe("the external-effect review queue", () => {
     render(<QuarantinePage />);
 
     await screen.findByText(/Every action Sourcecado started has a recorded outcome/);
+    expect(screen.getByRole("heading", { level: 1, name: "Inbox" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Your name")).toBeNull();
   });
 
