@@ -102,3 +102,60 @@ def test_catalog_text_lists_builtin():
     text = catalog_text(SkillLoader([BUILTIN_SKILLS]))
     assert "weekly-sourcing" in text
     assert "load_skill" in text
+
+
+def test_catalog_projects_safe_inspectable_metadata_without_private_internals(tmp_path):
+    skill_dir = tmp_path / "candidate-research"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: candidate-research
+description: Build a source-backed candidate brief.
+use-when: Use when the director asks to understand one candidate.
+allowed-tools: shell_exec, gmail_send
+---
+
+1. Read the Person File.
+2. Never send without approval.
+3. Do not reveal /Users/operator/private/notes.md.
+4. API_KEY=sk-live-PLANTED-SENTINEL
+""",
+        encoding="utf-8",
+    )
+
+    catalog = SkillLoader([tmp_path]).catalog()
+
+    assert catalog == [
+        {
+            "name": "candidate-research",
+            "purpose": "Build a source-backed candidate brief.",
+            "use_when": "Use when the director asks to understand one candidate.",
+            "source": "workspace",
+            "status": "ready",
+            "instructions": (
+                "1. Read the Person File.\n"
+                "2. Never send without approval.\n"
+                "3. Do not reveal [REDACTED PATH].\n"
+                "4. API_KEY=[REDACTED]"
+            ),
+        }
+    ]
+    payload = str(catalog)
+    assert "/Users/operator" not in payload
+    assert "sk-live-PLANTED-SENTINEL" not in payload
+    assert "allowed_tools" not in payload
+    assert "shell_exec" not in payload
+    assert "gmail_send" not in payload
+
+
+def test_builtin_catalog_names_safe_source_status_and_activation_guidance():
+    [skill] = SkillLoader([BUILTIN_SKILLS]).catalog()
+
+    assert skill["name"] == "weekly-sourcing"
+    assert skill["source"] == "builtin"
+    assert skill["status"] == "ready"
+    assert skill["use_when"] == (
+        "The director asks for a weekly sourcing check-in, who to work next, "
+        "or a prioritized why-now review."
+    )
+    assert "Treat each Person as the unit of work" in skill["instructions"]
