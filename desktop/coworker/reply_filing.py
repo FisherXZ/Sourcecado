@@ -262,6 +262,13 @@ def classify(message: dict[str, Any], index: OutboundIndex) -> Verdict:
     for address in _addresses_in(
         message.get("to"), message.get("cc"), message.get("delivered_to")
     ):
+        # The connected sending account is expected on an inbound reply. If a
+        # person file happens to use that same address (for example an
+        # operator-controlled test recipient), it is still not another person
+        # on this reply. Treating it as one would copy another person's
+        # reply-attention gap onto the operator's file.
+        if address in index.accounts:
+            continue
         others |= set(index.people_by_address.get(address, frozenset()))
     others.discard(person_id)
     if others:

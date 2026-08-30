@@ -628,7 +628,12 @@ def test_unbound_enrich_fails_closed(tmp_path):
     assert ok is False
     assert "bind" in result["error"].lower() or "person" in result["error"].lower()
     assert people.get_by_apollo_id("ada") is None
-    assert people.list_board() == {"open": [], "in_conversation": [], "done": []}
+    assert people.list_board() == {
+        "backlog": [],
+        "open": [],
+        "in_conversation": [],
+        "done": [],
+    }
     assert http.calls == []
 
 

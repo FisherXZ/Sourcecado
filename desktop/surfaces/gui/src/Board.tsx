@@ -150,8 +150,10 @@ export function BoardView() {
     }
   }
 
+  const backlog = board?.backlog ?? [];
   const empty =
     board !== null &&
+    backlog.length === 0 &&
     board.open.length === 0 &&
     board.in_conversation.length === 0 &&
     board.done.length === 0;
@@ -161,7 +163,7 @@ export function BoardView() {
       <header className="board-page-header">
         <p className="eyebrow">Sourcing workspace</p>
         <h1>Board</h1>
-        <p>Keep active people moving from open research to completed follow-up.</p>
+        <p>Keep sourced people visible from backlog through completed follow-up.</p>
         <div className="board-page-actions">
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
             {checking ? "Checking for replies…" : "Check for replies"}
@@ -186,6 +188,7 @@ export function BoardView() {
       ) : null}
       {board && !empty ? (
         <div className="board-grid">
+          <Bucket id="backlog" title="Backlog" people={backlog} />
           <Bucket id="open" title="Open" people={board.open} />
           <Bucket
             id="conversation"

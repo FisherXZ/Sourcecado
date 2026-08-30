@@ -23,6 +23,7 @@ _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SCHEMA_VERSION = 2
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
+BOARD_LANES = ("backlog", *SEQUENCE_STATES)
 ACTORS = ("director", "assistant")
 ATTACHMENT_TYPES = frozenset({"artifact", "knowledge_gap", "source_ref"})
 PERSON_PATCH_FIELDS = frozenset(
@@ -638,9 +639,9 @@ class PersonStore:
         """File the durable receipt for one approved send, then open the person.
 
         Keyed on the Gmail message id, so re-filing the same message can never
-        produce a second receipt. Advancing to Open only happens when the person
-        is not already on the board; an in-conversation or done person is left
-        where the director put them.
+        produce a second receipt. Advancing to Open happens when the person is
+        not already in one of the three valid sequence states; an open,
+        in-conversation, or done person is left where the director put them.
         """
         if not message_id.strip():
             raise ValueError("message_id is required")
@@ -692,7 +693,7 @@ class PersonStore:
                     (person_id, external_key),
                 ).fetchone()
             )
-            needs_open = not str(row["sequence_state"] or "").strip()
+            needs_open = row["sequence_state"] not in SEQUENCE_STATES
         person = (
             self.set_sequence(
                 person_id,
@@ -1063,14 +1064,12 @@ class PersonStore:
         return person
 
     def list_board(self) -> dict[str, list[dict[str, Any]]]:
-        board: dict[str, list[dict[str, Any]]] = {
-            state: [] for state in SEQUENCE_STATES
-        }
+        board: dict[str, list[dict[str, Any]]] = {lane: [] for lane in BOARD_LANES}
         with self._lock:
             rows = self._conn.execute(
                 """
                 SELECT * FROM people
-                WHERE sequence_state IS NOT NULL AND deleted_at IS NULL
+                WHERE deleted_at IS NULL
                 ORDER BY updated_at DESC, person_id
                 """
             ).fetchall()
@@ -1078,7 +1077,13 @@ class PersonStore:
             person = self._person_dict(row)
             assert person is not None
             person.update(self.mail_state(person["person_id"]))
-            board[person["sequence_state"]].append(person)
+            lane = (
+                person["sequence_state"]
+                if person["sequence_state"] in SEQUENCE_STATES
+                else "backlog"
+            )
+            person["board_lane"] = lane
+            board[lane].append(person)
         return board
 
     def list_people(self) -> list[dict[str, Any]]:
@@ -1366,7 +1371,7 @@ class PersonStore:
         people = (
             board[sequence]
             if sequence is not None
-            else [person for state in SEQUENCE_STATES for person in board[state]]
+            else [person for lane in BOARD_LANES for person in board[lane]]
         )
         matched = []
         for person in people:

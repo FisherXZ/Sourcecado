@@ -8,12 +8,10 @@ The current product is the Python sidecar and React/Tauri desktop app in `deskto
 
 ## Current product
 
-- Chat is home: the sourcing director gives Sourcecado a target and works with the assistant in a thread.
-- Apollo supplies candidate people; enrichment is deliberate because it spends credits.
-- Gmail, Drive, Calendar, Granola, and web research add context to a person file.
-- The board tracks people through Open, In conversation, and Done.
-- Sending requires a human approval in Sourcecado. There is no auto-send or background bulk enrichment.
-- State and credentials remain local for the current one-operator build.
+- Chat
+- People enrichment: Apollo supplies name, email, phone ; enrichment is deliberate because it spends credits.
+- Connectors: Gmail, Drive, Calendar, Granola, and web research add context
+- CRM board: Backlog, Open, In conversation, and Done.
 
 The current product specification is [Sourcecado as the sourcing director's assistant](docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md).
 

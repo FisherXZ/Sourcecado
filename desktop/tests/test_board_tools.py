@@ -52,7 +52,12 @@ def test_board_upsert_does_not_create_a_person_or_fill_open(tmp_path):
         people=store,
     )
     assert ok is False
-    assert store.list_board() == {"open": [], "in_conversation": [], "done": []}
+    assert store.list_board() == {
+        "backlog": [],
+        "open": [],
+        "in_conversation": [],
+        "done": [],
+    }
 
 
 def test_keeping_then_patching_puts_ada_on_the_person_board(tmp_path):
@@ -430,7 +435,12 @@ def test_delete_hides_the_person_from_the_board_and_keeps_a_receipt(tmp_path):
     )
     assert deleted["deleted"] is True
     assert store.get(ada["person_id"]) is None
-    assert store.list_board() == {"open": [], "in_conversation": [], "done": []}
+    assert store.list_board() == {
+        "backlog": [],
+        "open": [],
+        "in_conversation": [],
+        "done": [],
+    }
     assert store.timeline(ada["person_id"])[-1]["kind"] == "delete"
 
 
