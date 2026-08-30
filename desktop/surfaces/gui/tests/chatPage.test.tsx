@@ -810,9 +810,15 @@ describe("ChatPage Warm Operator thread", () => {
     const composerRoot = idleAction.closest(".sourcecado-composer");
     expect(idleAction).toHaveClass("sourcecado-composer-action");
     expect(composerRoot?.querySelectorAll(".sourcecado-composer-action")).toHaveLength(1);
+    const runningNote = screen.getByText(
+      "You can keep drafting while Sourcecado works.",
+    );
+    expect(runningNote).toHaveAttribute("aria-hidden", "true");
+    expect(runningNote.closest(".sourcecado-composer")).toBeNull();
+    expect(runningNote.parentElement).toHaveClass("sourcecado-composer-zone");
     expect(
-      screen.getByText("You can keep drafting while Sourcecado works."),
-    ).toHaveAttribute("aria-hidden", "true");
+      idleAction.querySelector(".sourcecado-composer-action-visual"),
+    ).toBeInTheDocument();
     fireEvent.change(composer, { target: { value: "Keep this next prompt" } });
     act(() => {
       onChatEvent?.({
@@ -831,9 +837,10 @@ describe("ChatPage Warm Operator thread", () => {
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
     expect(stop).toHaveClass("sourcecado-composer-action");
     expect(composerRoot?.querySelectorAll(".sourcecado-composer-action")).toHaveLength(1);
+    expect(runningNote).toHaveAttribute("aria-hidden", "false");
     expect(
-      screen.getByText("You can keep drafting while Sourcecado works."),
-    ).toHaveAttribute("aria-hidden", "false");
+      stop.querySelector(".sourcecado-composer-action-visual .sourcecado-stop-icon"),
+    ).toBeInTheDocument();
     fireEvent.click(stop);
     expect(chatCancel).toHaveBeenCalledWith("thread-alpha", "run-cancel-me");
     expect(composer).not.toBeDisabled();
