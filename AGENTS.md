@@ -13,6 +13,7 @@ The active runtime is `desktop/`. The previous hosted Next.js/Postgres applicati
 - Build the local Sourcecado desktop product: Python/FastAPI sidecar plus React/Vite/Tauri UI.
 - Optimize for one sourcing director now while keeping person files intelligible to a later officer.
 - A sequence is a person being worked through Open, In conversation, and Done. A company is context, not a deal.
+- A kept person appears in the Board's Backlog before outreach. Backlog is a Board lane, not a sequence state.
 - Apollo search may return candidates without an email. Enrichment is manual and credit-aware.
 - Sending is allowed only after explicit review and approval in Sourcecado. Never add auto-send.
 - Keep Gmail, Drive, Calendar, Granola, Apollo, and web work attached to the relevant person and run ledger.

@@ -257,6 +257,13 @@ def test_single_candidate_api_binds_original_chat_to_that_person(tmp_path):
     }
     assert kept["sourcing_chat"] == {"session_id": session_id}
     assert app.state.people.person_for_session(session_id) == kept["person_id"]
+    board = TestClient(app).get(
+        "/v1/board",
+        headers={TOKEN_HEADER: TOKEN},
+    ).json()
+    assert [row["person_id"] for row in board["backlog"]] == [kept["person_id"]]
+    assert board["backlog"][0]["sequence_state"] is None
+    assert board["backlog"][0]["board_lane"] == "backlog"
 
 
 def test_retrying_only_failed_multi_rows_never_rebinds_or_updates_successes(tmp_path):

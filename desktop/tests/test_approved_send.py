@@ -391,6 +391,30 @@ def test_a_send_leaves_an_already_placed_person_where_the_director_put_them(tmp_
     assert app.state.people.get(person_id)["sequence_state"] == "in_conversation"
 
 
+def test_a_send_moves_an_unknown_legacy_state_out_of_backlog(tmp_path):
+    gmail = _gmail()
+    app = _app(tmp_path, gmail)
+    client = TestClient(app)
+    person_id, session_id = _bound_person(app)
+    app.state.people._conn.execute(
+        "UPDATE people SET sequence_state = 'kept' WHERE person_id = ?",
+        (person_id,),
+    )
+    app.state.people._conn.commit()
+    draft = _draft(client, person_id, session_id)
+    item_id = _park(client, person_id, session_id, draft)
+
+    res = _decide(client, item_id)
+
+    assert res.json()["ok"] is True
+    assert res.json()["result"]["advanced_to_open"] is True
+    assert app.state.people.get(person_id)["sequence_state"] == "open"
+    assert [row["person_id"] for row in app.state.people.list_board()["open"]] == [
+        person_id
+    ]
+    assert app.state.people.list_board()["backlog"] == []
+
+
 # --------------------------------------------------------------------------
 # Criterion 6 — deny, cancel, expiry, stale draft, failed submission
 # --------------------------------------------------------------------------
