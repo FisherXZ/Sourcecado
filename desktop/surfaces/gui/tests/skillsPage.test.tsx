@@ -14,7 +14,7 @@ vi.mock("../src/api", () => ({
 const skills = [
   {
     name: "weekly-sourcing",
-    purpose: "Build a compact shortlist from active Person Files and why-now evidence.",
+    purpose: "Builds a compact shortlist from active Person Files, current sequence state, source-backed why-now evidence, and known knowledge gaps.",
     useWhen: "The director asks who to work next or requests a weekly sourcing check-in.",
     source: "builtin" as const,
     status: "ready" as const,
@@ -54,8 +54,14 @@ describe("SkillsPage", () => {
     expect(await screen.findByRole("searchbox", { name: "Search skills" })).toBeInTheDocument();
     expect(screen.getByText("Available · 2")).toBeInTheDocument();
     const catalog = screen.getByRole("list", { name: "Available skills" });
-    expect(within(catalog).getByRole("button", { name: /Weekly sourcing/ })).toHaveAttribute("aria-pressed", "true");
-    expect(within(catalog).getByRole("button", { name: /Outreach brief/ })).toHaveAttribute("aria-pressed", "false");
+    const weeklyRow = within(catalog).getByRole("button", { name: /Weekly sourcing/ });
+    const outreachRow = within(catalog).getByRole("button", { name: /Outreach brief/ });
+    expect(weeklyRow).toHaveAttribute("aria-pressed", "true");
+    expect(within(weeklyRow).getByText("Ready")).toBeInTheDocument();
+    expect(within(weeklyRow).getByText("Built in")).toBeInTheDocument();
+    expect(outreachRow).toHaveAttribute("aria-pressed", "false");
+    expect(within(outreachRow).getByText("Ready")).toBeInTheDocument();
+    expect(within(outreachRow).getByText("Workspace")).toBeInTheDocument();
 
     const detail = screen.getByRole("region", { name: "Weekly sourcing" });
     expect(within(detail).getByText("Ready")).toBeInTheDocument();

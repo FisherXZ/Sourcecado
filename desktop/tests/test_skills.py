@@ -152,6 +152,10 @@ def test_builtin_catalog_names_safe_source_status_and_activation_guidance():
     [skill] = SkillLoader([BUILTIN_SKILLS]).catalog()
 
     assert skill["name"] == "weekly-sourcing"
+    assert skill["purpose"] == (
+        "Builds a compact shortlist from active Person Files, current sequence "
+        "state, source-backed why-now evidence, and known knowledge gaps."
+    )
     assert skill["source"] == "builtin"
     assert skill["status"] == "ready"
     assert skill["use_when"] == (
@@ -159,3 +163,39 @@ def test_builtin_catalog_names_safe_source_status_and_activation_guidance():
         "or a prioritized why-now review."
     )
     assert "Treat each Person as the unit of work" in skill["instructions"]
+
+
+def test_catalog_redacts_absolute_filesystem_paths_without_hiding_public_or_relative_references(
+    tmp_path,
+):
+    skill_dir = tmp_path / "path-boundary"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: path-boundary
+description: Explain safe source references.
+use-when: Use for path-boundary review.
+---
+
+- Temporary note: /tmp/sourcecado-review/private-note.txt
+- System note: /opt/sourcecado/private/config.json
+- Home shorthand: ~/private/context.md
+- Windows note: C:\\Users\\operator\\private\\notes.md
+- Network note: \\\\private-server\\operator\\notes.md
+- Public reference: https://sourcecado.example/docs/skills
+- Relative reference: docs/skills/catalog.md
+""",
+        encoding="utf-8",
+    )
+
+    [skill] = SkillLoader([tmp_path]).catalog()
+
+    assert skill["instructions"] == (
+        "- Temporary note: [REDACTED PATH]\n"
+        "- System note: [REDACTED PATH]\n"
+        "- Home shorthand: [REDACTED PATH]\n"
+        "- Windows note: [REDACTED PATH]\n"
+        "- Network note: [REDACTED PATH]\n"
+        "- Public reference: https://sourcecado.example/docs/skills\n"
+        "- Relative reference: docs/skills/catalog.md"
+    )

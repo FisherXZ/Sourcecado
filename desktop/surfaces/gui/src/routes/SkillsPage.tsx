@@ -18,6 +18,10 @@ function sourceLabel(source: SkillInfo["source"]): string {
   return source === "builtin" ? "Built into Sourcecado" : "Workspace";
 }
 
+function rowSourceLabel(source: SkillInfo["source"]): string {
+  return source === "builtin" ? "Built in" : "Workspace";
+}
+
 function SkillsLoading() {
   return (
     <section className="skills-layout skills-loading" role="status" aria-label="Loading skills">
@@ -137,7 +141,14 @@ function SkillsCatalog({ skills }: { skills: SkillInfo[] }) {
                     <span className="skill-icon" aria-hidden="true">⚡</span>
                     <span className="skill-row-copy">
                       <strong>{title}</strong>
-                      <span>{skill.purpose}</span>
+                      <span className="skill-row-subline">
+                        <span className="skill-row-purpose">{skill.purpose}</span>
+                        <span className="skill-row-context">
+                          <span className="skill-row-ready">Ready</span>
+                          <span className="skill-row-separator" aria-hidden="true">·</span>
+                          <span>{rowSourceLabel(skill.source)}</span>
+                        </span>
+                      </span>
                     </span>
                     <span className="skill-chevron" aria-hidden="true">›</span>
                   </button>

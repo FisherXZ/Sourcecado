@@ -5,7 +5,7 @@ import { styles } from "./cssBundle";
 describe("Skills and Settings route styles", () => {
   it("uses a compact two-pane skills catalog that stacks for narrow screens", () => {
     expect(styles).toMatch(
-      /\.skills-layout\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(260px,\s*340px\)\s+minmax\(0,\s*1fr\);/,
+      /\.skills-layout\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(300px,\s*360px\)\s+minmax\(0,\s*1fr\);[^}]*min-height:\s*610px;/,
     );
     expect(styles).toMatch(
       /@media \(max-width: 767px\)[\s\S]*?\.skills-layout\s*\{[^}]*grid-template-columns:\s*1fr;/,
@@ -13,13 +13,17 @@ describe("Skills and Settings route styles", () => {
   });
 
   it("keeps skill rows touch sized and disabled management visibly inert", () => {
-    expect(styles).toMatch(/\.skill-row\s*\{[^}]*min-height:\s*58px;/);
+    expect(styles).toMatch(/\.skill-row\s*\{[^}]*min-height:\s*65px;/);
     expect(styles).toMatch(
       /\.skill-management button:disabled\s*\{[^}]*cursor:\s*not-allowed;[^}]*opacity:/,
     );
     expect(styles).toMatch(
       /@media \(max-width: 767px\)[\s\S]*?\.skill-row\s*\{[^}]*min-height:\s*60px;/,
     );
+  });
+
+  it("keeps the approved Skills title hierarchy", () => {
+    expect(styles).toMatch(/\.skills-page-header h1\s*\{[^}]*font-size:\s*32px;/);
   });
 
   it("disables skill skeleton animation when reduced motion is requested", () => {

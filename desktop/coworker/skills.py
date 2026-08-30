@@ -10,9 +10,14 @@ from coworker.agent_runs import redact_secrets
 
 
 BUILTIN_SKILLS = Path(__file__).resolve().parent / "builtin_skills"
+# Public URLs and relative references are useful in instructions. Absolute
+# file URIs, POSIX paths, home shorthand, drive paths, and UNC paths are not.
 _PRIVATE_PATH = re.compile(
-    r"(?:file://)?/(?:Users|home|private|var/folders)/[^\s\])}>\"']+"
-    r"|[A-Za-z]:\\Users\\[^\s\])}>\"']+",
+    r"\bfile://(?:localhost)?/[^\s`<>\"'\[\](){}]+"
+    r"|(?<![A-Za-z0-9_])\\\\[^\s`<>\"'\[\](){}]+"
+    r"|(?<![A-Za-z0-9_])[A-Za-z]:[\\/][^\s`<>\"'\[\](){}]+"
+    r"|(?<![A-Za-z0-9_])~[\\/][^\s`<>\"'\[\](){}]+"
+    r"|(?<![:/A-Za-z0-9_])/(?!/)[^\s`<>\"'\[\](){}]+",
     re.IGNORECASE,
 )
 
