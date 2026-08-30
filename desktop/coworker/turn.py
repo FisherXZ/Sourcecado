@@ -33,6 +33,7 @@ from coworker.evidence_envelope import (
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
 from coworker.permissions import RETRY_SAFE, decide
+from coworker.person_identity import sanitize_apollo_name_masks
 from coworker.provider import (
     ModelUsage,
     ProviderErrorKind,
@@ -70,10 +71,46 @@ from coworker.telemetry import (
 from coworker.tools import evidence_for, execute
 
 INTERRUPTED_TOOL = '{"error": "tool call interrupted"}'
+_APOLLO_TOOLS = frozenset({"apollo_search_people", "apollo_enrich_contact"})
 
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _safe_apollo_json(value: object) -> str:
+    if not isinstance(value, str):
+        return json.dumps(sanitize_apollo_name_masks(value))
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return str(sanitize_apollo_name_masks(value))
+    return json.dumps(sanitize_apollo_name_masks(decoded))
+
+
+def _model_safe_apollo_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Project legacy Apollo transcript records without exposing name masks."""
+    safe = dict(message)
+    calls = message.get("tool_calls")
+    if isinstance(calls, list):
+        safe_calls: list[Any] = []
+        for call in calls:
+            if not isinstance(call, dict):
+                safe_calls.append(call)
+                continue
+            safe_call = dict(call)
+            function = call.get("function")
+            if isinstance(function, dict) and function.get("name") in _APOLLO_TOOLS:
+                safe_function = dict(function)
+                safe_function["arguments"] = _safe_apollo_json(
+                    function.get("arguments") or "{}"
+                )
+                safe_call["function"] = safe_function
+            safe_calls.append(safe_call)
+        safe["tool_calls"] = safe_calls
+    if message.get("role") == "tool" and message.get("name") in _APOLLO_TOOLS:
+        safe["content"] = _safe_apollo_json(message.get("content") or "{}")
+    return safe
 
 
 def _telemetry_provider_name(provider: Any) -> str:
@@ -176,6 +213,18 @@ def _telemetry_provider_error_kind(error: Exception) -> ErrorKind:
     if isinstance(error, ConnectionError):
         return ErrorKind.CONNECTION
     return ErrorKind.PROVIDER
+
+
+def _provider_failure_code(error: BaseException) -> str:
+    if isinstance(error, ProviderStreamError):
+        return str(error.error_kind.value)
+    if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+        return "timeout"
+    if isinstance(error, ConnectionError):
+        return "connection"
+    if isinstance(error, (RuntimeError, ValueError)):
+        return "provider_runtime_error"
+    return "provider_failure"
 
 
 _TOOL_SOURCES: dict[str, tuple[str | None, str]] = {
@@ -588,7 +637,11 @@ def _assistant_tool_message(text: str, calls: list[ToolCall]) -> dict[str, Any]:
                 "type": "function",
                 "function": {
                     "name": call.name,
-                    "arguments": json.dumps(call.arguments),
+                    "arguments": json.dumps(
+                        sanitize_apollo_name_masks(call.arguments)
+                        if call.name in _APOLLO_TOOLS
+                        else call.arguments
+                    ),
                 },
             }
             for call in calls
@@ -826,6 +879,37 @@ async def run_turn(
             return
         run_context.finish(state, status=state, text=text_so_far)
 
+    def _record_model_failure(
+        error: BaseException,
+        directive: Any,
+        summary: str,
+    ) -> dict[str, Any]:
+        failure = {
+            "code": _provider_failure_code(error),
+            "provider": _telemetry_provider_name(directive.provider),
+            "model": str(
+                getattr(directive.provider, "model_id", "unknown") or "unknown"
+            ),
+            "attempts": directive.attempt_number,
+            "recovery_count": retry_count,
+            "exhausted": bool(directive.exhausted),
+        }
+        if run_context is not None:
+            run_context.note(
+                "model_failed",
+                state="running",
+                payload={
+                    "step": model_step,
+                    "attempt_id": f"model-{events.identity.run_id}-{model_step}",
+                    "provider": failure["provider"],
+                    "model_id": failure["model"],
+                    "status": "failed",
+                    "error_class": failure["code"],
+                    "error_summary": summary,
+                },
+            )
+        return failure
+
     async def _terminal(event: dict[str, Any]) -> None:
         _end_run(
             str(event.get("state") or "failed"), str(event.get("text") or "")
@@ -958,6 +1042,7 @@ async def run_turn(
     had_tool_failure = False
     turn_error_kind = ErrorKind.INTERNAL
     turn_error_message: str | None = None
+    provider_failure: dict[str, Any] | None = None
     history: list[dict[str, Any]] = []
     try:
         raw = store.load(sid)
@@ -1022,7 +1107,9 @@ async def run_turn(
             # The canonical view. Compaction reads it and never writes it; the
             # transcript on disk stays the record of what actually happened.
             canonical_messages = [
-                {k: v for k, v in message.items() if k != "message_id"}
+                _model_safe_apollo_message(
+                    {k: v for k, v in message.items() if k != "message_id"}
+                )
                 for message in history
             ]
             step_budget = context_budget(
@@ -1224,11 +1311,17 @@ async def run_turn(
                             exc,
                             review_required=True,
                         )
+                        provider_failure = _record_model_failure(
+                            exc, directive, turn_error_message
+                        )
                         raise RuntimeError(
                             turn_error_message
                         ) from exc
                     turn_error_kind = error_kind
                     turn_error_message = safe_provider_failure_message(exc)
+                    provider_failure = _record_model_failure(
+                        exc, directive, turn_error_message
+                    )
                     raise
                 _ensure_provider_span().finish(
                     stop_reason=_telemetry_stop_reason(
@@ -1716,6 +1809,7 @@ async def run_turn(
                 "state": "failed",
                 "error_kind": turn_error_kind.value,
                 "message": turn_error_message or str(exc),
+                **({"failure": provider_failure} if provider_failure else {}),
             }
         )
         return {"status": "error", "text": last_text}

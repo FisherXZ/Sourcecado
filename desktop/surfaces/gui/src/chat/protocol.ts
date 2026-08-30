@@ -33,6 +33,15 @@ export type ToolFailure = {
   readonly state: "failed";
 };
 
+export type ProviderFailure = {
+  readonly code: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly attempts: number;
+  readonly recovery_count: number;
+  readonly exhausted: boolean;
+};
+
 /** Sanitized fields needed to judge an approval; raw bodies/env never cross. */
 export type ApprovalResource =
   | {
@@ -169,6 +178,7 @@ export type ProtocolChatEvent = ChatEventEnvelope &
          * retrying is worth it. Optional: an older sidecar omits it.
          */
         readonly error_kind?: string;
+        readonly failure?: ProviderFailure;
       }
     /**
      * A consequential call was dispatched and never reported back.
@@ -206,6 +216,33 @@ export type CompactionNotice = {
   readonly measurement: string | null;
   readonly rejected_summaries: number;
 };
+
+function providerFailure(value: unknown): ProviderFailure | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    typeof value.code !== "string" ||
+    !value.code ||
+    typeof value.provider !== "string" ||
+    !value.provider ||
+    typeof value.model !== "string" ||
+    !value.model ||
+    typeof value.attempts !== "number" ||
+    value.attempts < 1 ||
+    typeof value.recovery_count !== "number" ||
+    value.recovery_count < 0 ||
+    typeof value.exhausted !== "boolean"
+  ) {
+    return undefined;
+  }
+  return {
+    code: value.code,
+    provider: value.provider,
+    model: value.model,
+    attempts: value.attempts,
+    recovery_count: value.recovery_count,
+    exhausted: value.exhausted,
+  };
+}
 
 function countOf(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -771,6 +808,13 @@ export function parseChatEvent(value: unknown): ChatEvent {
           delay_ms: value.delay_ms as number,
           message: value.message as string,
         };
+      }
+      if (value.type === "error" && value.state === "failed") {
+        const sanitized: Record<string, unknown> = { ...value };
+        delete sanitized.failure;
+        const failure = providerFailure(value.failure);
+        if (failure) sanitized.failure = failure;
+        return sanitized as ProtocolChatEvent;
       }
       if (
         (value.type === "turn_end" || value.type === "tool_started") &&

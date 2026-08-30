@@ -12,12 +12,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from coworker.person_identity import (
+    apollo_surname_is_masked,
+    without_apollo_name_masks,
+)
+
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
+BOARD_LANES = ("backlog", *SEQUENCE_STATES)
 ACTORS = ("director", "assistant")
 ATTACHMENT_TYPES = frozenset({"artifact", "knowledge_gap", "source_ref"})
 PERSON_PATCH_FIELDS = frozenset(
@@ -73,6 +79,7 @@ class PersonStore:
                 apollo_id TEXT UNIQUE,
                 first_name TEXT,
                 last_name TEXT,
+                apollo_last_name_obfuscated TEXT,
                 title TEXT,
                 company TEXT,
                 email TEXT,
@@ -150,6 +157,18 @@ class PersonStore:
             self._conn.execute("ALTER TABLE people ADD COLUMN outcome TEXT")
         if "deleted_at" not in columns:
             self._conn.execute("ALTER TABLE people ADD COLUMN deleted_at TEXT")
+        if "apollo_last_name_obfuscated" not in columns:
+            self._conn.execute(
+                "ALTER TABLE people ADD COLUMN apollo_last_name_obfuscated TEXT"
+            )
+        self._conn.execute(
+            """
+            UPDATE people SET
+                apollo_last_name_obfuscated = last_name,
+                last_name = NULL
+            WHERE last_name LIKE '%*%'
+            """
+        )
         event_columns = {
             str(row["name"])
             for row in self._conn.execute("PRAGMA table_info(events)").fetchall()
@@ -173,6 +192,22 @@ class PersonStore:
         if row is None:
             return None
         person = dict(row)
+        apollo_hidden = person.pop("apollo_last_name_obfuscated", None)
+        for field in (
+            "handoff_who",
+            "handoff_wanted",
+            "handoff_happened",
+            "handoff_they_want",
+        ):
+            if person.get(field):
+                person[field] = without_apollo_name_masks(person[field])
+        person["last_name_status"] = (
+            "known"
+            if _clean(person.get("last_name"))
+            else "hidden_by_apollo"
+            if _clean(apollo_hidden)
+            else "missing"
+        )
         person["version"] = int(person.get("version") or 1)
         person["restricted"] = False
         return person
@@ -320,6 +355,16 @@ class PersonStore:
         apollo = _clean(apollo_id)
         first_name = _clean(first_name)
         last_name_obfuscated = _clean(last_name_obfuscated)
+        incoming_last_name = (
+            None
+            if apollo_surname_is_masked(last_name_obfuscated)
+            else last_name_obfuscated
+        )
+        incoming_hidden_last_name = (
+            last_name_obfuscated
+            if apollo_surname_is_masked(last_name_obfuscated)
+            else None
+        )
         title = _clean(title)
         company = _clean(company)
         cleaned_target = _clean(target)
@@ -333,22 +378,34 @@ class PersonStore:
             if existing is not None:
                 restoring = bool(existing["deleted_at"])
                 now = self._now()
+                stored_last_name = _clean(existing["last_name"])
+                stored_hidden_last_name = _clean(
+                    existing["apollo_last_name_obfuscated"]
+                )
+                next_last_name = incoming_last_name or stored_last_name
+                next_hidden_last_name = (
+                    None
+                    if incoming_last_name
+                    else incoming_hidden_last_name or stored_hidden_last_name
+                )
                 changed = restoring or any(
                     incoming is not None and incoming != existing[field]
                     for incoming, field in (
                         (first_name, "first_name"),
-                        (last_name_obfuscated, "last_name"),
                         (title, "title"),
                         (company, "company"),
                         (cleaned_target, "target"),
                     )
+                ) or next_last_name != stored_last_name or (
+                    next_hidden_last_name != stored_hidden_last_name
                 )
                 next_version = int(existing["version"] or 1) + int(changed)
                 self._conn.execute(
                     """
                     UPDATE people SET
                         first_name = COALESCE(?, first_name),
-                        last_name = COALESCE(?, last_name),
+                        last_name = ?,
+                        apollo_last_name_obfuscated = ?,
                         title = COALESCE(?, title),
                         company = COALESCE(?, company),
                         target = COALESCE(?, target),
@@ -359,7 +416,8 @@ class PersonStore:
                     """,
                     (
                         first_name,
-                        last_name_obfuscated,
+                        next_last_name,
+                        next_hidden_last_name,
                         title,
                         company,
                         cleaned_target,
@@ -389,14 +447,16 @@ class PersonStore:
                 self._conn.execute(
                     """
                     INSERT INTO people (
-                        person_id, apollo_id, first_name, last_name, title, company, target
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        person_id, apollo_id, first_name, last_name,
+                        apollo_last_name_obfuscated, title, company, target
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         pid,
                         apollo,
                         first_name,
-                        last_name_obfuscated,
+                        incoming_last_name,
+                        incoming_hidden_last_name,
                         title,
                         company,
                         cleaned_target,
@@ -440,6 +500,8 @@ class PersonStore:
             parts = str(name).split(None, 1)
             first_name = parts[0]
             last_name = parts[1] if len(parts) > 1 else None
+            if apollo_surname_is_masked(last_name):
+                last_name = None
         with self._lock:
             exists = self._conn.execute(
                 "SELECT 1 FROM people WHERE person_id = ?",
@@ -577,9 +639,9 @@ class PersonStore:
         """File the durable receipt for one approved send, then open the person.
 
         Keyed on the Gmail message id, so re-filing the same message can never
-        produce a second receipt. Advancing to Open only happens when the person
-        is not already on the board; an in-conversation or done person is left
-        where the director put them.
+        produce a second receipt. Advancing to Open happens when the person is
+        not already in one of the three valid sequence states; an open,
+        in-conversation, or done person is left where the director put them.
         """
         if not message_id.strip():
             raise ValueError("message_id is required")
@@ -631,7 +693,7 @@ class PersonStore:
                     (person_id, external_key),
                 ).fetchone()
             )
-            needs_open = not str(row["sequence_state"] or "").strip()
+            needs_open = row["sequence_state"] not in SEQUENCE_STATES
         person = (
             self.set_sequence(
                 person_id,
@@ -1002,14 +1064,12 @@ class PersonStore:
         return person
 
     def list_board(self) -> dict[str, list[dict[str, Any]]]:
-        board: dict[str, list[dict[str, Any]]] = {
-            state: [] for state in SEQUENCE_STATES
-        }
+        board: dict[str, list[dict[str, Any]]] = {lane: [] for lane in BOARD_LANES}
         with self._lock:
             rows = self._conn.execute(
                 """
                 SELECT * FROM people
-                WHERE sequence_state IS NOT NULL AND deleted_at IS NULL
+                WHERE deleted_at IS NULL
                 ORDER BY updated_at DESC, person_id
                 """
             ).fetchall()
@@ -1017,7 +1077,13 @@ class PersonStore:
             person = self._person_dict(row)
             assert person is not None
             person.update(self.mail_state(person["person_id"]))
-            board[person["sequence_state"]].append(person)
+            lane = (
+                person["sequence_state"]
+                if person["sequence_state"] in SEQUENCE_STATES
+                else "backlog"
+            )
+            person["board_lane"] = lane
+            board[lane].append(person)
         return board
 
     def list_people(self) -> list[dict[str, Any]]:
@@ -1305,7 +1371,7 @@ class PersonStore:
         people = (
             board[sequence]
             if sequence is not None
-            else [person for state in SEQUENCE_STATES for person in board[state]]
+            else [person for lane in BOARD_LANES for person in board[lane]]
         )
         matched = []
         for person in people:
@@ -1332,6 +1398,17 @@ class PersonStore:
         unknown = set(fields) - PERSON_PATCH_FIELDS
         if unknown:
             raise ValueError(f"unsupported person fields {sorted(unknown)}")
+        if apollo_surname_is_masked(fields.get("last_name")):
+            raise ValueError("an obfuscated Apollo surname cannot be canonical")
+        fields = dict(fields)
+        for field in (
+            "handoff_who",
+            "handoff_wanted",
+            "handoff_happened",
+            "handoff_they_want",
+        ):
+            if fields.get(field):
+                fields[field] = without_apollo_name_masks(fields[field])
         self._require_audit(actor, rationale_summary)
         with self._lock:
             row = self._load_person_row(person_id)
@@ -1540,13 +1617,20 @@ class PersonStore:
             if snapshot is None:
                 raise ValueError(f"unknown record version {to_version}")
             target = json.loads(str(snapshot["person_json"]))
+            target_last_name = target.get("last_name")
+            target_hidden_last_name = None
+            if apollo_surname_is_masked(target_last_name):
+                target_hidden_last_name = target_last_name
+                target_last_name = None
             attachments = json.loads(str(snapshot["attachments_json"]))
             now = self._now()
             next_version = expected_version + 1
             cursor = self._conn.execute(
                 """
                 UPDATE people SET
-                    first_name = ?, last_name = ?, title = ?, company = ?, target = ?,
+                    first_name = ?, last_name = ?,
+                    apollo_last_name_obfuscated = COALESCE(?, apollo_last_name_obfuscated),
+                    title = ?, company = ?, target = ?,
                     sequence_state = ?, outcome = ?,
                     handoff_who = ?, handoff_wanted = ?, handoff_happened = ?,
                     handoff_they_want = ?, version = ?, updated_at = ?
@@ -1554,16 +1638,17 @@ class PersonStore:
                 """,
                 (
                     target.get("first_name"),
-                    target.get("last_name"),
+                    target_last_name,
+                    target_hidden_last_name,
                     target.get("title"),
                     target.get("company"),
                     target.get("target"),
                     target.get("sequence_state"),
                     target.get("outcome"),
-                    target.get("handoff_who"),
-                    target.get("handoff_wanted"),
-                    target.get("handoff_happened"),
-                    target.get("handoff_they_want"),
+                    without_apollo_name_masks(target.get("handoff_who")) or None,
+                    without_apollo_name_masks(target.get("handoff_wanted")) or None,
+                    without_apollo_name_masks(target.get("handoff_happened")) or None,
+                    without_apollo_name_masks(target.get("handoff_they_want")) or None,
                     next_version,
                     now,
                     person_id,

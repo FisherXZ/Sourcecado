@@ -4,7 +4,7 @@
 
 Sourcecado is a local-first desktop assistant for a Codeology sourcing director. The current spring proves the complete job for one operator on one machine: name a target, find people, prepare tailored outreach, deliberately enrich when needed, approve and send, keep conversations moving, and leave a person file another officer can pick up.
 
-Chat is home. The board is the assistant's operating picture. The person file is the durable domain object.
+Chat is home. Contacts is the assistant's operating picture for active sequences. The person file is the durable domain object.
 
 The active runtime is `desktop/`. The previous hosted Next.js/Postgres application is preserved in `archive/hosted-web/` and must not be treated as the current implementation.
 
@@ -13,6 +13,7 @@ The active runtime is `desktop/`. The previous hosted Next.js/Postgres applicati
 - Build the local Sourcecado desktop product: Python/FastAPI sidecar plus React/Vite/Tauri UI.
 - Optimize for one sourcing director now while keeping person files intelligible to a later officer.
 - A sequence is a person being worked through Open, In conversation, and Done. A company is context, not a deal.
+- A kept person remains durable in the internal Board projection before outreach, but the Contacts surface shows only active sequences in Open, In conversation, and Done.
 - Apollo search may return candidates without an email. Enrichment is manual and credit-aware.
 - Sending is allowed only after explicit review and approval in Sourcecado. Never add auto-send.
 - Keep Gmail, Drive, Calendar, Granola, Apollo, and web work attached to the relevant person and run ledger.
@@ -27,12 +28,13 @@ The active runtime is `desktop/`. The previous hosted Next.js/Postgres applicati
 - `desktop/surfaces/gui/` — active React/Vite/Tauri UI
 - `desktop/tests/` and `desktop/surfaces/gui/tests/` — active verification suites
 - `docs/` — current and historical product/engineering records
+- `docs/course/` — Sourcecado Course language and plan. Product language still wins. See `CONTEXT-MAP.md`.
 - `archive/hosted-web/` — read-only historical implementation
 
 ## Documentation precedence
 
 1. `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md` — current product source of truth
-2. `README.md`, this file, `CONTEXT.md`, and `DESIGN.md` — current operating guidance
+2. `README.md`, this file, `CONTEXT.md`, `DESIGN.md`, and `CONTRIBUTING.md` — current operating guidance
 3. Current dated implementation plans and ADRs listed in `docs/README.md`
 4. Older dated specs and plans — historical context only
 

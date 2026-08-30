@@ -3,16 +3,28 @@ import { describe, expect, it } from "vitest";
 
 const styles = readFileSync("src/styles.css", "utf8");
 
-describe("Board and person-file styles", () => {
-  it("uses scoped responsive grids and touch-sized sequence controls", () => {
+describe("Contacts and person-file styles", () => {
+  it("uses a dense bounded Contacts table with safe horizontal overflow", () => {
     expect(styles).toMatch(
-      /\.board-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\);/,
+      /\.contacts-list\s*\{[^}]*border:\s*1px solid var\(--border\);[^}]*background:\s*var\(--surface\);/,
     );
+    expect(styles).toMatch(
+      /\.contacts-table-scroll\s*\{[^}]*overflow-x:\s*auto;/,
+    );
+    expect(styles).toMatch(
+      /\.contacts-table\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*820px;[^}]*border-collapse:\s*collapse;/,
+    );
+    expect(styles).toMatch(
+      /\.contacts-table tbody tr\s*\{[^}]*height:\s*56px;[^}]*border-bottom:\s*1px solid var\(--border\);/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.contacts-filters button,\s*\.contacts-search input\s*\{[^}]*min-height:\s*44px;/,
+    );
+  });
+
+  it("keeps person sequence and chat controls touch sized", () => {
     expect(styles).toMatch(
       /\.person-sequence-action\s*\{[^}]*min-height:\s*44px;/,
-    );
-    expect(styles).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.board-grid,\s*\.person-summary-grid\s*\{[^}]*grid-template-columns:\s*1fr;/,
     );
     expect(styles).toMatch(
       /\.person-chat-action button\s*\{[^}]*min-height:\s*44px;/,

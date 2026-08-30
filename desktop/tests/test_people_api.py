@@ -502,9 +502,9 @@ def test_get_person_does_not_leak_access_token(tmp_path):
     assert res.json()["timeline"][0]["payload"]["id"] == "d1"
 
 
-def test_empty_board_is_three_empty_lists(tmp_path):
+def test_empty_board_is_four_empty_lists(tmp_path):
     body = TestClient(_app(tmp_path)).get("/v1/board", headers={TOKEN_HEADER: TOKEN}).json()
-    assert body == {"open": [], "in_conversation": [], "done": []}
+    assert body == {"backlog": [], "open": [], "in_conversation": [], "done": []}
     blob = str(body)
     assert "amount" not in blob
     assert "pipeline" not in blob

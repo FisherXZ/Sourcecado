@@ -115,7 +115,7 @@ export function ThreadView({
         ) : loadError ? (
           <div className="sourcecado-load-error" role="alert">
             <p>We couldn’t load this conversation.</p>
-            <p>Your draft is still here. Retry when the sidecar is available.</p>
+            <p>Your draft is still here. Retry, or choose another conversation.</p>
             <button type="button" onClick={onRetry}>
               Retry loading conversation
             </button>
@@ -124,6 +124,13 @@ export function ThreadView({
           <>
             <ThreadPrimitive.Empty>
               <section className="sourcecado-empty-thread">
+                <img
+                  className="sourcecado-empty-mascot"
+                  src="/brand/mascot/owl-mapping.jpg"
+                  alt=""
+                  width={96}
+                  height={96}
+                />
                 <p className="eyebrow">Start with a sourcing outcome</p>
                 <p>Build a shortlist, find a why-now signal, or prepare outreach for review.</p>
                 <div className="sourcecado-starters">

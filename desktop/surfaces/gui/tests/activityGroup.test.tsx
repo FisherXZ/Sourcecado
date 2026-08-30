@@ -165,7 +165,8 @@ describe("ActivityGroup", () => {
       name: "Searched Apollo · Completed",
     });
     expect(disclosure).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByText("Tim Zh***g")).toBeInTheDocument();
+    expect(screen.getByText("Tim")).toBeInTheDocument();
+    expect(screen.getByText("Surname hidden by Apollo")).toBeInTheDocument();
   });
 
   it("does not duplicate the domain result when the activity trace is also expanded", () => {
@@ -195,7 +196,8 @@ describe("ActivityGroup", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Searched Apollo · Completed" }),
     );
-    expect(screen.getAllByText("Tim Zh***g")).toHaveLength(1);
+    expect(screen.getAllByText("Tim")).toHaveLength(1);
+    expect(screen.getAllByText("Surname hidden by Apollo")).toHaveLength(1);
   });
 
   it("auto-collapses the activity trace to a quiet receipt once a running turn completes", () => {

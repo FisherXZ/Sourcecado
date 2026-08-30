@@ -30,6 +30,7 @@ _EDGES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "run_started": (_RUNNING, _RUNNING),
     "model_pending": (_ACTIVE, _RUNNING),
     "model_completed": (_RUNNING, _RUNNING),
+    "model_failed": (_RUNNING, _RUNNING),
     "tool_pending": (_RUNNING, _RUNNING),
     "tool_completed": (_RUNNING, _RUNNING),
     # An unknown outcome may only stall or end the run, never silently continue.

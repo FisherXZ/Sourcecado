@@ -14,6 +14,10 @@ from coworker.evidence_envelope import (
     external,
     opaque,
 )
+from coworker.person_identity import (
+    apollo_surname_is_masked,
+    without_apollo_name_masks,
+)
 
 SEARCH_URL = "https://api.apollo.io/api/v1/mixed_people/api_search"
 MATCH_URL = "https://api.apollo.io/api/v1/people/match"
@@ -333,6 +337,9 @@ def enrichment_resource(
         for part in (person.get("first_name"), person.get("last_name"))
         if part
     ).strip()
+    approval_display = display or "Unnamed person"
+    if person.get("last_name_status") == "hidden_by_apollo":
+        approval_display = f"{approval_display} (surname hidden by Apollo)"
     if match.get("email"):
         matched_on = "email"
     elif match.get("apollo_id"):
@@ -342,14 +349,14 @@ def enrichment_resource(
     return {
         "kind": "apollo_enrichment",
         "person_id": str(person.get("person_id") or ""),
-        "person": display or "Unnamed person",
+        "person": approval_display,
         "title": person.get("title") or None,
         "company": person.get("company") or None,
         "matched_on": matched_on,
         "credits": ENRICH_CREDIT_COST,
         "reason": (
             f"Spends {ENRICH_CREDIT_COST} Apollo credit to look up "
-            f"{display or 'this person'} by {MATCH_LABELS[matched_on]} and write the result "
+            f"{approval_display} by {MATCH_LABELS[matched_on]} and write the result "
             "to this person file only."
         ),
     }
@@ -370,24 +377,35 @@ def apollo_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
         for row in rows:
             if not isinstance(row, dict):
                 continue
+            last_name = row.get("lastNameObfuscated")
+            surname_hidden = apollo_surname_is_masked(last_name)
+            safe_name = " ".join(
+                str(part or "")
+                for part in (
+                    row.get("firstName"),
+                    None if surname_hidden else last_name,
+                )
+            ).strip()
+            body_fields = [
+                ("firstName", row.get("firstName")),
+                (
+                    "lastNameStatus",
+                    "surname hidden by Apollo" if surname_hidden else last_name,
+                ),
+                ("title", row.get("title")),
+                ("organizationName", row.get("organizationName")),
+            ]
             parts.append(
                 external(
                     "apollo",
                     identity=("person", row.get("apolloId")),
-                    title=" ".join(
-                        str(row.get(key) or "")
-                        for key in ("firstName", "lastNameObfuscated")
-                    ).strip()
-                    or "Apollo candidate",
+                    title=(
+                        f"{safe_name} (surname hidden by Apollo)"
+                        if surname_hidden and safe_name
+                        else safe_name or "Apollo candidate"
+                    ),
                     body="\n".join(
-                        f"{key}: {row.get(key)}"
-                        for key in (
-                            "firstName",
-                            "lastNameObfuscated",
-                            "title",
-                            "organizationName",
-                        )
-                        if row.get(key)
+                        f"{key}: {value}" for key, value in body_fields if value
                     ),
                     sensitivity="sensitive",
                 )
@@ -410,14 +428,22 @@ def apollo_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
             envelopes=combined.envelopes,
         )
     if tool_name == "apollo_enrich_contact":
+        raw_name = str(payload.get("name") or "").strip()
+        safe_name = without_apollo_name_masks(raw_name) or "Apollo contact"
         return external(
             "apollo",
             identity=("contact", payload.get("email"), payload.get("linkedinUrl")),
-            title=str(payload.get("name") or "Apollo contact"),
+            title=safe_name,
             body="\n".join(
-                f"{key}: {payload.get(key)}"
-                for key in ("name", "title", "organizationName", "email", "phone")
-                if payload.get(key)
+                f"{key}: {value}"
+                for key, value in (
+                    ("name", safe_name if raw_name else None),
+                    ("title", payload.get("title")),
+                    ("organizationName", payload.get("organizationName")),
+                    ("email", payload.get("email")),
+                    ("phone", payload.get("phone")),
+                )
+                if value
             ),
             url=payload.get("linkedinUrl"),
             sensitivity="sensitive",

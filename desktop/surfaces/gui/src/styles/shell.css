@@ -101,6 +101,12 @@ h1 {
   font-weight: 700;
 }
 
+img.app-mark {
+  display: block;
+  object-fit: cover;
+  background: none;
+}
+
 .operator-identity {
   border-top: 1px solid var(--border);
   padding-top: 10px;

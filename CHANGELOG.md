@@ -5,6 +5,7 @@ All notable changes to Sourcecado will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Painted owl mascot as the dock icon, rail mark, first-run welcome, empty-thread illustration, and README social card
 - Local Python/FastAPI sidecar with a provider-independent tool loop, permissions, schedules, connector support, person files, and a durable run ledger
 - React/Vite desktop workspace with chat, board, person, connections, schedules, skills, settings, recovery, and structured sourcing results
 - Tauri macOS shell that owns the sidecar lifecycle and local API token
@@ -21,6 +22,8 @@ All notable changes to Sourcecado will be documented in this file.
 - Hosted-team, weekly-ranking, and older runtime plans remain dated historical records unless the current product specification adopts them
 
 ## [0.2.0.0] - 2026-06-17
+
+This entry is the hosted Next.js app, not the current desktop product. Current work is under [Unreleased].
 
 ### Added
 - Next.js 15 web app shell replacing the CLI-only interface — open `npm run dev` to launch the browser app

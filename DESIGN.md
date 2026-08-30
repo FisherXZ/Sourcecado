@@ -15,7 +15,7 @@
 - **Direction:** Industrial/Utilitarian × Organic — "Warm Operator."
 - **Decoration level:** Intentional. The dense table stays quiet and legible. Warmth and avocado character live in empty states, onboarding, the nav header, and run-ledger "win" moments. **Never decorate the table.**
 - **Mood:** Calm, dense, fast, trustworthy — but warm and human. Confidence through restraint, not chrome.
-- **Memorable thing:** "Warm, approachable, friendly, on-theme with avocado/Codeology." Every decision serves this.
+- **Memorable thing:** "Warm, approachable, friendly, on-theme with avocado/Codeology." Every decision serves this. The painted owl with the avocado satchel is the mascot and dock icon. Masters live in `brand/`. The owl belongs in the dock, the rail mark, first-run welcome, and empty states — never on Contacts or other dense tables. The geometric avocado-pit motif remains a color/shape language, not the app icon.
 - **Reference sites:** attio.com (density), linear.app (chrome restraint), clay.com (warmth concentrated in low-density zones).
 
 ## Typography
@@ -61,7 +61,7 @@
 ## Layout
 - **Approach:** Hybrid, grid-disciplined app shell.
 - **Shell:** Persistent global rail / center work surface / contextual inspector when evidence or a person brief needs detail. The inspector may collapse on narrow windows; it must never trap the operator away from the thread.
-- **Hero object:** The conversation is home. Dense board and person-file views are destinations in the rail; structured tool results appear inline when the assistant is doing sourcing work.
+- **Hero object:** The conversation is home. Dense Contacts and person-file views are destinations in the rail; structured tool results appear inline when the assistant is doing sourcing work.
 - **Grid:** Desktop-first shell with responsive collapse behavior. Content within panes uses a 4px rhythm and maintains usable composer and approval controls at narrow widths.
 - **Border radius:** 8px cards/inputs/panels · 6px buttons · 4px tiny inline tags · full (9999px) pills/avatars/toggles. Friendly-precise band — avoid ≥12px (toy) and ≤4px (clinical).
 - **Elevation:** Borders over shadows for dense surfaces (1px `#E7E3DA` hairlines). Reserve soft shadows for floating elements only — command palette, Gmail-draft popup, inspector.
@@ -82,5 +82,6 @@
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-06-18 | Initial design system created ("Warm Operator") | Created by /design-consultation. Direction chosen: data-dense operator tool with warm/avocado character. Research-backed (Attio/Linear density + Clay warmth split). Approved after live HTML preview. |
-| 2026-08-25 | Chat became the home surface | The sourcing-director job begins with a target and a conversation; the board reports work and the person file preserves it. |
+| 2026-08-25 | Chat became the home surface | The sourcing-director job begins with a target and a conversation; Contacts reports active sequences and the person file preserves the full record. |
 | 2026-08-26 | Local desktop became the active product | The React/Vite/Tauri shell and Python sidecar replaced the hosted web app as the implementation target. |
+| 2026-08-28 | Owl mascot replaced the geometric avocado dock icon | New painted brand set: flight pose as the app icon, mapping pose on empty threads, meadow pose stored, landing-hero on first-run welcome, light social card on the README. |

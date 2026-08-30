@@ -62,6 +62,17 @@ function noticeFrame(code: unknown): {
       detail: "Available messages are shown.",
     };
   }
+  if (
+    code === "provider_runtime_error" ||
+    code === "invalid_request" ||
+    code === "protocol" ||
+    code === "configuration"
+  ) {
+    return {
+      title: "Model provider compatibility problem.",
+      detail: "Sourcecado tried compatible configured providers. Retry once, then review Settings if it persists.",
+    };
+  }
   return { title: "This turn failed.", detail: null };
 }
 

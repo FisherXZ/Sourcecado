@@ -1,6 +1,6 @@
 # Package the desktop shell as a reproducible macOS preview artifact
 
-Status: Proposed — 2026-08-27
+Status: Accepted — 2026-08-27 (CI `macos-preview` job, packaging how-to, and Sourcecado productName are in tree)
 
 ## Context
 

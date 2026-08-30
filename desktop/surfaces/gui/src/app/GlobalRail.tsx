@@ -107,7 +107,7 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
           <span aria-hidden="true">×</span>
         </button>
         <div className="app-identity" aria-label="Sourcecado home">
-          <span className="app-mark" aria-hidden="true">S</span>
+          <img className="app-mark" src="/favicon.png" alt="" width={28} height={28} />
           <span>Sourcecado</span>
         </div>
         <button type="button" className="new-chat-button" onClick={onNewChat}>
@@ -124,7 +124,7 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
           <kbd>⌘K</kbd>
         </button>
         <div className="destination-links">
-          <RailLink href="#/board" current={route.kind === "board" || route.kind === "person"}>Board</RailLink>
+          <RailLink href="#/board" current={route.kind === "board" || route.kind === "person"}>Contacts</RailLink>
           <RailLink
             href="#/scheduled"
             current={route.kind === "scheduled"}

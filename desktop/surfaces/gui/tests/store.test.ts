@@ -1016,6 +1016,55 @@ describe("issue #136 - a failed turn must say why", () => {
     expect(notice).toMatchObject({ code: "error", recoverable: false });
   });
 
+  it("collapses consecutive identical provider failures into one actionable card", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    const repeated = Array.from({ length: 5 }, (_value, index) => {
+      const number = index + 1;
+      return [
+        {
+          ...textTurnEvents()[0],
+          run_id: `run-${number}`,
+          event_id: `event-start-${number}`,
+          message_id: `message-answer-${number}`,
+          part_id: `part-answer-${number}`,
+        },
+        failureEvent({
+          run_id: `run-${number}`,
+          event_id: `event-terminal-${number}`,
+          message_id: `message-answer-${number}`,
+          part_id: `part-answer-${number}`,
+          error_kind: "provider",
+          message: "The model provider failed after bounded recovery attempts.",
+          failure: {
+            code: "provider_runtime_error",
+            provider: "openai",
+            model: "gpt-4o-mini",
+            attempts: 1,
+            recovery_count: 1,
+            exhausted: true,
+          },
+        }),
+      ];
+    }).flat();
+
+    store.replayChatEvents(repeated);
+
+    const notices = store
+      .messagesFor("thread-alpha")
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "notice");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({
+      code: "provider_runtime_error",
+      recoverable: false,
+      occurrences: 5,
+    });
+    expect(notices[0]?.message).toContain("5 consecutive failed turns");
+  });
+
   it("leaves a held turn alone, since held is not a failure", () => {
     const store = new SourcecadoChatStore(
       [{ id: "thread-alpha", messages: [] }],

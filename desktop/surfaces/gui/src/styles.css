@@ -4,7 +4,7 @@
 @import "./styles/route.css";
 @import "./styles/responsive.css";
 
-/* Board and person-file routes. This stays here (not in styles/route.css)
+/* Contacts and person-file routes. This stays here (not in styles/route.css)
    because tests/boardPersonStyles.test.ts reads src/styles.css directly
    via fs and is owned by the component agent working on Board.tsx /
    PersonFile.tsx in this review pass, not by this stylesheet split.
@@ -17,7 +17,7 @@
   margin: 0 auto;
 }
 
-.board-page-header > p:last-child,
+.board-page-header > p:not(.eyebrow),
 .person-page-header > p:last-child {
   max-width: 680px;
   margin: 8px 0 0;
@@ -25,14 +25,24 @@
   line-height: 1.55;
 }
 
-.board-grid {
+.board-page-header {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin-top: 24px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  column-gap: 24px;
 }
 
-.board-bucket,
+.board-page-header > :not(.board-page-actions) {
+  grid-column: 1;
+}
+
+.board-page-header .board-page-actions {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: end;
+  margin: 0;
+}
+
 .person-summary-card,
 .person-sequence,
 .person-section {
@@ -42,99 +52,264 @@
   background: var(--surface);
 }
 
-.board-bucket {
+.contacts-list {
+  margin-top: 24px;
   overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
 }
 
-.board-bucket-heading {
+.contacts-controls {
   display: flex;
-  min-height: 48px;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 0 16px;
+  gap: 16px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.contacts-filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.contacts-filters button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.contacts-filters button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.contacts-filters button[aria-pressed="true"] {
+  border-color: var(--border);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.contacts-filter-count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 9999px;
+  background: var(--canvas);
+  color: var(--muted);
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 10px;
+  text-align: center;
+}
+
+.contacts-search input {
+  width: 230px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+}
+
+.contacts-search input::placeholder {
+  color: var(--muted);
+}
+
+.contacts-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.contacts-table-scroll {
+  overflow-x: auto;
+}
+
+.contacts-table {
+  width: 100%;
+  min-width: 820px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.contacts-table th {
+  height: 34px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--border);
   background: var(--raised);
-}
-
-.board-bucket-heading h2,
-.person-page h2 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.board-bucket-heading span {
   color: var(--muted);
-  font-size: 12px;
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .07em;
+  text-align: left;
+  text-transform: uppercase;
 }
 
-.board-rows {
-  display: grid;
-}
-
-.board-row {
-  display: flex;
-  min-height: 64px;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 10px 16px;
+.contacts-table tbody tr {
+  height: 56px;
   border-bottom: 1px solid var(--border);
-  color: var(--text);
-  text-decoration: none;
 }
 
-.board-row:last-child {
+.contacts-row {
+  cursor: pointer;
+}
+
+.contacts-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.contacts-table tbody tr:last-child {
   border-bottom: 0;
 }
 
-.board-row:hover {
+.contacts-table tbody tr:hover {
   background: var(--raised);
 }
 
-.board-row:focus-visible,
-.person-back-link:focus-visible,
-.person-sequence-action:focus-visible,
-.person-chat-action button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+.contacts-table td {
+  min-width: 0;
+  overflow: hidden;
+  padding: 9px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.board-row strong {
+.contacts-table th:nth-child(1) { width: 25%; }
+.contacts-table th:nth-child(2) { width: 28%; }
+.contacts-table th:nth-child(3) { width: 17%; }
+.contacts-table th:nth-child(4) { width: 18%; }
+.contacts-table th:nth-child(5) { width: 12%; }
+
+.contacts-table td:first-child a {
+  color: var(--text);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.contacts-identity {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.contacts-avatar {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.contacts-cell-copy,
+.contacts-primary,
+.contacts-secondary {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.board-row span,
-.board-bucket-empty,
-.person-empty,
-.person-timeline-meta {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.board-bucket-empty {
-  margin: 0;
-  padding: 18px 16px;
-}
-
-/* Follow-up state on the board row. The row stays a quiet table line; the one
-   piece of colour is the warm "needs attention" pill, and it only appears when
-   something is actually waiting. */
-.board-row-contact {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.contacts-cell-copy > span,
+.contacts-secondary {
+  display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.contacts-primary {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.contacts-sequence {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.contacts-sequence::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+  content: "";
+  opacity: .72;
+}
+
+.contacts-sequence-open {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.contacts-sequence-in_conversation {
+  background: var(--raised);
+  color: var(--pit);
+}
+
+.contacts-sequence-done {
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.contacts-last-contact {
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
+.contacts-attention-empty {
+  color: var(--muted);
+}
+
+.contacts-table a:focus-visible,
+.contacts-filters button:focus-visible,
+.contacts-search input:focus-visible,
+.person-back-link:focus-visible,
+.person-sequence-action:focus-visible,
+.person-chat-action button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A dense contact row stays quiet; colour appears only when attention is real. */
 .board-row-flag {
-  padding: 1px 8px;
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 0 8px;
   border-radius: 9999px;
   background: var(--warn-bg);
   color: var(--warn);
@@ -142,6 +317,25 @@
   font-weight: 600;
   letter-spacing: .04em;
   white-space: nowrap;
+}
+
+.contacts-filter-empty {
+  margin: 0;
+  padding: 48px 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.person-page h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.person-empty,
+.person-timeline-meta {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .board-page-actions {
@@ -542,16 +736,37 @@
   opacity: .65;
 }
 
-@media (max-width: 1179px) {
-  .board-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 767px) {
-  .board-grid,
   .person-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .board-page-header {
+    grid-template-columns: 1fr;
+  }
+
+  .board-page-header .board-page-actions {
+    grid-column: 1;
+    grid-row: auto;
+    margin-top: 16px;
+  }
+
+  .contacts-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .contacts-filters {
+    overflow-x: auto;
+  }
+
+  .contacts-filters button,
+  .contacts-search input {
+    min-height: 44px;
+  }
+
+  .contacts-search input {
+    width: 100%;
   }
 
   .board-page-actions button {

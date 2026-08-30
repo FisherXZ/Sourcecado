@@ -35,7 +35,7 @@ vi.mock("../src/api", () => ({
   setPersonSequence: api.setPersonSequence,
 }));
 
-describe("Board and person-file routes", () => {
+describe("Contacts and person-file routes", () => {
   beforeEach(() => {
     api.getBoard.mockResolvedValue({
       open: [
@@ -173,16 +173,239 @@ describe("Board and person-file routes", () => {
     });
   });
 
-  it("renders labeled Board buckets and safe person links", async () => {
+  it("announces that Contacts is loading", () => {
+    api.getBoard.mockReturnValue(new Promise(() => {}));
+
     render(<BoardView />);
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Board" })).toBeInTheDocument();
-    const open = screen.getByRole("region", { name: "Open" });
-    expect(within(open).getByRole("link", { name: /Alyssa Lee/ })).toHaveAttribute(
+    expect(screen.getByRole("status")).toHaveTextContent("Loading contacts");
+  });
+
+  it("recovers from a Contacts load failure without leaking details", async () => {
+    api.getBoard
+      .mockRejectedValueOnce(new Error("contacts 500 token=private /state/path"))
+      .mockResolvedValueOnce({ open: [], in_conversation: [], done: [] });
+
+    const { container } = render(<BoardView />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn’t load contacts");
+    expect(container).not.toHaveTextContent("token=private");
+    expect(container).not.toHaveTextContent("/state/path");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("heading", { name: "No active contacts" })).toBeInTheDocument();
+    expect(api.getBoard).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders active sequences in a Contacts table", async () => {
+    render(<BoardView />);
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Contacts" }),
+    ).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Active sourcing contacts" });
+    expect(within(table).getByRole("columnheader", { name: "Contact" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Role & company" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Sequence" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Last contact" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Attention" })).toBeInTheDocument();
+    expect(within(table).getByRole("link", { name: /Alyssa Lee/ })).toHaveAttribute(
       "href",
       "#/people/person%20one",
     );
-    expect(screen.getByRole("region", { name: "In conversation" })).toHaveTextContent("None");
+    expect(screen.queryByRole("region", { name: "Open" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Person File from pointer or keyboard interaction anywhere in a row", async () => {
+    window.location.hash = "#/board";
+    render(<BoardView />);
+
+    const row = await screen.findByRole("row", { name: "Open Person File for Alyssa Lee" });
+    expect(row).toHaveAttribute("tabindex", "0");
+
+    fireEvent.click(within(row).getByText("Codeology"));
+    expect(window.location.hash).toBe("#/people/person%20one");
+
+    window.location.hash = "#/board";
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(window.location.hash).toBe("#/people/person%20one");
+  });
+
+  it("filters Contacts by the three sequence states", async () => {
+    api.getBoard.mockResolvedValue({
+      backlog: [
+        {
+          person_id: "person-backlog",
+          first_name: "Hidden",
+          last_name: "Backlog",
+          sequence_state: null,
+        },
+      ],
+      open: [
+        {
+          person_id: "person-open",
+          first_name: "Olive",
+          last_name: "Open",
+          title: "Founder",
+          company: "Open Labs",
+          sequence_state: "open",
+        },
+      ],
+      in_conversation: [
+        {
+          person_id: "person-talking",
+          first_name: "Connie",
+          last_name: "Conversation",
+          title: "VP Engineering",
+          company: "Talking Systems",
+          sequence_state: "in_conversation",
+        },
+      ],
+      done: [
+        {
+          person_id: "person-done",
+          first_name: "Dana",
+          last_name: "Done",
+          title: "Product Lead",
+          company: "Done Works",
+          sequence_state: "done",
+        },
+      ],
+    });
+
+    render(<BoardView />);
+
+    const filters = await screen.findByRole("group", {
+      name: "Filter contacts by sequence status",
+    });
+    expect(within(filters).getByRole("button", { name: "All 3" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(filters).getByRole("button", { name: "Open 1" })).toBeInTheDocument();
+    expect(
+      within(filters).getByRole("button", { name: "In conversation 1" }),
+    ).toBeInTheDocument();
+    expect(within(filters).getByRole("button", { name: "Done 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Hidden Backlog/ })).not.toBeInTheDocument();
+
+    fireEvent.click(within(filters).getByRole("button", { name: "In conversation 1" }));
+
+    expect(screen.getByRole("link", { name: /Connie Conversation/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Olive Open/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Dana Done/ })).not.toBeInTheDocument();
+  });
+
+  it("searches active Contacts by identity, role, and company", async () => {
+    api.getBoard.mockResolvedValue({
+      backlog: [],
+      open: [
+        {
+          person_id: "person-maya",
+          first_name: "Maya",
+          last_name: "Chen",
+          title: "VP Product Engineering",
+          company: "Northstar Labs",
+          sequence_state: "open",
+        },
+        {
+          person_id: "person-jordan",
+          first_name: "Jordan",
+          last_name: "Patel",
+          title: "Founder",
+          company: "Applied Bio Systems",
+          sequence_state: "open",
+        },
+      ],
+      in_conversation: [],
+      done: [],
+    });
+
+    render(<BoardView />);
+
+    const search = await screen.findByRole("searchbox", { name: "Search active contacts" });
+    fireEvent.change(search, { target: { value: "northstar" } });
+
+    expect(screen.getByRole("link", { name: /Maya Chen/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Jordan Patel/ })).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "no such contact" } });
+
+    expect(screen.getByRole("status")).toHaveTextContent("No contacts match");
+  });
+
+  it("labels an Apollo-hidden surname honestly on Board and person file", async () => {
+    api.getBoard.mockResolvedValue({
+      open: [
+        {
+          person_id: "person one",
+          first_name: "Hudson",
+          last_name: null,
+          last_name_status: "hidden_by_apollo",
+          title: "CEO",
+          company: "The Hog",
+          sequence_state: "open",
+        },
+      ],
+      in_conversation: [],
+      done: [],
+    });
+    api.getPerson.mockResolvedValue({
+      ...(await api.getPerson()),
+      person: {
+        person_id: "person one",
+        first_name: "Hudson",
+        last_name: null,
+        last_name_status: "hidden_by_apollo",
+        sequence_state: "open",
+        version: 2,
+        sources: [],
+      },
+      brief: livingBrief({
+        who: "Hudson, CEO at The Hog",
+        why: "YC F25 target",
+        learned: [],
+        missing: [],
+        sources: [],
+      }),
+    });
+
+    const board = render(<BoardView />);
+    expect(await screen.findByText("Surname hidden by Apollo")).toBeInTheDocument();
+    expect(board.container).not.toHaveTextContent("***");
+    board.unmount();
+
+    const person = render(<PersonFileView personId="person one" />);
+    expect(await screen.findByText(/Enrich to verify the full name/i)).toBeInTheDocument();
+    expect(person.container).not.toHaveTextContent("***");
+  });
+
+  it("keeps unsequenced backlog people off Contacts", async () => {
+    api.getBoard.mockResolvedValue({
+      backlog: [
+        {
+          person_id: "person-kept",
+          first_name: "Hudson",
+          last_name: "Liao",
+          title: "CEO",
+          company: "The Hog",
+          sequence_state: null,
+          board_lane: "backlog",
+        },
+      ],
+      open: [],
+      in_conversation: [],
+      done: [],
+    });
+
+    render(<BoardView />);
+
+    expect(await screen.findByRole("heading", { name: "No active contacts" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Hudson Liao/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Active sourcing contacts" })).not.toBeInTheDocument();
   });
 
   it("updates a person sequence through labeled pressed-state controls", async () => {
@@ -202,7 +425,7 @@ describe("Board and person-file routes", () => {
     expect(container.querySelector(".tool-card")).not.toBeInTheDocument();
   });
 
-  it("refreshes Board buckets after a person-file write", async () => {
+  it("refreshes Contacts after a person-file write", async () => {
     render(<BoardView />);
     await screen.findByRole("link", { name: /Alyssa Lee/ });
     window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
@@ -278,7 +501,7 @@ describe("Board and person-file routes", () => {
     expect(
       screen.queryByRole("button", { name: /sourcing chat/i }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to Board" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Back to Contacts" })).toHaveAttribute(
       "href",
       "#/board",
     );

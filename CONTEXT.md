@@ -62,8 +62,8 @@ The accumulated person files, outcomes, source-backed notes, and handoffs that p
 **Chat**
 The home surface where the director gives targets, asks questions, reviews work, and tells the assistant what to do next.
 
-**Board**
-The assistant's operating picture of sequences in Open, In conversation, and Done. It reports the work; it is not a CRM the director must constantly maintain.
+**Contacts**
+The assistant's compact operating picture of active sequences. It presents Open, In conversation, and Done as table filters and keeps each row attached to its durable Person File. Kept people without a sequence remain stored in the internal Board projection but do not appear in Contacts yet. Contacts reports the work; it is not a CRM the director must constantly maintain.
 
 **Person View**
 The full person file and handoff record. A compact version of the living brief may appear beside work in other surfaces.
@@ -71,9 +71,15 @@ The full person file and handoff record. A compact version of the living brief m
 **Scheduled Job**
 A saved local task that can run on a schedule. Scheduling supports the assistant but is not the product's defining weekly-ranking loop.
 
+**Memory**
+The operator's saved-memory review queue. Preferences and notes about how the director works, not a person file. Unreviewed memory does not silently become sourcing fact.
+
+**Connections, Skills, Settings**
+Supporting destinations in the rail. They configure connectors, skills, workspace grants, updates, and diagnostics. They are not the job.
+
 ## Safety and scope invariants
 
-- Chat is home; the board and person view support it.
+- Chat is home; Contacts and the person view support it.
 - A human chooses the target, person, enrichment, and send.
 - No background bulk enrichment and no auto-send.
 - Connector output is untrusted input and must not override product policy.

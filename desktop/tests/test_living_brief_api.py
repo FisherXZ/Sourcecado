@@ -200,6 +200,291 @@ def test_the_director_reviews_versions_and_reverts_a_handoff(tmp_path):
     assert after["claims"], "a reverted person file still has a brief"
 
 
+def test_a_saved_handoff_keeps_its_saved_version_and_marks_new_reply_fields_stale(
+    tmp_path,
+):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    saved = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace, founder at Analytic",
+            "wanted": "A research-dinner speaker",
+            "happened": "No reply yet",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    saved_version = saved["person"]["version"]
+    app.state.people.append_event(
+        pid,
+        source="gmail",
+        kind="mail",
+        summary="Ada replied with a date",
+        payload={
+            "direction": "inbound",
+            "received_at": "2026-08-29T10:00:00+00:00",
+            "snippet": "The 21st works.",
+        },
+    )
+
+    handoff = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"][
+        "handoff"
+    ]
+
+    assert handoff["generated"] is False
+    assert handoff["version"] == saved_version
+    assert handoff["stale"] is True
+    assert handoff["stale_fields"] == ["happened", "they_want"]
+    assert handoff["happened"] == "No reply yet"
+    assert handoff["they_want"] == "Unknown"
+
+
+def test_saving_an_unchanged_handoff_does_not_create_another_version(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    body = {
+        "who": "Ada Lovelace, founder at Analytic",
+        "wanted": "A research-dinner speaker",
+        "happened": "No reply yet",
+        "they_want": "Unknown",
+        "expected_version": person["version"],
+    }
+    first = client.post(f"/v1/people/{pid}/handoff", headers=HEADERS, json=body)
+    assert first.status_code == 200
+    first_body = first.json()
+    versions_before = app.state.people.versions(pid)
+    events_before = app.state.people.timeline(pid)
+
+    second = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={**body, "expected_version": first_body["person"]["version"]},
+    )
+
+    assert second.status_code == 200
+    assert second.json()["saved"] is False
+    assert second.json()["unchanged"] is True
+    assert second.json()["brief"]["handoff"]["version"] == first_body["person"][
+        "version"
+    ]
+    assert app.state.people.versions(pid) == versions_before
+    assert app.state.people.timeline(pid) == events_before
+
+
+def test_reverting_to_a_saved_handoff_reports_its_original_version(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    saved = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace, founder at Analytic",
+            "wanted": "A research-dinner speaker",
+            "happened": "No reply yet",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    saved_version = saved["person"]["version"]
+    changed = app.state.people.patch(
+        pid,
+        fields={"title": "Later title"},
+        expected_version=saved_version,
+        actor="director",
+        rationale_summary="Later identity correction.",
+    )
+
+    reverted = client.post(
+        f"/v1/people/{pid}/revert",
+        headers=HEADERS,
+        json={
+            "to_version": saved_version,
+            "expected_version": changed["version"],
+            "rationale_summary": "Restore the reviewed handoff.",
+        },
+    )
+
+    assert reverted.status_code == 200
+    handoff = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"][
+        "handoff"
+    ]
+    assert handoff["version"] == saved_version
+    assert handoff["stale"] is False
+    assert handoff["stale_fields"] == []
+
+
+def test_newer_reply_remains_stale_after_reverting_to_the_saved_handoff(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    saved = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace, founder at Analytic",
+            "wanted": "A research-dinner speaker",
+            "happened": "No reply yet",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    saved_version = saved["person"]["version"]
+    app.state.people.append_event(
+        pid,
+        source="gmail",
+        kind="mail",
+        summary="Ada replied with a date",
+        payload={"direction": "inbound", "snippet": "The 21st works."},
+    )
+
+    reverted = client.post(
+        f"/v1/people/{pid}/revert",
+        headers=HEADERS,
+        json={
+            "to_version": saved_version,
+            "expected_version": saved_version,
+            "rationale_summary": "Restore the reviewed handoff fields.",
+        },
+    )
+
+    assert reverted.status_code == 200
+    handoff = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"][
+        "handoff"
+    ]
+    assert handoff["version"] == saved_version
+    assert handoff["stale"] is True
+    assert handoff["stale_fields"] == ["happened", "they_want"]
+
+
+def test_reverting_to_a_later_snapshot_keeps_the_original_handoff_save_version(
+    tmp_path,
+):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    saved = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace, founder at Analytic",
+            "wanted": "A research-dinner speaker",
+            "happened": "No reply yet",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    saved_version = saved["person"]["version"]
+    later = app.state.people.patch(
+        pid,
+        fields={"title": "Later title"},
+        expected_version=saved_version,
+        actor="director",
+        rationale_summary="Later identity correction.",
+    )
+
+    reverted = client.post(
+        f"/v1/people/{pid}/revert",
+        headers=HEADERS,
+        json={
+            "to_version": later["version"],
+            "expected_version": later["version"],
+            "rationale_summary": "Restore the later snapshot.",
+        },
+    )
+
+    assert reverted.status_code == 200
+    handoff = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"][
+        "handoff"
+    ]
+    assert handoff["version"] == saved_version
+
+
+def test_a_new_handoff_saved_after_revert_uses_the_new_save_version(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    first = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace",
+            "wanted": "First target",
+            "happened": "First state",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    reverted = client.post(
+        f"/v1/people/{pid}/revert",
+        headers=HEADERS,
+        json={
+            "to_version": person["version"],
+            "expected_version": first["person"]["version"],
+            "rationale_summary": "Remove the first reviewed handoff.",
+        },
+    ).json()
+
+    second = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace",
+            "wanted": "Second target",
+            "happened": "Second state",
+            "they_want": "The 21st",
+            "expected_version": reverted["person"]["version"],
+        },
+    ).json()
+
+    assert second["brief"]["handoff"]["version"] == second["person"]["version"]
+    assert second["brief"]["handoff"]["wanted"] == "Second target"
+
+
+def test_partial_handoff_patch_does_not_stale_unchanged_reviewed_fields(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    person = _person(app)
+    pid = person["person_id"]
+    saved = client.post(
+        f"/v1/people/{pid}/handoff",
+        headers=HEADERS,
+        json={
+            "who": "Ada Lovelace",
+            "wanted": "A research-dinner speaker",
+            "happened": "No reply yet",
+            "they_want": "Unknown",
+            "expected_version": person["version"],
+        },
+    ).json()
+    patched = app.state.people.patch(
+        pid,
+        fields={"handoff_happened": "Drafted, not sent"},
+        expected_version=saved["person"]["version"],
+        actor="director",
+        rationale_summary="Review the latest happened field.",
+    )
+
+    handoff = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"][
+        "handoff"
+    ]
+
+    assert handoff["version"] == patched["version"]
+    assert handoff["happened"] == "Drafted, not sent"
+    assert handoff["stale"] is False
+    assert handoff["stale_fields"] == []
+
+
 def test_a_handoff_needs_a_version_and_at_least_one_field(tmp_path):
     app = _app(tmp_path)
     client = TestClient(app)
