@@ -102,3 +102,104 @@ def test_catalog_text_lists_builtin():
     text = catalog_text(SkillLoader([BUILTIN_SKILLS]))
     assert "weekly-sourcing" in text
     assert "load_skill" in text
+
+
+def test_catalog_projects_safe_inspectable_metadata_without_private_internals(tmp_path):
+    skill_dir = tmp_path / "candidate-research"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: candidate-research
+description: Build a source-backed candidate brief.
+use-when: Use when the director asks to understand one candidate.
+allowed-tools: shell_exec, gmail_send
+---
+
+1. Read the Person File.
+2. Never send without approval.
+3. Do not reveal /Users/operator/private/notes.md.
+4. API_KEY=sk-live-PLANTED-SENTINEL
+""",
+        encoding="utf-8",
+    )
+
+    catalog = SkillLoader([tmp_path]).catalog()
+
+    assert catalog == [
+        {
+            "name": "candidate-research",
+            "purpose": "Build a source-backed candidate brief.",
+            "use_when": "Use when the director asks to understand one candidate.",
+            "source": "workspace",
+            "status": "ready",
+            "instructions": (
+                "1. Read the Person File.\n"
+                "2. Never send without approval.\n"
+                "3. Do not reveal [REDACTED PATH].\n"
+                "4. API_KEY=[REDACTED]"
+            ),
+        }
+    ]
+    payload = str(catalog)
+    assert "/Users/operator" not in payload
+    assert "sk-live-PLANTED-SENTINEL" not in payload
+    assert "allowed_tools" not in payload
+    assert "shell_exec" not in payload
+    assert "gmail_send" not in payload
+
+
+def test_builtin_catalog_names_safe_source_status_and_activation_guidance():
+    [skill] = SkillLoader([BUILTIN_SKILLS]).catalog()
+
+    assert skill["name"] == "weekly-sourcing"
+    assert skill["purpose"] == (
+        "Builds a compact shortlist from active Person Files, current sequence "
+        "state, source-backed why-now evidence, and known knowledge gaps."
+    )
+    assert skill["source"] == "builtin"
+    assert skill["status"] == "ready"
+    assert skill["use_when"] == (
+        "The director asks for a weekly sourcing check-in, who to work next, "
+        "or a prioritized why-now review."
+    )
+    assert "Treat each Person as the unit of work" in skill["instructions"]
+
+
+def test_catalog_redacts_absolute_filesystem_paths_without_hiding_public_or_relative_references(
+    tmp_path,
+):
+    skill_dir = tmp_path / "path-boundary"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: path-boundary
+description: Explain safe source references.
+use-when: Use for path-boundary review.
+---
+
+- Temporary note: /tmp/sourcecado-review/private-note.txt
+- System note: /opt/sourcecado/private/config.json
+- Home shorthand: ~/private/context.md
+- Windows note: C:\\Users\\operator\\private\\notes.md
+- Network note: \\\\private-server\\operator\\notes.md
+- Public reference: https://sourcecado.example/docs/skills
+- Relative reference: docs/skills/catalog.md
+- Dot-relative reference: ./docs/skills/catalog.md
+- Parent-relative reference: ../docs/skills/catalog.md
+""",
+        encoding="utf-8",
+    )
+
+    [skill] = SkillLoader([tmp_path]).catalog()
+
+    assert skill["instructions"] == (
+        "- Temporary note: [REDACTED PATH]\n"
+        "- System note: [REDACTED PATH]\n"
+        "- Home shorthand: [REDACTED PATH]\n"
+        "- Windows note: [REDACTED PATH]\n"
+        "- Network note: [REDACTED PATH]\n"
+        "- Public reference: https://sourcecado.example/docs/skills\n"
+        "- Relative reference: docs/skills/catalog.md\n"
+        "- Dot-relative reference: ./docs/skills/catalog.md\n"
+        "- Parent-relative reference: ../docs/skills/catalog.md"
+    )
