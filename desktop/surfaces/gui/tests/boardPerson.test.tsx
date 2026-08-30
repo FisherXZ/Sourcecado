@@ -173,6 +173,32 @@ describe("Contacts and person-file routes", () => {
     });
   });
 
+  it("announces that Contacts is loading", () => {
+    api.getBoard.mockReturnValue(new Promise(() => {}));
+
+    render(<BoardView />);
+
+    expect(screen.getByRole("status")).toHaveTextContent("Loading contacts");
+  });
+
+  it("recovers from a Contacts load failure without leaking details", async () => {
+    api.getBoard
+      .mockRejectedValueOnce(new Error("contacts 500 token=private /state/path"))
+      .mockResolvedValueOnce({ open: [], in_conversation: [], done: [] });
+
+    const { container } = render(<BoardView />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn’t load contacts");
+    expect(container).not.toHaveTextContent("token=private");
+    expect(container).not.toHaveTextContent("/state/path");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("heading", { name: "No active contacts" })).toBeInTheDocument();
+    expect(api.getBoard).toHaveBeenCalledTimes(2);
+  });
+
   it("renders active sequences in a Contacts table", async () => {
     render(<BoardView />);
 
@@ -190,6 +216,22 @@ describe("Contacts and person-file routes", () => {
       "#/people/person%20one",
     );
     expect(screen.queryByRole("region", { name: "Open" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Person File from pointer or keyboard interaction anywhere in a row", async () => {
+    window.location.hash = "#/board";
+    render(<BoardView />);
+
+    const row = await screen.findByRole("row", { name: "Open Person File for Alyssa Lee" });
+    expect(row).toHaveAttribute("tabindex", "0");
+
+    fireEvent.click(within(row).getByText("Codeology"));
+    expect(window.location.hash).toBe("#/people/person%20one");
+
+    window.location.hash = "#/board";
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(window.location.hash).toBe("#/people/person%20one");
   });
 
   it("filters Contacts by the three sequence states", async () => {

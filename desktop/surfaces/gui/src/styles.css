@@ -167,6 +167,15 @@
   border-bottom: 1px solid var(--border);
 }
 
+.contacts-row {
+  cursor: pointer;
+}
+
+.contacts-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 .contacts-table tbody tr:last-child {
   border-bottom: 0;
 }

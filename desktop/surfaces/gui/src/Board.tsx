@@ -65,15 +65,32 @@ const SEQUENCE_FILTERS: { value: SequenceFilter; label: string }[] = [
 function ContactRow({ person }: { person: BoardPerson }) {
   const name = personName(person);
   const sequence = SEQUENCE_LABEL[person.sequence_state ?? ""] ?? "Unknown";
+  const href = `#/people/${encodeURIComponent(person.person_id)}`;
+  const openPersonFile = () => {
+    window.location.hash = href;
+  };
   return (
-    <tr>
+    <tr
+      className="contacts-row"
+      tabIndex={0}
+      aria-label={`Open Person File for ${name}`}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("a")) return;
+        openPersonFile();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        openPersonFile();
+      }}
+    >
       <td>
         <div className="contacts-identity">
           <span className="contacts-avatar" aria-hidden="true">
             {initials(person)}
           </span>
           <span className="contacts-cell-copy">
-            <a href={`#/people/${encodeURIComponent(person.person_id)}`}>
+            <a href={href} tabIndex={-1}>
               <strong>{name}</strong>
             </a>
             {person.last_name_status === "hidden_by_apollo" ? (
