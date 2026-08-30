@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import {
   ScheduleApiError,
@@ -70,12 +72,52 @@ function formatTimestamp(stamp: string | null): string {
   }).format(date);
 }
 
-function formatDuration(durationMs: number): string {
+function formatHistoryTimestamp(stamp: string): string {
+  const date = new Date(stamp);
+  if (Number.isNaN(date.getTime())) return stamp;
+  const day = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(date);
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+  return `${day} at ${time}`;
+}
+
+function formatDuration(durationMs: number, status: ScheduleRunStatus): string {
+  if (status === "running") return "In progress";
   // Legacy rows written before duration tracking existed always recorded 0;
   // showing "0ms" reads as an instant run instead of "never measured".
   if (durationMs === 0) return "Legacy run";
   if (durationMs < 1000) return `${durationMs}ms`;
   return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function ScheduleMarkdown({ children }: { children: string }) {
+  return (
+    <div className="schedule-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        components={{
+          a: ({ children: linkChildren, ...props }) => (
+            <a {...props} target="_blank" rel="noreferrer noopener">
+              {linkChildren}
+            </a>
+          ),
+          table: ({ children: tableChildren, ...props }) => (
+            <div className="schedule-markdown-table">
+              <table {...props}>{tableChildren}</table>
+            </div>
+          ),
+        }}
+      >
+        {children}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 function LoadingSchedule() {
@@ -216,7 +258,7 @@ function CreateAutomationForm({
   );
 }
 
-function ScheduleReceipt({ receipt }: { receipt: ScheduleRun }) {
+function ScheduleReceipt({ receipt, heading }: { receipt: ScheduleRun; heading: string }) {
   const label = RUN_STATUS_LABELS[receipt.status];
   return (
     <li
@@ -224,10 +266,12 @@ function ScheduleReceipt({ receipt }: { receipt: ScheduleRun }) {
       aria-label={`${label} run ${receipt.id}`}
     >
       <header>
-        <span className="schedule-run-status">{label}</span>
-        <span>{formatDuration(receipt.durationMs)}</span>
+        <h2>{heading}</h2>
+        <span className="schedule-run-status">
+          {label} · {formatDuration(receipt.durationMs, receipt.status)}
+        </span>
       </header>
-      <p>{receipt.summary || "No summary was recorded."}</p>
+      <ScheduleMarkdown>{receipt.summary || "No summary was recorded."}</ScheduleMarkdown>
       {receipt.status === "waiting_approval" && (
         <div className="schedule-waiting-context">
           <strong>This run is paused—not complete.</strong>
@@ -261,7 +305,97 @@ function ScheduleReceipt({ receipt }: { receipt: ScheduleRun }) {
   );
 }
 
-function ScheduleJobCard({
+function RunFeedbackMessage({ feedback }: { feedback: RunFeedback | undefined }) {
+  if (feedback?.kind === "running") {
+    return (
+      <p className="schedule-run-feedback" role="status">
+        Running now. The next scheduled time remains unchanged.
+      </p>
+    );
+  }
+  if (feedback?.kind === "already_running") {
+    return (
+      <p className="schedule-run-feedback warning" role="status">
+        <strong>Already running.</strong> {feedback.message}
+      </p>
+    );
+  }
+  if (feedback?.kind === "failed") {
+    return (
+      <div className="schedule-run-feedback error" role="alert">
+        <strong>This run couldn’t be started.</strong>
+        <span>Check that Sourcecado is available, then try again.</span>
+      </div>
+    );
+  }
+  return null;
+}
+
+function ScheduleTaskList({
+  jobs,
+  templates,
+  onCreateFromTemplate,
+}: {
+  jobs: ScheduleJob[];
+  templates: ScheduleTemplate[];
+  onCreateFromTemplate: (template: ScheduleTemplate) => void;
+}) {
+  return (
+    <>
+      {jobs.length > 0 && (
+        <section className="schedule-task-list" aria-label="Saved scheduled tasks">
+          {jobs.map((job) => (
+            <a
+              key={job.id}
+              className="schedule-task-card"
+              href={`#/scheduled/${job.id}`}
+              aria-label={`Open ${job.name}`}
+            >
+              <strong>{job.name}</strong>
+              <p>{job.prompt}</p>
+              <span className="schedule-task-meta">
+                <span>{CADENCE_LABELS[job.cadence] || job.cadence}</span>
+                <span className="schedule-active-pill">Active</span>
+              </span>
+            </a>
+          ))}
+        </section>
+      )}
+
+      {templates.length > 0 && (
+        <section className="schedule-template-section" aria-labelledby="schedule-template-heading">
+          <h2 id="schedule-template-heading">Start from a template</h2>
+          <div className="schedule-template-grid">
+            {templates.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                className="schedule-template-card"
+                aria-label={`Use ${template.name} template`}
+                onClick={() => onCreateFromTemplate(template)}
+              >
+                <span className="schedule-template-mark" aria-hidden="true">
+                  ✦
+                </span>
+                <span>
+                  <strong>{template.name}</strong>
+                  <p>{template.description}</p>
+                  <small>
+                    {CADENCE_LABELS[template.cadences[0] || ""] ||
+                      template.cadences[0] ||
+                      "Choose a cadence"}
+                  </small>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
+function ScheduleDetail({
   job,
   receipts,
   feedback,
@@ -273,72 +407,125 @@ function ScheduleJobCard({
   onRun: () => void;
 }) {
   const running = feedback?.kind === "running";
+  const boundedReceipts = receipts.slice(0, 10);
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(receipts[0]?.id ?? null);
+  useEffect(() => {
+    setSelectedRunId(receipts[0]?.id ?? null);
+  }, [job.id, receipts[0]?.id]);
+  const selectedReceipt =
+    receipts.find((receipt) => receipt.id === selectedRunId) || receipts[0] || null;
   return (
-    <article className="schedule-job" aria-label={job.name}>
-      <header className="schedule-job-header">
+    <>
+      <nav className="schedule-breadcrumb" aria-label="Breadcrumb">
+        <a href="#/scheduled">Scheduled tasks</a>
+        <span aria-hidden="true">/</span>
+        <span>{job.name}</span>
+      </nav>
+      <header className="schedule-detail-header">
         <div>
-          <p className="schedule-eyebrow">{CADENCE_LABELS[job.cadence] || job.cadence}</p>
-          <h2>{job.name}</h2>
+          <h1>{job.name}</h1>
+          <label className="schedule-active-switch">
+            <input type="checkbox" role="switch" aria-label="Active" checked readOnly disabled />
+            <span>Active</span>
+          </label>
         </div>
-        <button
-          type="button"
-          aria-label={running ? `Running ${job.name}` : `Run ${job.name} now`}
-          aria-busy={running || undefined}
-          disabled={running}
-          onClick={onRun}
-        >
-          {running ? "Running…" : "Run now"}
-        </button>
+        <div className="schedule-detail-actions">
+          <button type="button" aria-label="Edit task" disabled>
+            <span aria-hidden="true">✎</span>
+          </button>
+          <button type="button" aria-label="Delete task" disabled>
+            <span aria-hidden="true">⌫</span>
+          </button>
+          <button
+            type="button"
+            aria-label={running ? `Running ${job.name}` : `Run ${job.name} now`}
+            aria-busy={running || undefined}
+            disabled={running}
+            onClick={onRun}
+          >
+            {running ? (
+              "Running…"
+            ) : (
+              <>
+                <span aria-hidden="true">▷</span> Run now
+              </>
+            )}
+          </button>
+        </div>
       </header>
 
-      <p className="schedule-job-prompt">{job.prompt}</p>
-      <dl className="schedule-job-facts">
-        <div>
-          <dt>Next run</dt>
-          <dd>
-            <time dateTime={job.nextRunAt || undefined}>{formatTimestamp(job.nextRunAt)}</time>
-          </dd>
-        </div>
-        <div>
-          <dt>Cadence</dt>
-          <dd>{CADENCE_LABELS[job.cadence] || job.cadence}</dd>
-        </div>
-      </dl>
+      <RunFeedbackMessage feedback={feedback} />
 
-      {feedback?.kind === "running" && (
-        <p className="schedule-run-feedback" role="status">
-          Running now. The next scheduled time remains unchanged.
-        </p>
-      )}
-      {feedback?.kind === "already_running" && (
-        <p className="schedule-run-feedback warning" role="status">
-          <strong>Already running.</strong> {feedback.message}
-        </p>
-      )}
-      {feedback?.kind === "failed" && (
-        <div className="schedule-run-feedback error" role="alert">
-          <strong>This run couldn’t be started.</strong>
-          <span>Check that Sourcecado is available, then try again.</span>
-        </div>
-      )}
+      <div className="schedule-detail-grid">
+        <aside className="schedule-history" aria-labelledby="schedule-history-heading">
+          <h2 id="schedule-history-heading">History</h2>
+          {boundedReceipts.length === 0 ? (
+            <p>No runs yet.</p>
+          ) : (
+            <ul>
+              {boundedReceipts.map((receipt) => (
+                <li key={receipt.id}>
+                  <button
+                    type="button"
+                    aria-pressed={selectedReceipt?.id === receipt.id}
+                    onClick={() => setSelectedRunId(receipt.id)}
+                  >
+                    <span>{formatHistoryTimestamp(receipt.startedAt)}</span>
+                    <span>{RUN_STATUS_LABELS[receipt.status]}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </aside>
 
-      <section className="schedule-receipts" aria-labelledby={`schedule-runs-${job.id}`}>
-        <h3 id={`schedule-runs-${job.id}`}>Run receipts</h3>
-        {receipts.length === 0 ? (
-          <p>No runs yet. Run it now or wait for the next scheduled time.</p>
-        ) : (
-          <ul aria-label="Run receipts">
-            {receipts.map((receipt) => (
-              <ScheduleReceipt key={receipt.id} receipt={receipt} />
-            ))}
-          </ul>
-        )}
-      </section>
-    </article>
+        <article className="schedule-detail-body">
+          {selectedReceipt && (
+            <section className="schedule-selected-receipt" aria-label="Selected run receipt">
+              <ul aria-label="Run receipts">
+                <ScheduleReceipt
+                  receipt={selectedReceipt}
+                  heading={
+                    selectedReceipt.id === boundedReceipts[0]?.id
+                      ? "Latest receipt"
+                      : "Run receipt"
+                  }
+                />
+              </ul>
+            </section>
+          )}
+          <section className="schedule-detail-section">
+            <h2>Instructions</h2>
+            <p>{job.prompt}</p>
+          </section>
+          <section className="schedule-detail-section schedule-repeat-row">
+            <div>
+              <h2>Repeats</h2>
+              <p>{CADENCE_LABELS[job.cadence] || job.cadence}</p>
+            </div>
+            <p>
+              Next run{" "}
+              <time dateTime={job.nextRunAt || undefined}>{formatTimestamp(job.nextRunAt)}</time>
+            </p>
+          </section>
+          <section className="schedule-detail-section">
+            <h2>Approvals</h2>
+            <p>
+              No automatic approvals. Enrichment and sending still pause in Inbox for an explicit
+              decision.
+            </p>
+          </section>
+          <p className="schedule-retention-note">
+            Deleting this task stops future runs. Existing receipts and the scheduled thread remain
+            available as history.
+          </p>
+        </article>
+      </div>
+    </>
   );
 }
 
-export function ScheduledPage() {
+export function ScheduledPage({ jobId }: { jobId?: number } = {}) {
   const [state, setState] = useState<PageState>({ status: "loading" });
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
@@ -347,6 +534,9 @@ export function ScheduledPage() {
   const [saving, setSaving] = useState(false);
   const [createFeedback, setCreateFeedback] = useState<string | null>(null);
   const [runFeedback, setRunFeedback] = useState<Record<number, RunFeedback>>({});
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<"next_run" | "name">("next_run");
 
   useEffect(() => {
     let active = true;
@@ -375,11 +565,40 @@ export function ScheduledPage() {
     [state],
   );
 
-  function openCreate() {
+  const visibleJobs = useMemo(() => {
+    if (state.status !== "loaded") return [];
+    const query = searchQuery.trim().toLocaleLowerCase();
+    return state.schedule.jobs
+      .filter(
+        (job) =>
+          !query ||
+          job.name.toLocaleLowerCase().includes(query) ||
+          job.prompt.toLocaleLowerCase().includes(query),
+      )
+      .sort((left, right) => {
+        if (sortBy === "name") return left.name.localeCompare(right.name);
+        if (left.nextRunAt === right.nextRunAt) return left.name.localeCompare(right.name);
+        if (left.nextRunAt === null) return 1;
+        if (right.nextRunAt === null) return -1;
+        return left.nextRunAt.localeCompare(right.nextRunAt);
+      });
+  }, [searchQuery, sortBy, state]);
+  const selectedJob =
+    state.status === "loaded" && jobId !== undefined
+      ? state.schedule.jobs.find((job) => job.id === jobId)
+      : undefined;
+  const selectedReceipts =
+    state.status === "loaded" && selectedJob
+      ? state.schedule.runs
+          .filter((receipt) => receipt.jobId === selectedJob.id)
+          .sort((left, right) => right.id - left.id)
+      : [];
+
+  function openCreate(template?: ScheduleTemplate) {
     if (state.status !== "loaded") return;
-    const firstTemplate = state.schedule.templates?.[0];
-    if (!firstTemplate) return;
-    setDraft(draftFromTemplate(firstTemplate));
+    const selectedTemplate = template || state.schedule.templates?.[0];
+    if (!selectedTemplate) return;
+    setDraft(draftFromTemplate(selectedTemplate));
     setCreateErrors({});
     setCreateFeedback(null);
     setShowCreate(true);
@@ -470,22 +689,67 @@ export function ScheduledPage() {
 
   return (
     <main className="route-page scheduled-page">
-      <header className="scheduled-page-header">
-        <div>
-          <h1>Scheduled</h1>
-          <p>Run repeatable sourcing work and keep a durable receipt for every attempt.</p>
-        </div>
-        {state.status === "loaded" && state.schedule.jobs.length > 0 && !showCreate && (
-          <button type="button" onClick={openCreate} disabled={!state.schedule.templates?.length}>
-            Create automation
-          </button>
-        )}
-      </header>
+      {jobId === undefined && (
+        <>
+          <header className="scheduled-page-header">
+            <div>
+              <h1>Scheduled tasks</h1>
+              <p>Run tasks on a schedule or whenever you need them.</p>
+            </div>
+            <div className="schedule-list-actions">
+              <button
+                type="button"
+                className="schedule-search-toggle"
+                aria-label="Search scheduled tasks"
+                aria-expanded={searchOpen}
+                aria-controls="schedule-search"
+                onClick={() => setSearchOpen((open) => !open)}
+              >
+                <span aria-hidden="true">⌕</span>
+              </button>
+              <label>
+                <span className="schedule-visually-hidden">Sort scheduled tasks</span>
+                <select
+                  aria-label="Sort scheduled tasks"
+                  value={sortBy}
+                  onChange={(event) => setSortBy(event.target.value as "next_run" | "name")}
+                >
+                  <option value="next_run">Sort by Next run</option>
+                  <option value="name">Sort by Name</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="schedule-primary-action"
+                onClick={() => openCreate()}
+                disabled={state.status !== "loaded" || !state.schedule.templates?.length}
+              >
+                New task
+              </button>
+            </div>
+          </header>
+          {searchOpen && (
+            <div className="schedule-search" id="schedule-search">
+              <label htmlFor="schedule-search-input">Search scheduled tasks</label>
+              <input
+                id="schedule-search-input"
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+            </div>
+          )}
+        </>
+      )}
 
       {state.status === "loading" && <LoadingSchedule />}
       {state.status === "failed" && (
         <section className="route-error" role="alert">
-          <h2>Automations couldn’t be loaded</h2>
+          {jobId === undefined ? (
+            <h2>Automations couldn’t be loaded</h2>
+          ) : (
+            <h1>Automations couldn’t be loaded</h1>
+          )}
           <p>Check that Sourcecado is available, then try again.</p>
           <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
             Retry loading automations
@@ -494,71 +758,87 @@ export function ScheduledPage() {
       )}
       {state.status === "loaded" && (
         <>
-          {waitingApprovalCount > 0 && (
-            <aside className="schedule-inbox-summary" role="status">
-              <strong>
-                {waitingApprovalCount} approval{waitingApprovalCount === 1 ? "" : "s"} waiting in
-                Inbox
-              </strong>
-              <span>Open the matching scheduled thread to review the approval in context.</span>
-            </aside>
-          )}
-          {createFeedback && (
-            <p className="schedule-create-feedback" role="status">
-              {createFeedback}
-            </p>
-          )}
-          {showCreate && draft && (
-            <CreateAutomationForm
-              templates={state.schedule.templates || []}
-              draft={draft}
-              errors={createErrors}
-              saving={saving}
-              onChange={setDraft}
-              onCancel={() => {
-                setShowCreate(false);
-                setDraft(null);
-                setCreateErrors({});
-              }}
-              onSubmit={(event) => void submitCreate(event)}
+          {jobId !== undefined && selectedJob && (
+            <ScheduleDetail
+              job={selectedJob}
+              receipts={selectedReceipts}
+              feedback={runFeedback[jobId]}
+              onRun={() => void runNow(selectedJob)}
             />
           )}
-          {createErrors.form && (
-            <p className="schedule-create-feedback error" role="alert">
-              {createErrors.form}
-            </p>
-          )}
-          {state.schedule.jobs.length === 0 && !showCreate && (
-            <section className="schedule-empty">
-              <p className="schedule-eyebrow">Template ready</p>
-              <h2>No automations yet</h2>
-              <p>
-                Start with a weekly sourcing review. You can adjust its name and instructions
-                before saving.
-              </p>
-              <button
-                type="button"
-                onClick={openCreate}
-                disabled={!state.schedule.templates?.length}
-              >
-                Create automation
-              </button>
+          {jobId !== undefined && !selectedJob && (
+            <section className="route-error" role="alert">
+              <h1>Scheduled task not found</h1>
+              <p>This saved task is no longer available.</p>
+              <a href="#/scheduled">Back to Scheduled tasks</a>
             </section>
           )}
-          {state.schedule.jobs.length > 0 && (
-            <div className="schedule-jobs">
-              {state.schedule.jobs.map((job) => (
-                <ScheduleJobCard
-                  key={job.id}
-                  job={job}
-                  receipts={state.schedule.runs
-                    .filter((receipt) => receipt.jobId === job.id)
-                    .sort((a, b) => b.id - a.id)}
-                  feedback={runFeedback[job.id]}
-                  onRun={() => void runNow(job)}
+          {jobId === undefined && (
+            <>
+              {waitingApprovalCount > 0 && (
+                <aside className="schedule-inbox-summary" role="status">
+                  <strong>
+                    {waitingApprovalCount} approval
+                    {waitingApprovalCount === 1 ? "" : "s"} waiting in Inbox
+                  </strong>
+                  <span>Open the matching scheduled thread to review the approval in context.</span>
+                </aside>
+              )}
+              {createFeedback && (
+                <p className="schedule-create-feedback" role="status">
+                  {createFeedback}
+                </p>
+              )}
+              {showCreate && draft && (
+                <CreateAutomationForm
+                  templates={state.schedule.templates || []}
+                  draft={draft}
+                  errors={createErrors}
+                  saving={saving}
+                  onChange={setDraft}
+                  onCancel={() => {
+                    setShowCreate(false);
+                    setDraft(null);
+                    setCreateErrors({});
+                  }}
+                  onSubmit={(event) => void submitCreate(event)}
                 />
-              ))}
-            </div>
+              )}
+              {createErrors.form && (
+                <p className="schedule-create-feedback error" role="alert">
+                  {createErrors.form}
+                </p>
+              )}
+              {state.schedule.jobs.length === 0 && !showCreate && (
+                <section className="schedule-empty">
+                  <p className="schedule-eyebrow">Template ready</p>
+                  <h2>No automations yet</h2>
+                  <p>
+                    Start with a weekly sourcing review. You can adjust its name and instructions
+                    before saving.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => openCreate()}
+                    disabled={!state.schedule.templates?.length}
+                  >
+                    Create automation
+                  </button>
+                </section>
+              )}
+              {state.schedule.jobs.length > 0 && (
+                <ScheduleTaskList
+                  jobs={visibleJobs}
+                  templates={state.schedule.templates || []}
+                  onCreateFromTemplate={openCreate}
+                />
+              )}
+              {state.schedule.jobs.length > 0 && visibleJobs.length === 0 && (
+                <p className="schedule-no-results" role="status">
+                  No saved tasks match “{searchQuery.trim()}”.
+                </p>
+              )}
+            </>
           )}
         </>
       )}

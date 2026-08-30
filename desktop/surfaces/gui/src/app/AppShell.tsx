@@ -365,7 +365,7 @@ export function AppShell() {
   } else if (route.kind === "memory") {
     outlet = <MemoryPage />;
   } else if (route.kind === "scheduled") {
-    outlet = <ScheduledPage />;
+    outlet = <ScheduledPage jobId={route.jobId} />;
   } else if (route.kind === "quarantine") {
     outlet = <QuarantinePage />;
   } else if (route.kind === "connections") {
