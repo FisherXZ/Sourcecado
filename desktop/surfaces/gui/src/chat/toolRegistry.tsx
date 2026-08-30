@@ -3,11 +3,13 @@ import type { ComponentType } from "react";
 import { ApolloPeopleResult } from "../generative/ApolloPeopleResult";
 import { CalendarEventResult } from "../generative/CalendarEventResult";
 import { GmailDraftResult } from "../generative/GmailDraftResult";
+import { LivingBriefResult } from "../generative/LivingBriefResult";
 
 export type DomainRendererSlot =
   | "apollo"
   | "gmail"
   | "calendar"
+  | "brief"
   | "evidence";
 
 export type DomainRendererProps = {
@@ -94,7 +96,7 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     category: "action",
     slot: "calendar",
   },
-  board_get: { label: "Read person file", category: "source" },
+  board_get: { label: "Read person file", category: "source", slot: "brief" },
   board_query: { label: "Queried Board", category: "source" },
   board_upsert: { label: "Updated person file", category: "action" },
   board_mutate: { label: "Updated person file", category: "action" },
@@ -145,6 +147,7 @@ const DOMAIN_RENDERERS: DomainRendererRegistry = {
   apollo: ApolloPeopleResult,
   calendar: CalendarEventResult,
   gmail: GmailDraftResult,
+  brief: LivingBriefResult,
 };
 
 export function domainRendererFor(

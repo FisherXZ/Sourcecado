@@ -55,6 +55,7 @@ from coworker.people import SOURCES
 from coworker.run_evidence import Evidence
 
 BRIEF_VERSION = "living-brief-v1"
+CHAT_HANDOFF_FIELD_CHARS = 2_000
 
 # How long a source reference stands before the claim it backs reads stale.
 FRESH_FOR = timedelta(days=30)
@@ -113,6 +114,9 @@ class LivingBrief:
     sequence_state: str | None
     last_contact: dict[str, Any]
     stored_handoff: dict[str, str] | None
+    stored_handoff_version: int | None
+    stored_handoff_saved_at: str | None
+    stored_handoff_stale_fields: tuple[str, ...]
     version: int
 
 
@@ -729,6 +733,9 @@ def project(
         "happened": _clean(person.get("handoff_happened")) or "",
         "they_want": _clean(person.get("handoff_they_want")) or "",
     }
+    handoff_version, handoff_saved_at, stale_handoff_fields = _handoff_metadata(
+        events, handoff
+    )
     return LivingBrief(
         person_id=str(person["person_id"]),
         projection=projection,
@@ -741,8 +748,141 @@ def project(
         sequence_state=_clean(person.get("sequence_state")),
         last_contact=_mail_state(person, events),
         stored_handoff=handoff if any(handoff.values()) else None,
+        stored_handoff_version=handoff_version,
+        stored_handoff_saved_at=handoff_saved_at,
+        stored_handoff_stale_fields=stale_handoff_fields,
         version=int(person.get("version") or 1),
     )
+
+
+_HANDOFF_FIELD_LABELS = {
+    "handoff_who": "who",
+    "handoff_wanted": "wanted",
+    "handoff_happened": "happened",
+    "handoff_they_want": "they_want",
+}
+
+
+def _handoff_metadata(
+    events: list[dict[str, Any]],
+    handoff: dict[str, str],
+) -> tuple[int | None, str | None, tuple[str, ...]]:
+    """Track each handoff field's save and later invalidations independently."""
+    saves: list[tuple[int, int | None, str | None, set[str]]] = []
+    reverts: list[tuple[int, int | None]] = []
+    for index, event in enumerate(events):
+        if event.get("source") == "sourcecado" and event.get("kind") == "revert":
+            payload = _payload(event)
+            try:
+                to_version = int(payload.get("to_version"))
+            except (TypeError, ValueError):
+                to_version = None
+            reverts.append((index, to_version))
+            continue
+        if event.get("source") != "sourcecado" or event.get("kind") != "patch":
+            continue
+        payload = _payload(event)
+        fields = payload.get("fields")
+        if not isinstance(fields, dict):
+            continue
+        handoff_fields = _HANDOFF_FIELD_LABELS.keys() & fields.keys()
+        if not handoff_fields:
+            continue
+        try:
+            saved_version = int(payload.get("version"))
+        except (TypeError, ValueError):
+            saved_version = None
+        saves.append(
+            (
+                index,
+                saved_version,
+                _clean(event.get("created_at")),
+                set(handoff_fields),
+            )
+        )
+    if not saves:
+        return None, None, ()
+
+    revert_index: int | None = None
+    effective_saves = list(saves)
+    if reverts:
+        revert_index, to_version = reverts[-1]
+        before_revert = [
+            save
+            for save in saves
+            if save[0] < revert_index
+            and to_version is not None
+            and save[1] is not None
+            and int(save[1]) <= to_version
+        ]
+        after_revert = [save for save in saves if save[0] > revert_index]
+        effective_saves = [*before_revert, *after_revert]
+    if not effective_saves:
+        return None, None, ()
+
+    field_saves: dict[str, tuple[int, int | None, str | None, set[str]]] = {}
+    for save in effective_saves:
+        for field in save[3]:
+            field_saves[field] = save
+    required_fields = {
+        field
+        for field, label in _HANDOFF_FIELD_LABELS.items()
+        if handoff.get(label)
+    }
+    unknown_fields = required_fields - field_saves.keys()
+    latest_save = max(field_saves.values(), key=lambda save: save[0])
+    saved_version = None if unknown_fields else latest_save[1]
+    saved_at = None if unknown_fields else latest_save[2]
+
+    stale: set[str] = set()
+    for storage_field, label in _HANDOFF_FIELD_LABELS.items():
+        saved = field_saves.get(storage_field)
+        if saved is None:
+            continue
+        for index, event in enumerate(events[saved[0] + 1 :], start=saved[0] + 1):
+            payload = _payload(event)
+            fields = payload.get("fields")
+            is_handoff_patch = (
+                event.get("source") == "sourcecado"
+                and event.get("kind") == "patch"
+                and isinstance(fields, dict)
+                and bool(_HANDOFF_FIELD_LABELS.keys() & fields.keys())
+            )
+            if is_handoff_patch or (
+                event.get("source") == "sourcecado" and event.get("kind") == "revert"
+            ):
+                continue
+            if (
+                revert_index is not None
+                and index < revert_index
+                and event.get("source") == "sourcecado"
+            ):
+                continue
+            invalidates = label == "happened"
+            if label == "they_want":
+                invalidates = bool(
+                    payload.get("direction") == "inbound"
+                    or event.get("kind") == "meeting"
+                    or event.get("source") == "granola"
+                )
+            elif label == "who":
+                invalidates = bool(
+                    isinstance(fields, dict)
+                    and {"first_name", "last_name", "title", "company"}
+                    & fields.keys()
+                ) or bool(
+                    event.get("source") == "apollo"
+                    and event.get("kind") == "enrich"
+                )
+            elif label == "wanted":
+                invalidates = isinstance(fields, dict) and "target" in fields
+            if invalidates:
+                stale.add(label)
+                break
+    ordered = tuple(
+        field for field in ("who", "wanted", "happened", "they_want") if field in stale
+    )
+    return saved_version, saved_at, ordered
 
 
 def person_brief(
@@ -807,7 +947,26 @@ def _one(brief: LivingBrief, *prefixes: str) -> dict[str, Any] | None:
     return None
 
 
-def handoff_draft(brief: LivingBrief) -> dict[str, Any]:
+def _bound_handoff_fields(
+    handoff: dict[str, Any], field_chars: int | None
+) -> dict[str, Any]:
+    bounded = dict(handoff)
+    truncated: list[str] = []
+    if field_chars is not None:
+        limit = max(1, int(field_chars))
+        for field in ("who", "wanted", "happened", "they_want"):
+            value = str(bounded.get(field) or "")
+            if len(value) <= limit:
+                continue
+            bounded[field] = value[:limit].rstrip() + "…"
+            truncated.append(field)
+    bounded["truncated_fields"] = truncated
+    return bounded
+
+
+def handoff_draft(
+    brief: LivingBrief, *, field_chars: int | None = None
+) -> dict[str, Any]:
     """The four-field handoff: what the director stored, or a draft to review.
 
     A generated draft names the claims it was built from, so a reviewer can
@@ -817,12 +976,19 @@ def handoff_draft(brief: LivingBrief) -> dict[str, Any]:
     revert restores.
     """
     if brief.stored_handoff is not None:
-        return {
-            **brief.stored_handoff,
-            "generated": False,
-            "source_refs": [],
-            "version": brief.version,
-        }
+        return _bound_handoff_fields(
+            {
+                **brief.stored_handoff,
+                "generated": False,
+                "source_refs": [],
+                "version": brief.stored_handoff_version,
+                "saved_at": brief.stored_handoff_saved_at,
+                "stale": bool(brief.stored_handoff_stale_fields),
+                "stale_fields": list(brief.stored_handoff_stale_fields),
+                "freshness_unknown": brief.stored_handoff_version is None,
+            },
+            field_chars,
+        )
     identity = _one(brief, "identity")
     target = _one(brief, "target", "gap:target")
     outcome = _one(brief, "outcome")
@@ -834,18 +1000,27 @@ def handoff_draft(brief: LivingBrief) -> dict[str, Any]:
     used = [
         claim["id"] for claim in (identity, target, outcome, wants) if claim is not None
     ] + [item.id for item in happened_items]
-    return {
-        "who": (identity or {}).get("text", ""),
-        "wanted": (target or {}).get("text", ""),
-        "happened": happened,
-        "they_want": (wants or {}).get("text", ""),
-        "generated": True,
-        "source_refs": used,
-        "version": brief.version,
-    }
+    return _bound_handoff_fields(
+        {
+            "who": (identity or {}).get("text", ""),
+            "wanted": (target or {}).get("text", ""),
+            "happened": happened,
+            "they_want": (wants or {}).get("text", ""),
+            "generated": True,
+            "source_refs": used,
+            "version": brief.version,
+            "saved_at": None,
+            "stale": False,
+            "stale_fields": [],
+            "freshness_unknown": False,
+        },
+        field_chars,
+    )
 
 
-def brief_payload(brief: LivingBrief) -> dict[str, Any]:
+def brief_payload(
+    brief: LivingBrief, *, handoff_field_chars: int | None = None
+) -> dict[str, Any]:
     """Render the projection for the person view."""
     claims = [_claim(item) for item in brief.projection.items]
     learned = _section(brief, "evidence") + _section(brief, "notes")
@@ -914,7 +1089,7 @@ def brief_payload(brief: LivingBrief) -> dict[str, Any]:
         "partial": bool(brief.partial_sources),
         "partial_sources": list(brief.partial_sources),
         "omitted": brief.dropped,
-        "handoff": handoff_draft(brief),
+        "handoff": handoff_draft(brief, field_chars=handoff_field_chars),
         "person_version": brief.version,
     }
 

@@ -449,6 +449,47 @@ def test_a_retry_safe_tool_costs_no_effect_record(tmp_path, tool_name, monkeypat
     assert "tool_pending" in kinds and "tool_completed" in kinds
 
 
+def test_a_board_read_failure_is_recorded_as_structured_partial_run_evidence(
+    tmp_path, monkeypatch
+):
+    repository, owner = _runs(tmp_path)
+    people = PersonStore(tmp_path / "people")
+    person = people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="Lovelace",
+        title="Founder",
+        company="Analytic",
+    )
+    people.bind_session("sess-board-partial", person["person_id"])
+    original_get = people.get
+
+    def unavailable(*args, **kwargs):
+        if kwargs.get("expand_sources"):
+            raise RuntimeError("private board storage failure")
+        return original_get(*args, **kwargs)
+
+    monkeypatch.setattr(people, "get", unavailable)
+    result, _store = _turn(
+        tmp_path,
+        provider=OneToolProvider("board_get"),
+        repository=repository,
+        owner=owner,
+        people=people,
+        sid="sess-board-partial",
+        text="Read the living brief",
+    )
+
+    assert result["status"] == "partial"
+    run = repository.list_runs(session_id="sess-board-partial", limit=10)[0]
+    checkpoints = repository.list_checkpoints(run["run_id"])
+    completed = next(item for item in checkpoints if item["kind"] == "tool_completed")
+    assert completed["payload"]["tool_name"] == "board_get"
+    assert completed["payload"]["status"] == "failed"
+    assert completed["payload"]["error_class"] == "board_read_failed"
+    assert run["current_state"] == "partial"
+
+
 # ==========================================================================
 # 3 -- the three triggers, each from its own production path
 # ==========================================================================
