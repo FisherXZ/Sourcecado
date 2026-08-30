@@ -8,10 +8,8 @@ import {
   type ReplyRefreshResult,
 } from "./api";
 
-function label(person: BoardPerson): { name: string; detail: string | null } {
-  const name = [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
-  const detail = [person.title, person.company].filter(Boolean).join(" · ");
-  return { name, detail: detail || null };
+function personName(person: BoardPerson): string {
+  return [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
 }
 
 function day(stamp: string | null | undefined): string | null {
@@ -40,50 +38,159 @@ function FollowUpChip({ person }: { person: BoardPerson }) {
   );
 }
 
-function Bucket({
-  id,
-  title,
-  people,
-}: {
-  id: string;
-  title: string;
-  people: BoardPerson[];
-}) {
-  const headingId = `board-${id}-heading`;
+function initials(person: BoardPerson): string {
+  const letters = [person.first_name, person.last_name]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .map((value) => Array.from(value)[0])
+    .join("")
+    .slice(0, 2);
+  return letters.toLocaleUpperCase() || "?";
+}
+
+const SEQUENCE_LABEL: Record<string, string> = {
+  open: "Open",
+  in_conversation: "In conversation",
+  done: "Done",
+};
+
+type SequenceFilter = "all" | "open" | "in_conversation" | "done";
+
+const SEQUENCE_FILTERS: { value: SequenceFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "open", label: "Open" },
+  { value: "in_conversation", label: "In conversation" },
+  { value: "done", label: "Done" },
+];
+
+function ContactRow({ person }: { person: BoardPerson }) {
+  const name = personName(person);
+  const sequence = SEQUENCE_LABEL[person.sequence_state ?? ""] ?? "Unknown";
+  const href = `#/people/${encodeURIComponent(person.person_id)}`;
+  const openPersonFile = () => {
+    window.location.hash = href;
+  };
   return (
-    <section className="board-bucket" aria-labelledby={headingId}>
-      <div className="board-bucket-heading">
-        <h2 id={headingId}>{title}</h2>
-        <span aria-label={`${people.length} people`}>{people.length}</span>
-      </div>
-      {people.length === 0 ? (
-        <p className="board-bucket-empty">None</p>
-      ) : (
-        <div className="board-rows">
-          {people.map((person) => {
-            const copy = label(person);
-            return (
-              <a
-                key={person.person_id}
-                className="board-row"
-                href={`#/people/${encodeURIComponent(person.person_id)}`}
-              >
-                <strong>{copy.name}</strong>
-                {copy.detail ? <span>{copy.detail}</span> : null}
-                {person.last_name_status === "hidden_by_apollo" ? (
-                  <span>Surname hidden by Apollo</span>
-                ) : null}
-                <span className="board-row-contact">
-                  {contactLine(person)}
-                  <FollowUpChip person={person} />
-                </span>
-              </a>
-            );
-          })}
+    <tr
+      className="contacts-row"
+      tabIndex={0}
+      aria-label={`Open Person File for ${name}`}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("a")) return;
+        openPersonFile();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        openPersonFile();
+      }}
+    >
+      <td>
+        <div className="contacts-identity">
+          <span className="contacts-avatar" aria-hidden="true">
+            {initials(person)}
+          </span>
+          <span className="contacts-cell-copy">
+            <a href={href} tabIndex={-1}>
+              <strong>{name}</strong>
+            </a>
+            {person.last_name_status === "hidden_by_apollo" ? (
+              <span>Surname hidden by Apollo</span>
+            ) : null}
+          </span>
         </div>
-      )}
-    </section>
+      </td>
+      <td>
+        <span className="contacts-primary">{person.title || "No title recorded"}</span>
+        <span className="contacts-secondary">{person.company || "No company recorded"}</span>
+      </td>
+      <td>
+        <span className={`contacts-sequence contacts-sequence-${person.sequence_state}`}>
+          {sequence}
+        </span>
+      </td>
+      <td>
+        <span className="contacts-last-contact">{contactLine(person)}</span>
+      </td>
+      <td>
+        {person.follow_up?.needed ? (
+          <FollowUpChip person={person} />
+        ) : (
+          <span className="contacts-attention-empty" aria-label="No attention needed">
+            —
+          </span>
+        )}
+      </td>
+    </tr>
   );
+}
+
+function ContactsTable({ people }: { people: BoardPerson[] }) {
+  return (
+    <div className="contacts-table-scroll">
+      <table className="contacts-table" aria-label="Active sourcing contacts">
+        <thead>
+          <tr>
+            <th scope="col">Contact</th>
+            <th scope="col">Role &amp; company</th>
+            <th scope="col">Sequence</th>
+            <th scope="col">Last contact</th>
+            <th scope="col">Attention</th>
+          </tr>
+        </thead>
+        <tbody>
+          {people.map((person) => (
+            <ContactRow key={person.person_id} person={person} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ContactsFilters({
+  active,
+  board,
+  onChange,
+}: {
+  active: SequenceFilter;
+  board: Board;
+  onChange: (filter: SequenceFilter) => void;
+}) {
+  const counts: Record<SequenceFilter, number> = {
+    all: board.open.length + board.in_conversation.length + board.done.length,
+    open: board.open.length,
+    in_conversation: board.in_conversation.length,
+    done: board.done.length,
+  };
+  return (
+    <div
+      className="contacts-filters"
+      role="group"
+      aria-label="Filter contacts by sequence status"
+    >
+      {SEQUENCE_FILTERS.map((filter) => (
+        <button
+          key={filter.value}
+          type="button"
+          aria-pressed={active === filter.value}
+          onClick={() => onChange(filter.value)}
+        >
+          <span>{filter.label}</span>
+          <span className="contacts-filter-count">{counts[filter.value]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function matchesContact(person: BoardPerson, query: string): boolean {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return true;
+  return [person.first_name, person.last_name, person.title, person.company]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLocaleLowerCase()
+    .includes(needle);
 }
 
 /** What the refresh did, said plainly. Counts come from the server. */
@@ -112,6 +219,8 @@ export function BoardView() {
   const [attempt, setAttempt] = useState(0);
   const [checking, setChecking] = useState(false);
   const [replyStatusText, setReplyStatusText] = useState<string | null>(null);
+  const [sequenceFilter, setSequenceFilter] = useState<SequenceFilter>("all");
+  const [contactQuery, setContactQuery] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -150,20 +259,24 @@ export function BoardView() {
     }
   }
 
-  const backlog = board?.backlog ?? [];
+  const contacts = board
+    ? [...board.open, ...board.in_conversation, ...board.done]
+    : [];
+  const visibleContacts =
+    (sequenceFilter === "all"
+      ? contacts
+      : contacts.filter((person) => person.sequence_state === sequenceFilter)
+    ).filter((person) => matchesContact(person, contactQuery));
   const empty =
     board !== null &&
-    backlog.length === 0 &&
-    board.open.length === 0 &&
-    board.in_conversation.length === 0 &&
-    board.done.length === 0;
+    contacts.length === 0;
 
   return (
     <main className="route-page board-page">
       <header className="board-page-header">
-        <p className="eyebrow">Sourcing workspace</p>
-        <h1>Board</h1>
-        <p>Keep sourced people visible from backlog through completed follow-up.</p>
+        <p className="eyebrow">Active sequences</p>
+        <h1>Contacts</h1>
+        <p>Keep active people moving from open outreach through completed follow-up.</p>
         <div className="board-page-actions">
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
             {checking ? "Checking for replies…" : "Check for replies"}
@@ -171,10 +284,10 @@ export function BoardView() {
           {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
         </div>
       </header>
-      {board === null && !failed ? <p role="status">Loading board…</p> : null}
+      {board === null && !failed ? <p role="status">Loading contacts…</p> : null}
       {failed ? (
         <section className="route-error" role="alert">
-          <p>Couldn’t load the board.</p>
+          <p>Couldn’t load contacts.</p>
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
             Retry
           </button>
@@ -182,21 +295,39 @@ export function BoardView() {
       ) : null}
       {empty ? (
         <section className="route-empty" role="status">
-          <h2>No one in motion</h2>
-          <p>Keep a person from sourcing results to add them here.</p>
+          <h2>No active contacts</h2>
+          <p>Start a sequence from a Person File to add someone here.</p>
         </section>
       ) : null}
       {board && !empty ? (
-        <div className="board-grid">
-          <Bucket id="backlog" title="Backlog" people={backlog} />
-          <Bucket id="open" title="Open" people={board.open} />
-          <Bucket
-            id="conversation"
-            title="In conversation"
-            people={board.in_conversation}
-          />
-          <Bucket id="done" title="Done" people={board.done} />
-        </div>
+        <section className="contacts-list" aria-label="Sequence contacts">
+          <div className="contacts-controls">
+            <ContactsFilters
+              active={sequenceFilter}
+              board={board}
+              onChange={setSequenceFilter}
+            />
+            <label className="contacts-search">
+              <span className="contacts-visually-hidden">Search active contacts</span>
+              <input
+                type="search"
+                aria-label="Search active contacts"
+                placeholder="Search active contacts"
+                value={contactQuery}
+                onChange={(event) => setContactQuery(event.currentTarget.value)}
+              />
+            </label>
+          </div>
+          {visibleContacts.length > 0 ? (
+            <ContactsTable people={visibleContacts} />
+          ) : (
+            <p className="contacts-filter-empty" role="status">
+              {contactQuery.trim()
+                ? `No contacts match “${contactQuery.trim()}”.`
+                : `No contacts in ${SEQUENCE_LABEL[sequenceFilter] ?? "this status"}.`}
+            </p>
+          )}
+        </section>
       ) : null}
     </main>
   );

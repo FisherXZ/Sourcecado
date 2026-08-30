@@ -130,17 +130,17 @@ describe("App shell routing", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Skills" })).toBeInTheDocument();
   });
 
-  it("renders Board as a direct durable rail destination", async () => {
+  it("renders Contacts as a direct durable rail destination", async () => {
     window.location.hash = "#/board";
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Board" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Contacts" })).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "Board" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Contacts" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("renders a decoded person file under the active Board destination", async () => {
+  it("renders a decoded person file under the active Contacts destination", async () => {
     window.location.hash = "#/people/person%20one";
 
     render(<App />);
@@ -148,7 +148,7 @@ describe("App shell routing", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Alyssa" })).toBeInTheDocument();
     expect(api.getPerson).toHaveBeenCalledWith("person one");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    expect(screen.getByRole("link", { name: "Board" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Contacts" })).toHaveAttribute("aria-current", "page");
   });
 
   it("opens a newly created person chat before the cached session list refreshes", async () => {
@@ -296,7 +296,7 @@ describe("App shell routing", () => {
     const nav = await screen.findByRole("navigation", { name: "Sourcecado" });
     expect(within(nav).getByRole("button", { name: "New chat" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: /Search/ })).toHaveTextContent("⌘K");
-    expect(within(nav).getByRole("link", { name: "Board" })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "Contacts" })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: "Scheduled" })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: "Connections" })).toBeInTheDocument();
     expect(within(nav).getByRole("link", { name: "Skills" })).toHaveAttribute("aria-current", "page");
@@ -741,14 +741,14 @@ describe("App shell routing", () => {
     expect(screen.queryByRole("dialog", { name: "Search Sourcecado" })).not.toBeInTheDocument();
   });
 
-  it("navigates to Board from command search", async () => {
+  it("navigates to Contacts from command search", async () => {
     render(<App />);
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     const dialog = await screen.findByRole("dialog", { name: "Search Sourcecado" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Board" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Contacts" }));
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Board" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Contacts" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/board");
   });
 

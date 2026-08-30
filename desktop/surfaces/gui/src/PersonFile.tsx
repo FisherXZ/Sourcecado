@@ -341,7 +341,7 @@ export function PersonFileView({ personId }: { personId: string }) {
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
             Retry
           </button>
-          <a href="#/board">Back to Board</a>
+          <a href="#/board">Back to Contacts</a>
         </section>
       </main>
     );
@@ -365,7 +365,7 @@ export function PersonFileView({ personId }: { personId: string }) {
   return (
     <main className="route-page person-page">
       <header className="person-page-header">
-        <a className="person-back-link" href="#/board">← Board</a>
+        <a className="person-back-link" href="#/board">← Contacts</a>
         <p className="eyebrow">Person file</p>
         <h1>{file.brief.who || "Person"}</h1>
         {file.person.last_name_status === "hidden_by_apollo" ? (

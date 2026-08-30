@@ -124,7 +124,7 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
           <kbd>⌘K</kbd>
         </button>
         <div className="destination-links">
-          <RailLink href="#/board" current={route.kind === "board" || route.kind === "person"}>Board</RailLink>
+          <RailLink href="#/board" current={route.kind === "board" || route.kind === "person"}>Contacts</RailLink>
           <RailLink
             href="#/scheduled"
             current={route.kind === "scheduled"}

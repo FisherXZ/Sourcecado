@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { SessionRow } from "../api";
 
 const DESTINATIONS = [
-  { label: "Board", hash: "#/board" },
+  { label: "Contacts", hash: "#/board" },
   { label: "Scheduled", hash: "#/scheduled" },
   { label: "Connections", hash: "#/connections" },
   { label: "Skills", hash: "#/skills" },

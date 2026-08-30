@@ -75,6 +75,14 @@ function boardWith(open: unknown[], inConversation: unknown[]) {
   return { open, in_conversation: inConversation, done: [] };
 }
 
+function contactRow(link: HTMLElement): HTMLTableRowElement {
+  const row = link.closest("tr");
+  if (!(row instanceof HTMLTableRowElement)) {
+    throw new Error("contact link is not inside a table row");
+  }
+  return row;
+}
+
 function personFile(overrides: Record<string, unknown> = {}) {
   return {
     person: {
@@ -135,7 +143,7 @@ function personFile(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("reply filing on the Board and the person file", () => {
+describe("reply filing on Contacts and the person file", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getBoard.mockResolvedValue(boardWith([WAITING], [REPLIED]));
@@ -147,14 +155,14 @@ describe("reply filing on the Board and the person file", () => {
     api.searchPersonDriveEvidence.mockResolvedValue({ files: [] });
   });
 
-  it("shows last contact, replied state, and the follow-up flag on the board", async () => {
+  it("shows last contact, replied state, and the follow-up flag on Contacts", async () => {
     render(<BoardView />);
 
-    const waiting = await screen.findByRole("link", { name: /Ada Analytic/ });
+    const waiting = contactRow(await screen.findByRole("link", { name: /Ada Analytic/ }));
     expect(waiting).toHaveTextContent("We wrote · 2026-08-20");
     expect(waiting).not.toHaveTextContent("Needs follow-up");
 
-    const talking = screen.getByRole("link", { name: /Bob Builder/ });
+    const talking = contactRow(screen.getByRole("link", { name: /Bob Builder/ }));
     expect(talking).toHaveTextContent("They replied · 2026-08-26");
     expect(talking).toHaveTextContent("Needs follow-up");
   });
@@ -163,7 +171,7 @@ describe("reply filing on the Board and the person file", () => {
     api.getBoard.mockResolvedValue(boardWith([NEEDS_REVIEW], []));
     render(<BoardView />);
 
-    const row = await screen.findByRole("link", { name: /Cleo Chen/ });
+    const row = contactRow(await screen.findByRole("link", { name: /Cleo Chen/ }));
     expect(row).toHaveTextContent("Reply needs review");
     expect(row).not.toHaveTextContent("They replied");
   });
@@ -177,9 +185,9 @@ describe("reply filing on the Board and the person file", () => {
     );
     render(<BoardView />);
 
-    expect(await screen.findByRole("link", { name: /Ada Analytic/ })).toHaveTextContent(
-      "No contact yet",
-    );
+    expect(
+      contactRow(await screen.findByRole("link", { name: /Ada Analytic/ })),
+    ).toHaveTextContent("No contact yet");
   });
 
   it("checks for replies on demand and reports what the refresh did", async () => {
