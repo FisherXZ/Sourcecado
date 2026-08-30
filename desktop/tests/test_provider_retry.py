@@ -585,6 +585,43 @@ def test_retry_controller_exhausts_active_attempts_before_failover():
     assert sleeps == [0.5]
 
 
+def test_retry_controller_fails_over_on_nonretryable_provider_incompatibility():
+    retry = importlib.import_module("coworker.provider_retry")
+
+    class Provider:
+        def __init__(self, provider_id):
+            self.provider_id = provider_id
+            self.model_id = f"{provider_id}-model"
+
+    async def no_sleep(_delay):
+        return None
+
+    controller = retry.RetryController(
+        (Provider("deepseek"), Provider("openai")),
+        policy=retry.RetryPolicy(max_attempts_per_provider=1),
+        sleep=no_sleep,
+    )
+
+    failover = asyncio.run(
+        controller.recover(
+            RuntimeError("provider adapter rejected retained history"),
+            partial_stream=False,
+        )
+    )
+    exhausted = asyncio.run(
+        controller.recover(
+            RuntimeError("fallback adapter also rejected retained history"),
+            partial_stream=False,
+        )
+    )
+
+    assert failover.action is retry.RecoveryAction.FAILOVER
+    assert failover.provider.provider_id == "openai"
+    assert failover.reason.value == "provider_incompatible"
+    assert exhausted.action is retry.RecoveryAction.FAIL
+    assert exhausted.exhausted is True
+
+
 def test_retry_controller_cancels_during_backoff_without_next_attempt():
     retry = importlib.import_module("coworker.provider_retry")
 

@@ -146,11 +146,24 @@ class RetryController:
                 decision.reason,
             )
         if decision.action is RetryAction.FAIL:
+            if (
+                self.provider_index + 1 < len(self.providers)
+                and _provider_specific_failure(error)
+            ):
+                self.provider_index += 1
+                self.attempt_number = 1
+                return RecoveryDirective(
+                    RecoveryAction.FAILOVER,
+                    self.provider,
+                    self.attempt_number,
+                    RetryReason.PROVIDER_INCOMPATIBLE,
+                )
             return RecoveryDirective(
                 RecoveryAction.FAIL,
                 self.provider,
                 self.attempt_number,
                 decision.reason,
+                exhausted=self.provider_index + 1 >= len(self.providers),
             )
         if self.attempt_number < self.policy.max_attempts_per_provider:
             delay = self.policy.delay_seconds(
@@ -190,7 +203,6 @@ class RetryController:
             decision.reason,
             exhausted=True,
         )
-
     async def _sleep_or_cancel(self, delay: float) -> bool:
         if self._cancel_event is None:
             await self._sleep(delay)
@@ -210,6 +222,18 @@ class RetryController:
             return False
         await sleep_task
         return True
+
+
+def _provider_specific_failure(error: BaseException) -> bool:
+    if isinstance(error, ProviderStreamError):
+        return error.error_kind in {
+            ProviderErrorKind.AUTHENTICATION,
+            ProviderErrorKind.CONFIGURATION,
+            ProviderErrorKind.INVALID_REQUEST,
+            ProviderErrorKind.PROTOCOL,
+            ProviderErrorKind.PROVIDER,
+        }
+    return isinstance(error, (RuntimeError, ValueError))
 
 
 _RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})

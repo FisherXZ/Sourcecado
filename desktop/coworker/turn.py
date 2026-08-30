@@ -215,6 +215,18 @@ def _telemetry_provider_error_kind(error: Exception) -> ErrorKind:
     return ErrorKind.PROVIDER
 
 
+def _provider_failure_code(error: BaseException) -> str:
+    if isinstance(error, ProviderStreamError):
+        return str(error.error_kind.value)
+    if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+        return "timeout"
+    if isinstance(error, ConnectionError):
+        return "connection"
+    if isinstance(error, (RuntimeError, ValueError)):
+        return "provider_runtime_error"
+    return "provider_failure"
+
+
 _TOOL_SOURCES: dict[str, tuple[str | None, str]] = {
     "gmail_search": ("gmail", "Gmail"),
     "gmail_read": ("gmail", "Gmail"),
@@ -867,6 +879,37 @@ async def run_turn(
             return
         run_context.finish(state, status=state, text=text_so_far)
 
+    def _record_model_failure(
+        error: BaseException,
+        directive: Any,
+        summary: str,
+    ) -> dict[str, Any]:
+        failure = {
+            "code": _provider_failure_code(error),
+            "provider": _telemetry_provider_name(directive.provider),
+            "model": str(
+                getattr(directive.provider, "model_id", "unknown") or "unknown"
+            ),
+            "attempts": directive.attempt_number,
+            "recovery_count": retry_count,
+            "exhausted": bool(directive.exhausted),
+        }
+        if run_context is not None:
+            run_context.note(
+                "model_failed",
+                state="running",
+                payload={
+                    "step": model_step,
+                    "attempt_id": f"model-{events.identity.run_id}-{model_step}",
+                    "provider": failure["provider"],
+                    "model_id": failure["model"],
+                    "status": "failed",
+                    "error_class": failure["code"],
+                    "error_summary": summary,
+                },
+            )
+        return failure
+
     async def _terminal(event: dict[str, Any]) -> None:
         _end_run(
             str(event.get("state") or "failed"), str(event.get("text") or "")
@@ -999,6 +1042,7 @@ async def run_turn(
     had_tool_failure = False
     turn_error_kind = ErrorKind.INTERNAL
     turn_error_message: str | None = None
+    provider_failure: dict[str, Any] | None = None
     history: list[dict[str, Any]] = []
     try:
         raw = store.load(sid)
@@ -1267,11 +1311,17 @@ async def run_turn(
                             exc,
                             review_required=True,
                         )
+                        provider_failure = _record_model_failure(
+                            exc, directive, turn_error_message
+                        )
                         raise RuntimeError(
                             turn_error_message
                         ) from exc
                     turn_error_kind = error_kind
                     turn_error_message = safe_provider_failure_message(exc)
+                    provider_failure = _record_model_failure(
+                        exc, directive, turn_error_message
+                    )
                     raise
                 _ensure_provider_span().finish(
                     stop_reason=_telemetry_stop_reason(
@@ -1759,6 +1809,7 @@ async def run_turn(
                 "state": "failed",
                 "error_kind": turn_error_kind.value,
                 "message": turn_error_message or str(exc),
+                **({"failure": provider_failure} if provider_failure else {}),
             }
         )
         return {"status": "error", "text": last_text}

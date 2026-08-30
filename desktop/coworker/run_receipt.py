@@ -150,13 +150,19 @@ def _model_attempts(
     attempts = _lifecycle(
         checkpoints,
         start_kinds={"model_pending"},
-        end_kinds={"model_completed"},
+        end_kinds={"model_completed", "model_failed"},
         key_field="attempt_id",
         fields=_MODEL_FIELDS,
     )
     for attempt in attempts:
         attempt.pop("_unknown")
-        attempt["outcome"] = "completed" if attempt.pop("_settled") else "pending"
+        settled = attempt.pop("_settled")
+        if not settled:
+            attempt["outcome"] = "pending"
+        elif attempt.get("error_class"):
+            attempt["outcome"] = "failed"
+        else:
+            attempt["outcome"] = "completed"
     observed = Evidence.PRESENT
     if not attempts:
         observed = absence_evidence(record)

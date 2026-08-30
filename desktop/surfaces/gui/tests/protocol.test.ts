@@ -148,6 +148,36 @@ describe("parseChatEvent", () => {
       parseChatEvent({ ...event, raw_provider_body: "PRIVATE_BODY" }),
     ).toEqual(event);
   });
+
+  it("keeps only classified fields on a final provider failure", () => {
+    const event = {
+      version: 2,
+      type: "error",
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      event_id: "event-provider-failed",
+      message_id: "message-1",
+      part_id: "part-1",
+      state: "failed",
+      error_kind: "provider",
+      message: "The model provider failed after bounded recovery attempts.",
+      failure: {
+        code: "provider_runtime_error",
+        provider: "openai",
+        model: "gpt-4o-mini",
+        attempts: 1,
+        recovery_count: 1,
+        exhausted: true,
+      },
+    } as const;
+
+    expect(
+      parseChatEvent({
+        ...event,
+        failure: { ...event.failure, raw_provider_body: "PRIVATE_BODY" },
+      }),
+    ).toEqual(event);
+  });
 });
 
 describe("parseChatEvent additive fields", () => {

@@ -71,6 +71,7 @@ class RetryReason(str, Enum):
     TIMEOUT = "timeout"
     CONNECTION = "connection"
     TRANSIENT_PROVIDER = "transient_provider"
+    PROVIDER_INCOMPATIBLE = "provider_incompatible"
     TRANSIENT_TOOL = "transient_tool"
 
 
