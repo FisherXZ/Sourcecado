@@ -70,6 +70,9 @@ function Bucket({
               >
                 <strong>{copy.name}</strong>
                 {copy.detail ? <span>{copy.detail}</span> : null}
+                {person.last_name_status === "hidden_by_apollo" ? (
+                  <span>Surname hidden by Apollo</span>
+                ) : null}
                 <span className="board-row-contact">
                   {contactLine(person)}
                   <FollowUpChip person={person} />

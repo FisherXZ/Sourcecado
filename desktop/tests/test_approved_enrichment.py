@@ -195,6 +195,49 @@ def test_an_approved_enrichment_updates_only_that_person_and_files_the_receipt(
     assert enrich_events[0]["session_id"] == session_id
 
 
+def test_verified_enrichment_promotes_the_full_name_across_person_surfaces(tmp_path):
+    from coworker.server import system_prompt
+
+    http = FakeHttp({MATCH_URL: APOLLO_PERSON})
+    app = _app(tmp_path, http)
+    client = TestClient(app)
+    person_id, session_id = _person(
+        app,
+        apollo_id="apollo_person_77",
+        first="Ada",
+        last="L***e",
+    )
+    app.state.store.rename_session(session_id, "Sourcing · Ada L***e")
+    parked = _park(client, person_id, session_id)
+    assert "L***e" not in parked.text
+
+    decided = _decide(client, parked.json()["item"]["id"])
+
+    assert decided.status_code == 200, decided.text
+    person = app.state.people.get(person_id)
+    assert person is not None
+    assert person["person_id"] == person_id
+    assert person["last_name"] == "Lovelace"
+    assert person["last_name_status"] == "known"
+    assert "L***e" not in str(person)
+    person_view = client.get(f"/v1/people/{person_id}", headers=HEADERS)
+    assert person_view.status_code == 200
+    assert "Ada Lovelace" in person_view.text
+    assert "L***e" not in person_view.text
+    prompt = system_prompt(
+        app.state.store,
+        people=app.state.people,
+        session_id=session_id,
+    )
+    assert "Ada Lovelace" in prompt
+    assert "L***e" not in prompt
+    session = app.state.store.index(session_id)
+    assert session is not None
+    assert "Ada Lovelace" in str(session["title"])
+    assert "L***e" not in str(session["title"])
+    assert app.state.people.person_for_session(session_id) == person_id
+
+
 def test_a_denied_enrichment_spends_no_credit(tmp_path):
     http = FakeHttp({MATCH_URL: APOLLO_PERSON})
     app = _app(tmp_path, http)

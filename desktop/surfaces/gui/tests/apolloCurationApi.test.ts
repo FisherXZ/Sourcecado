@@ -73,11 +73,13 @@ describe("Apollo curation API boundary", () => {
       version: 2,
       operation: "created",
       first_name: "Tim",
-      last_name: "Zh***g",
+      last_name: null,
+      last_name_status: "hidden_by_apollo",
       title: "CEO",
       company: "Apollo.io",
       sourcing_chat: null,
     });
+    expect(JSON.stringify(result)).not.toContain("Zh***g");
     expect(JSON.stringify(result)).not.toContain("PRIVATE");
   });
 });
