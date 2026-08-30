@@ -186,7 +186,36 @@ describe("App shell routing", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Scheduled" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Scheduled tasks" }),
+    ).toBeInTheDocument();
+  });
+
+  it("restores a direct Scheduled task detail route", async () => {
+    window.location.hash = "#/scheduled/4";
+    api.getSchedule.mockResolvedValue({
+      jobs: [
+        {
+          id: 4,
+          name: "Weekly priority review",
+          templateId: "weekly_sourcing_review",
+          cadence: "weekly_monday_0900",
+          cron: "0 9 * * 1",
+          prompt: "Review priority sourcing work.",
+          createdAt: "2026-08-25T10:00:00Z",
+          nextRunAt: "2026-08-31T09:00:00-07:00",
+        },
+      ],
+      runs: [],
+      templates: [],
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Weekly priority review" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toBeInTheDocument();
   });
 
   it("renders a direct Connections hash route", async () => {
@@ -346,7 +375,9 @@ describe("App shell routing", () => {
 
     fireEvent.click(screen.getByRole("link", { name: "Scheduled" }));
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Scheduled" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Scheduled tasks" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Scheduled" })).toHaveAttribute("aria-current", "page");
   });
 
@@ -634,7 +665,9 @@ describe("App shell routing", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Scheduled" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Scheduled tasks" }),
+    ).toBeInTheDocument();
     expect(api.setLastDestination).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("link", { name: "Skills" }));

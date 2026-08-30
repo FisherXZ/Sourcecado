@@ -9,15 +9,38 @@ describe("Scheduled route styles", () => {
       /\.schedule-create-form :where\(input, select\)[\s\S]*?min-height:\s*44px;/,
     );
     expect(css).toMatch(/\.schedule-thread-link[\s\S]*?min-height:\s*44px;/);
+    expect(css).toMatch(/\.schedule-history button[\s\S]*?min-height:\s*44px;/);
   });
 
-  it("stacks job and form actions on narrow screens", () => {
+  it("uses compact task cards and a dedicated history-detail grid", () => {
+    expect(css).toMatch(/\.schedule-task-list\s*\{[^}]*display:\s*grid;/);
+    expect(css).toMatch(/\.scheduled-page\s*\{[^}]*max-width:\s*900px;/);
+    expect(css).toMatch(/\.schedule-task-card\s*\{[^}]*max-width:\s*405px;/);
     expect(css).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.scheduled-page-header,[\s\S]*?\.schedule-job-header[\s\S]*?flex-direction:\s*column;/,
+      /\.schedule-detail-grid\s*\{[^}]*grid-template-columns:\s*320px\s+minmax\(0,\s*1fr\);[^}]*gap:\s*42px;/,
+    );
+    expect(css).toMatch(/\.schedule-markdown-table\s*\{[^}]*overflow-x:\s*auto;/);
+  });
+
+  it("stacks list and detail actions on narrow screens", () => {
+    expect(css).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.scheduled-page-header,[\s\S]*?\.schedule-detail-header[\s\S]*?flex-direction:\s*column;/,
     );
     expect(css).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.schedule-job-header button[\s\S]*?width:\s*100%;/,
+      /@media \(max-width: 767px\)[\s\S]*?\.schedule-detail-grid[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     );
+  });
+
+  it("keeps keyboard focus visible and disabled lifecycle stubs honest", () => {
+    expect(css).toMatch(/\.schedule-task-card:focus-visible[\s\S]*?outline:/);
+    expect(css).toMatch(
+      /\.schedule-detail-actions button:disabled[\s\S]*?cursor:\s*not-allowed;/,
+    );
+    expect(css).toMatch(
+      /\.schedule-active-switch input\s*\{[^}]*appearance:\s*none;[^}]*border-radius:\s*999px;/,
+    );
+    expect(css).toMatch(/\.schedule-active-switch input\s*\{[^}]*width:\s*39px;[^}]*height:\s*23px;/);
+    expect(css).toMatch(/\.schedule-markdown a\s*\{[^}]*color:\s*var\(--accent-deep\);/);
   });
 
   it("visually distinguishes waiting, partial, failed, and unknown receipts", () => {
