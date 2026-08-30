@@ -435,7 +435,7 @@ describe("ChatPage Warm Operator thread", () => {
     );
   });
 
-  it("moves from a transcript skeleton to sourcing-specific starters", async () => {
+  it("moves from a transcript skeleton to one suggestion above the composer", async () => {
     const conversation = deferred<{
       id: string;
       title: string | null;
@@ -461,13 +461,42 @@ describe("ChatPage Warm Operator thread", () => {
       });
     });
 
-    const starter = await screen.findByRole("button", {
-      name: "Build a candidate shortlist",
+    const suggestion = await screen.findByRole("button", {
+      name: "Review the active contacts that need follow-up this week",
     });
-    fireEvent.click(starter);
-    expect(screen.getByRole("textbox", { name: "Message Sourcecado" })).toHaveValue(
-      "Build a candidate shortlist for this week’s highest-priority role.",
+    const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    expect(
+      suggestion.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /follow-up this week/ })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Build a candidate shortlist" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Find why-now signals" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Prepare outreach for review" })).toBeNull();
+  });
+
+  it("fills only the active thread draft from the suggestion without sending", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: null,
+      messages: [],
+      events: [],
+    });
+
+    render(<ChatPage sessionId="thread-alpha" />);
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Review the active contacts that need follow-up this week",
+      }),
     );
+    expect(screen.getByRole("textbox", { name: "Message Sourcecado" })).toHaveValue(
+      "Review the active contacts that need follow-up this week.",
+    );
+    expect(chatSend).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("sourcecado.chat.draft.v1:thread-alpha")).toBe(
+      "Review the active contacts that need follow-up this week.",
+    );
+    expect(window.localStorage.getItem("sourcecado.chat.draft.v1:thread-beta")).toBeNull();
   });
 
   it("keeps the draft through a contextual load failure and retry", async () => {
@@ -729,7 +758,8 @@ describe("ChatPage Warm Operator thread", () => {
       target: { value: "Preserve this next instruction" },
     });
     expect(composer).toHaveValue("Preserve this next instruction");
-    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeEnabled();
     expect(screen.getByText("You can keep drafting while Sourcecado works.")).toBeInTheDocument();
 
     act(() => {
@@ -776,6 +806,13 @@ describe("ChatPage Warm Operator thread", () => {
     render(<ChatPage sessionId="thread-alpha" />);
     await screen.findByRole("heading", { level: 1, name: "Alpha" });
     const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    const idleAction = screen.getByRole("button", { name: "Send message" });
+    const composerRoot = idleAction.closest(".sourcecado-composer");
+    expect(idleAction).toHaveClass("sourcecado-composer-action");
+    expect(composerRoot?.querySelectorAll(".sourcecado-composer-action")).toHaveLength(1);
+    expect(
+      screen.getByText("You can keep drafting while Sourcecado works."),
+    ).toHaveAttribute("aria-hidden", "true");
     fireEvent.change(composer, { target: { value: "Keep this next prompt" } });
     act(() => {
       onChatEvent?.({
@@ -790,7 +827,14 @@ describe("ChatPage Warm Operator thread", () => {
       });
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Stop run" }));
+    const stop = await screen.findByRole("button", { name: "Stop run" });
+    expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+    expect(stop).toHaveClass("sourcecado-composer-action");
+    expect(composerRoot?.querySelectorAll(".sourcecado-composer-action")).toHaveLength(1);
+    expect(
+      screen.getByText("You can keep drafting while Sourcecado works."),
+    ).toHaveAttribute("aria-hidden", "false");
+    fireEvent.click(stop);
     expect(chatCancel).toHaveBeenCalledWith("thread-alpha", "run-cancel-me");
     expect(composer).not.toBeDisabled();
     expect(composer).toHaveValue("Keep this next prompt");
@@ -1395,10 +1439,10 @@ describe("ChatPage Warm Operator thread", () => {
     });
     const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
     fireEvent.change(composer, { target: { value: "Queue this follow-up" } });
-    const send = screen.getByRole("button", { name: "Send message" });
 
-    expect(send).toBeEnabled();
-    fireEvent.click(send);
+    expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeEnabled();
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
     await waitFor(() => expect(chatQueue).toHaveBeenCalledOnce());
     expect(chatQueue.mock.calls[0]?.[0]).toMatchObject({
       type: "queue_add",

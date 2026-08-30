@@ -148,7 +148,7 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
             badge={heldEffectCount}
             badgeLabel={`Held actions: ${heldEffectCount} waiting for your answer`}
           >
-            Needs your answer
+            Inbox
           </RailLink>
         </div>
         <div className="thread-groups">

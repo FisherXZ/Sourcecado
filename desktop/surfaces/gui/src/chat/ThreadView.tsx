@@ -29,7 +29,9 @@ type ThreadViewProps = {
   readonly onQueueRemove: (itemId: string) => void;
 };
 
-function Starter({
+const SUGGESTED_ACTION = "Review the active contacts that need follow-up this week";
+
+function SuggestedAction({
   label,
   prompt,
   onDraftChange,
@@ -42,12 +44,18 @@ function Starter({
   return (
     <button
       type="button"
+      className="sourcecado-suggestion"
       onClick={() => {
         aui.composer.setText(prompt);
         onDraftChange(prompt);
       }}
     >
-      {label}
+      <span className="sourcecado-suggestion-icon" aria-hidden="true">
+        <svg viewBox="0 0 20 20" focusable="false">
+          <path d="M4 14.5c1.8-3.5 4.2-5.7 7.4-6.8M9.8 4.5l3.8 2.7-2.7 3.8" />
+        </svg>
+      </span>
+      <span>{label}</span>
     </button>
   );
 }
@@ -124,32 +132,8 @@ export function ThreadView({
           <>
             <ThreadPrimitive.Empty>
               <section className="sourcecado-empty-thread">
-                <img
-                  className="sourcecado-empty-mascot"
-                  src="/brand/mascot/owl-mapping.jpg"
-                  alt=""
-                  width={96}
-                  height={96}
-                />
-                <p className="eyebrow">Start with a sourcing outcome</p>
-                <p>Build a shortlist, find a why-now signal, or prepare outreach for review.</p>
-                <div className="sourcecado-starters">
-                  <Starter
-                    label="Build a candidate shortlist"
-                    prompt="Build a candidate shortlist for this week’s highest-priority role."
-                    onDraftChange={onDraftChange}
-                  />
-                  <Starter
-                    label="Find why-now signals"
-                    prompt="Find fresh why-now signals for the people we should work next."
-                    onDraftChange={onDraftChange}
-                  />
-                  <Starter
-                    label="Prepare outreach for review"
-                    prompt="Prepare personalized outreach drafts for review; do not send them."
-                    onDraftChange={onDraftChange}
-                  />
-                </div>
+                <h2>What are you sourcing today?</h2>
+                <p>Name a target, review an active sequence, or prepare outreach.</p>
               </section>
             </ThreadPrimitive.Empty>
             <ThreadPrimitive.Messages
@@ -178,7 +162,18 @@ export function ThreadView({
         onEdit={onQueueEdit}
         onRemove={onQueueRemove}
       />
-      <Composer initialDraft={initialDraft} onDraftChange={onDraftChange} />
+      <div className="sourcecado-composer-zone">
+        {!loading && !loadError ? (
+          <ThreadPrimitive.Empty>
+            <SuggestedAction
+              label={SUGGESTED_ACTION}
+              prompt={`${SUGGESTED_ACTION}.`}
+              onDraftChange={onDraftChange}
+            />
+          </ThreadPrimitive.Empty>
+        ) : null}
+        <Composer initialDraft={initialDraft} onDraftChange={onDraftChange} />
+      </div>
     </ThreadPrimitive.Root>
     <Inspector />
     </div>
