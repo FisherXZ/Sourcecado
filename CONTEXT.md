@@ -62,8 +62,8 @@ The accumulated person files, outcomes, source-backed notes, and handoffs that p
 **Chat**
 The home surface where the director gives targets, asks questions, reviews work, and tells the assistant what to do next.
 
-**Board**
-The assistant's operating picture of kept people and active sequences. A kept person appears in Backlog before outreach; active sequences remain Open, In conversation, and Done. Backlog is not a fourth sequence state. The Board reports the work; it is not a CRM the director must constantly maintain.
+**Contacts**
+The assistant's compact operating picture of active sequences. It presents Open, In conversation, and Done as table filters and keeps each row attached to its durable Person File. Kept people without a sequence remain stored in the internal Board projection but do not appear in Contacts yet. Contacts reports the work; it is not a CRM the director must constantly maintain.
 
 **Person View**
 The full person file and handoff record. A compact version of the living brief may appear beside work in other surfaces.
@@ -79,7 +79,7 @@ Supporting destinations in the rail. They configure connectors, skills, workspac
 
 ## Safety and scope invariants
 
-- Chat is home; the board and person view support it.
+- Chat is home; Contacts and the person view support it.
 - A human chooses the target, person, enrichment, and send.
 - No background bulk enrichment and no auto-send.
 - Connector output is untrusted input and must not override product policy.

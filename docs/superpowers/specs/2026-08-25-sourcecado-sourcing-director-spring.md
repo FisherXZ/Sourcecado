@@ -49,7 +49,7 @@ Getting a real email address spends Apollo credits. The director does that on pu
 
 ### 3. Keep work in motion
 
-Outreach is not one email and a prayer. A person the director keeps appears in the Board's Backlog before outreach starts. Each person we are actively working is a sequence. The assistant keeps the picture of what is waiting in Backlog, what is open, what is in conversation, and what is done, so the director is not reconstructing it from Gmail search.
+Outreach is not one email and a prayer. A person the director keeps remains durable before outreach starts, but Contacts begins when that person enters an active sequence. The assistant keeps the compact picture of what is open, what is in conversation, and what is done, so the director is not reconstructing it from Gmail search.
 
 Follow-ups, "what did we last say," and "is this still alive" are the assistant's job. The conversation itself stays human.
 
@@ -69,7 +69,7 @@ The director opens Sourcecado and is in the thread with the assistant.
 
 They can say the target and get people back. They can say "write this one" and get a draft. They can say "what do I need for this conversation" and the brief is already on the person.
 
-When they want the operating picture, they open the dashboard: who is in Backlog, who is queued to write, which sequences are in conversation, what is done. It is the EA putting the board on the table for the principal. It is not a CRM they have to live in.
+When they want the operating picture, they open Contacts: who is queued to write, which sequences are in conversation, and what is done. It is the EA putting the active work on the table for the principal. It is not a CRM they have to live in.
 
 When they need the record, they open the person. A small panel of the same brief sits beside whatever they are doing, so they do not have to leave the work to remember who this is.
 
@@ -121,9 +121,9 @@ Team tenancy and hosted shared login.
 
 These are true. They are not the outline of the work. They exist so an implementation pass does not re-litigate the job.
 
-- Chat is home. The operating board is a destination in the rail.
+- Chat is home. Contacts is the active-sequence destination in the rail.
 - A sequence is a person we are working. A company is how we tag that person, not a separate kind of work item. Do not call it a deal.
-- Kept people appear in the Board's Backlog before they enter a sequence. Backlog is a Board lane, not a sequence state.
+- Kept people remain durable in the internal Board projection before they enter a sequence. They appear in Contacts only after entering Open, In conversation, or Done.
 - Sequences move Open → In conversation → Done. Exactly three sequence states. The director or the assistant moves them.
 - Intake is Apollo search from a target the director named.
 - A draft may be queued from Apollo fields and the target. Cited web research is welcome in the brief. It is not a gate on drafting.

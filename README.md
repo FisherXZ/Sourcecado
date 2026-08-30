@@ -11,7 +11,7 @@ The current product is the Python sidecar and React/Tauri desktop app in `deskto
 - Chat
 - People enrichment: Apollo supplies name, email, phone ; enrichment is deliberate because it spends credits.
 - Connectors: Gmail, Drive, Calendar, Granola, and web research add context
-- CRM board: Backlog, Open, In conversation, and Done.
+- Contacts: a compact table of active sequences in Open, In conversation, and Done. Kept people without a sequence remain durable Person Files but do not appear in Contacts yet.
 
 The current product specification is [Sourcecado as the sourcing director's assistant](docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md).
 
