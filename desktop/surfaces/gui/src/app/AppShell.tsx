@@ -5,7 +5,6 @@ import {
   getInbox,
   getMemoryBacklog,
   getQuarantinedEffects,
-  getSessions,
   pinSession,
   renameSession,
   setLastDestination,
@@ -28,6 +27,7 @@ import { CommandSearch } from "./CommandSearch";
 import { GlobalRail } from "./GlobalRail";
 import { parseHash } from "./route";
 import { readShellCache, writeShellCache } from "./sessionCache";
+import { getSessionsForBoot } from "./sessionBootstrap";
 
 export function AppShell() {
   const [cachedListing] = useState(() => readShellCache());
@@ -232,7 +232,7 @@ export function AppShell() {
         setRoute({ kind: "chat" });
       }
     }
-    getSessions()
+    getSessionsForBoot(() => active)
       .then(async (listing) => {
         if (!active) return;
         const restoreRoute = bootRestoreHashRef.current
@@ -287,6 +287,9 @@ export function AppShell() {
         writeShellCache(listing);
         const currentHash = window.location.hash;
         const cacheStillOwnsHash = bootRestoreHashRef.current === currentHash;
+        const persistNavigationAfterBoot =
+          deferDestinationPersistenceRef.current &&
+          shouldPersistDestination(currentHash, cacheStillOwnsHash);
         if (isRootHash(currentHash) || cacheStillOwnsHash) {
           const restored = restoreHash(listing);
           if (restored) {
@@ -299,11 +302,25 @@ export function AppShell() {
         }
         bootRestoreHashRef.current = null;
         deferDestinationPersistenceRef.current = false;
+        if (persistNavigationAfterBoot) {
+          setLastDestination(currentHash).catch(() => {});
+        }
         setBootPending(false);
       })
       .catch((error: unknown) => {
         if (!active) return;
+        const currentHash = window.location.hash;
+        const cacheStillOwnsHash = bootRestoreHashRef.current === currentHash;
+        const persistNavigationAfterBoot =
+          deferDestinationPersistenceRef.current &&
+          shouldPersistDestination(currentHash, cacheStillOwnsHash);
+        if (!cacheStillOwnsHash) {
+          bootRestoreHashRef.current = null;
+        }
         deferDestinationPersistenceRef.current = false;
+        if (persistNavigationAfterBoot) {
+          setLastDestination(currentHash).catch(() => {});
+        }
         setBootPending(false);
         setBootError(error instanceof Error ? error.message : String(error));
       });
@@ -415,7 +432,7 @@ export function AppShell() {
           <button type="button" onClick={() => setBootAttempt((attempt) => attempt + 1)}>Retry</button>
         </div>
       )}
-      {stale && (
+      {stale && !bootPending && (
         <div className="shell-stale" role="status">
           <span>Cached conversations may be stale.</span>
           <button type="button" onClick={() => setBootAttempt((attempt) => attempt + 1)}>Reconnect</button>
@@ -437,6 +454,12 @@ export function AppShell() {
 
 function isRootHash(hash: string) {
   return hash === "" || hash === "#" || hash === "#/";
+}
+
+function shouldPersistDestination(hash: string, bootRestoreOwnsHash: boolean): boolean {
+  if (bootRestoreOwnsHash || isRootHash(hash)) return false;
+  const destination = parseHash(hash);
+  return !(destination.kind === "chat" && destination.sessionId?.startsWith("sched-"));
 }
 
 function isRestorableChatHash(hash: string): boolean {
