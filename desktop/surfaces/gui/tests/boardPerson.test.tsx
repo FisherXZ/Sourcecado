@@ -185,6 +185,34 @@ describe("Board and person-file routes", () => {
     expect(screen.getByRole("region", { name: "In conversation" })).toHaveTextContent("None");
   });
 
+  it("renders kept people in Backlog without starting their sequence", async () => {
+    api.getBoard.mockResolvedValue({
+      backlog: [
+        {
+          person_id: "person-kept",
+          first_name: "Hudson",
+          last_name: "Liao",
+          title: "CEO",
+          company: "The Hog",
+          sequence_state: null,
+          board_lane: "backlog",
+        },
+      ],
+      open: [],
+      in_conversation: [],
+      done: [],
+    });
+
+    render(<BoardView />);
+
+    const backlog = await screen.findByRole("region", { name: "Backlog" });
+    expect(within(backlog).getByRole("link", { name: /Hudson Liao/ })).toHaveAttribute(
+      "href",
+      "#/people/person-kept",
+    );
+    expect(screen.getByRole("region", { name: "Open" })).toHaveTextContent("None");
+  });
+
   it("updates a person sequence through labeled pressed-state controls", async () => {
     const { container } = render(<PersonFileView personId="person one" />);
 

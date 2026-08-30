@@ -63,7 +63,7 @@ The accumulated person files, outcomes, source-backed notes, and handoffs that p
 The home surface where the director gives targets, asks questions, reviews work, and tells the assistant what to do next.
 
 **Board**
-The assistant's operating picture of sequences in Open, In conversation, and Done. It reports the work; it is not a CRM the director must constantly maintain.
+The assistant's operating picture of kept people and active sequences. A kept person appears in Backlog before outreach; active sequences remain Open, In conversation, and Done. Backlog is not a fourth sequence state. The Board reports the work; it is not a CRM the director must constantly maintain.
 
 **Person View**
 The full person file and handoff record. A compact version of the living brief may appear beside work in other surfaces.

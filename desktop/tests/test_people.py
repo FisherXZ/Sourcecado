@@ -112,10 +112,37 @@ def _ada(store: PersonStore) -> dict:
     )
 
 
-def test_person_with_no_sequence_is_not_on_the_board(tmp_path):
+def test_person_with_no_sequence_is_on_the_board_backlog(tmp_path):
     store = PersonStore(tmp_path)
-    _ada(store)
-    assert store.list_board() == {"open": [], "in_conversation": [], "done": []}
+    person = _ada(store)
+
+    board = store.list_board()
+
+    assert person["sequence_state"] is None
+    assert [row["person_id"] for row in board["backlog"]] == [person["person_id"]]
+    assert board["backlog"][0]["board_lane"] == "backlog"
+    assert board["open"] == []
+    assert board["in_conversation"] == []
+    assert board["done"] == []
+
+
+def test_unknown_legacy_sequence_appears_in_backlog_without_outreach(tmp_path):
+    store = PersonStore(tmp_path)
+    person = _ada(store)
+    store._conn.execute(
+        "UPDATE people SET sequence_state = 'kept' WHERE person_id = ?",
+        (person["person_id"],),
+    )
+    store._conn.commit()
+
+    row = store.list_board()["backlog"][0]
+
+    assert row["person_id"] == person["person_id"]
+    assert row["sequence_state"] == "kept"
+    assert row["board_lane"] == "backlog"
+    assert row["last_contact_at"] is None
+    assert row["replied"] is False
+    assert row["follow_up"] == {"needed": False, "reason": None}
 
 
 def test_moving_person_to_open_puts_them_on_the_board(tmp_path):
@@ -142,7 +169,9 @@ def test_unknown_sequence_actor_or_person_is_rejected(tmp_path):
         store.set_sequence(person["person_id"], "open", actor="crm")
     with pytest.raises(ValueError, match="unknown person"):
         store.set_sequence("per_" + "0" * 32, "open", actor="assistant")
-    assert store.list_board() == {"open": [], "in_conversation": [], "done": []}
+    assert [row["person_id"] for row in store.list_board()["backlog"]] == [
+        person["person_id"]
+    ]
     assert store.get(person["person_id"])["sequence_state"] is None
 
 
