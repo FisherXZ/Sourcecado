@@ -596,8 +596,8 @@
 .sourcecado-empty-thread h2 {
   margin: 0;
   color: var(--text);
-  font-size: clamp(24px, 4vw, 30px);
-  font-weight: 550;
+  font-size: 28px;
+  font-weight: 500;
   letter-spacing: -0.025em;
 }
 
@@ -660,10 +660,10 @@
 }
 
 .sourcecado-composer-zone {
-  width: min(808px, calc(100% - 48px));
+  width: min(720px, calc(100% - 40px));
   min-width: 0;
   justify-self: center;
-  padding: 0 0 18px;
+  padding: 0 0 22px;
 }
 
 .sourcecado-suggestion {
@@ -672,14 +672,15 @@
   max-width: 100%;
   min-height: 38px;
   align-items: center;
-  gap: 9px;
-  margin: 0 0 8px 8px;
-  padding: 5px 10px;
+  gap: 10px;
+  margin: 0 0 9px 10px;
+  padding: 0 11px;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
   font: inherit;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
   transition: background-color 140ms ease, color 140ms ease;
@@ -722,12 +723,11 @@
   width: 100%;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "input action"
-    "status status";
-  gap: 8px;
+  grid-template-areas: "input action";
+  gap: 10px;
+  min-height: 88px;
   align-items: end;
-  padding: 12px;
+  padding: 13px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
@@ -738,11 +738,11 @@
   grid-area: input;
   width: 100%;
   min-width: 0;
-  min-height: 44px;
+  min-height: 54px;
   max-height: 160px;
   overflow-y: auto;
   resize: none;
-  padding: 10px 4px;
+  padding: 0;
   border: 0;
   outline: 0;
   background: transparent;
@@ -759,19 +759,29 @@
   min-width: 44px;
   min-height: 44px;
   padding: 0;
+  border: 0;
+  background: transparent;
+  display: grid;
+  place-items: end;
+  align-self: end;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.sourcecado-composer-action-visual {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
   border: 1px solid var(--accent);
   border-radius: 999px;
   background: var(--accent);
   color: var(--surface);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
-.sourcecado-composer-action svg {
-  width: 20px;
-  height: 20px;
+.sourcecado-composer-action-visual svg {
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentcolor;
   stroke-linecap: round;
@@ -780,8 +790,8 @@
 }
 
 .sourcecado-stop-icon {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 2px;
   background: currentcolor;
 }
@@ -792,19 +802,20 @@
 }
 
 .sourcecado-composer-action:disabled {
-  border-color: var(--border);
-  background: var(--raised);
-  color: var(--muted);
   cursor: default;
 }
 
-.sourcecado-composer-running {
-  grid-column: 1 / -1;
-  grid-area: status;
-  min-height: 17px;
-  margin: 0;
+.sourcecado-composer-action:disabled .sourcecado-composer-action-visual {
+  border-color: var(--border);
+  background: var(--raised);
   color: var(--muted);
-  font-size: 12px;
+}
+
+.sourcecado-composer-running {
+  min-height: 16px;
+  margin: 7px 0 0 13px;
+  color: var(--muted);
+  font-size: 11px;
   visibility: hidden;
 }
 
@@ -848,6 +859,7 @@
   .sourcecado-suggestion {
     min-height: 44px;
     margin-left: 0;
+    padding-block: 3px;
   }
 
   .sourcecado-composer textarea {
@@ -875,7 +887,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sourcecado-suggestion,
-  .sourcecado-composer-action {
+  .sourcecado-composer-action,
+  .sourcecado-composer-action-visual {
     transition: none;
   }
 }

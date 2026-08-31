@@ -44,13 +44,16 @@ describe("Warm Operator thread styles", () => {
 
   it("keeps one fixed composer action slot when Send becomes Stop", () => {
     expect(styles).toMatch(
-      /\.sourcecado-composer\s*\{[^}]*grid-template-areas:\s*"input action"\s*"status status";/,
+      /\.sourcecado-composer\s*\{[^}]*grid-template-areas:\s*"input action";[^}]*min-height:\s*88px;[^}]*padding:\s*13px;/,
     );
     expect(styles).toMatch(
       /\.sourcecado-composer-action\s*\{[^}]*grid-area:\s*action;[^}]*width:\s*44px;[^}]*height:\s*44px;/,
     );
     expect(styles).toMatch(
-      /\.sourcecado-composer-running\s*\{[^}]*min-height:\s*17px;[^}]*visibility:\s*hidden;/,
+      /\.sourcecado-composer-action-visual\s*\{[^}]*width:\s*38px;[^}]*height:\s*38px;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-composer-running\s*\{[^}]*min-height:\s*16px;[^}]*margin:\s*7px 0 0 13px;[^}]*font-size:\s*11px;[^}]*visibility:\s*hidden;/,
     );
     expect(styles).toMatch(
       /\.sourcecado-composer-running\.is-visible\s*\{[^}]*visibility:\s*visible;/,
@@ -59,10 +62,13 @@ describe("Warm Operator thread styles", () => {
 
   it("keeps the empty-thread suggestion understated above the composer", () => {
     expect(styles).toMatch(
-      /\.sourcecado-composer-zone\s*\{[^}]*width:\s*min\(808px, calc\(100% - 48px\)\);/,
+      /\.sourcecado-composer-zone\s*\{[^}]*width:\s*min\(720px, calc\(100% - 40px\)\);/,
     );
     expect(styles).toMatch(
       /\.sourcecado-suggestion\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-empty-thread h2\s*\{[^}]*font-size:\s*28px;[^}]*font-weight:\s*500;/,
     );
   });
 
@@ -74,7 +80,7 @@ describe("Warm Operator thread styles", () => {
       /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-suggestion\s*\{[^}]*min-height:\s*44px;/,
     );
     expect(styles).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-suggestion[\s\S]*?\.sourcecado-composer-action\s*\{[^}]*transition:\s*none;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-suggestion[\s\S]*?\.sourcecado-composer-action,[\s\S]*?\.sourcecado-composer-action-visual\s*\{[^}]*transition:\s*none;/,
     );
   });
 
