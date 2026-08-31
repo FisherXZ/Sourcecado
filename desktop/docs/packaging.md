@@ -11,11 +11,11 @@ Design decisions and their reasoning live in [ADR 0003](adr/0003-macos-preview-a
 ## Build
 
 ```sh
-make build-sidecar   # freezes desktop/coworker into desktop/surfaces/gui/src-tauri/resources/sourcecado-sidecar/
+make build-backend   # freezes desktop/coworker into desktop/surfaces/gui/src-tauri/resources/sourcecado-backend/
 npm --prefix desktop/surfaces/gui run tauri -- build
 ```
 
-`make build-sidecar` must run before any `cargo build`/`cargo check`/`cargo test`/`cargo clippy` in `src-tauri`, including for `tauri dev`. `tauri.conf.json` declares `bundle.resources: ["resources/sourcecado-sidecar"]`, and Tauri's build script validates that path exists at compile time regardless of profile — there is no separate "dev doesn't need it" exemption. This is a new local prerequisite `tauri dev` didn't have before this change.
+`make build-backend` must run before any `cargo build`/`cargo check`/`cargo test`/`cargo clippy` in `src-tauri`, including for `tauri dev`. `tauri.conf.json` declares `bundle.resources: ["resources/sourcecado-backend"]`, and Tauri's build script validates that path exists at compile time regardless of profile — there is no separate "dev doesn't need it" exemption. This is a new local prerequisite `tauri dev` didn't have before this change.
 
 The result is `desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app` — a self-contained app that does not reference this repository checkout or `desktop/.venv` at runtime.
 
@@ -25,14 +25,14 @@ The result is `desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Source
 make smoke-test
 ```
 
-Or point `desktop/packaging/smoke_test.py` directly at the built app's sidecar:
+Or point `desktop/packaging/smoke_test.py` directly at the built app's backend:
 
 ```sh
 python3 desktop/packaging/smoke_test.py \
-  "desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app/Contents/Resources/resources/sourcecado-sidecar/sourcecado-sidecar"
+  "desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app/Contents/Resources/resources/sourcecado-backend/sourcecado-backend"
 ```
 
-The smoke test launches the sidecar exactly as the shell does (loopback only, isolated `CLUB_STATE_DIR`, in-memory token, then `kill()`), checks the health/auth handshake, confirms isolated state was created, and confirms the process leaves no orphan behind.
+The smoke test launches the backend exactly as the shell does (loopback only, isolated `CLUB_STATE_DIR`, in-memory token, then `kill()`), checks the health/auth handshake, confirms isolated state was created, and confirms the process leaves no orphan behind.
 
 ## Known gaps
 

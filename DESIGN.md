@@ -83,5 +83,5 @@
 |------|----------|-----------|
 | 2026-06-18 | Initial design system created ("Warm Operator") | Created by /design-consultation. Direction chosen: data-dense operator tool with warm/avocado character. Research-backed (Attio/Linear density + Clay warmth split). Approved after live HTML preview. |
 | 2026-08-25 | Chat became the home surface | The sourcing-director job begins with a target and a conversation; Contacts reports active sequences and the person file preserves the full record. |
-| 2026-08-26 | Local desktop became the active product | The React/Vite/Tauri shell and Python sidecar replaced the hosted web app as the implementation target. |
+| 2026-08-26 | Local desktop became the active product | The React/Vite/Tauri shell and Python backend replaced the hosted web app as the implementation target. |
 | 2026-08-28 | Owl mascot replaced the geometric avocado dock icon | New painted brand set: flight pose as the app icon, mapping pose on empty threads, meadow pose stored, landing-hero on first-run welcome, light social card on the README. |

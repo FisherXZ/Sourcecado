@@ -1,7 +1,7 @@
 """Regression coverage for coworker.run's loopback guard and per-launch token.
 
-Packaging the sidecar into a bundled macOS artifact must not weaken either
-guarantee: the sidecar only ever binds loopback, and each launch gets its own
+Packaging the backend into a bundled macOS artifact must not weaken either
+guarantee: the backend only ever binds loopback, and each launch gets its own
 in-memory token rather than a fixed or shared secret.
 """
 

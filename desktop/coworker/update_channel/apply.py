@@ -64,8 +64,8 @@ STAGING_DIR_NAME = ".sourcecado-update"
 PREVIOUS_SUFFIX = ".previous"
 RUN_STORE_NAME = "agent_runs.db"
 VERSIONS_SNAPSHOT = "pre-update-state-versions.json"
-SIDECAR_RELATIVE = Path(
-    "Contents/Resources/resources/sourcecado-sidecar/sourcecado-sidecar"
+BACKEND_RELATIVE = Path(
+    "Contents/Resources/resources/sourcecado-backend/sourcecado-backend"
 )
 HEALTH_TIMEOUT = 40.0
 
@@ -370,17 +370,17 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def sidecar_health_check(
+def backend_health_check(
     installation: Installation, *, timeout: float = HEALTH_TIMEOUT
 ) -> bool:
-    """Launch the installed sidecar against throwaway state and ask if it is well.
+    """Launch the installed backend against throwaway state and ask if it is well.
 
     The state directory is a temporary one, never the operator's. A health check
     that wrote to real state would be a change the rollback could not undo.
     """
     import secrets as secrets_module
 
-    binary = installation.bundle_path / SIDECAR_RELATIVE
+    binary = installation.bundle_path / BACKEND_RELATIVE
     if not binary.is_file() or not os.access(binary, os.X_OK):
         return False
     token = secrets_module.token_hex(16)
@@ -456,7 +456,7 @@ def apply_update(
     artifact_path: str | Path,
     trust: Any = None,
     runs: Any = None,
-    health_check: Callable[[Installation], bool] = sidecar_health_check,
+    health_check: Callable[[Installation], bool] = backend_health_check,
     drain_timeout: float = DEFAULT_TIMEOUT,
     drain_poll: float = DEFAULT_POLL,
     sleep: Callable[[float], None] = time.sleep,
@@ -842,6 +842,6 @@ __all__ = [
     "restore_bundle",
     "rollback",
     "running_identity",
-    "sidecar_health_check",
+    "backend_health_check",
     "stage_artifact",
 ]

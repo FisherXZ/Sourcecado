@@ -188,7 +188,7 @@ def registry_state_versions() -> dict[str, int]:
     """The version of every registered store this build knows how to produce.
 
     Imported here rather than at module scope so the packaging scripts can use
-    the manifest format without pulling in the whole sidecar.
+    the manifest format without pulling in the whole backend.
     """
     from coworker import migrations
 

@@ -365,7 +365,7 @@ describe("ApprovalCard", () => {
     ).toBeInTheDocument();
   });
 
-  it("names the recipient, subject, and account when the sidecar resolved the gmail_send resource", () => {
+  it("names the recipient, subject, and account when the backend resolved the gmail_send resource", () => {
     const part = {
       ...approvalPart(),
       toolName: "gmail_send",

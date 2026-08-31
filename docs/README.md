@@ -26,7 +26,7 @@ Sourcecado's dated documents record several product shapes. They are intentional
 
 These describe the active local runtime. They are not the product spec. If they conflict with the 2026-08-25 specification, the spec wins.
 
-### How the sidecar works
+### How the backend works
 
 - [Agent runs](../desktop/docs/agent-runs.md)
 - [Run ledger](../desktop/docs/run-ledger.md)

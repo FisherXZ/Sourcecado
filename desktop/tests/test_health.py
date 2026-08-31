@@ -14,7 +14,7 @@ def test_health_ok_with_token(tmp_path):
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "ok"
-    assert body["piece"] == "sidecar"
+    assert body["piece"] == "backend"
     assert body["slice"] == 29
     assert "model" in body
 

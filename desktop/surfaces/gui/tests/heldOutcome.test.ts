@@ -8,7 +8,7 @@ import { SourcecadoChatStore } from "../src/chat/store";
  * A consequential call was dispatched and never reported back.
  *
  * "Failed" is a claim nobody can make about it, and a director told a send
- * failed is a director who sends it again. The sidecar now ends that turn with
+ * failed is a director who sends it again. The backend now ends that turn with
  * `state: "held"`, and the thread has to carry the word through rather than
  * flatten it back into an error.
  */

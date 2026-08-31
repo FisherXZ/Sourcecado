@@ -661,7 +661,7 @@ describe("App shell routing", () => {
       open_id: null,
       last_destination: "#/scheduled",
     }));
-    api.getSessions.mockRejectedValue(new Error("sidecar offline"));
+    api.getSessions.mockRejectedValue(new Error("backend offline"));
 
     render(<App />);
 
@@ -915,12 +915,12 @@ describe("App shell routing", () => {
   });
 
   it("keeps navigation usable after bounded boot retries are exhausted", async () => {
-    api.getSessions.mockRejectedValue(new Error("sidecar offline"));
+    api.getSessions.mockRejectedValue(new Error("backend offline"));
 
     render(<App />);
 
     const alert = await screen.findByRole("alert", undefined, { timeout: 2_500 });
-    expect(alert).toHaveTextContent("sidecar offline");
+    expect(alert).toHaveTextContent("backend offline");
     expect(api.getSessions).toHaveBeenCalledTimes(4);
     expect(screen.getByRole("navigation", { name: "Sourcecado" })).toBeInTheDocument();
     api.getSessions.mockResolvedValueOnce({
@@ -951,7 +951,7 @@ describe("App shell routing", () => {
       last_destination: "#/chat/missing/person/person-old",
     }));
     window.localStorage.setItem("sourcecado.chat.draft.v1:missing", "Unsent note");
-    api.getSessions.mockRejectedValue(new Error("sidecar offline"));
+    api.getSessions.mockRejectedValue(new Error("backend offline"));
     api.createSession.mockResolvedValue({
       id: "recovered-draft",
       title: null,
@@ -1039,7 +1039,7 @@ describe("App shell routing", () => {
     expect(screen.getByRole("link", { name: "Open most recent conversation" })).toHaveAttribute("href", "#/chat/alpha");
   });
 
-  it("does not blame the sidecar when a person-bound conversation is missing", async () => {
+  it("does not blame the backend when a person-bound conversation is missing", async () => {
     window.location.hash = "#/chat/missing/person/person-old";
     api.getSessions.mockResolvedValue({
       sessions: [
@@ -1054,7 +1054,7 @@ describe("App shell routing", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Your draft is still here. Retry, or choose another conversation.");
-    expect(alert).not.toHaveTextContent("sidecar");
+    expect(alert).not.toHaveTextContent("backend");
   });
 
   it("moves an opened thread to the front of recent navigation", async () => {

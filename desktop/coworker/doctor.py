@@ -64,7 +64,7 @@ MAX_FINDINGS = 60
 MAX_REPORT_CHARS = 16000
 STATE_LABEL = "<state>"
 
-# Runtime modules the sidecar cannot start without. Presence is resolved through
+# Runtime modules the backend cannot start without. Presence is resolved through
 # the import system's finder, which locates a module without executing it.
 REQUIRED_DEPENDENCIES = ("fastapi", "uvicorn", "httpx", "sqlite3")
 OPTIONAL_DEPENDENCIES = ("mcp", "pypdf")
@@ -884,7 +884,7 @@ def _check_run_leases(collector: _Collector, root: Path, runs: list[dict[str, An
             Severity.WARN,
             Repair.REVIEW_REQUIRED,
             "Runs hold an unexpired lease whose owner process the kernel "
-            "confirms has exited. Starting the sidecar reclaims them under a "
+            "confirms has exited. Starting the backend reclaims them under a "
             "lease; Doctor will not write to a run store it does not own.",
             count=len(dead),
             detail=dead,
@@ -909,7 +909,7 @@ def _check_run_leases(collector: _Collector, root: Path, runs: list[dict[str, An
             Severity.WARN,
             Repair.REVIEW_REQUIRED,
             "Runs hold a lease that has run out of time. Anyone may reclaim it "
-            "and the version fence stops a late writer, so starting the sidecar "
+            "and the version fence stops a late writer, so starting the backend "
             "clears this. Doctor reports it and changes nothing.",
             count=len(expired),
             detail=expired,
@@ -1465,7 +1465,7 @@ def repair(root: str | Path | None = None) -> DoctorReport:
     """Apply only the deterministic safe repairs, after a backup.
 
     Anything reported for review is left exactly as it was found. Doctor expects
-    the sidecar to be stopped; it does not coordinate with a running process.
+    the backend to be stopped; it does not coordinate with a running process.
     """
     root = Path(root) if root is not None else state_root()
     scan = _scan(root)

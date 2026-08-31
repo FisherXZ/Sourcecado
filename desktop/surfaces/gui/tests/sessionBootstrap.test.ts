@@ -10,7 +10,7 @@ describe("session-list bootstrap", () => {
   });
 
   it("uses the current launch token when a bounded retry runs", async () => {
-    window.__CLUB_HTTP__ = "http://sidecar.test";
+    window.__CLUB_HTTP__ = "http://backend.test";
     window.__CLUB_API_TOKEN__ = "old-launch-token";
     const fetchMock = vi
       .fn()

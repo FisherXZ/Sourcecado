@@ -99,7 +99,7 @@ const EXHAUSTED_BUDGET = {
 };
 
 describe("run budget projection", () => {
-  it("keeps only contract fields and never the sidecar's own prose", () => {
+  it("keeps only contract fields and never the backend's own prose", () => {
     const status = runBudgetStatus({
       ...EXHAUSTED_BUDGET,
       message: "Shortlist complete, nothing further is needed.",

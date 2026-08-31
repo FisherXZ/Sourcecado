@@ -20,7 +20,7 @@ describe("connector API boundary", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
-    window.__CLUB_HTTP__ = "http://sidecar.test";
+    window.__CLUB_HTTP__ = "http://backend.test";
     window.__CLUB_API_TOKEN__ = "review-token";
   });
 
@@ -101,10 +101,10 @@ describe("connector API boundary", () => {
     await connectConnector("granola");
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      "http://sidecar.test/v1/gmail/connect",
-      "http://sidecar.test/v1/connectors/drive/connect",
-      "http://sidecar.test/v1/connectors/calendar/connect",
-      "http://sidecar.test/v1/connectors/granola/connect",
+      "http://backend.test/v1/gmail/connect",
+      "http://backend.test/v1/connectors/drive/connect",
+      "http://backend.test/v1/connectors/calendar/connect",
+      "http://backend.test/v1/connectors/granola/connect",
     ]);
   });
 
@@ -116,7 +116,7 @@ describe("connector API boundary", () => {
     const result = await disconnectConnector("calendar");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://sidecar.test/v1/gmail/disconnect",
+      "http://backend.test/v1/gmail/disconnect",
       expect.objectContaining({ method: "POST" }),
     );
     expect(result.disconnected).toEqual(["gmail", "drive", "calendar"]);
@@ -130,7 +130,7 @@ describe("connector API boundary", () => {
     const result = await disconnectConnector("granola");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://sidecar.test/v1/connectors/granola/disconnect",
+      "http://backend.test/v1/connectors/granola/disconnect",
       expect.objectContaining({ method: "POST" }),
     );
     expect(result.disconnected).toEqual(["granola"]);

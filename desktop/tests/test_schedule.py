@@ -663,7 +663,7 @@ def test_reopen_does_not_copy_last_weeks_completed_receipt_when_this_attempt_nev
 
 
 def test_scheduled_run_statuses_stay_inside_the_shared_contract(tmp_path):
-    """S4: every status the sidecar writes to the runs table is declared, so
+    """S4: every status the backend writes to the runs table is declared, so
     the client never coerces an honest outcome into 'Failed'."""
     from coworker.automation.scheduler import (
         RECEIPT_STATUSES,

@@ -4,7 +4,7 @@ import { getSession, openPersonSourcingChat } from "../src/api";
 
 describe("person sourcing chat API boundary", () => {
   beforeEach(() => {
-    window.__CLUB_HTTP__ = "http://sidecar.test";
+    window.__CLUB_HTTP__ = "http://backend.test";
     window.__CLUB_API_TOKEN__ = "review-token";
   });
 
@@ -36,7 +36,7 @@ describe("person sourcing chat API boundary", () => {
       },
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://sidecar.test/v1/people/person%20one/sourcing-chat",
+      "http://backend.test/v1/people/person%20one/sourcing-chat",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ expected_person_version: 2 }),
@@ -66,7 +66,7 @@ describe("person sourcing chat API boundary", () => {
     const conversation = await getSession("thread one", "person one");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://sidecar.test/v1/sessions/thread%20one?expected_person_id=person%20one",
+      "http://backend.test/v1/sessions/thread%20one?expected_person_id=person%20one",
       expect.any(Object),
     );
     expect(conversation.active_person).toEqual({

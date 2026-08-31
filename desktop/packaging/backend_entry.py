@@ -1,4 +1,4 @@
-"""PyInstaller entry point for the bundled Sourcecado sidecar.
+"""PyInstaller entry point for the bundled Sourcecado backend.
 
 Only imports coworker.run's public entrypoint; does not modify desktop/coworker.
 """

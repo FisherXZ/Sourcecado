@@ -706,7 +706,7 @@ describe("SourcecadoChatStore restore-while-streaming", () => {
     // T1/B1 composed seam: the transport's reconnect re-sync replays the
     // events a run emitted while the socket was down. Pins that the store
     // turns that replay into a finished message with the full text, and that
-    // a sidecar over-replay of an already-delivered delta cannot double it.
+    // a backend over-replay of an already-delivered delta cannot double it.
     const store = new SourcecadoChatStore(
       [{ id: "thread-alpha", messages: [] }],
       "thread-alpha",
@@ -725,7 +725,7 @@ describe("SourcecadoChatStore restore-while-streaming", () => {
       text: "Hello world",
       state: "complete",
     });
-    // The sidecar may over-replay an already-delivered event; identity wins.
+    // The backend may over-replay an already-delivered event; identity wins.
     store.applyChatEvent(liveHello);
 
     const assistant = store
@@ -768,7 +768,7 @@ describe("SourcecadoChatStore restore-while-streaming", () => {
     expect(assistant?.parts[0]).toMatchObject({ text: "Hello world" });
   });
 
-  it("revives an interrupted restore when the sidecar re-announces the run", () => {
+  it("revives an interrupted restore when the backend re-announces the run", () => {
     const store = new SourcecadoChatStore(
       [{ id: "thread-alpha", messages: [] }],
       "thread-alpha",
@@ -813,7 +813,7 @@ describe("SourcecadoChatStore transport events", () => {
       type: "connection_change",
       status: "reconnecting",
       attempt: 1,
-      reason: "The sidecar connection closed (code 1006). Reconnecting.",
+      reason: "The backend connection closed (code 1006). Reconnecting.",
     } as const;
 
     expect(store.applyChatEvent(change)).toEqual(change);
@@ -829,7 +829,7 @@ describe("SourcecadoChatStore transport events", () => {
     store.applyChatEvent({
       type: "error",
       message:
-        "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+        "The backend connection is down and the retry buffer is full; the command was dropped.",
     });
 
     const [message] = store.messagesFor("thread-alpha");
@@ -837,7 +837,7 @@ describe("SourcecadoChatStore transport events", () => {
       type: "notice",
       code: "transport",
       message:
-        "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+        "The backend connection is down and the retry buffer is full; the command was dropped.",
     });
   });
 });
@@ -998,7 +998,7 @@ describe("issue #136 - a failed turn must say why", () => {
     expect(rendered).toContain("rate limited after bounded retries");
   });
 
-  it("falls back to a generic code when the sidecar sends no kind", () => {
+  it("falls back to a generic code when the backend sends no kind", () => {
     const store = new SourcecadoChatStore(
       [{ id: "thread-alpha", messages: [] }],
       "thread-alpha",

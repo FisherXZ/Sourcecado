@@ -142,7 +142,7 @@ def test_the_ledger_surface_has_no_write_verb(tmp_path):
     assert repo.get_run(run_id)["current_state"] == "running"
 
 
-def test_the_sidecar_serves_the_ledger_behind_its_token(tmp_path):
+def test_the_backend_serves_the_ledger_behind_its_token(tmp_path):
     app = create_app(token=TOKEN, provider=None, state=tmp_path)
     client = TestClient(app)
     started = app.state.agent_runs.create_run(

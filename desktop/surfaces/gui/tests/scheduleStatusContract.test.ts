@@ -3,11 +3,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 /**
- * The schedule run statuses are declared twice, in two languages: the sidecar
+ * The schedule run statuses are declared twice, in two languages: the backend
  * owns the vocabulary, the client validates against its own copy and refuses
  * anything it does not recognise.
  *
- * That is a silent failure by construction. When the sidecar gained
+ * That is a silent failure by construction. When the backend gained
  * "interrupted", both suites stayed green -- the client simply discarded the
  * status, because no test on either side crossed the boundary. This test
  * crosses it.
@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
 const SCHEDULER_PY = "../../coworker/automation/scheduler.py";
 const API_TS = "src/api.ts";
 
-function sidecarStatuses(): string[] {
+function backendStatuses(): string[] {
   const src = readFileSync(SCHEDULER_PY, "utf8");
   const block = /SCHEDULE_RUN_STATUSES\s*=\s*frozenset\(\s*\{([^}]*)\}/m.exec(src);
   if (!block) throw new Error("SCHEDULE_RUN_STATUSES not found in scheduler.py");
@@ -36,12 +36,12 @@ function clientStatuses(): string[] {
 }
 
 describe("schedule run status vocabulary", () => {
-  it("is identical on both sides of the sidecar boundary", () => {
-    expect(clientStatuses()).toEqual(sidecarStatuses());
+  it("is identical on both sides of the backend boundary", () => {
+    expect(clientStatuses()).toEqual(backendStatuses());
   });
 
   it("includes interrupted, which a restart-cut routine reports", () => {
-    expect(sidecarStatuses()).toContain("interrupted");
+    expect(backendStatuses()).toContain("interrupted");
     expect(clientStatuses()).toContain("interrupted");
   });
 });

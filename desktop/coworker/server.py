@@ -1,4 +1,4 @@
-"""Sourcecado sidecar: local API, streamed chat, approvals, and durable state."""
+"""Sourcecado backend: local API, streamed chat, approvals, and durable state."""
 
 from __future__ import annotations
 
@@ -398,9 +398,9 @@ def create_app(
     provider_failovers: tuple[Any, ...] | None = None,
 ) -> FastAPI:
     if not token:
-        raise ValueError("sidecar token must be non-empty")
+        raise ValueError("backend token must be non-empty")
 
-    app = FastAPI(title="Club sidecar", version="0.0.2")
+    app = FastAPI(title="Club backend", version="0.0.2")
     app.state.token = token
     if provider is _UNSET:
         provider_chain = verified_provider_chain()
@@ -455,7 +455,7 @@ def create_app(
     )
     app.state.agent_runs = AgentRunRepository(root)
     # This process becomes an Agent Run owner here, and it is the process that
-    # starts the sidecar, so this is where the marker belongs. The marker holds
+    # starts the backend, so this is where the marker belongs. The marker holds
     # an exclusive `flock` for the life of the process, which is what lets a
     # later start prove this one is gone rather than assume it.
     app.state.run_owner = app.state.agent_runs.registry.register()
@@ -655,7 +655,7 @@ def create_app(
         return safe
 
     # Older builds wrote Apollo's mask into bound chat titles. Repair those
-    # titles once while the sidecar is opening, before any surface can read
+    # titles once while the backend is opening, before any surface can read
     # them. Approved enrichment calls this helper again to promote the full
     # verified name without making a read endpoint mutate durable state.
     for existing_person in app.state.people.list_people():
@@ -1258,7 +1258,7 @@ def create_app(
         p = app.state.provider
         return {
             "status": "ok",
-            "piece": "sidecar",
+            "piece": "backend",
             "slice": SLICE,
             "model": None if p is None else p.model_id,
             "persona": app.state.persona.id,
@@ -1267,7 +1267,7 @@ def create_app(
     @app.get("/v1/hello")
     def hello():
         return {
-            "message": "sidecar alive",
+            "message": "backend alive",
             "piece": "brain",
             "window": "remote control. the agent does not live in the pixels",
         }
@@ -2639,7 +2639,7 @@ def create_app(
 
     def _diagnostic_sources(receipt: dict[str, Any] | None) -> BundleSources:
         # Imported here rather than at module scope: the state inspector pulls
-        # in the whole migration registry, and the sidecar should not pay for
+        # in the whole migration registry, and the backend should not pay for
         # that unless an operator actually asks for a bundle.
         from coworker import doctor
 

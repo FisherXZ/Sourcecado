@@ -1,8 +1,8 @@
 //! Sourcecado desktop shell. It owns four native lifecycle jobs:
 //!   1. pick a free loopback port
-//!   2. start the Python sidecar as a child
+//!   2. start the Python backend as a child
 //!   3. inject URL + one-time token before the UI loads
-//!   4. tray: close hides (sidecar keeps running); Quit kills the sidecar
+//!   4. tray: close hides (backend keeps running); Quit kills the backend
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -30,15 +30,15 @@ fn launch_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
-// Dev builds (`tauri dev`) run the sidecar straight out of the repo's dev
-// venv. Release builds run the PyInstaller-frozen sidecar that `tauri build`
+// Dev builds (`tauri dev`) run the backend straight out of the repo's dev
+// venv. Release builds run the PyInstaller-frozen backend that `tauri build`
 // bundles as a resource (see `desktop/packaging/`), so the packaged app never
 // shells out to a repo checkout or `desktop/.venv`.
 //
-// The sidecar is bundled with PyInstaller `--onedir`, not `--onefile`: a
+// The backend is bundled with PyInstaller `--onedir`, not `--onefile`: a
 // onefile build's bootloader forks a second process to run the actual
 // interpreter and hands back the bootloader's PID, so killing that PID
-// orphans the real sidecar. onedir has no extraction step and no fork, so
+// orphans the real backend. onedir has no extraction step and no fork, so
 // the PID we spawn is the PID that answers requests and the one `kill()`
 // actually stops.
 #[cfg(debug_assertions)]
@@ -47,7 +47,7 @@ fn desktop_root() -> PathBuf {
 }
 
 #[cfg(debug_assertions)]
-fn sidecar_command<R: tauri::Runtime>(_app: &tauri::App<R>, port: u16) -> Command {
+fn backend_command<R: tauri::Runtime>(_app: &tauri::App<R>, port: u16) -> Command {
     let mut cmd = Command::new(desktop_root().join(".venv/bin/python"));
     cmd.current_dir(desktop_root()).args([
         "-m",
@@ -61,15 +61,15 @@ fn sidecar_command<R: tauri::Runtime>(_app: &tauri::App<R>, port: u16) -> Comman
 }
 
 #[cfg(not(debug_assertions))]
-fn sidecar_command<R: tauri::Runtime>(app: &tauri::App<R>, port: u16) -> Command {
+fn backend_command<R: tauri::Runtime>(app: &tauri::App<R>, port: u16) -> Command {
     use tauri::path::BaseDirectory;
     let exe = app
         .path()
         .resolve(
-            "resources/sourcecado-sidecar/sourcecado-sidecar",
+            "resources/sourcecado-backend/sourcecado-backend",
             BaseDirectory::Resource,
         )
-        .expect("resolve bundled sourcecado-sidecar resource");
+        .expect("resolve bundled sourcecado-backend resource");
     let mut cmd = Command::new(exe);
     cmd.args(["--host", "127.0.0.1", "--port", &port.to_string()]);
     cmd
@@ -86,9 +86,9 @@ fn state_dir() -> PathBuf {
 fn server_log_file() -> Option<std::fs::File> {
     let dir = state_dir().join("logs");
     std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("sidecar.log");
+    let path = dir.join("backend.log");
     if path.exists() {
-        let _ = std::fs::rename(&path, dir.join("sidecar.log.old"));
+        let _ = std::fs::rename(&path, dir.join("backend.log.old"));
     }
     std::fs::File::create(&path).ok()
 }
@@ -113,7 +113,7 @@ pub fn run() {
             show_main(app);
         }))
         .setup(move |app| {
-            let mut server_cmd = sidecar_command(app, port);
+            let mut server_cmd = backend_command(app, port);
             server_cmd
                 .env("CLUB_API_TOKEN", &api_token)
                 .env("CLUB_EXIT_WITH_PARENT", "1")
@@ -137,7 +137,7 @@ pub fn run() {
                 Ok(child) => Some(child),
                 Err(e) => {
                     eprintln!(
-                        "[sourcecado] failed to start sidecar via {}: {e}",
+                        "[sourcecado] failed to start backend via {}: {e}",
                         server_cmd.get_program().to_string_lossy()
                     );
                     None

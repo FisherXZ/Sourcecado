@@ -69,7 +69,7 @@ def ensure_token(port: int) -> tuple[str, Path | None]:
         return existing, None
     token = secrets.token_hex(32)
     os.environ[TOKEN_ENV] = token
-    path = state_dir() / f"sidecar-{port}.token"
+    path = state_dir() / f"backend-{port}.token"
     _write_private(path, token + "\n")
     return token, path
 
@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> None:
             next_run_at=next_monday_0900(datetime.now()),
         )
 
-    print(f"Club sidecar  http://{args.host}:{args.port}")
+    print(f"Club backend  http://{args.host}:{args.port}")
     print(f"token file    {token_path or '(from ' + TOKEN_ENV + ')'}")
     print("window talks with header X-Club-Token. chat is /ws/chat.")
 

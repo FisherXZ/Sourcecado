@@ -4,7 +4,7 @@
 whether a string carries a credential or a home path. This module does not add
 patterns; it only gathers the values to scan against and applies the same
 matcher to the update channel's four output surfaces: the manifest, the update
-log lines, the packaged artifact's sidecar files, and anything a diagnostic
+log lines, the packaged artifact's backend files, and anything a diagnostic
 bundle could later pick up.
 
 A second matcher would drift, and the one that drifts is the one that misses.

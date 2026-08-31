@@ -3,8 +3,8 @@
 Work in this order. Pause after each item for a click. Do not skip ahead.
 
 **Terms**
-- Club: the local sidecar + window under `desktop/`
-- Sidecar: FastAPI on `127.0.0.1:8765`
+- Club: the local backend + window under `desktop/`
+- Backend: FastAPI on `127.0.0.1:8765`
 - Strip: connector/inbox/schedule row at the bottom of the window
 - Tick: run due scheduler jobs now
 - Full Google grant: one login that covers Gmail read+compose+send, Drive readonly, Calendar (all calendars)
@@ -17,7 +17,7 @@ Work in this order. Pause after each item for a click. Do not skip ahead.
 
 **Done when:** Chat “search Apollo for people at Codeology” returns people with first name, obfuscated last name, title, org. No email field. Strip stays “Apollo · configured”. Enrich still asks.
 
-**How:** Valid `APOLLO_API_KEY` in `~/.config/club/.env` (x-api-key, `mixed_people/api_search` or master). Sidecar loads it at boot. Current key returns 401 Invalid API key.
+**How:** Valid `APOLLO_API_KEY` in `~/.config/club/.env` (x-api-key, `mixed_people/api_search` or master). Backend loads it at boot. Current key returns 401 Invalid API key.
 
 **Verify:** Live search from Club. `CLUB_RUN_LIVE_SMOKE=1` smoke also passes.
 

@@ -2,14 +2,14 @@ PYTHON ?= python3
 VENV := desktop/.venv
 GUI := desktop/surfaces/gui
 
-.PHONY: setup sidecar gui native test test-python test-gui eval eval-sourcing build doctor doctor-repair secret-scan build-sidecar smoke-test test-update update-status update-rollback update-manifest update-verify
+.PHONY: setup backend gui native test test-python test-gui eval eval-sourcing build doctor doctor-repair secret-scan build-backend smoke-test test-update update-status update-rollback update-manifest update-verify
 
 setup:
 	$(PYTHON) -m venv $(VENV)
 	$(VENV)/bin/python -m pip install --require-hashes -r desktop/requirements.lock
 	npm --prefix $(GUI) ci
 
-sidecar:
+backend:
 	cd desktop && .venv/bin/python -m coworker.run
 
 gui:
@@ -49,11 +49,11 @@ secret-scan:
 build:
 	npm --prefix $(GUI) run build
 
-build-sidecar:
-	bash desktop/packaging/build_sidecar.sh
+build-backend:
+	bash desktop/packaging/build_backend.sh
 
 smoke-test:
-	$(PYTHON) desktop/packaging/smoke_test.py desktop/surfaces/gui/src-tauri/resources/sourcecado-sidecar/sourcecado-sidecar
+	$(PYTHON) desktop/packaging/smoke_test.py desktop/surfaces/gui/src-tauri/resources/sourcecado-backend/sourcecado-backend
 
 # --- preview update channel -------------------------------------------------
 # desktop/docs/update-channel.md explains every target below.

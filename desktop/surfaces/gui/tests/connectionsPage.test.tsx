@@ -552,12 +552,12 @@ describe("ConnectionsPage", () => {
   });
 
   it("shows page retry and unknown-detail recovery without leaking fetch errors", async () => {
-    api.getConnectors.mockRejectedValueOnce(new Error("token=sidecar-secret /private/state"));
+    api.getConnectors.mockRejectedValueOnce(new Error("token=backend-secret /private/state"));
     const { container, rerender } = render(<ConnectionsPage />);
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Connections couldn’t be loaded");
-    expect(container).not.toHaveTextContent("sidecar-secret");
+    expect(container).not.toHaveTextContent("backend-secret");
     api.getConnectors.mockResolvedValueOnce({ connectors: [gmailAvailable] });
     fireEvent.click(within(alert).getByRole("button", { name: "Retry loading connections" }));
     expect(await screen.findByRole("link", { name: /Gmail/ })).toBeInTheDocument();

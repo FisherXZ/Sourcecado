@@ -20,7 +20,7 @@ quarantined, because the send may already have reached a real person. See
 `coworker/agent_run_approval.py` for the fence that holds it there.
 
 Nothing here is wired into the running application. The process that starts the
-sidecar is where `restart()` belongs, and that wiring is later work.
+backend is where `restart()` belongs, and that wiring is later work.
 """
 
 from __future__ import annotations

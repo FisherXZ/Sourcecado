@@ -1,6 +1,6 @@
 import type { BriefClaim, LivingBrief } from "../src/api";
 
-/** One claim as the sidecar renders it, for tests that need a whole brief. */
+/** One claim as the backend renders it, for tests that need a whole brief. */
 export function claim(over: Partial<BriefClaim> & { id: string; text: string }): BriefClaim {
   return {
     state: "current",

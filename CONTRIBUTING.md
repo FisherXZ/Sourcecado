@@ -9,7 +9,7 @@ Follow the root [README](README.md). From a clean checkout:
 ```bash
 make setup
 cp .env.example ~/.config/club/.env
-make sidecar
+make backend
 make gui
 ```
 
@@ -22,7 +22,7 @@ make test
 make build
 ```
 
-`make test` is the Python sidecar suite plus GUI Vitest. `make build` type-checks and bundles the GUI. CI runs those, then the sourcing eval suite. The archived hosted app is not in CI.
+`make test` is the Python backend suite plus GUI Vitest. `make build` type-checks and bundles the GUI. CI runs those, then the sourcing eval suite. The archived hosted app is not in CI.
 
 If you changed agent or connector behavior, also run the relevant live path and say so in the pull request.
 

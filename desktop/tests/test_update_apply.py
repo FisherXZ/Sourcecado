@@ -395,7 +395,7 @@ def test_a_health_check_that_raises_is_a_failed_health_check(tmp_path):
     seed, public, artifact, install = _prepare(tmp_path)
 
     def explode(_installation):
-        raise RuntimeError("the sidecar never opened its port")
+        raise RuntimeError("the backend never opened its port")
 
     outcome = _apply(
         fx.document(artifact, seed), install, artifact, public, health_check=explode

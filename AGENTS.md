@@ -10,7 +10,7 @@ The active runtime is `desktop/`. The previous hosted Next.js/Postgres applicati
 
 ## Current guardrails
 
-- Build the local Sourcecado desktop product: Python/FastAPI sidecar plus React/Vite/Tauri UI.
+- Build the local Sourcecado desktop product: Python/FastAPI backend plus React/Vite/Tauri UI.
 - Optimize for one sourcing director now while keeping person files intelligible to a later officer.
 - A sequence is a person being worked through Open, In conversation, and Done. A company is context, not a deal.
 - A kept person remains durable in the internal Board projection before outreach, but the Contacts surface shows only active sequences in Open, In conversation, and Done.
@@ -24,7 +24,7 @@ The active runtime is `desktop/`. The previous hosted Next.js/Postgres applicati
 
 ## Repository map
 
-- `desktop/coworker/` — sidecar, connectors, agent loop, policy, and persistence
+- `desktop/coworker/` — backend, connectors, agent loop, policy, and persistence
 - `desktop/surfaces/gui/` — active React/Vite/Tauri UI
 - `desktop/tests/` and `desktop/surfaces/gui/tests/` — active verification suites
 - `docs/` — current and historical product/engineering records

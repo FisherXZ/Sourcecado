@@ -12,10 +12,10 @@ every claim cited to file:line, verdict up front, strengths credited.
 
 ## Step 1 — Repo survey (measured)
 
-- Active product: `desktop/` — Python/FastAPI sidecar (`coworker/`), React/Vite/Tauri GUI (`surfaces/gui/`), Rust shell 208 LOC.
+- Active product: `desktop/` — Python/FastAPI backend (`coworker/`), React/Vite/Tauri GUI (`surfaces/gui/`), Rust shell 208 LOC.
 - Prod Python (coworker + packaging): **43,549 LOC / 90 files**. Python tests: **50,585 LOC** → test/source ratio **1.16**.
 - GUI src: **13,614 LOC / 52 files**. GUI tests: **15,026 LOC** → ratio **1.10**.
-- 722 files tracked in git; packaged sidecar bundle under `src-tauri/resources/` is NOT committed (gitignored properly).
+- 722 files tracked in git; packaged backend bundle under `src-tauri/resources/` is NOT committed (gitignored properly).
 - `archive/hosted-web/` historical, excluded from audit scope (per AGENTS.md).
 
 ## Step 2 — Tooling config
@@ -27,7 +27,7 @@ every claim cited to file:line, verdict up front, strengths credited.
 
 ## Step 3 — CI (.github/workflows/ci.yml, 332 lines, single workflow)
 
-- Jobs: sidecar (pytest + behavioural evals), gui (vitest + tsc build), macos-preview (both suites + cargo fmt/clippy -D warnings/test + sidecar build + Tauri build + packaged smoke test + gated signing/notarization + pip-audit + provenance/checksums + signed update manifest).
+- Jobs: backend (pytest + behavioural evals), gui (vitest + tsc build), macos-preview (both suites + cargo fmt/clippy -D warnings/test + backend build + Tauri build + packaged smoke test + gated signing/notarization + pip-audit + provenance/checksums + signed update manifest).
 - **Gaps: no Python lint step, no TS lint step, no coverage run/threshold, no npm audit.** pip-audit runs (ci.yml:248-251). Rust IS lint-gated.
 - macos-preview (30 min) runs on every PR — thorough but expensive per-PR.
 
@@ -65,7 +65,7 @@ every claim cited to file:line, verdict up front, strengths credited.
 - **A-DB (Medium)**: five SQLite DBs (club.db store.py:209, people.db people.py:64, agent_runs.db agent_run_repository.py:65, drive_ingestion.db, meeting_evidence.db), each with own connection + RLock, no cross-DB transaction. A turn writes run row + inbox row + person row non-atomically; agent_run_reconcile.py exists precisely to read two stores at once — deliberate, but consistency is by convention. ConversationStore (club.db) alone carries sessions + transcripts + memories + inbox + scheduler + settings.
 - **A-GOD (High)**: server.py 3,687 LOC / 63 routes in one closure; api.ts 2,214 LOC mirrors it in the GUI. The two files are the change-cost hotspot of the codebase.
 - **A-FLAT (Medium)**: 60+ modules flat in one `coworker/` package; the 9 `agent_run_*` modules and 5 `workspace_*` modules are packages-by-prefix. Navigability currently OK because module docstrings are excellent.
-- **A-NAME (Low)**: pre-rename "club" identity persists in load-bearing places: club.db, X-Club-Token, CLUB_EXIT_WITH_PARENT, `club-server` prog, club-gui package, "Club sidecar" banner (run.py:78,100; store.py:209). 15 sidecar files reference it. Migration cost grows with time (db filename is user state).
+- **A-NAME (Low)**: pre-rename "club" identity persists in load-bearing places: club.db, X-Club-Token, CLUB_EXIT_WITH_PARENT, `club-server` prog, club-gui package, "Club backend" banner (run.py:78,100; store.py:209). 15 backend files reference it. Migration cost grows with time (db filename is user state).
 - **A-TICK (Low)**: scheduler tick thread catches bare Exception and prints traceback (run.py:110-118); entry logging is print-based. One bad tick pattern could repeat-crash silently in a packaged app where stdout goes nowhere.
 
 ## Step 7 — Informational scans (sizing the gates, not current-config findings)
