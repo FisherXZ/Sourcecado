@@ -1,5 +1,5 @@
 /**
- * Canonical sidecar presentation-event contract.
+ * Canonical backend presentation-event contract.
  *
  * Version 2 keeps the legacy top-level event names and payload fields while
  * adding replay and routing identity shared by live WebSocket and HTTP restore.
@@ -175,7 +175,7 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly state: "failed";
         /**
          * What kind of failure it was, so the interface can say whether
-         * retrying is worth it. Optional: an older sidecar omits it.
+         * retrying is worth it. Optional: an older backend omits it.
          */
         readonly error_kind?: string;
         readonly failure?: ProviderFailure;
@@ -199,12 +199,12 @@ export type ProtocolChatEvent = ChatEventEnvelope &
 /**
  * What the operator is told about compaction: counts, never content.
  *
- * The sidecar builds the compacted context for the model, and part of that
+ * The backend builds the compacted context for the model, and part of that
  * context is a model-written summary of earlier turns. That summary is one
  * model's account of the session, not Sourcecado's record of it, so it must
  * never reach the thread where the operator would read it as Sourcecado
  * explaining itself. The allowlist below is what keeps it out: fields are
- * copied one at a time, so a sidecar that starts sending summary text has it
+ * copied one at a time, so a backend that starts sending summary text has it
  * dropped here rather than rendered.
  */
 export type CompactionNotice = {
@@ -291,10 +291,10 @@ export function compactionNoticeText(value: unknown): string {
 
 /**
  * What the operator is told about a run's budget: counts and outcomes, never
- * prose from the sidecar.
+ * prose from the backend.
  *
  * Same discipline as `CompactionNotice`. Fields are copied one at a time and
- * every sentence below is written here, so a sidecar that starts sending a
+ * every sentence below is written here, so a backend that starts sending a
  * reassuring message cannot get it rendered as Sourcecado's own account of
  * what happened.
  */
@@ -433,7 +433,7 @@ export function runBudgetStatus(value: unknown): RunBudgetStatus | undefined {
           : [],
       ),
       // Absent means "we were not told the run closed", which is the safe
-      // reading: unfinished until the sidecar says otherwise.
+      // reading: unfinished until the backend says otherwise.
       final_answer: remaining.final_answer === true,
     },
     unpriced_requests: countOf(value.unpriced_requests),
@@ -557,7 +557,7 @@ export type QueueSnapshotEvent = {
 export type ConnectionStatus = "connected" | "reconnecting" | "offline";
 
 /**
- * Client-generated transport status. The sidecar never sends this; `openChat`
+ * Client-generated transport status. The backend never sends this; `openChat`
  * synthesizes it so consumers can render connection state.
  */
 export type ConnectionChangeEvent = {
@@ -661,7 +661,7 @@ function isQueueSnapshot(value: unknown): value is QueueSnapshotEvent {
 
 /**
  * Rebuilds an approval resource from exactly the contract keys, so nothing
- * else the sidecar might ever attach (a body, a token) can reach the UI.
+ * else the backend might ever attach (a body, a token) can reach the UI.
  * Returns undefined when the value is not a usable resource.
  */
 function approvalResource(value: unknown): ApprovalResource | undefined {
@@ -862,7 +862,7 @@ export function parseChatEvent(value: unknown): ChatEvent {
   }
   return {
     type: "error",
-    message: "Malformed event from sidecar.",
+    message: "Malformed event from backend.",
     notice: { code: "malformed_event", recoverable: true },
     ...(sessionId ? { session_id: sessionId } : {}),
   };

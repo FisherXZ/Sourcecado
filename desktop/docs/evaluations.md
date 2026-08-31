@@ -2,7 +2,7 @@
 
 Status: active-stack engineering reference.
 
-Sourcecado's baseline harness compares prompts, tool catalogs, providers/models, compaction settings, and run-budget policies through the same `run_turn` seam as the desktop sidecar. Every repetition runs in a spawned child process with a replaced minimal environment, a unique state directory and person database, connector fakes, and one exact read-write/no-shell grant for its isolated workspace. The fake lane never reads live credentials.
+Sourcecado's baseline harness compares prompts, tool catalogs, providers/models, compaction settings, and run-budget policies through the same `run_turn` seam as the desktop backend. Every repetition runs in a spawned child process with a replaced minimal environment, a unique state directory and person database, connector fakes, and one exact read-write/no-shell grant for its isolated workspace. The fake lane never reads live credentials.
 
 Run the checked-in fake baseline and candidate from the repository root:
 
@@ -35,7 +35,7 @@ cd desktop
 .venv/bin/python -m coworker.evals --suite sourcing --artifacts .eval-artifacts
 ```
 
-The same command runs in the Python sidecar CI job after `pytest -q`, so a
+The same command runs in the Python backend CI job after `pytest -q`, so a
 behavioural regression fails the pull request. `desktop/tests/test_sourcing_evals.py`
 runs every scene again inside pytest and adds the non-vacuity checks.
 

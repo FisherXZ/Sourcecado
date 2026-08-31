@@ -690,7 +690,7 @@ def test_disconnected_explicit_source_keeps_completed_index_queryable(tmp_path):
         assert recovered.status_code == 202
 
 
-def test_active_sidecar_mounts_ingestion_under_local_auth_and_state(tmp_path):
+def test_active_backend_mounts_ingestion_under_local_auth_and_state(tmp_path):
     class Drive:
         def list_folder(self, folder_id, max_results=1000, page_token=None):
             return {"files": [], "nextPageToken": None}

@@ -11,7 +11,7 @@ import { SourcecadoChatStore } from "../src/chat/store";
  * store.test.ts stores it, messageAdapter.test.ts exposes it, approvalCard
  * renders it. Each one builds its own input, so all four passed while the path
  * between them was not connected: three separate seams opened in this single
- * feature (sidecar->client, client->component, store->adapter). This test joins
+ * feature (backend->client, client->component, store->adapter). This test joins
  * them, so a break in any hand-off fails here instead of silently blanking the
  * approval card.
  *
@@ -77,8 +77,8 @@ describe("gmail_send approval resource, wire to rendered part", () => {
     });
   });
 
-  it("strips a field the sidecar should never send, even mid-chain", () => {
-    // DU-12: provenance without exposing tokens or headers. If a future sidecar
+  it("strips a field the backend should never send, even mid-chain", () => {
+    // DU-12: provenance without exposing tokens or headers. If a future backend
     // change leaks a body, it must die at the boundary, not reach the DOM.
     const resource = pendingApprovalPart({
       kind: "gmail_draft",
@@ -95,7 +95,7 @@ describe("gmail_send approval resource, wire to rendered part", () => {
   });
 
   it("survives a lookup failure with nulls rather than dropping the approval", () => {
-    // The sidecar degrades each field independently when the draft read fails.
+    // The backend degrades each field independently when the draft read fails.
     expect(
       pendingApprovalPart({
         kind: "gmail_draft",

@@ -96,7 +96,7 @@ export function createPersistedQueueAdapter({
       command({ type: "queue_remove", item_id: queueItemId });
     },
     __internal_notifyCancelled() {
-      // The cancel command pauses the authoritative sidecar queue.
+      // The cancel command pauses the authoritative backend queue.
     },
   };
 }

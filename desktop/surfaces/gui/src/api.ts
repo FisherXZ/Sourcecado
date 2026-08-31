@@ -47,7 +47,7 @@ export type ScheduleRunStatus =
   | "partial"
   | "interrupted"
   // Client-only: a status this build does not recognize (a future status,
-  // corrupted data). Never written by the sidecar, so it stays out of
+  // corrupted data). Never written by the backend, so it stays out of
   // SCHEDULE_RUN_STATUSES below -- it is not part of the shared contract.
   | "unknown";
 
@@ -1881,7 +1881,7 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
 
   // After a drop, fetch each interesting session's durable event log and
   // replay the tail this socket never delivered. The store dedupes by
-  // event_id, so overlap with anything the sidecar replays itself is safe;
+  // event_id, so overlap with anything the backend replays itself is safe;
   // live socket events are held until the tail lands to preserve order.
   async function resyncMissedEvents() {
     const sessions = new Set<string>(awaitingTurnStart);
@@ -1962,7 +1962,7 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
         type: "connection_change",
         status: "connected",
         attempt: 0,
-        reason: "Connected to the sidecar.",
+        reason: "Connected to the backend.",
       });
       emitQueueStates();
       for (const payload of pending.splice(0)) {
@@ -1993,13 +1993,13 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
       if (disposed || socket !== ws) return;
       if (ev.code === 1008) {
         terminal = true;
-        onEvent({ type: "error", message: "sidecar rejected the socket (token)" });
+        onEvent({ type: "error", message: "backend rejected the socket (token)" });
         if (pending.length > 0) {
           onEvent({
             type: "error",
             message: `${pending.length} queued command${
               pending.length === 1 ? "" : "s"
-            } dropped because the sidecar rejected the connection token.`,
+            } dropped because the backend rejected the connection token.`,
           });
           pending.length = 0;
         }
@@ -2007,7 +2007,7 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
           type: "connection_change",
           status: "offline",
           attempt,
-          reason: "The sidecar rejected the connection token.",
+          reason: "The backend rejected the connection token.",
         });
         emitQueueStates("offline");
         return;
@@ -2016,7 +2016,7 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
         type: "connection_change",
         status: "reconnecting",
         attempt: attempt + 1,
-        reason: `The sidecar connection closed (code ${ev.code}). Reconnecting.`,
+        reason: `The backend connection closed (code ${ev.code}). Reconnecting.`,
       });
       emitQueueStates("offline");
       scheduleReconnect();
@@ -2036,13 +2036,13 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
     }
     if (terminal) {
       const reason =
-        "The sidecar rejected the connection token; the command was dropped.";
+        "The backend rejected the connection token; the command was dropped.";
       onEvent({ type: "error", message: reason });
       return { state: "dropped", reason };
     }
     if (pending.length >= PENDING_COMMAND_LIMIT) {
       const reason =
-        "The sidecar connection is down and the retry buffer is full; the command was dropped.";
+        "The backend connection is down and the retry buffer is full; the command was dropped.";
       onEvent({ type: "error", message: reason });
       return { state: "dropped", reason };
     }
@@ -2126,7 +2126,7 @@ export type DiagnosticBundleResult = {
   members: string[];
 };
 
-/** A scan match. The sidecar never sends the matched value, only where it was. */
+/** A scan match. The backend never sends the matched value, only where it was. */
 export type DiagnosticScanMatch = { category: string; location: string };
 
 export type DiagnosticBundleStart = {

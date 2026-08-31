@@ -241,7 +241,7 @@ def _rolled_back_with(tmp_path, message: str):
 
 def test_a_credential_in_a_failure_message_is_withheld_from_guidance(tmp_path):
     outcome = _rolled_back_with(
-        tmp_path, f"the sidecar rejected X-Club-Token: {PLANTED_API_KEY}"
+        tmp_path, f"the backend rejected X-Club-Token: {PLANTED_API_KEY}"
     )
 
     assert outcome.status is UpdateStatus.ROLLED_BACK
@@ -253,7 +253,7 @@ def test_a_credential_in_a_failure_message_is_withheld_from_guidance(tmp_path):
 
 def test_a_home_path_in_a_failure_message_is_anchored_not_printed(tmp_path):
     outcome = _rolled_back_with(
-        tmp_path, "could not execute /Users/operator/Library/Sourcecado/sidecar"
+        tmp_path, "could not execute /Users/operator/Library/Sourcecado/backend"
     )
     assert "/Users/operator" not in outcome.guidance
     assert "<home>" in outcome.guidance
@@ -264,7 +264,7 @@ def test_a_home_path_in_a_failure_message_is_anchored_not_printed(tmp_path):
 
 def test_the_whole_update_outcome_passes_the_scan_a_bundle_would_apply(tmp_path):
     outcome = _rolled_back_with(
-        tmp_path, f"the sidecar rejected X-Club-Token: {PLANTED_API_KEY}"
+        tmp_path, f"the backend rejected X-Club-Token: {PLANTED_API_KEY}"
     )
 
     matches = bundle_redaction.scan(
@@ -278,5 +278,5 @@ def test_the_whole_update_outcome_passes_the_scan_a_bundle_would_apply(tmp_path)
 
 
 def test_the_outcome_is_plain_json_so_a_bundle_can_carry_it(tmp_path):
-    outcome = _rolled_back_with(tmp_path, "the sidecar exited immediately")
+    outcome = _rolled_back_with(tmp_path, "the backend exited immediately")
     assert json.loads(json.dumps(outcome.to_dict()))["status"] == "rolled_back"

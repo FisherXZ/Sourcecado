@@ -175,7 +175,7 @@ If we build only the happy path, the user becomes our error handler.
 
 Sourcecado CI runs:
 
-- Python sidecar tests;
+- Python backend tests;
 - GUI tests;
 - TypeScript typecheck and application build.
 

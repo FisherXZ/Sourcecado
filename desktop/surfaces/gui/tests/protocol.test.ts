@@ -76,7 +76,7 @@ describe("parseChatEvent", () => {
 
     expect(parseChatEvent(malformed)).toEqual({
       type: "error",
-      message: "Malformed event from sidecar.",
+      message: "Malformed event from backend.",
       notice: { code: "malformed_event", recoverable: true },
       session_id: "thread-alpha",
     });

@@ -351,7 +351,7 @@ export function ChatPage({
       chatRef.current?.cancel?.(threadId, runId);
       return;
     }
-    // The composer sent this message but the sidecar hasn't announced
+    // The composer sent this message but the backend hasn't announced
     // turn_start yet, so there is no run id to cancel. Stop must never be a
     // silent no-op here: end the optimistic "running" state locally now
     // (so the operator isn't stuck if turn_start never arrives at all),

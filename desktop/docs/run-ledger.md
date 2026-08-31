@@ -157,7 +157,7 @@ ignoring would infer.
 ## Known gaps
 
 - Nothing calls `enforce_retention` yet. It is a library call on purpose: the
-  process that starts the sidecar owns startup work, and that wiring is a
+  process that starts the backend owns startup work, and that wiring is a
   separate lane.
 - `create_app` now opens an `AgentRunRepository` so the ledger has something to
   read. It deliberately does not register an owner or reclaim leases, which is

@@ -222,7 +222,7 @@ in plain words.
 | New version does not start, previous version exists | `rolled_back`. Both restored. |
 | New version does not start, nothing was installed | `failed`. Failed bundle removed. There is no previous version to put back. |
 
-The launch check runs the sidecar inside the newly installed application on
+The launch check runs the backend inside the newly installed application on
 loopback with its own token and a **throwaway** state directory, and waits for
 `/v1/health`. A launch check that opened the operator's real state would be a
 change the rollback could not undo.

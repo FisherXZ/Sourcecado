@@ -4,7 +4,7 @@ import { curateApolloCandidates } from "../src/api";
 
 describe("Apollo curation API boundary", () => {
   beforeEach(() => {
-    window.__CLUB_HTTP__ = "http://sidecar.test";
+    window.__CLUB_HTTP__ = "http://backend.test";
     window.__CLUB_API_TOKEN__ = "review-token";
   });
 
@@ -55,7 +55,7 @@ describe("Apollo curation API boundary", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://sidecar.test/v1/apollo/curate",
+      "http://backend.test/v1/apollo/curate",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({

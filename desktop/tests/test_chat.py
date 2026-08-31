@@ -79,7 +79,7 @@ def test_health_reports_slice_and_model(tmp_path):
     body = res.json()
     assert body["slice"] == 29
     assert body["model"] == "fake"
-    assert body["piece"] == "sidecar"
+    assert body["piece"] == "backend"
 
 
 def test_ws_rejects_missing_token(tmp_path):
@@ -1529,7 +1529,7 @@ def test_ws_persists_messages_to_disk(tmp_path):
     assert (tmp_path / "club.db").is_file()
 
 
-def test_new_sidecar_reloads_history(tmp_path):
+def test_new_backend_reloads_history(tmp_path):
     first = FakeProvider(deltas=("Hello ", "world"))
     with TestClient(app(tmp_path, first)).websocket_connect(
         "/ws/chat", subprotocols=["club", TOKEN]
@@ -1548,7 +1548,7 @@ def test_new_sidecar_reloads_history(tmp_path):
     assert contents[-1] == "remember?"
 
 
-def test_ws_remember_survives_new_sidecar(tmp_path):
+def test_ws_remember_survives_new_backend(tmp_path):
     first = FakeProvider(
         steps=[
             {

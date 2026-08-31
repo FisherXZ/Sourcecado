@@ -1,6 +1,6 @@
 # Sourcecado desktop runtime
 
-Runtime-specific language for the local sidecar and window. Product/domain language lives in the root `CONTEXT.md`; that file wins if terminology conflicts.
+Runtime-specific language for the local backend and window. Product/domain language lives in the root `CONTEXT.md`; that file wins if terminology conflicts.
 
 ## Language
 

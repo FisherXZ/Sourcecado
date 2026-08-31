@@ -12,7 +12,7 @@ All numbers are **measured output** from tools run against the repository as com
 |---|---|---|
 | Size & structure | file scan (`find` + `wc -l`) | prod = `coworker/` + `packaging/`; GUI = `surfaces/gui/src` |
 | Cyclomatic complexity | `ruff --select C901` at threshold 15 | count of functions exceeding CC 15 |
-| Duplication | `jscpd --min-lines 5 --min-tokens 50` | run separately over sidecar prod and GUI src |
+| Duplication | `jscpd --min-lines 5 --min-tokens 50` | run separately over backend prod and GUI src |
 | Python coverage | `pytest --cov=coworker --cov=packaging` | full suite, no exclusions |
 | GUI tests | `vitest run` (repo config) | coverage provider not installed; count only |
 | Lint (Python) | `ruff check` — default rules (repo has **no** lint config) | plus a broader informational scan (§6) |
@@ -47,7 +47,7 @@ All numbers are **measured output** from tools run against the repository as com
 
 ## 2. Size & Structure
 
-| Metric | Sidecar (Python) | GUI (TS/TSX) |
+| Metric | Backend (Python) | GUI (TS/TSX) |
 |---|---|---|
 | Source files | 90 | 52 |
 | Source LOC | 43,549 | 13,614 |
@@ -81,7 +81,7 @@ File-size distribution (prod Python): 0-100: **17** · 100-300: **36** · 300-50
 
 | Scope | Duplication | Clones |
 |---|---|---|
-| Sidecar prod (`coworker/` + `packaging/`) | **1.55%** lines (675 / 43,533) | 70 |
+| Backend prod (`coworker/` + `packaging/`) | **1.55%** lines (675 / 43,533) | 70 |
 | GUI src | **2.15%** lines (399) | 40 |
 
 **Reading:** both are comfortably under the 3-5% gate. GUI clones cluster in `ApprovalCard.tsx` (internal), and a shared block between `Board.tsx:127-135` and `PersonFile.tsx:182-190` — candidates for extraction during the api.ts split, not urgent.
@@ -154,7 +154,7 @@ This is the cleanest marker profile in this audit series. Suppressions are the e
 **Quick (hours):**
 1. Add `ruff` with default rules + C901(15) + B-class to `ci.yml`; fix the 1 current error; configure B008 exception for FastAPI.
 2. Add ESLint (typescript-eslint recommended-type-checked) to the GUI and CI; baseline is near-zero today, so gating is cheap *now*.
-3. Add `pytest --cov` with a floor at the current 89% (or 85% for slack) to the sidecar job; add `npm audit --omit=dev --audit-level=high` to the GUI job.
+3. Add `pytest --cov` with a floor at the current 89% (or 85% for slack) to the backend job; add `npm audit --omit=dev --audit-level=high` to the GUI job.
 4. Commit the PR template.
 
 **Medium (days):**

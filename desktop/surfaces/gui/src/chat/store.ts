@@ -551,11 +551,11 @@ export class SourcecadoChatStore {
         threadId: event.session_id,
         messageId: event.message_id,
         // `held` carries through unchanged. Collapsing it into `failed` here
-        // would undo the whole point of the sidecar sending it.
+        // would undo the whole point of the backend sending it.
         state: event.state === "held" ? "held" : "failed",
       });
       if (event.state !== "held") {
-        // The sidecar already sends operator-safe text explaining the
+        // The backend already sends operator-safe text explaining the
         // failure. Dropping it left a dead turn indistinguishable from a
         // slow one (#136). `held` is excluded: it has its own surface and
         // is not a failure.

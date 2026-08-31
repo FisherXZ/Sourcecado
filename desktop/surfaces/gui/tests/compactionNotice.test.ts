@@ -36,7 +36,7 @@ describe("compaction notice parsing", () => {
     expect((parsed as { compaction?: unknown }).compaction).toEqual(notice);
   });
 
-  it("drops summary text a sidecar should never have sent", () => {
+  it("drops summary text a backend should never have sent", () => {
     const parsed = parseChatEvent(
       turnEnd({ ...notice, summary_text: "the model's account of the session" }),
     );

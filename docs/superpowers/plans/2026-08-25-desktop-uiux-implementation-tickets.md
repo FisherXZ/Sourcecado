@@ -2,7 +2,7 @@
 
 **Status:** Implemented and independently cleared on 2026-08-26
 **Parent plan:** `docs/superpowers/plans/2026-08-25-desktop-uiux-improvement.md`
-**Scope:** Desktop Python sidecar and `desktop/surfaces/gui/` only
+**Scope:** Desktop Python backend and `desktop/surfaces/gui/` only
 **Prepared for:** One ticket per implementation agent or worktree
 
 ## Baseline
@@ -171,13 +171,13 @@ None. Can start immediately and in parallel with DU-01.
 
 #### What to build
 
-Create the canonical sidecar-to-GUI event envelope and prove it with the smallest complete path: one user message, streamed assistant text, terminal state, reload, and thread switching. Every event carries version, session, run, event, message, and part identity. The sidecar remains authoritative.
+Create the canonical backend-to-GUI event envelope and prove it with the smallest complete path: one user message, streamed assistant text, terminal state, reload, and thread switching. Every event carries version, session, run, event, message, and part identity. The backend remains authoritative.
 
 New conversation records must project cleanly into model history and UI state. Existing role/content/tool JSONL remains readable through a backward adapter; do not rewrite old conversation files during migration.
 
 #### Acceptance criteria
 
-- [ ] One typed event contract is shared by sidecar tests and the TypeScript client boundary.
+- [ ] One typed event contract is shared by backend tests and the TypeScript client boundary.
 - [ ] A streamed text turn uses stable IDs from start through terminal acknowledgement and restored history.
 - [ ] Duplicate or replayed events are idempotent and cannot duplicate text.
 - [ ] Events for a background or inactive session update only that session.
@@ -230,7 +230,7 @@ Synchronous tools that cannot be interrupted must report that Sourcecado is stop
 
 - [ ] Stop is available from run start until any terminal state.
 - [ ] Cancel commands are scoped to a session/run and are safe to repeat.
-- [ ] The sidecar emits stopping and exactly one stopped terminal acknowledgement.
+- [ ] The backend emits stopping and exactly one stopped terminal acknowledgement.
 - [ ] No assistant delta or new tool begins after the stopped acknowledgement.
 - [ ] A non-interruptible active tool finishes or fails visibly before the stopped acknowledgement.
 - [ ] Cancellation while waiting for approval closes the pending card without recording a denial.
@@ -248,7 +248,7 @@ Synchronous tools that cannot be interrupted must report that Sourcecado is stop
 
 #### What to build
 
-Keep submission available during a run by creating a sidecar-authoritative queue per thread. Support add, edit, keyboard/pointer move, remove, retry, and deterministic draining. The assistant-ui queue adapter is the interaction layer; persisted ordering, state, acknowledgements, and exactly-once dispatch remain sidecar responsibilities.
+Keep submission available during a run by creating a backend-authoritative queue per thread. Support add, edit, keyboard/pointer move, remove, retry, and deterministic draining. The assistant-ui queue adapter is the interaction layer; persisted ordering, state, acknowledgements, and exactly-once dispatch remain backend responsibilities.
 
 #### Acceptance criteria
 
@@ -258,7 +258,7 @@ Keep submission available during a run by creating a sidecar-authoritative queue
 - [ ] One terminal run state drains exactly one next item; duplicate terminal events cannot double-send it.
 - [ ] Cancel pauses and preserves the queue; the next explicit send/resume follows the tested DU-01 policy.
 - [ ] Failed, interrupted, offline, and reconnecting items retain their text and valid recovery actions.
-- [ ] Queue state is isolated by thread and survives app/sidecar restart.
+- [ ] Queue state is isolated by thread and survives app/backend restart.
 - [ ] Action columns do not jump as item status changes.
 
 #### Blocked by
@@ -514,7 +514,7 @@ Move the existing skills catalog, persona choice, model status, and operator ide
 
 #### Acceptance criteria
 
-- [ ] Skills loading, empty, failed, and populated states use the existing sidecar catalog.
+- [ ] Skills loading, empty, failed, and populated states use the existing backend catalog.
 - [ ] Skill rows show human name and description without exposing implementation paths by default.
 - [ ] Settings shows operator/persona, model configuration status, and safe current connector summary.
 - [ ] Persona changes persist and update the active conversation header without reload.

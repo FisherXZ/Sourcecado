@@ -13,6 +13,6 @@ Verification on 2026-08-25:
 - `npm run build` — TypeScript and Vite production build passed.
 - `cd desktop && .venv/bin/pytest -q` — 158 passed, 1 skipped; one existing Starlette deprecation warning.
 
-Known limitation: this is an isolated contract proof, not the production transcript replacement. The future sidecar adapter must persist queue/order and drive the tested busy, settle, cancel, and explicit-resume edges. `@assistant-ui/react` installs its upstream `assistant-cloud` package transitively; Sourcecado adds no direct Cloud dependency, import, configuration, persistence, or authentication and remains entirely host-owned.
+Known limitation: this is an isolated contract proof, not the production transcript replacement. The future backend adapter must persist queue/order and drive the tested busy, settle, cancel, and explicit-resume edges. `@assistant-ui/react` installs its upstream `assistant-cloud` package transitively; Sourcecado adds no direct Cloud dependency, import, configuration, persistence, or authentication and remains entirely host-owned.
 
 Concurrent-checkout note: the last unfiltered `npm test` observed 25 passes plus DU-02's intentional in-progress Settings-route RED. DU-02 owns that shell test and implementation; it is excluded from this DU-01 verdict at the root agent's direction. The shared production build still passes.

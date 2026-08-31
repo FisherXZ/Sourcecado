@@ -21,7 +21,7 @@ describe("schedule API boundary", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
-    window.__CLUB_HTTP__ = "http://sidecar.test";
+    window.__CLUB_HTTP__ = "http://backend.test";
     window.__CLUB_API_TOKEN__ = "review-token";
   });
 
@@ -180,7 +180,7 @@ describe("schedule API boundary", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://sidecar.test/v1/schedule",
+      "http://backend.test/v1/schedule",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({

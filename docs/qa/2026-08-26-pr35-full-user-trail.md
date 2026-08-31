@@ -5,7 +5,7 @@
 Environment:
 
 - Branch: `feat/club-desktop` / PR #35
-- Sidecar: `http://127.0.0.1:8765`
+- Backend: `http://127.0.0.1:8765`
 - UI: `http://127.0.0.1:5180`
 - Browser: Fisher's existing Chrome tab
 - Desktop viewport: 1550px wide

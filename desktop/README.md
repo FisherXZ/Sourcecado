@@ -1,6 +1,6 @@
 # Sourcecado desktop
 
-This is Sourcecado's active application: a local Python sidecar plus a React/Vite interface packaged as a Tauri macOS app.
+This is Sourcecado's active application: a local Python backend plus a React/Vite interface packaged as a Tauri macOS app.
 
 The root [README](../README.md) is the canonical setup guide. This document covers the stack inside `desktop/`.
 
@@ -11,7 +11,7 @@ Tauri or browser window
         │
         │ authenticated local HTTP (/v1)
         ▼
-FastAPI sidecar (coworker/)
+FastAPI backend (coworker/)
         │
         ├── model provider and tool loop
         ├── Apollo, Gmail, Drive, Calendar, Granola, and web connectors
@@ -19,7 +19,7 @@ FastAPI sidecar (coworker/)
         └── local conversations, person files, schedules, and run ledger
 ```
 
-The Vite development server proxies `/v1` to the sidecar so browser development stays same-origin. Do not hard-code the sidecar port in UI code. The native shell starts and stops the sidecar, injects the API token, and hides to the menu bar on window close.
+The Vite development server proxies `/v1` to the backend so browser development stays same-origin. Do not hard-code the backend port in UI code. The native shell starts and stops the backend, injects the API token, and hides to the menu bar on window close.
 
 Engineering notes for this stack live in [desktop/docs](docs/). The map is in [docs/README.md](../docs/README.md).
 
@@ -33,13 +33,13 @@ The default local state directory is `~/.config/club/`. Set `CLUB_STATE_DIR` for
 
 Workspace grants and exact host-command approvals are also stored in the local state directory. Docker is optional. When its CLI, daemon, or sandbox image is unavailable, shell commands require an explicit **Not sandboxed** host approval; permanent exact-command approvals remain visible and revocable in Settings.
 
-CI and the lockfile use Python 3.14. `make native` / `tauri dev` still start the sidecar from `desktop/.venv`. A packaged `Sourcecado.app` starts the frozen sidecar instead. See [packaging.md](docs/packaging.md).
+CI and the lockfile use Python 3.14. `make native` / `tauri dev` still start the backend from `desktop/.venv`. A packaged `Sourcecado.app` starts the frozen backend instead. See [packaging.md](docs/packaging.md).
 
 ## Run from this directory
 
-Prefer `make setup`, `make sidecar`, and `make gui` from the repository root. From this directory:
+Prefer `make setup`, `make backend`, and `make gui` from the repository root. From this directory:
 
-Sidecar:
+Backend:
 
 ```bash
 python3 -m venv .venv
@@ -47,7 +47,7 @@ python3 -m venv .venv
 .venv/bin/python -m coworker.run
 ```
 
-GUI, after the sidecar is running:
+GUI, after the backend is running:
 
 ```bash
 cd surfaces/gui

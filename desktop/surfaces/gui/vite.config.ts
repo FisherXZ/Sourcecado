@@ -7,7 +7,7 @@ import react from "@vitejs/plugin-react";
 function loadDevToken(): string {
   const fromEnv = process.env.VITE_CLUB_TOKEN || process.env.CLUB_API_TOKEN;
   if (fromEnv) return fromEnv;
-  const path = join(homedir(), ".config", "club", "sidecar-8765.token");
+  const path = join(homedir(), ".config", "club", "backend-8765.token");
   try {
     return readFileSync(path, "utf8").trim();
   } catch {

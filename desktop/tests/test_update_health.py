@@ -1,7 +1,7 @@
 """The launch check: does the version that was just installed actually come up?
 
 This is what makes criterion 4's "failed launch" a real branch rather than a
-callable somebody passes in. The check launches the sidecar that is inside the
+callable somebody passes in. The check launches the backend that is inside the
 installed application, exactly as the shell does -- loopback, its own token, an
 isolated state directory -- and waits for the health handshake.
 
@@ -26,10 +26,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import update_fixtures as fx  # noqa: E402
-from coworker.update_channel.apply import SIDECAR_RELATIVE, sidecar_health_check  # noqa: E402
+from coworker.update_channel.apply import BACKEND_RELATIVE, backend_health_check  # noqa: E402
 
-# The installed sidecar is a real executable. The test stand-in has to be too,
-# because sidecar_health_check execs it the way the shell would. Putting
+# The installed backend is a real executable. The test stand-in has to be too,
+# because backend_health_check execs it the way the shell would. Putting
 # sys.executable on a shebang fails on the macOS 26 runner (Python.app is not
 # a valid interpreter path there), so the stub is /bin/sh wrapping that same
 # interpreter.
@@ -88,10 +88,10 @@ ReuseHTTPServer((args.host, args.port), Handler).serve_forever()
 '''
 
 
-def _install_with_sidecar(tmp_path, *, health: str = "ok"):
+def _install_with_backend(tmp_path, *, health: str = "ok"):
     install = fx.installation(tmp_path, version="0.0.2")
-    fx.app_tree(install.bundle_path.parent, version="0.0.2", sidecar="#!/bin/sh\nexit 1\n")
-    binary = install.bundle_path / SIDECAR_RELATIVE
+    fx.app_tree(install.bundle_path.parent, version="0.0.2", backend="#!/bin/sh\nexit 1\n")
+    binary = install.bundle_path / BACKEND_RELATIVE
     script = binary.with_name("health-stub.py")
     script.write_text(STUB_PY, encoding="utf-8")
     binary.write_text(
@@ -105,7 +105,7 @@ def _install_with_sidecar(tmp_path, *, health: str = "ok"):
 
 
 def _assert_healthy(install, timeout=25.0):
-    if sidecar_health_check(install, timeout=timeout):
+    if backend_health_check(install, timeout=timeout):
         return
     raise AssertionError(
         "health handshake failed\n" + "\n".join(_health_diagnostics(install))
@@ -120,7 +120,7 @@ def _health_diagnostics(install) -> list[str]:
     `communicate()` was called on a stub that ends in `serve_forever()`, so it
     always timed out and the collected details were discarded.
     """
-    binary = install.bundle_path / SIDECAR_RELATIVE
+    binary = install.bundle_path / BACKEND_RELATIVE
     details: list[str] = []
 
     def probe(label, fn):
@@ -270,40 +270,40 @@ def _free_diagnostic_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def test_a_sidecar_that_answers_the_health_handshake_passes(tmp_path):
-    install = _install_with_sidecar(tmp_path)
+def test_a_backend_that_answers_the_health_handshake_passes(tmp_path):
+    install = _install_with_backend(tmp_path)
     try:
         _assert_healthy(install, timeout=25.0)
     finally:
         os.environ.pop("STUB_HEALTH", None)
 
 
-def test_a_sidecar_that_reports_an_unhealthy_status_fails(tmp_path):
-    install = _install_with_sidecar(tmp_path, health="degraded")
+def test_a_backend_that_reports_an_unhealthy_status_fails(tmp_path):
+    install = _install_with_backend(tmp_path, health="degraded")
     try:
-        assert sidecar_health_check(install, timeout=25.0) is False
+        assert backend_health_check(install, timeout=25.0) is False
     finally:
         os.environ.pop("STUB_HEALTH", None)
 
 
-def test_a_sidecar_that_exits_immediately_fails(tmp_path):
-    install = _install_with_sidecar(tmp_path, health="crash")
+def test_a_backend_that_exits_immediately_fails(tmp_path):
+    install = _install_with_backend(tmp_path, health="crash")
     try:
-        assert sidecar_health_check(install, timeout=25.0) is False
+        assert backend_health_check(install, timeout=25.0) is False
     finally:
         os.environ.pop("STUB_HEALTH", None)
 
 
-def test_an_application_with_no_sidecar_in_it_fails(tmp_path):
+def test_an_application_with_no_backend_in_it_fails(tmp_path):
     install = fx.installation(tmp_path, version="0.0.2")
     fx.app_tree(install.bundle_path.parent, version="0.0.2")
-    assert not (install.bundle_path / SIDECAR_RELATIVE).exists()
-    assert sidecar_health_check(install, timeout=5.0) is False
+    assert not (install.bundle_path / BACKEND_RELATIVE).exists()
+    assert backend_health_check(install, timeout=5.0) is False
 
 
 def test_the_launch_check_never_opens_the_operators_state(tmp_path):
     """The check runs against a throwaway directory, so a rollback stays complete."""
-    install = _install_with_sidecar(tmp_path)
+    install = _install_with_backend(tmp_path)
     install.state_root.mkdir(parents=True, exist_ok=True)
     marker = install.state_root / "club.db"
     marker.write_bytes(b"operator state")
@@ -329,7 +329,7 @@ def test_the_health_diagnostic_reports_instead_of_dying_inside_itself(tmp_path):
     `communicate()` on a process that never exits. The resulting
     TimeoutExpired replaced the diagnosis with a subprocess error.
     """
-    install = _install_with_sidecar(tmp_path, health="degraded")
+    install = _install_with_backend(tmp_path, health="degraded")
     try:
         with pytest.raises(AssertionError) as caught:
             _assert_healthy(install, timeout=5.0)

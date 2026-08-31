@@ -1,4 +1,4 @@
-"""Versioned presentation events emitted by the sidecar."""
+"""Versioned presentation events emitted by the backend."""
 
 from __future__ import annotations
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Smoke-tests the packaged Sourcecado sidecar the way the Tauri shell spawns it:
+"""Smoke-tests the packaged Sourcecado backend the way the Tauri shell spawns it:
 loopback bind, health/auth handshake, isolated per-launch state, and a clean
 shutdown that leaves no orphaned process.
 
-Usage: python3 smoke_test.py <path-to-sourcecado-sidecar-binary>
+Usage: python3 smoke_test.py <path-to-sourcecado-backend-binary>
 """
 
 from __future__ import annotations
@@ -166,7 +166,7 @@ def stop_process(proc: subprocess.Popen) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("binary", help="path to the frozen sourcecado-sidecar binary")
+    parser.add_argument("binary", help="path to the frozen sourcecado-backend binary")
     args = parser.parse_args()
 
     binary = os.path.abspath(args.binary)
@@ -208,7 +208,7 @@ def main() -> int:
     proc = launch()
     try:
         if not wait_for_port("127.0.0.1", port):
-            print("FAIL sidecar never opened its loopback port", file=sys.stderr)
+            print("FAIL backend never opened its loopback port", file=sys.stderr)
             return 1
 
         res = get("127.0.0.1", port, "/v1/health", token)
@@ -286,11 +286,11 @@ def main() -> int:
             return 1
 
         if not stop_process(proc):
-            print("FAIL sidecar did not stop for restart smoke", file=sys.stderr)
+            print("FAIL backend did not stop for restart smoke", file=sys.stderr)
             return 1
         proc = launch()
         if not wait_for_port("127.0.0.1", port):
-            print("FAIL restarted sidecar never opened its loopback port", file=sys.stderr)
+            print("FAIL restarted backend never opened its loopback port", file=sys.stderr)
             return 1
         second = run_chat(
             "127.0.0.1",
@@ -321,15 +321,15 @@ def main() -> int:
         if fake_provider.tool_call_responses != 1 or not retained_tool_result:
             print("FAIL completed tool history was replayed or discarded", file=sys.stderr)
             return 1
-        print("OK   retained person chat completed before and after sidecar restart")
+        print("OK   retained person chat completed before and after backend restart")
     finally:
         stopped = stop_process(proc)  # matches Tauri Child::kill() on Quit
         fake_provider.close()
 
     if not stopped:
-        print("FAIL sidecar did not exit after kill()", file=sys.stderr)
+        print("FAIL backend did not exit after kill()", file=sys.stderr)
         return 1
-    print("OK   sidecar exited cleanly, no orphaned process")
+    print("OK   backend exited cleanly, no orphaned process")
 
     shutil.rmtree(state_dir, ignore_errors=True)
     return 0

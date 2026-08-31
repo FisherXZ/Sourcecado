@@ -371,7 +371,7 @@ def test_doctor_inspects_drive_ingestion_db_when_present(tmp_path):
 
 
 def test_doctor_inspects_meeting_evidence_db_when_present(tmp_path):
-    """Current main writes meeting_evidence.db on every sidecar start.
+    """Current main writes meeting_evidence.db on every backend start.
 
     Doctor, packaging, and later updates consume the registry, so a world-readable
     copy of that database must show up as a named store with permission drift.
@@ -1049,7 +1049,7 @@ def test_cli_lists_and_restores_backups(tmp_path, capsys):
         conn.close()
 
 
-def test_cli_uses_the_same_state_directory_as_the_sidecar(monkeypatch, tmp_path):
+def test_cli_uses_the_same_state_directory_as_the_backend(monkeypatch, tmp_path):
     from coworker.server import state_dir
 
     monkeypatch.setenv("CLUB_STATE_DIR", str(tmp_path / "state"))

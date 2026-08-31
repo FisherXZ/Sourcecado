@@ -674,7 +674,7 @@ def test_a_restart_never_takes_a_lease_from_an_owner_that_is_still_alive(tmp_pat
 
     second = AgentRunRepository(base)
     second.registry = repository.registry
-    outcome = restart(second, second.registry.register("owner-second-sidecar"))
+    outcome = restart(second, second.registry.register("owner-second-backend"))
 
     verdicts = {verdict.run_id: verdict.action for verdict in outcome.verdicts}
     assert verdicts[started.run["run_id"]] is ResumeAction.NOTHING

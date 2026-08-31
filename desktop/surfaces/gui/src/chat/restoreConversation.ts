@@ -13,7 +13,7 @@ function structuredText(message: SourcecadoStructuredMessage): string {
 }
 
 /**
- * Maps structured legacy ids (`<thread>:legacy:<index>`) to the sidecar
+ * Maps structured legacy ids (`<thread>:legacy:<index>`) to the backend
  * message identity persisted on the raw record, when one exists.
  */
 function legacyIdentities(conversation: Conversation): Map<string, string> {

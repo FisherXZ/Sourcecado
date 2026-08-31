@@ -10,7 +10,7 @@ Sources (read, do not import as a package):
 
 Slices 1–18 persist **one** chat (`main.jsonl`) and one Gmail **draft** tool. Missing:
 
-1. **Chat history management in the window** — new chat, list, open, rename. Sidecar already writes per-id jsonl; the UI never exposes it.
+1. **Chat history management in the window** — new chat, list, open, rename. Backend already writes per-id jsonl; the UI never exposes it.
 2. **A real connector suite** — Gmail beyond draft, Google Drive, Calendar, Apollo live, Granola. Not OpenWorker’s 25-app dump.
 
 ## Locked
@@ -30,7 +30,7 @@ Slices 1–18 persist **one** chat (`main.jsonl`) and one Gmail **draft** tool. 
 19. **Gmail connect actually completes.** System browser open (done). Stable `http://127.0.0.1:8765/v1/gmail/callback`. Add that URI on the Google Web client (or mint a Desktop client). Consent. Strip shows email. Alyssa Allow lands in Drafts.
 
 20. **Chat history frontend.**
-    Sidecar: `GET /v1/sessions`, `POST /v1/sessions` (new id), `GET /v1/sessions/{id}`, `PATCH` title. Store already keys jsonl by id — stop hardcoding `main` as the only session.
+    Backend: `GET /v1/sessions`, `POST /v1/sessions` (new id), `GET /v1/sessions/{id}`, `PATCH` title. Store already keys jsonl by id — stop hardcoding `main` as the only session.
     Window: left rail (Warm Operator, ~232px): session list, New chat, click to load transcript. Title = first user line unless renamed.
     Done when: New chat blanks the transcript; old chats reopen; quit/relaunch restores the last open id.
 

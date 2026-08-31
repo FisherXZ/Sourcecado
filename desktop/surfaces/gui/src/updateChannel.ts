@@ -4,7 +4,7 @@
  * The channel is a property of the build, not a setting. You join the preview
  * channel by installing a preview build, and there is no control anywhere in
  * Sourcecado that switches you onto it. That is the whole opt-in design: the
- * sidecar trusts a different signing key per channel, so a stable installation
+ * backend trusts a different signing key per channel, so a stable installation
  * cannot authenticate a preview update even if it is handed one. A toggle would
  * be one mis-click away from putting an operator on a channel they did not
  * choose; an install is not.

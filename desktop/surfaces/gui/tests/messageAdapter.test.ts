@@ -343,7 +343,7 @@ describe("convertStructuredMessage notices", () => {
     const converted = convertStructuredMessage(
       noticeMessage(
         "transport",
-        "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+        "The backend connection is down and the retry buffer is full; the command was dropped.",
       ),
     );
 
@@ -353,7 +353,7 @@ describe("convertStructuredMessage notices", () => {
 
   it("exposes a history notice's code for the missing-history framing", () => {
     const converted = convertStructuredMessage(
-      noticeMessage("malformed_event", "Malformed event from sidecar."),
+      noticeMessage("malformed_event", "Malformed event from backend."),
     );
 
     expect(converted.metadata?.custom?.sourcecadoNotice).toBe(true);

@@ -236,7 +236,7 @@ measurement was provider-reported or estimated, and how many summaries were
 rejected.
 
 It never carries summary text. `protocol.ts` copies the fields one at a time, so
-a sidecar that starts sending summary text has it dropped in the parser rather
+a backend that starts sending summary text has it dropped in the parser rather
 than rendered. The thread shows "Older context was compacted." with a plain
 sentence, and says the full conversation is still saved on this machine.
 

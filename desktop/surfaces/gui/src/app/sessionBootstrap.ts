@@ -2,7 +2,7 @@ import { getSessions } from "../api";
 
 const SESSION_LIST_RETRY_DELAYS_MS = [100, 300, 900] as const;
 
-/** Absorb the short sidecar/token startup race without hiding a real outage. */
+/** Absorb the short backend/token startup race without hiding a real outage. */
 export async function getSessionsForBoot(isActive: () => boolean) {
   let lastError: unknown;
   for (let attempt = 0; attempt <= SESSION_LIST_RETRY_DELAYS_MS.length; attempt += 1) {

@@ -87,7 +87,7 @@ Unknown never authorizes a reclaim. An unknown owner's run is not stranded: its
 lease still expires, and expiry reclaim is already fenced.
 
 This matters because "the application is starting, so every previous owner must
-be dead" is false. A second sidecar can be launched beside a working one. Under
+be dead" is false. A second backend can be launched beside a working one. Under
 that assumption the new process steals live leases and two owners commit state
 for one run. `reclaim_dead_owner_leases` refuses to make that assumption.
 
@@ -271,7 +271,7 @@ The following are named seams, not implementations.
   Losing renewal must abandon the work, not continue it.
 - **Wiring.** `create_app` registers one owner with `OwnerRegistry.register()`
   and calls `agent_run_resume.restart()` once, because that is the function
-  that starts the sidecar process. The repository still does not reconcile in
+  that starts the backend process. The repository still does not reconcile in
   its constructor, because opening a store is not the same event as starting a
   process, and `create_app` opens it a line earlier than it becomes an owner.
 - **The two halves of at-most-once.** `store.decide_and_claim_inbox_execution`

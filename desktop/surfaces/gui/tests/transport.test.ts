@@ -172,7 +172,7 @@ describe("openChat reconnect", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "error",
-        message: "sidecar rejected the socket (token)",
+        message: "backend rejected the socket (token)",
       }),
     );
     expect(events).toContainEqual(

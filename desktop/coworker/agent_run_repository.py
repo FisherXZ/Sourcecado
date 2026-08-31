@@ -905,7 +905,7 @@ class AgentRunRepository:
         """Startup recovery: also take leases whose owner is proven dead.
 
         Proof comes from `OwnerRegistry`, never from the assumption that a
-        restart means every previous owner is gone. A second sidecar starting
+        restart means every previous owner is gone. A second backend starting
         beside a working one must leave that one's runs alone.
         """
         return self._reconcile(_stamp(now), prove_dead=True)

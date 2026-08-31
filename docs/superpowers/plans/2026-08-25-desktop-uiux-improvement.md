@@ -7,7 +7,7 @@
 
 ## Objective
 
-Turn the working desktop buddy into a conversation-first operator interface with clear agent activity, durable navigation, intentional responsive behavior, and review-ready tool outputs. Preserve the Python sidecar, local-first architecture, Warm Operator visual language, and permission model.
+Turn the working desktop buddy into a conversation-first operator interface with clear agent activity, durable navigation, intentional responsive behavior, and review-ready tool outputs. Preserve the Python backend, local-first architecture, Warm Operator visual language, and permission model.
 
 ## Initial Assessment
 
@@ -80,7 +80,7 @@ deep-link target.
 - Clear transition when the active run ends and the next queued message begins.
 - Failed or cancelled runs preserve unsent drafts and queued messages.
 
-**Runtime implication:** Add cancel and queue commands to the sidecar protocol. assistant-ui supplies the client interaction model and queue adapter, but the sidecar remains authoritative for persistence, ordering, execution, and terminal acknowledgement.
+**Runtime implication:** Add cancel and queue commands to the backend protocol. assistant-ui supplies the client interaction model and queue adapter, but the backend remains authoritative for persistence, ordering, execution, and terminal acknowledgement.
 
 **Visual:** `scratchpad/d5-running-composer.html`
 
@@ -151,7 +151,7 @@ deep-link target.
 
 **Required framework capabilities:**
 
-- Custom backend or external-store adapter for the Python sidecar and WebSocket protocol.
+- Custom backend or external-store adapter for the Python backend and WebSocket protocol.
 - Structured message parts for text, tools, sources, approvals, and artifacts.
 - Tool lifecycle states and human-in-the-loop approval callbacks.
 - Custom renderers for domain components such as candidate lists, Gmail drafts, calendar events, and source evidence.
@@ -171,7 +171,7 @@ deep-link target.
 
 **Integration boundary:**
 
-- Keep the Python sidecar, local session files, permission engine, and WebSocket transport authoritative.
+- Keep the Python backend, local session files, permission engine, and WebSocket transport authoritative.
 - Add a typed React event store and convert it into assistant-ui `ThreadMessageLike` content parts.
 - Use assistant-ui for interaction state and accessible primitives, not model execution, persistence, cloud sync, or connector logic.
 - Do not add the Vercel AI SDK, assistant-ui Cloud, shadcn/ui, or Tailwind to the desktop runtime for this pass.
@@ -184,7 +184,7 @@ deep-link target.
 
 | Source | Pattern adopted | Sourcecado decision |
 |---|---|---|
-| assistant-ui `ExternalStoreRuntime` | Existing state and custom message conversion | Keep the sidecar and WebSocket; adapt into structured message parts |
+| assistant-ui `ExternalStoreRuntime` | Existing state and custom message conversion | Keep the backend and WebSocket; adapt into structured message parts |
 | assistant-ui Tool UI | Loading, result, error, approval, and custom renderer lifecycle | Registry-backed domain renderers and progressive approval cards |
 | OpenWorker `IntegrationsView` / `ConnectorsList` | Dedicated page, connected-first grouping, search, per-connector details | D2 dedicated Connections page |
 | OpenWorker `Transcript` | Entire agent turn collapsed by default; humanized steps; raw details on demand | D7 quiet activity block with expandable grouped trace |
@@ -385,11 +385,11 @@ No unresolved design decisions remain after the user selections and reference-co
 
 ### Direction A — assistant-ui spine, Sourcecado presentation (chosen)
 
-Use assistant-ui for thread state, message parts, streaming lifecycle, queue/cancel behavior, tool UI registration, approvals, source parts, and generative UI. Sourcecado owns routing, the unified rail, the sidecar adapter, domain components, and all Warm Operator styling.
+Use assistant-ui for thread state, message parts, streaming lifecycle, queue/cancel behavior, tool UI registration, approvals, source parts, and generative UI. Sourcecado owns routing, the unified rail, the backend adapter, domain components, and all Warm Operator styling.
 
 **Advantages:** Mature interaction semantics, accessible primitives, less custom chat-state code, and a direct path to richer agent tools.
 
-**Risk:** A careless adapter could duplicate sidecar state or distort persisted events. Mitigate with a contract-first spike and fixture-based parity tests before replacing the current transcript.
+**Risk:** A careless adapter could duplicate backend state or distort persisted events. Mitigate with a contract-first spike and fixture-based parity tests before replacing the current transcript.
 
 ### Direction B — custom component refactor on the current reducer (fallback only)
 
@@ -402,7 +402,7 @@ Keep the existing event reducer and implement the same component architecture wi
 ## Component and Runtime Architecture
 
 ```text
-Python sidecar
+Python backend
   session HTTP + typed WebSocket events
               │
               ▼
@@ -431,7 +431,7 @@ desktop/surfaces/gui/src/
 │   └── GlobalRail.tsx                   # destinations + pinned/recent threads
 ├── chat/
 │   ├── SourcecadoRuntimeProvider.tsx    # assistant-ui ExternalStoreRuntime
-│   ├── store.ts                         # sidecar-authoritative event reducer
+│   ├── store.ts                         # backend-authoritative event reducer
 │   ├── messageAdapter.ts                # StoredMessage/ChatEvent → message parts
 │   ├── threadAdapter.ts                 # session list/open/create/rename
 │   ├── toolRegistry.tsx                 # framework-backed tool renderers
@@ -474,13 +474,13 @@ desktop/surfaces/gui/src/
 
 Hash routing avoids a new router dependency and keeps browser-dev and Tauri navigation deterministic.
 
-### Sidecar contract additions
+### Backend contract additions
 
 - Versioned event envelope carrying `session_id`, `run_id`, `event_id`, and stable message/part ids across live streaming and restored history.
 - Structured content parts for text, tool call, tool result, approval, source, artifact, and notice.
 - Turn lifecycle: start, active milestone, partial, stopped, failed, complete.
 - Cancel command with terminal acknowledgement.
-- Sidecar-persisted queue commands: add, edit, move, remove, retry, optional steer.
+- Backend-persisted queue commands: add, edit, move, remove, retry, optional steer.
 - Approval receipt with decision, actor, timestamp, scope, and outcome.
 - Source references and artifact metadata survive session reload.
 - A failed step identifies whether retry is safe and which connection route repairs it.
@@ -500,7 +500,7 @@ Hash routing avoids a new router dependency and keeps browser-dev and Tauri navi
 - OpenClaw reference components for queueing, run frames, tool details, responsive rails, and accessibility.
 - Grok Bot reference components for transcript disclosures, retry, and message actions.
 
-Reuse these contracts and patterns. Do not rebuild the sidecar, permission engine, or storage model to fit a frontend library.
+Reuse these contracts and patterns. Do not rebuild the backend, permission engine, or storage model to fit a frontend library.
 
 ## NOT in Scope
 
@@ -533,7 +533,7 @@ Machine-readable mirror: `scratchpad/tasks-design-review-20260825.jsonl`.
   - Surfaced by: D9 framework decision.
   - Files: `desktop/surfaces/gui/src/chat/SourcecadoRuntimeProvider.tsx`, `desktop/surfaces/gui/src/chat/store.ts`, `desktop/surfaces/gui/src/chat/messageAdapter.ts`, fixture tests.
   - Verify: Restored and live conversations render identically; no duplicate deltas, tools, or receipts.
-  - Go/no-go: approvals, persisted tools, partial failures, and thread switching must round-trip without changing sidecar authority.
+  - Go/no-go: approvals, persisted tools, partial failures, and thread switching must round-trip without changing backend authority.
 
 - [ ] **T3 (P1, human: ~1 day / Codex: ~45min)** — Protocol — Add stable structured parts, cancel, and queue commands.
   - Surfaced by: D5 and interaction-state table.

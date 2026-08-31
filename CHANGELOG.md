@@ -6,16 +6,17 @@ All notable changes to Sourcecado will be documented in this file.
 
 ### Added
 - Painted owl mascot as the dock icon, rail mark, first-run welcome, empty-thread illustration, and README social card
-- Local Python/FastAPI sidecar with a provider-independent tool loop, permissions, schedules, connector support, person files, and a durable run ledger
+- Local Python/FastAPI backend with a provider-independent tool loop, permissions, schedules, connector support, person files, and a durable run ledger
 - React/Vite desktop workspace with chat, board, person, connections, schedules, skills, settings, recovery, and structured sourcing results
-- Tauri macOS shell that owns the sidecar lifecycle and local API token
+- Tauri macOS shell that owns the backend lifecycle and local API token
 - Root `Makefile`, active-stack CI, local environment template, and documentation map
 
 ### Changed
 - Sourcecado's current product is now the local, one-operator sourcing-director assistant under `desktop/`
 - Chat is the home surface; the board is the operating picture and the person file is the durable record
 - Gmail moved from drafts-only to explicit review-and-send; automatic sending remains prohibited
-- Default CI now verifies the Python sidecar and React GUI rather than the retired hosted application
+- Default CI now verifies the Python backend and React GUI rather than the retired hosted application
+- The desktop runtime is now named `backend` throughout commands, code, logs, tokens, packaging, tests, and documentation. Existing preview installations need one manual app replacement because their updater probes the previous internal runtime path; in-app updates resume after that transition.
 
 ### Archived
 - The former Next.js/Postgres/pgvector implementation moved intact to `archive/hosted-web/` for historical reference

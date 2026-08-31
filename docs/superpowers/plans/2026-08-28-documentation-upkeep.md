@@ -33,8 +33,8 @@ Analyzed the living tree against code, CI, and Makefile on 2026-08-28. Current b
 - CI Python is **3.14** (`.github/workflows/ci.yml`, `desktop/requirements.lock` generated with `--python-version 3.14`).
 - Node is **24** (`.nvmrc`). That matches README.
 - GUI/Cargo version is **0.0.1**. Root `VERSION` is **0.2.0.0**. CHANGELOG `[0.2.0.0]` is the hosted Next.js app from 2026-06-17.
-- Makefile targets that exist and have dedicated docs: `setup`, `sidecar`, `gui`, `native`, `test`, `eval`, `eval-sourcing`, `doctor`, `doctor-repair`, `secret-scan`, `build`, `build-sidecar`, `smoke-test`, `test-update`, `update-status`, `update-rollback`, `update-manifest`, `update-verify`.
-- `make native` / `tauri dev` still shells to `desktop/.venv` (ADR 0003). Packaged builds use the bundled sidecar. `packaging.md` is the how-to for the artifact.
+- Makefile targets that exist and have dedicated docs: `setup`, `backend`, `gui`, `native`, `test`, `eval`, `eval-sourcing`, `doctor`, `doctor-repair`, `secret-scan`, `build`, `build-backend`, `smoke-test`, `test-update`, `update-status`, `update-rollback`, `update-manifest`, `update-verify`.
+- `make native` / `tauri dev` still shells to `desktop/.venv` (ADR 0003). Packaged builds use the bundled backend. `packaging.md` is the how-to for the artifact.
 - Rail destinations: Chat, Board, Scheduled, Connections, Skills, Memory (saved-memory review), Needs your answer (quarantine), plus Settings/workspace/update/diagnostic routes.
 - Course, brand, CONTEXT-MAP, and the PR template exist on disk and are untracked.
 
@@ -63,7 +63,7 @@ Common gaps this plan flags, not fills: first-run tutorial; VERSION alignment; M
 
 ### Diagram drift
 
-`desktop/README.md` architecture diagram still matches the sidecar: Tauri/browser → `/v1` → FastAPI → providers, connectors, workspace, person files, ledger. Keep it. Do not auto-edit.
+`desktop/README.md` architecture diagram still matches the backend: Tauri/browser → `/v1` → FastAPI → providers, connectors, workspace, person files, ledger. Keep it. Do not auto-edit.
 
 ADR 0003 header still says **Proposed** (2026-08-27) while CI `macos-preview`, `packaging.md`, `productName: Sourcecado`, and Cargo `0.0.1` show the work landed. Mark Accepted.
 
@@ -226,7 +226,7 @@ The root `Makefile` wraps the usual commands. The long versions live next to the
 - [Doctor](desktop/docs/doctor.md) — inspect local state. `make doctor` changes nothing. `make doctor-repair` applies only automatic repairs.
 - [Secret scan](desktop/docs/secret-scan.md) — confirm a rotated credential is gone from local state without printing it. `make secret-scan`
 - [Evaluations](desktop/docs/evaluations.md) — `make eval` and `make eval-sourcing`. Artifacts stay under `desktop/.eval-artifacts/` and are gitignored.
-- [Packaging](desktop/docs/packaging.md) — freeze the sidecar and build `Sourcecado.app`
+- [Packaging](desktop/docs/packaging.md) — freeze the backend and build `Sourcecado.app`
 - [Preview updates](desktop/docs/update-channel.md) — signed manifests, drain, rollback
 ```
 
@@ -315,7 +315,7 @@ Follow the root [README](README.md). From a clean checkout:
 ```bash
 make setup
 cp .env.example ~/.config/club/.env
-make sidecar
+make backend
 make gui
 ```
 
@@ -328,7 +328,7 @@ make test
 make build
 ```
 
-`make test` is the Python sidecar suite plus GUI Vitest. `make build` type-checks and bundles the GUI. CI runs those, then the sourcing eval suite. The archived hosted app is not in CI.
+`make test` is the Python backend suite plus GUI Vitest. `make build` type-checks and bundles the GUI. CI runs those, then the sourcing eval suite. The archived hosted app is not in CI.
 
 If you changed agent or connector behavior, also run the relevant live path and say so in the pull request.
 
@@ -395,7 +395,7 @@ Keep the existing source-of-truth and course sections (already drafted). Under e
 
 These describe the active local runtime. They are not the product spec. If they conflict with the 2026-08-25 specification, the spec wins.
 
-### How the sidecar works
+### How the backend works
 
 - [Agent runs](../desktop/docs/agent-runs.md)
 - [Run ledger](../desktop/docs/run-ledger.md)
@@ -459,7 +459,7 @@ Expected: `missing none`.
 
 **Interfaces:**
 
-- Consumes: ADR 0003 (dev uses `.venv`; release uses bundled sidecar), Python 3.14, docs index
+- Consumes: ADR 0003 (dev uses `.venv`; release uses bundled backend), Python 3.14, docs index
 - Produces: accurate setup for work inside `desktop/`
 
 - [ ] **Step 1: Add a Docs pointer after Architecture**
@@ -468,15 +468,15 @@ Expected: `missing none`.
 Engineering notes for this stack live in [desktop/docs](docs/). The map is in [docs/README.md](../docs/README.md).
 ```
 
-- [ ] **Step 2: State the Python and sidecar split**
+- [ ] **Step 2: State the Python and backend split**
 
 In Credentials and state, or Run, add one short paragraph:
 
 ```markdown
-CI and the lockfile use Python 3.14. `make native` / `tauri dev` still start the sidecar from `desktop/.venv`. A packaged `Sourcecado.app` starts the frozen sidecar instead. See [packaging.md](docs/packaging.md).
+CI and the lockfile use Python 3.14. `make native` / `tauri dev` still start the backend from `desktop/.venv`. A packaged `Sourcecado.app` starts the frozen backend instead. See [packaging.md](docs/packaging.md).
 ```
 
-Do not claim `make native` requires `make build-sidecar` for everyday dev. ADR 0003 says the opposite. `packaging.md` requires the resource path to exist for Tauri's compile-time check; if that tree is already in the checkout, leave it. If a clean `make native` fails without it, add `make build-sidecar` as a prerequisite with the error as evidence. Do not guess.
+Do not claim `make native` requires `make build-backend` for everyday dev. ADR 0003 says the opposite. `packaging.md` requires the resource path to exist for Tauri's compile-time check; if that tree is already in the checkout, leave it. If a clean `make native` fails without it, add `make build-backend` as a prerequisite with the error as evidence. Do not guess.
 
 - [ ] **Step 3: Verify the paragraph is true against ADR 0003**
 

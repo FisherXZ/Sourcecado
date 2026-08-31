@@ -474,7 +474,7 @@ def _tool_finished_event(
 
 
 class RunControl:
-    """Addressed cooperative control for one sidecar-authoritative turn."""
+    """Addressed cooperative control for one backend-authoritative turn."""
 
     def __init__(self, identity: TurnIdentity) -> None:
         self.identity = identity

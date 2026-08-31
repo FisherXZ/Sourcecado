@@ -22,7 +22,7 @@ from coworker.update_channel.apply import Installation
 
 KEY_ID = "test-preview-2026"
 PRODUCT = "sourcecado"
-SIDECAR_RELATIVE = "Contents/Resources/resources/sourcecado-sidecar/sourcecado-sidecar"
+BACKEND_RELATIVE = "Contents/Resources/resources/sourcecado-backend/sourcecado-backend"
 
 
 def keypair() -> tuple[bytes, str]:
@@ -42,7 +42,7 @@ def trust(public_b64: str, channel: str = str(m.Channel.PREVIEW)) -> dict:
     return {str(channel): {KEY_ID: public_b64}}
 
 
-def app_tree(root: Path, *, version: str, sidecar: str | None = None) -> Path:
+def app_tree(root: Path, *, version: str, backend: str | None = None) -> Path:
     """A directory shaped like the packaged app, with a readable version marker."""
     bundle = root / "Sourcecado.app"
     contents = bundle / "Contents"
@@ -53,19 +53,19 @@ def app_tree(root: Path, *, version: str, sidecar: str | None = None) -> Path:
         encoding="utf-8",
     )
     (contents / "MacOS" / "Sourcecado").write_text(f"binary {version}", encoding="utf-8")
-    if sidecar is not None:
-        path = bundle / SIDECAR_RELATIVE
+    if backend is not None:
+        path = bundle / BACKEND_RELATIVE
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(sidecar, encoding="utf-8")
+        path.write_text(backend, encoding="utf-8")
         path.chmod(0o755)
     return bundle
 
 
-def artifact(tmp_path: Path, *, version: str, sidecar: str | None = None) -> Path:
+def artifact(tmp_path: Path, *, version: str, backend: str | None = None) -> Path:
     """Zip an app tree the way a publisher would, and return the archive path."""
     staging = tmp_path / f"artifact-{version}"
     staging.mkdir(parents=True, exist_ok=True)
-    app_tree(staging, version=version, sidecar=sidecar)
+    app_tree(staging, version=version, backend=backend)
     archive = shutil.make_archive(
         str(tmp_path / f"Sourcecado-{version}-macos-aarch64"), "zip", root_dir=staging
     )

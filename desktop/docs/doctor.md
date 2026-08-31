@@ -42,7 +42,7 @@ cd desktop
 .venv/bin/python -m coworker.doctor --state /path/to/state
 ```
 
-Stop the sidecar before running `repair` or `restore`. Doctor does not
+Stop the backend before running `repair` or `restore`. Doctor does not
 coordinate with a running process.
 
 Exit codes:
@@ -158,7 +158,7 @@ the contract. Removing those blocks is a follow-up, not part of this change.
   an outcome.
 - **Permission drift** — anything under the state directory that group or other
   can read or write.
-- **Runtime dependencies** — the modules the sidecar cannot start without,
+- **Runtime dependencies** — the modules the backend cannot start without,
   resolved through the import finder so nothing is executed.
 
 ## What Doctor will and will not repair
@@ -302,7 +302,7 @@ Restore takes its own safety backup of the current state before overwriting
 anything, and prints that safety backup's id. So a restore is itself
 reversible. Only stores with `"content_backed_up": true` are put back.
 
-Stop the sidecar first. Restore replaces files under the state directory and
+Stop the backend first. Restore replaces files under the state directory and
 does not coordinate with a running process.
 
 ## If a migration fails
@@ -427,7 +427,7 @@ run store already does correctly at startup, under a lease, fenced by version,
 in one transaction with the checkpoint that records it. Doctor holds no lease
 and cannot acquire one. A Doctor that wrote the same rows would be a second
 writer racing an owner it may not be able to prove is gone, which is the failure
-the whole design exists to prevent. Starting the sidecar is the repair.
+the whole design exists to prevent. Starting the backend is the repair.
 
 ### Not covered yet
 

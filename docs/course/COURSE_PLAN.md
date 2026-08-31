@@ -22,7 +22,7 @@ Teaching and building run together. During Weeks 1–5, each lesson is applied t
 The course teaches the active local product only:
 
 - React/Vite interface and Tauri desktop shell
-- local `/v1` application boundary and Python/FastAPI sidecar
+- local `/v1` application boundary and Python/FastAPI backend
 - SQLite indexes, append-only JSONL events, person files, and local state
 - model messages, provider adapters, streaming, the agent loop, and tool execution
 - Gmail, Drive, and Calendar through student-owned Google OAuth connections
@@ -97,7 +97,7 @@ Full audience-facing slide copy is maintained in [TEACHING_DECKS.md](TEACHING_DE
 - SQLite schema evolution and backward-compatible local-state changes
 - local API authentication versus Google connector OAuth versus action approval
 - loading, empty, success, invalid-input, server-error, and stale-state behavior
-- testing the sidecar and GUI contract
+- testing the backend and GUI contract
 
 **Deck outline:**
 
@@ -235,7 +235,7 @@ Real Product Tickets may vary in scope. There is no artificial line-count, file-
 
 - AI-assisted workflow and product-language alignment
 - pull-request, CI, documentation, and accessibility improvements
-- full-stack application behavior across sidecar and GUI
+- full-stack application behavior across backend and GUI
 - local-state compatibility and recovery
 - provider, streaming, and turn-loop behavior
 - tool schemas, permissions, approval safety, and connector behavior

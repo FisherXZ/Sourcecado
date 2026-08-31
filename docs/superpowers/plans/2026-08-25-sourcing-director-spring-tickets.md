@@ -3,7 +3,7 @@
 **Status:** Draft for implementation planning on 2026-08-25  
 **Spec:** `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md`  
 **Worktree:** `/Users/fisher/Documents/GitHub2026/sc-spring` on `feat/sourcing-director-spring`  
-**Scope:** Club sidecar domain under `desktop/coworker/` and `desktop/tests/`. GUI tickets are listed and blocked. Do not edit `desktop/surfaces/gui/` in this pass.
+**Scope:** Club backend domain under `desktop/coworker/` and `desktop/tests/`. GUI tickets are listed and blocked. Do not edit `desktop/surfaces/gui/` in this pass.
 
 The June 8 OS design is prior art, not this product. It is an earlier version with the wrong scope. Borrow identity, citations, and a durable record of work. Do not rebuild the weekly packet, ranked shortlist, or drafts-only Gmail product.
 
@@ -34,7 +34,7 @@ A **sequence** is a person we are working. Company is a tag on that person. Do n
 
 The spec's use cases are the source of truth. Locked conditions are constraints, not the backlog.
 
-`ConversationStore` / `store.py` / `turn.py` / `server.py` are merge-conflict hotspots with the parallel UI/UX pass on `feat/club-desktop`. As of 2026-08-25 that pass has **done** DU-01–06, DU-15, and DU-17, still uncommitted on `feat/club-desktop`. Remaining DU-07–14, DU-16, DU-18–19 are presentation, Scheduled, and cleanup. They do not block sidecar SD-01–11.
+`ConversationStore` / `store.py` / `turn.py` / `server.py` are merge-conflict hotspots with the parallel UI/UX pass on `feat/club-desktop`. As of 2026-08-25 that pass has **done** DU-01–06, DU-15, and DU-17, still uncommitted on `feat/club-desktop`. Remaining DU-07–14, DU-16, DU-18–19 are presentation, Scheduled, and cleanup. They do not block backend SD-01–11.
 
 SD-01 and SD-02 add new files only. Later tickets may touch `tools.py`, `permissions.py`, `gmail.py`, and `turn.py` in this worktree. They must not edit GUI sources while DU-07–14 / DU-16 are in that tree.
 
@@ -105,7 +105,7 @@ SD-13 draft/send GUI    (after DU-12 and SD-08; send backend is not waiting on D
 
 #### What to build
 
-A sidecar-owned person file in a new sqlite database `people.db`, separate from `club.db`. Create, fetch, and update a person from an Apollo candidate without storing an email. Support sequence state, an append-only ledger, session binding, and a four-field handoff.
+A backend-owned person file in a new sqlite database `people.db`, separate from `club.db`. Create, fetch, and update a person from an Apollo candidate without storing an email. Support sequence state, an append-only ledger, session binding, and a four-field handoff.
 
 This ticket is the file. It does not add HTTP, tools, or GUI.
 
@@ -156,7 +156,7 @@ Do not call `PersonStore.append_event` from `turn.py` in this ticket.
 
 **Type:** AFK  
 **User stories:** U1  
-**Plan:** `docs/superpowers/plans/2026-08-25-sd-03-to-11-sidecar.md` (SD-03 through SD-11)
+**Plan:** `docs/superpowers/plans/2026-08-25-sd-03-to-11-backend.md` (SD-03 through SD-11)
 
 #### What to build
 

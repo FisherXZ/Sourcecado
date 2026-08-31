@@ -263,7 +263,7 @@ export function ApprovalCard({
     previousState.current = audit.approvalState;
   }, [audit.approvalState]);
 
-  // The sidecar itself gives up waiting for execution after ~60s
+  // The backend itself gives up waiting for execution after ~60s
   // (desktop/coworker/inbox.py _DEFAULT_WAIT_TIMEOUT_SECONDS) and writes no
   // receipt for a non-terminal outcome. Mirror that deadline here: if no
   // approval_resolved has arrived by then, stop implying the decision is

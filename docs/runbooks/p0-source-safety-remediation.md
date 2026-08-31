@@ -19,7 +19,7 @@ Authorized Apollo operator:
 
 1. Create a replacement credential in Apollo without exposing it in this runbook or an issue comment.
 2. Store it only in the approved local secret configuration (`~/.config/club/.env` for the current local app).
-3. Restart the sidecar and verify Apollo reports Connected without printing the value.
+3. Restart the backend and verify Apollo reports Connected without printing the value.
 4. Run one bounded, read-only Apollo search smoke.
 5. Revoke the exposed credential.
 6. Verify the revoked credential no longer authenticates using Apollo's own key-management status; do not replay it through logs or shell output.

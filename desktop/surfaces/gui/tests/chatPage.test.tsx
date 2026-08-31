@@ -567,14 +567,14 @@ describe("ChatPage Warm Operator thread", () => {
       onChatEvent?.({
         type: "error",
         message:
-          "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+          "The backend connection is down and the retry buffer is full; the command was dropped.",
       });
     });
 
     const notice = await screen.findByRole("note");
     expect(notice).toHaveTextContent("Connection problem.");
     expect(notice).toHaveTextContent(
-      "The sidecar connection is down and the retry buffer is full",
+      "The backend connection is down and the retry buffer is full",
     );
     expect(notice).not.toHaveTextContent("Some conversation history is unavailable");
     expect(notice).not.toHaveTextContent("Available messages are shown");
@@ -674,7 +674,7 @@ describe("ChatPage Warm Operator thread", () => {
         type: "connection_change",
         status: "offline",
         attempt: 1,
-        reason: "The sidecar connection closed (code 1006). Reconnecting.",
+        reason: "The backend connection closed (code 1006). Reconnecting.",
       });
     });
 
@@ -709,13 +709,13 @@ describe("ChatPage Warm Operator thread", () => {
         type: "connection_change",
         status: "reconnecting",
         attempt: 1,
-        reason: "The sidecar connection closed (code 1006). Reconnecting.",
+        reason: "The backend connection closed (code 1006). Reconnecting.",
       });
       onChatEvent?.({
         type: "connection_change",
         status: "connected",
         attempt: 0,
-        reason: "Connected to the sidecar.",
+        reason: "Connected to the backend.",
       });
     });
 
@@ -1293,7 +1293,7 @@ describe("ChatPage Warm Operator thread", () => {
     });
     chatApprove.mockReturnValue({
       state: "dropped",
-      reason: "The sidecar connection is down and the retry buffer is full; the command was dropped.",
+      reason: "The backend connection is down and the retry buffer is full; the command was dropped.",
     });
 
     render(<ChatPage sessionId="thread-alpha" />);
@@ -1385,7 +1385,7 @@ describe("ChatPage Warm Operator thread", () => {
     expect(screen.queryByText("Late alpha response")).not.toBeInTheDocument();
   });
 
-  it("restores the sidecar-authoritative queue with stable item state", async () => {
+  it("restores the backend-authoritative queue with stable item state", async () => {
     api.getSession.mockResolvedValue({
       id: "thread-alpha",
       title: "Queued work",

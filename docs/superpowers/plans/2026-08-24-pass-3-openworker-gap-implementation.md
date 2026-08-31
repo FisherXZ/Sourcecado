@@ -6,9 +6,9 @@
 
 **Goal:** The Club window can open more than one chat, show a five-connector status panel, search/read Gmail plus Drive and Calendar, talk to Granola through MCP OAuth, and let a due scheduler job run a real turn that parks asks in the inbox.
 
-**Architecture:** Keep the three Club layers. The sidecar stays the only brain. Copy OpenWorker *jobs* (session list, incremental Google scopes, fake-HTTP connectors, Granola MCP OAuth, scheduler runner) into owned files under `desktop/coworker/`. Do not import OpenWorker, OpenClaw, or grok-bot as a package. The window stays Warm Operator: 232px session rail + transcript + connector/inbox strip.
+**Architecture:** Keep the three Club layers. The backend stays the only brain. Copy OpenWorker *jobs* (session list, incremental Google scopes, fake-HTTP connectors, Granola MCP OAuth, scheduler runner) into owned files under `desktop/coworker/`. Do not import OpenWorker, OpenClaw, or grok-bot as a package. The window stays Warm Operator: 232px session rail + transcript + connector/inbox strip.
 
-**Tech Stack:** Python 3 sidecar (FastAPI, httpx, pytest), Tauri + React window, sqlite + jsonl under `~/.config/club/`, secrets.json 0600. New dep only for Granola: `mcp>=1.28.1,<2`.
+**Tech Stack:** Python 3 backend (FastAPI, httpx, pytest), Tauri + React window, sqlite + jsonl under `~/.config/club/`, secrets.json 0600. New dep only for Granola: `mcp>=1.28.1,<2`.
 
 **Spec:** `docs/superpowers/plans/2026-08-24-pass-3-openworker-gap.md`
 **Design:** `~/.gstack/projects/sourcecado/fisher-fix-loop-truncated-partial-answer-design-20260824-desktop-buddy.md`
@@ -398,7 +398,7 @@ Expected: PASS. Health slice 19.
 
 - [ ] **Step 5: Click in the window**
 
-Relaunch sidecar so `.env` is loaded. Connect Gmail. After Fisher adds the redirect URI, strip shows the Gmail address. Secrets.json stays 0600; the strip never prints the refresh token.
+Relaunch backend so `.env` is loaded. Connect Gmail. After Fisher adds the redirect URI, strip shows the Gmail address. Secrets.json stays 0600; the strip never prints the refresh token.
 
 - [ ] **Step 6: Commit**
 
@@ -663,7 +663,7 @@ Keep `/v1/conversation` as GET of the open session so the current window boot st
 - `test_conversation_empty_before_chat`: `body["id"] == app.state.store.open_session_id()` (not `"main"`). Messages still `[]`.
 - `test_ws_persists_messages_to_disk`: jsonl path is `conversations / f"{open_session_id()}.jsonl"`, not `main.jsonl`.
 - `test_ws_heals_orphaned_tool_call_before_model`: `sid = built.state.store.open_session_id()` — **do not** use `built.state.session_id` (that attribute is gone).
-- `test_new_sidecar_reloads_history` and any other `main.jsonl` / `session_id == "main"` assertions in this file: same rewrite.
+- `test_new_backend_reloads_history` and any other `main.jsonl` / `session_id == "main"` assertions in this file: same rewrite.
 
 Bump `SLICE = 20`. Update both health tests to `== 20`.
 
@@ -704,7 +704,7 @@ Window jobs (copy grok-bot *jobs*, not chrome):
 2. New chat → POST /v1/sessions → blank transcript.
 3. Click row → GET /v1/sessions/{id} → `itemsFromMessages`.
 4. Title = first user line unless PATCH renamed. Double-click a rail row to rename (PATCH). Empty title is rejected.
-5. Last open id is whatever the sidecar stored; boot uses `open_id`.
+5. Last open id is whatever the backend stored; boot uses `open_id`.
 6. Shell:
 
 ```
@@ -1728,7 +1728,7 @@ Pause.
 
 Not a gap-doc slice. Do **not** bump `SLICE`. Land this after `run_turn` exists so allow/deny has one home.
 
-This slice is cleanup on the landed sidecar, not sessions/Drive/Calendar/Granola/MEMORY.md. Pass 3 product work stays in Tasks 1–11 and 13.
+This slice is cleanup on the landed backend, not sessions/Drive/Calendar/Granola/MEMORY.md. Pass 3 product work stays in Tasks 1–11 and 13.
 
 **Files:** `turn.py` / `server.py` / `inbox.py` / `run.py` / `scheduler.py` / `store.py` / `secrets.py` / `tools.py` / `permissions.py` / `persona.py` / `gmail.py` / `google_oauth.py` / matching tests.
 

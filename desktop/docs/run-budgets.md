@@ -116,7 +116,7 @@ conclusion:
 - `continue_available: true`.
 
 The UI writes its own sentences from those numbers. `runBudgetStatus` in
-`protocol.ts` rebuilds the payload field by field, so a sidecar that starts
+`protocol.ts` rebuilds the payload field by field, so a backend that starts
 sending prose cannot get it rendered as Sourcecado's account of the run. The
 stop card leads with "This run did not finish."
 

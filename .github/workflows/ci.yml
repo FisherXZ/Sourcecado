@@ -6,8 +6,8 @@ on:
     branches: [main]
 
 jobs:
-  sidecar:
-    name: Python sidecar
+  backend:
+    name: Python backend
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -122,8 +122,8 @@ jobs:
         working-directory: desktop/surfaces/gui/src-tauri
         run: cargo fmt --check
 
-      - name: Build sidecar
-        run: bash desktop/packaging/build_sidecar.sh
+      - name: Build backend
+        run: bash desktop/packaging/build_backend.sh
 
       - name: Rust lint
         working-directory: desktop/surfaces/gui/src-tauri
@@ -137,10 +137,10 @@ jobs:
         working-directory: desktop/surfaces/gui
         run: npm run tauri -- build
 
-      - name: Smoke test the packaged sidecar
+      - name: Smoke test the packaged backend
         run: |
           python3 desktop/packaging/smoke_test.py \
-            "desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app/Contents/Resources/resources/sourcecado-sidecar/sourcecado-sidecar"
+            "desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app/Contents/Resources/resources/sourcecado-backend/sourcecado-backend"
 
       # --- preview channel: signing, notarization, and the update manifest ---
       #
@@ -208,7 +208,7 @@ jobs:
           set -euo pipefail
           # Inner code first, then the bundle. `codesign --deep` is unsupported
           # for distribution and mis-signs nested code quietly, and the frozen
-          # sidecar is exactly the nested code that would be mis-signed.
+          # backend is exactly the nested code that would be mis-signed.
           find Sourcecado.app/Contents -type f \
             \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) -print0 \
             | xargs -0 -n 1 codesign --force --options runtime --timestamp \

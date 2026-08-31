@@ -1,1 +1,1 @@
-"""Sourcecado sidecar — the authenticated local application brain."""
+"""Sourcecado backend — the authenticated local application brain."""

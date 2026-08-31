@@ -6,7 +6,7 @@
 
 ## 1. Verdict Up Front
 
-Sourcecado's active stack is a **well-architected local-first desktop system** (~43.5k LOC Python sidecar + ~13.6k LOC React GUI + 208-line Rust/Tauri shell) with an unusually strong safety spine: a single-source permission policy, durable agent runs with an external-effect fence, an at-most-once approved-send chain, and a workspace runtime with a written, honest threat model (ADR 0002).
+Sourcecado's active stack is a **well-architected local-first desktop system** (~43.5k LOC Python backend + ~13.6k LOC React GUI + 208-line Rust/Tauri shell) with an unusually strong safety spine: a single-source permission policy, durable agent runs with an external-effect fence, an at-most-once approved-send chain, and a workspace runtime with a written, honest threat model (ADR 0002).
 
 **It fits its stated scope without restructuring.** The work to budget is targeted, not foundational. The three things that will bite first as the product grows: (1) **`gmail_send` and `apollo_enrich_contact` each exist twice** — a thin tool path and a thick approval path with materially different safety guarantees, selected implicitly by which UI path the call arrives through; (2) **two god seams** — `server.py` (3,687 LOC, all 63 routes in one closure) and `api.ts` (2,214 LOC) — concentrate nearly all change cost; (3) **five SQLite databases with no cross-store transaction**, held consistent by convention and a reconcile pass rather than by mechanism.
 
@@ -18,14 +18,14 @@ Sourcecado's active stack is a **well-architected local-first desktop system** (
 
 **What it is:** a local-first desktop assistant for a sourcing director: name a target, find people (Apollo), prepare tailored outreach, enrich deliberately (credit-aware), approve and send (Gmail), keep conversations moving, and leave a person file another officer can pick up. Chat is home; the board is the operating picture; the person file is the durable domain object.
 
-**Stack:** Python 3.14 / FastAPI / uvicorn sidecar · React 18 / Vite / assistant-ui GUI · Tauri 2 (Rust) shell · SQLite + append-only JSONL state · PyInstaller-frozen sidecar shipped inside the app bundle · signed preview update channel.
+**Stack:** Python 3.14 / FastAPI / uvicorn backend · React 18 / Vite / assistant-ui GUI · Tauri 2 (Rust) shell · SQLite + append-only JSONL state · PyInstaller-frozen backend shipped inside the app bundle · signed preview update channel.
 
 ```
  Operator (sourcing director)
       │
  ┌────▼─────────────────────────────────────────────┐
  │ Tauri shell (Rust, 208 LOC)                      │
- │   spawns sidecar, exit-with-parent watchdog      │
+ │   spawns backend, exit-with-parent watchdog      │
  │ ┌──────────────────────────────────────────────┐ │
  │ │ React/Vite GUI (13.6k LOC)                   │ │
  │ │  chat · board · person file · inbox ·        │ │
@@ -35,7 +35,7 @@ Sourcecado's active stack is a **well-architected local-first desktop system** (
         HTTP + WS  │  loopback 127.0.0.1:8765
         X-Club-Token (per-run, 0600 file)
  ┌─────────────────▼────────────────────────────────┐
- │ Python sidecar (coworker/, 43.5k LOC)            │
+ │ Python backend (coworker/, 43.5k LOC)            │
  │  create_app: 63 routes + /ws/chat                │
  │  turn loop · permission policy · agent runs ·    │
  │  inbox approvals · workspace runtime · scheduler │
@@ -51,7 +51,7 @@ Sourcecado's active stack is a **well-architected local-first desktop system** (
 
 ## 3. Architectural Style
 
-**Local sidecar monolith behind a thin native shell.** One Python process owns the API, the agent loop, policy, persistence, scheduling, and self-maintenance; the GUI is a rendering surface over a versioned event protocol; the Rust shell does process supervision only (`src-tauri/src/lib.rs`, 200 LOC). This is the right shape for a single-operator local product.
+**Local backend monolith behind a thin native shell.** One Python process owns the API, the agent loop, policy, persistence, scheduling, and self-maintenance; the GUI is a rendering surface over a versioned event protocol; the Rust shell does process supervision only (`src-tauri/src/lib.rs`, 200 LOC). This is the right shape for a single-operator local product.
 
 - **Loopback-only by construction** — `run.py:83-85` refuses to bind off loopback; per-run token generated with `secrets.token_hex(32)`, written mode 0600 (`run.py:44-48, 66-74`), compared constant-time with an origin allowlist (`server.py:339-349`).
 - **Versioned presentation events** — event schema v2 with replay/routing identity shared by live WebSocket and HTTP restore (`events.py:10-26`, `chat/protocol.ts:1-14`). This is a real contract, not an ad-hoc stream.
@@ -137,7 +137,7 @@ POST /v1/inbox/{approval_id}             allow/deny; at-most-once via atomic
 | File | LOC | Role |
 |---|---|---|
 | `coworker/server.py` | 3,687 | all 63 routes + WS defined inside one `create_app` closure (`server.py:383`, routes 1225-2829) |
-| `surfaces/gui/src/api.ts` | 2,214 | entire GUI↔sidecar client surface in one module |
+| `surfaces/gui/src/api.ts` | 2,214 | entire GUI↔backend client surface in one module |
 | `coworker/store.py` | 1,946 | six persistence concerns in one class |
 | `coworker/turn.py` | 1,743 | turn loop (already an extraction — acceptable) |
 
@@ -152,7 +152,7 @@ POST /v1/inbox/{approval_id}             allow/deny; at-most-once via atomic
 - Policy is one module with zero side effects (`permissions.py`) — the model-facing approval class and the runtime decision derive from the same frozensets (`permissions.py:91-114`).
 - Providers sit behind a `StreamProvider` protocol with five implementations and a compatible-failover chain (`provider.py:263`, `provider_retry.py`) — swapping vendors is low-risk.
 - The turn loop is shared by WS chat and the scheduler rather than duplicated (`turn.py:1`).
-- The GUI consumes a versioned event contract, not sidecar internals (`chat/protocol.ts`).
+- The GUI consumes a versioned event contract, not backend internals (`chat/protocol.ts`).
 - The workspace runtime is a self-contained authority boundary with typed tools, receipts, and its own risk classes (ADR 0002).
 
 ---
@@ -162,7 +162,7 @@ POST /v1/inbox/{approval_id}             allow/deny; at-most-once via atomic
 | Surface | Blast radius | Current mitigation | Severity |
 |---|---|---|---|
 | Dual-path send/enrich | A send can reach a recipient the director never bound; enrichment spends credits without provenance | Both paths human-approved; effect fence stops duplicates | **High** |
-| Sidecar process | GUI is inert without it | Tauri watchdog; orphan exit (`run.py:15-41`); doctor | Medium |
+| Backend process | GUI is inert without it | Tauri watchdog; orphan exit (`run.py:15-41`); doctor | Medium |
 | Five SQLite files | Corruption/partial write splits truth across stores | Backup-first migrations; reconcile pass; receipts | Medium |
 | LLM providers | Turn fails | Retry + failover chain, budget stops, safe failure messages (`provider_retry.py`) | Low-Med |
 | Gmail/Apollo quota+auth | Outreach/enrich blocked | Typed failure classes, connector status surfaces | Low-Med |
@@ -182,13 +182,13 @@ POST /v1/inbox/{approval_id}             allow/deny; at-most-once via atomic
 
 ## 10. Observability & Operational Readiness
 
-Mature for a local product: local telemetry spans/usage/cost estimates (`telemetry/`), per-turn failure classes surfaced to the operator (PR #137), doctor with repair mode, diagnostic bundle with registered-secret redaction (`diagnostic_bundle.py`, `bundle_redaction.py`), secret-scan tooling with rotation support (Makefile), behavioural evals in CI, and a packaged-sidecar smoke test. The gap is small: entry-point logging is `print`-based and the tick thread swallows exceptions (§8).
+Mature for a local product: local telemetry spans/usage/cost estimates (`telemetry/`), per-turn failure classes surfaced to the operator (PR #137), doctor with repair mode, diagnostic bundle with registered-secret redaction (`diagnostic_bundle.py`, `bundle_redaction.py`), secret-scan tooling with rotation support (Makefile), behavioural evals in CI, and a packaged-backend smoke test. The gap is small: entry-point logging is `print`-based and the tick thread swallows exceptions (§8).
 
 ---
 
 ## 11. Strengths Summary
 
-1. **Right shape for the product** — sidecar monolith + thin shell + event-contract GUI.
+1. **Right shape for the product** — backend monolith + thin shell + event-contract GUI.
 2. **Safety spine** — single-source policy, effect fence, at-most-once send chain, workspace authority model with honest accepted-risks.
 3. **Self-maintenance as a feature** — doctor, registry migrations with backups, signed update channel with rollback.
 4. **Documentation discipline** — per-subsystem references that name their invariant tests; dated docs with explicit precedence.
