@@ -6,7 +6,7 @@ Sourcecado is a local-first desktop assistant for a Codeology sourcing director.
 
 Chat is home. Contacts is the assistant's operating picture for active sequences. The person file is the durable domain object.
 
-The active runtime is `desktop/`. The previous hosted Next.js/Postgres application is preserved in `archive/hosted-web/` and must not be treated as the current implementation.
+The active runtime is `backend/` (Python) and `frontend/` (React and Tauri). The previous hosted Next.js/Postgres application is preserved in `archive/hosted-web/` and must not be treated as the current implementation.
 
 ## Current guardrails
 
@@ -24,18 +24,26 @@ The active runtime is `desktop/`. The previous hosted Next.js/Postgres applicati
 
 ## Repository map
 
-- `desktop/coworker/` — backend, connectors, agent loop, policy, and persistence
-- `desktop/surfaces/gui/` — active React/Vite/Tauri UI
-- `desktop/tests/` and `desktop/surfaces/gui/tests/` — active verification suites
+- `backend/coworker/` — backend, connectors, agent loop, policy, and persistence
+- `frontend/` — active React/Vite/Tauri UI
+- `backend/tests/` and `frontend/tests/` — active verification suites
 - `docs/` — current and historical product/engineering records
-- `docs/course/` — Sourcecado Course language and plan. Product language still wins. See `CONTEXT-MAP.md`.
+- `docs/course/` — Sourcecado Course language and plan. Product language in `docs/domain.md` takes precedence over course terminology.
 - `archive/hosted-web/` — read-only historical implementation
 
 ## Documentation precedence
 
 1. `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md` — current product source of truth
-2. `README.md`, this file, `CONTEXT.md`, `DESIGN.md`, and `CONTRIBUTING.md` — current operating guidance
+2. `README.md`, this file, `docs/domain.md`, `docs/design.md`, and `CONTRIBUTING.md` — current operating guidance
 3. Current dated implementation plans and ADRs listed in `docs/README.md`
 4. Older dated specs and plans — historical context only
 
 If documents conflict, follow the highest item in this list and update the stale living document in the same change.
+
+## Read for the task
+
+- For setup, testing or a first contribution, read [CONTRIBUTING.md](CONTRIBUTING.md).
+- For product concepts, read [docs/domain.md](docs/domain.md).
+- Before visual changes, read [docs/design.md](docs/design.md). Preserve the Warm Operator direction unless the user approves a change.
+- Before changing approvals, persistence or recovery, read the relevant [engineering guide](docs/engineering/README.md).
+- For active work and deliberate deferrals, read [docs/BACKLOG.md](docs/BACKLOG.md).

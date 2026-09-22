@@ -465,7 +465,7 @@ Expected: `missing none`.
 - [ ] **Step 1: Add a Docs pointer after Architecture**
 
 ```markdown
-Engineering notes for this stack live in [desktop/docs](docs/). The map is in [docs/README.md](../docs/README.md).
+Engineering notes for this stack live in [desktop/docs](docs). The map is in [docs/README.md](../docs/README.md).
 ```
 
 - [ ] **Step 2: State the Python and backend split**
@@ -530,8 +530,8 @@ Keep CONTEXT-MAP.md as drafted:
 
 ## Contexts
 
-- [Sourcecado Product](./CONTEXT.md) — defines the sourcing director's job, the assistant's operating language, and the durable records the product maintains
-- [Sourcecado Course](./docs/course/CONTEXT.md) — defines how students learn by contributing to the product through guided and student-owned work
+- [Sourcecado Product](CONTEXT.md) — defines the sourcing director's job, the assistant's operating language, and the durable records the product maintains
+- [Sourcecado Course](docs/course/CONTEXT.md) — defines how students learn by contributing to the product through guided and student-owned work
 
 ## Relationships
 

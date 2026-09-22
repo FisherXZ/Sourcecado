@@ -13,7 +13,7 @@ prove-and-plain-english-skills.zip
 .gstack/
 .impeccable/
 .pytest_cache/
-desktop/.eval-artifacts/
+backend/.eval-artifacts/
 __pycache__/
 *.pyc
 *.log
@@ -34,10 +34,6 @@ __pycache__/
 # local environments and credentials
 .venv/
 
-# non-authoritative local design/session artifacts
-scratchpad/*.png
-scratchpad/*.finalized.json
-scratchpad/*.html
-scratchpad/*-plan.md
-scratchpad/HANDOFF-*.md
-scratchpad/session-notes/
+# Local working files; committed design explorations live under docs/archive.
+/tmp/
+/scratchpad/

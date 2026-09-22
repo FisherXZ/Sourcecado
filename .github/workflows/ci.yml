@@ -18,17 +18,17 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: desktop/requirements.lock
+          cache-dependency-path: backend/requirements.lock
 
       - name: Install dependencies
-        run: python -m pip install --require-hashes -r desktop/requirements.lock
+        run: python -m pip install --require-hashes -r backend/requirements.lock
 
       - name: Test
-        working-directory: desktop
+        working-directory: backend
         run: pytest -q
 
       - name: Behavioural evaluations
-        working-directory: desktop
+        working-directory: backend
         run: python -m coworker.evals --suite sourcing --artifacts .eval-artifacts
 
   gui:
@@ -38,7 +38,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: desktop/surfaces/gui
+        working-directory: frontend
 
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: desktop/surfaces/gui/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -70,36 +70,36 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-          cache-dependency-path: desktop/requirements.lock
+          cache-dependency-path: backend/requirements.lock
 
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
-          cache-dependency-path: desktop/surfaces/gui/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install Rust components
         run: rustup component add rustfmt clippy
 
       - name: Install Python dependencies
-        run: python -m pip install --require-hashes -r desktop/requirements.lock
+        run: python -m pip install --require-hashes -r backend/requirements.lock
 
       - name: Python tests
-        working-directory: desktop
+        working-directory: backend
         run: pytest -q
 
       - name: Install GUI dependencies
-        working-directory: desktop/surfaces/gui
+        working-directory: frontend
         run: npm ci
 
       - name: GUI tests
-        working-directory: desktop/surfaces/gui
+        working-directory: frontend
         run: npm test
 
       - name: Stamp the preview channel into the build
         run: |
           set -euo pipefail
-          BASE="$(node -p "require('./desktop/surfaces/gui/package.json').version")"
+          BASE="$(node -p "require('./frontend/package.json').version")"
           # Preview builds carry a fourth component so consecutive builds are
           # always an upgrade of each other without anyone hand-bumping a
           # version. `minimum_upgradable_version` stays at the package version.
@@ -115,32 +115,32 @@ jobs:
           echo "preview channel stamp: ${PREVIEW}"
 
       - name: GUI typecheck and build
-        working-directory: desktop/surfaces/gui
+        working-directory: frontend
         run: npm run build
 
       - name: Rust format check
-        working-directory: desktop/surfaces/gui/src-tauri
+        working-directory: frontend/src-tauri
         run: cargo fmt --check
 
       - name: Build backend
-        run: bash desktop/packaging/build_backend.sh
+        run: bash backend/packaging/build_backend.sh
 
       - name: Rust lint
-        working-directory: desktop/surfaces/gui/src-tauri
+        working-directory: frontend/src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Rust tests
-        working-directory: desktop/surfaces/gui/src-tauri
+        working-directory: frontend/src-tauri
         run: cargo test
 
       - name: Native Tauri build
-        working-directory: desktop/surfaces/gui
+        working-directory: frontend
         run: npm run tauri -- build
 
       - name: Smoke test the packaged backend
         run: |
-          python3 desktop/packaging/smoke_test.py \
-            "desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app/Contents/Resources/resources/sourcecado-backend/sourcecado-backend"
+          python3 backend/packaging/smoke_test.py \
+            "frontend/src-tauri/target/release/bundle/macos/Sourcecado.app/Contents/Resources/resources/sourcecado-backend/sourcecado-backend"
 
       # --- preview channel: signing, notarization, and the update manifest ---
       #
@@ -149,7 +149,7 @@ jobs:
       # emits a warning and produces an unsigned build, so a skipped signing pass
       # can never be mistaken for a successful one.
       #
-      # desktop/docs/update-channel.md lists every secret and variable that has
+      # docs/engineering/update-channel.md lists every secret and variable that has
       # to be supplied, and how to generate the update signing key offline.
 
       - name: Check for signing credentials
@@ -170,13 +170,13 @@ jobs:
             echo "apple=true" >> "$GITHUB_OUTPUT"
           else
             echo "apple=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No Apple signing identity is configured. This build is UNSIGNED and UNNOTARIZED, and Gatekeeper will require right-click then Open on first launch. See desktop/docs/update-channel.md."
+            echo "::warning::No Apple signing identity is configured. This build is UNSIGNED and UNNOTARIZED, and Gatekeeper will require right-click then Open on first launch. See docs/engineering/update-channel.md."
           fi
           if [ -n "$UPDATE_KEY" ]; then
             echo "update=true" >> "$GITHUB_OUTPUT"
           else
             echo "update=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::No update signing key is configured. This build has no update manifest, so the update and rollback paths cannot be exercised. See desktop/docs/update-channel.md."
+            echo "::warning::No update signing key is configured. This build has no update manifest, so the update and rollback paths cannot be exercised. See docs/engineering/update-channel.md."
           fi
 
       - name: Import the Developer ID certificate
@@ -203,7 +203,7 @@ jobs:
         if: steps.signing.outputs.apple == 'true'
         env:
           IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        working-directory: frontend/src-tauri/target/release/bundle/macos
         run: |
           set -euo pipefail
           # Inner code first, then the bundle. `codesign --deep` is unsupported
@@ -222,7 +222,7 @@ jobs:
           NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
-        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        working-directory: frontend/src-tauri/target/release/bundle/macos
         run: |
           set -euo pipefail
           printf '%s' "$NOTARY_PRIVATE_KEY" > "$RUNNER_TEMP/notary.p8"
@@ -235,7 +235,7 @@ jobs:
 
       - name: Verify the signed build independently
         if: steps.signing.outputs.apple == 'true'
-        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        working-directory: frontend/src-tauri/target/release/bundle/macos
         run: |
           set -euo pipefail
           # Independent of the signing step: this reads only what is on disk.
@@ -248,10 +248,10 @@ jobs:
       - name: Audit locked Python dependencies
         run: |
           python -m pip install --quiet pip-audit
-          python -m pip_audit -r desktop/requirements.lock
+          python -m pip_audit -r backend/requirements.lock
 
       - name: Record build provenance and checksums
-        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        working-directory: frontend/src-tauri/target/release/bundle/macos
         run: |
           {
             echo "commit: ${{ github.sha }}"
@@ -271,7 +271,7 @@ jobs:
         if: steps.signing.outputs.update == 'true'
         env:
           SOURCECADO_UPDATE_SIGNING_KEY: ${{ secrets.SOURCECADO_UPDATE_SIGNING_KEY }}
-        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        working-directory: frontend/src-tauri/target/release/bundle/macos
         run: |
           set -euo pipefail
           ARTIFACT="Sourcecado-${SOURCECADO_PREVIEW_VERSION}-macos-${SOURCECADO_ARCH}.zip"
@@ -280,7 +280,7 @@ jobs:
           shasum -a 256 "$ARTIFACT" >> checksums.txt
           # Generation refuses if the manifest or either attestation file matches
           # the credential scan, and writes nothing when it does.
-          python3 "$GITHUB_WORKSPACE/desktop/packaging/update_manifest.py" generate \
+          python3 "$GITHUB_WORKSPACE/backend/packaging/update_manifest.py" generate \
             --artifact "$ARTIFACT" \
             --output update-preview.json \
             --channel preview \
@@ -297,12 +297,12 @@ jobs:
 
       - name: Verify the update manifest independently
         if: steps.signing.outputs.update == 'true'
-        working-directory: desktop/surfaces/gui/src-tauri/target/release/bundle/macos
+        working-directory: frontend/src-tauri/target/release/bundle/macos
         run: |
           set -euo pipefail
           # No signing key here on purpose: verification needs only the public
           # key, which is what every installation will have.
-          python3 "$GITHUB_WORKSPACE/desktop/packaging/update_manifest.py" verify \
+          python3 "$GITHUB_WORKSPACE/backend/packaging/update_manifest.py" verify \
             --manifest update-preview.json \
             --artifact "Sourcecado-${SOURCECADO_PREVIEW_VERSION}-macos-${SOURCECADO_ARCH}.zip" \
             --channel preview \
@@ -316,17 +316,17 @@ jobs:
         with:
           name: sourcecado-macos-preview-packaged
           path: |
-            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado-*.zip
-            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/update-preview.json
-            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/checksums.txt
-            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/provenance.txt
+            frontend/src-tauri/target/release/bundle/macos/Sourcecado-*.zip
+            frontend/src-tauri/target/release/bundle/macos/update-preview.json
+            frontend/src-tauri/target/release/bundle/macos/checksums.txt
+            frontend/src-tauri/target/release/bundle/macos/provenance.txt
           retention-days: 14
 
       - uses: actions/upload-artifact@v4
         with:
           name: sourcecado-macos-preview
           path: |
-            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/Sourcecado.app
-            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/checksums.txt
-            desktop/surfaces/gui/src-tauri/target/release/bundle/macos/provenance.txt
+            frontend/src-tauri/target/release/bundle/macos/Sourcecado.app
+            frontend/src-tauri/target/release/bundle/macos/checksums.txt
+            frontend/src-tauri/target/release/bundle/macos/provenance.txt
           retention-days: 14

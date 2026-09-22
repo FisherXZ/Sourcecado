@@ -6,7 +6,7 @@ Archived code is preserved, not maintained:
 
 - it is excluded from the default CI pipeline;
 - current documentation must not send contributors here for normal setup;
-- fixes should land in the active `desktop/` stack unless a task explicitly targets an archive;
+- fixes should land in the active `backend/` and `frontend/` code unless a task explicitly targets an archive;
 - archive removal requires a separate decision rather than routine cleanup.
 
 ## Contents
