@@ -45,6 +45,7 @@ The [engineering index](engineering/README.md) maps the active backend and front
 
 - [Approved send](engineering/approved-send.md)
 - [Reply filing](engineering/reply-filing.md)
+- [Durable person tasks](engineering/person-tasks.md)
 - [Living brief](engineering/living-brief.md)
 - [Meeting evidence](engineering/meeting-evidence.md)
 - [Legal artifacts](engineering/legal-artifacts.md)

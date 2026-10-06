@@ -66,6 +66,20 @@
 - **Border radius:** 8px cards/inputs/panels · 6px buttons · 4px tiny inline tags · full (9999px) pills/avatars/toggles. Friendly-precise band — avoid ≥12px (toy) and ≤4px (clinical).
 - **Elevation:** Borders over shadows for dense surfaces (1px `#E7E3DA` hairlines). Reserve soft shadows for floating elements only — command palette, Gmail-draft popup, inspector.
 
+## Person tasks
+
+Contacts has Contacts / Tasks controls within the existing destination. Tasks
+covers all saved people, including people before outreach. Use compact rows with
+person links, titles, optional dates and Edit; the person file uses the same list
+and editor. Reuse Warm Operator colors, borders, density and focus rings.
+
+The editor uses explicit Save / Cancel and keeps drafts separate from refreshed
+rows. Show the current saved version beside unsaved text on conflicts. An
+unconfirmed save offers a retry of that request. Navigation asks how to handle
+unsaved text. Narrow windows stack form labels and scroll the table within its
+pane. Loading, empty results and failed refreshes are distinct. Completion and
+AI suggestions belong to later tickets.
+
 ## Motion
 - **Approach:** Minimal-functional, with one allowance for warmth in low-density moments.
 - **Use:** inspector slide-in, command-palette fade, row hover, filter-chip toggle. A gentle entrance is OK in ledger "win"/celebration moments only. Nothing that slows an operator.

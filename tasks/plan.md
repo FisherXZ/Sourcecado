@@ -1,7 +1,7 @@
 # Implementation plan: durable person tasks
 
 Date: 2026-10-05. Parent: [CRM #199](https://github.com/FisherXZ/Sourcecado/issues/199).
-Scope: human creation and editing of tasks, globally inside Contacts and in each person file. This plan is being executed on `codex/durable-person-tasks`.
+Scope: human creation and editing of tasks, globally inside Contacts and in each person file. Executed on `codex/durable-person-tasks`.
 
 ## Product contract
 
@@ -64,4 +64,8 @@ Commands: backend `.venv/Scripts/python.exe -m pytest` (Windows equivalent of CO
 
 ## Verification record
 
-Pending execution. No implementation checks have passed yet.
+Implemented and reviewed. See [verification.md](verification.md) for the complete
+commands, baseline comparison, live create/edit/restart/conflict demonstration
+and remaining platform limits. The clean feature regression set passes 134 tests;
+the frontend build passes. Full suites retain existing Windows failures, and the
+native macOS packaging gate remains to be run on a supported host.
