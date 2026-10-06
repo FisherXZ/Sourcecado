@@ -1,5 +1,5 @@
 export type AppRoute =
-  | { kind: "board" }
+  | { kind: "board"; view?: "tasks" }
   | { kind: "person"; personId: string }
   | { kind: "connections"; connectorId?: string }
   | { kind: "scheduled"; jobId?: number }
@@ -11,6 +11,7 @@ export type AppRoute =
 
 export function parseHash(hash: string): AppRoute {
   if (hash === "#/board") return { kind: "board" };
+  if (hash === "#/board/tasks") return { kind: "board", view: "tasks" };
   if (hash.startsWith("#/people/") && hash.length > "#/people/".length) {
     try {
       return {
