@@ -1007,6 +1007,7 @@ REGISTRY: tuple[StoreSpec, ...] = (
             ("person_tasks", "protected_fields"),
             ("person_tasks", "source_refs"),
             ("crm_changes", "after_json"),
+            ("crm_changes", "before_json"),
             ("crm_changes", "source_refs"),
             ("crm_operations", "response_json"),
         ),
@@ -1519,7 +1520,8 @@ def _apply_store(root: Path, plan: StorePlan, spec: StoreSpec) -> list[AppliedSt
         if spec.kind is StoreKind.SQLITE:
             conn = sqlite3.connect(store_path(root, spec))
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
+            if spec.store_id == "people_db":
+                conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("BEGIN IMMEDIATE")
         context = _context_for(root, spec, conn)
         for step in plan.steps:

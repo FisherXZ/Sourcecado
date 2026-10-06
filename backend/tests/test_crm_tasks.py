@@ -152,6 +152,14 @@ def test_missing_deleted_and_cross_person_tasks_are_out_of_scope(tmp_path):
     assert app.state.people._conn.execute("SELECT count(*) FROM person_tasks").fetchone()[0] == 1
     assert app.state.people._conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert app.state.people._conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    # A caller that forgets SQLite's per-connection FK setting still cannot
+    # bypass the live-person constraint or reparent a task.
+    with sqlite3.connect(tmp_path / "people.db") as raw:
+        assert raw.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+        for parent in ("missing", pid):
+            with pytest.raises(sqlite3.IntegrityError, match="live person"):
+                raw.execute("""INSERT INTO person_tasks(task_id, person_id, title, due_timezone, origin,
+                    version, created_at, updated_at) VALUES ('invalid-off', ?, 'Direct', 'UTC', 'human', 1, 'now', 'now')""", (parent,))
 
 
 @pytest.mark.parametrize("failing_table", ["crm_changes", "crm_operations"])
@@ -218,3 +226,60 @@ def test_global_task_list_and_person_picker_are_bounded_and_include_kept_people(
     assert picks[0]["person_id"] == pid
     assert set(picks[0]) == {"person_id", "first_name", "last_name", "company"}
     assert client.get("/v1/crm/tasks").status_code == 401
+
+
+def test_task_audit_does_not_replace_relationship_evidence_or_handoff(tmp_path):
+    app = app_at(tmp_path)
+    pid = keep(app)["person_id"]
+    app.state.people.append_event(pid, source="gmail", kind="mail", summary="Wants a spring collaboration")
+    client = TestClient(app)
+    before = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"]
+    for index in range(35):
+        assert create(client, pid, f"audit-{index}").status_code == 201
+    after = client.get(f"/v1/people/{pid}", headers=HEADERS).json()
+    assert after["brief"]["learned"] == before["learned"]
+    assert after["brief"]["handoff"]["happened"] == before["handoff"]["happened"]
+    assert len([event for event in after["timeline"] if event["kind"] == "crm_task"]) == 35
+
+
+def test_task_saves_keep_reviewed_handoff_fresh(tmp_path):
+    app = app_at(tmp_path)
+    pid = keep(app)["person_id"]
+    app.state.people.patch(pid, expected_version=1, actor="director", rationale_summary="Reviewed handoff",
+        fields={"handoff_who": "Maya, founder", "handoff_wanted": "Spring collaboration",
+                "handoff_happened": "Introduced our projects", "handoff_they_want": "Examples"})
+    client = TestClient(app)
+    before = client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"]["handoff"]
+    assert not before["stale"]
+    task = create(client, pid).json()["task"]
+    assert client.patch(f"/v1/people/{pid}/tasks/{task['task_id']}", headers=HEADERS,
+        json={"operation_id": "handoff-edit", "expected_version": 1, "details": "Two project examples"}).status_code == 200
+    assert client.get(f"/v1/people/{pid}", headers=HEADERS).json()["brief"]["handoff"] == before
+
+
+def test_full_form_edit_keeps_date_timezone_until_date_changes(tmp_path):
+    client = TestClient(app := app_at(tmp_path))
+    pid = keep(app)["person_id"]
+    first = create(client, pid, due_date="2026-10-09").json()["task"]
+    client.put("/v1/crm/preferences", headers=HEADERS, json={"timezone": "Pacific/Auckland"})
+    url = f"/v1/people/{pid}/tasks/{first['task_id']}"
+    same = client.patch(url, headers=HEADERS, json={"operation_id": "same-date", "expected_version": 1,
+        "title": "Edited title", "details": "Edited details", "due_date": "2026-10-09"}).json()["task"]
+    assert same["due_timezone"] == "America/Los_Angeles"
+    changed = client.patch(url, headers=HEADERS, json={"operation_id": "changed-date", "expected_version": 2,
+        "due_date": "2026-10-10"}).json()["task"]
+    assert changed["due_timezone"] == "Pacific/Auckland"
+
+
+def test_person_revert_keeps_task_identity_content_and_history(tmp_path):
+    app = app_at(tmp_path)
+    pid = keep(app)["person_id"]
+    client = TestClient(app)
+    app.state.people.patch(pid, expected_version=1, actor="director", rationale_summary="Company correction",
+        fields={"company": "Corrected company"})
+    task = create(client, pid, details="Keep this promise").json()["task"]
+    app.state.people.revert(pid, to_version=1, expected_version=2, actor="director", rationale_summary="Restore person")
+    saved = client.get(f"/v1/crm/tasks?person_id={pid}", headers=HEADERS).json()["tasks"][0]
+    for field in ("task_id", "title", "details", "due_date", "version"):
+        assert saved[field] == task[field]
+    assert app.state.people._conn.execute("SELECT count(*) FROM crm_changes").fetchone()[0] == 1

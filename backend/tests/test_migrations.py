@@ -482,7 +482,7 @@ def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
 
     # Constructing the stores must not knock the recorded version off current.
     assert _user_version(root / "club.db") == 2
-    assert _user_version(root / "people.db") == 2
+    assert _user_version(root / "people.db") == migrations.spec_for("people_db").current_version
 
 
 # --- failing closed ------------------------------------------------------

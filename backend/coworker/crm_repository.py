@@ -17,7 +17,8 @@ TASK_SCHEMA = (
         title TEXT NOT NULL CHECK(length(trim(title)) BETWEEN 1 AND 200),
         details TEXT NOT NULL DEFAULT '' CHECK(length(details) <= 8000),
         due_date TEXT CHECK(due_date IS NULL OR
-            (length(due_date) = 10 AND due_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+            (length(due_date) = 10 AND due_date >= '0001-01-01'
+             AND due_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
              AND date(due_date, '+0 days') IS due_date)),
         due_timezone TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','completed','cancelled')),
@@ -145,7 +146,7 @@ class CrmRepository:
                 if before["version"] != expected_version:
                     raise CrmConflict("This task changed while you were editing.", current=before)
                 values = {**before, **changes, "version": expected_version + 1, "updated_at": now}
-                if "due_date" in changes:
+                if "due_date" in changes and changes["due_date"] != before["due_date"]:
                     values["due_timezone"] = timezone
                 values["protected_fields"] = sorted(set(before["protected_fields"]) | set(changes))
                 conn.execute("""UPDATE person_tasks SET title=?, details=?, due_date=?, due_timezone=?,

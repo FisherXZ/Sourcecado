@@ -55,9 +55,11 @@ def prior_v2(root):
     return person["person_id"]
 
 
-def test_v2_upgrade_preserves_people_handoffs_private_sources_and_timeline(tmp_path):
+@pytest.mark.parametrize("version", [1, 2])
+def test_upgrade_preserves_people_handoffs_private_sources_and_timeline(tmp_path, version):
     pid = prior_v2(tmp_path)
     with sqlite3.connect(tmp_path / "people.db") as conn:
+        conn.execute(f"PRAGMA user_version = {version}")
         before = {table: conn.execute(f"SELECT * FROM {table}").fetchall()
                   for table in ("people", "person_attachments", "person_versions", "events")}
     people = PersonStore(tmp_path)
