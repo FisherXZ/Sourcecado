@@ -254,7 +254,7 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
     assert store_plan.record_count > 0
 
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(db) == 2
+    assert _user_version(db) == 3
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -272,7 +272,17 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        assert {"person_attachments", "person_versions"} <= tables
+        assert {
+            "person_attachments",
+            "person_versions",
+            "person_tasks",
+            "crm_members",
+        } <= tables
+        people_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(people)").fetchall()
+        }
+        assert "owner_member_id" in people_columns
     finally:
         conn.close()
 
@@ -326,12 +336,12 @@ def test_people_v2_moves_masked_surnames_out_of_canonical_history(tmp_path):
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert plan.from_version == 1
-    assert plan.to_version == 2
+    assert plan.to_version == 3
 
     outcome = migrations.apply_migrations(root)
 
     assert outcome.error is None
-    assert _user_version(root / "people.db") == 2
+    assert _user_version(root / "people.db") == 3
     loaded = PersonStore(root).get(person["person_id"])
     assert loaded is not None
     assert loaded["person_id"] == person["person_id"]
@@ -482,7 +492,7 @@ def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
 
     # Constructing the stores must not knock the recorded version off current.
     assert _user_version(root / "club.db") == 2
-    assert _user_version(root / "people.db") == 2
+    assert _user_version(root / "people.db") == 3
 
 
 # --- failing closed ------------------------------------------------------

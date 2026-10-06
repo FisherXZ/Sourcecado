@@ -501,6 +501,45 @@ _PEOPLE_ADDED_TABLES = {
 }
 
 
+# people.db v2 -> v3: shared tasks and lightweight committee-member labels.
+_PEOPLE_TASKS_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("people", "owner_member_id", "TEXT"),
+)
+
+_PEOPLE_TASKS_ADDED_TABLES = {
+    "crm_members": """
+        CREATE TABLE IF NOT EXISTS crm_members (
+            member_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            archived_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """,
+    "person_tasks": """
+        CREATE TABLE IF NOT EXISTS person_tasks (
+            task_id TEXT PRIMARY KEY,
+            person_id TEXT NOT NULL REFERENCES people(person_id),
+            title TEXT NOT NULL,
+            details TEXT,
+            due_date TEXT,
+            due_timezone TEXT,
+            state TEXT NOT NULL DEFAULT 'open',
+            origin TEXT NOT NULL DEFAULT 'human',
+            assignee_member_id TEXT REFERENCES crm_members(member_id),
+            operation_id TEXT UNIQUE,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS person_tasks_by_person
+            ON person_tasks(person_id, state, due_date);
+        CREATE INDEX IF NOT EXISTS person_tasks_by_due
+            ON person_tasks(state, due_date, task_id);
+    """,
+}
+
+
 def _sqlite_adoption_count(
     context: MigrationContext,
     added_columns: Sequence[tuple[str, str, str]],
@@ -649,6 +688,23 @@ def _adopt_people_db(context: MigrationContext) -> int:
 
 def _count_people_db(context: MigrationContext) -> int:
     return _sqlite_adoption_count(context, _PEOPLE_ADDED_COLUMNS, _PEOPLE_ADDED_TABLES)
+
+
+def _count_person_tasks(context: MigrationContext) -> int:
+    return _sqlite_adoption_count(
+        context, _PEOPLE_TASKS_ADDED_COLUMNS, _PEOPLE_TASKS_ADDED_TABLES
+    )
+
+
+def _add_person_tasks(context: MigrationContext) -> int:
+    """Additive: add the tasks/members tables and the person owner column."""
+    conn = context.connection
+    assert conn is not None
+    touched = _count_person_tasks(context)
+    _sqlite_add_columns_and_tables(
+        conn, _PEOPLE_TASKS_ADDED_COLUMNS, _PEOPLE_TASKS_ADDED_TABLES
+    )
+    return touched
 
 
 def _count_masked_people_names(context: MigrationContext) -> int:
@@ -982,6 +1038,16 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 ),
                 count=_count_masked_people_names,
                 apply=_separate_masked_people_names,
+            ),
+            Migration(
+                from_version=2,
+                to_version=3,
+                description=(
+                    "Add shared person tasks and lightweight committee-member "
+                    "labels (crm_members, person_tasks, people.owner_member_id)."
+                ),
+                count=_count_person_tasks,
+                apply=_add_person_tasks,
             ),
         ),
         json_columns=(
