@@ -286,6 +286,29 @@
   color: var(--muted);
 }
 
+/* Inline sequence editor: a native select dressed as the status pill. The
+   state-specific colour classes above supply its background and text colour. */
+.contacts-sequence-select {
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.contacts-sequence-select:hover {
+  border-color: var(--muted);
+}
+
+.contacts-sequence-select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .contacts-last-contact {
   color: var(--muted);
   font-variant-numeric: tabular-nums;

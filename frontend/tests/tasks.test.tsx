@@ -14,6 +14,7 @@ const api = vi.hoisted(() => {
     updateTask: vi.fn(),
     addMember: vi.fn(),
     setPersonOwner: vi.fn(),
+    setPersonSequence: vi.fn(),
     refreshReplies: vi.fn(),
     TaskConflictError,
   };
@@ -151,6 +152,18 @@ describe("Contacts table sorting and owner", () => {
       in_conversation: [],
       done: [],
     });
+  });
+
+  it("changes a contact's sequence from the table dropdown", async () => {
+    api.setPersonSequence.mockResolvedValue({ person: {} });
+    render(<BoardView />);
+    await screen.findByRole("link", { name: /Maya Chen/ });
+    fireEvent.change(screen.getByLabelText("Sequence for Maya Chen"), {
+      target: { value: "done" },
+    });
+    await waitFor(() =>
+      expect(api.setPersonSequence).toHaveBeenCalledWith("p1", "done"),
+    );
   });
 
   it("shows an owner column and sorts by company", async () => {

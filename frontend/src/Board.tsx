@@ -3,11 +3,18 @@ import { useEffect, useMemo, useState } from "react";
 import {
   getBoard,
   refreshReplies,
+  setPersonSequence,
   type Board,
   type BoardPerson,
   type ReplyRefreshResult,
 } from "./api";
 import { TasksView } from "./Tasks";
+
+const SEQUENCE_OPTIONS: { value: string; label: string }[] = [
+  { value: "open", label: "Open" },
+  { value: "in_conversation", label: "In conversation" },
+  { value: "done", label: "Done" },
+];
 
 type SortColumn = "company" | "owner";
 type SortDir = "asc" | "desc";
@@ -75,9 +82,55 @@ const SEQUENCE_FILTERS: { value: SequenceFilter; label: string }[] = [
   { value: "done", label: "Done" },
 ];
 
-function ContactRow({ person }: { person: BoardPerson }) {
+function SequenceSelect({
+  person,
+  onChanged,
+}: {
+  person: BoardPerson;
+  onChanged: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  async function change(next: string) {
+    if (next === (person.sequence_state ?? "")) return;
+    setSaving(true);
+    try {
+      await setPersonSequence(person.person_id, next);
+    } finally {
+      // Reload either way so the row reflects the server's actual state.
+      setSaving(false);
+      onChanged();
+    }
+  }
+  return (
+    <select
+      className={`contacts-sequence-select contacts-sequence-${person.sequence_state}`}
+      aria-label={`Sequence for ${personName(person)}`}
+      value={person.sequence_state ?? ""}
+      disabled={saving}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+      onChange={(event) => {
+        event.stopPropagation();
+        void change(event.currentTarget.value);
+      }}
+    >
+      {SEQUENCE_OPTIONS.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function ContactRow({
+  person,
+  onChanged,
+}: {
+  person: BoardPerson;
+  onChanged: () => void;
+}) {
   const name = personName(person);
-  const sequence = SEQUENCE_LABEL[person.sequence_state ?? ""] ?? "Unknown";
   const href = `#/people/${encodeURIComponent(person.person_id)}`;
   const openPersonFile = () => {
     window.location.hash = href;
@@ -120,9 +173,7 @@ function ContactRow({ person }: { person: BoardPerson }) {
         <span className="contacts-owner">{person.owner_name || "—"}</span>
       </td>
       <td>
-        <span className={`contacts-sequence contacts-sequence-${person.sequence_state}`}>
-          {sequence}
-        </span>
+        <SequenceSelect person={person} onChanged={onChanged} />
       </td>
       <td>
         <span className="contacts-last-contact">{contactLine(person)}</span>
@@ -170,11 +221,13 @@ function ContactsTable({
   sortBy,
   sortDir,
   onSort,
+  onChanged,
 }: {
   people: BoardPerson[];
   sortBy: SortColumn | null;
   sortDir: SortDir;
   onSort: (column: SortColumn) => void;
+  onChanged: () => void;
 }) {
   return (
     <div className="contacts-table-scroll">
@@ -203,7 +256,7 @@ function ContactsTable({
         </thead>
         <tbody>
           {people.map((person) => (
-            <ContactRow key={person.person_id} person={person} />
+            <ContactRow key={person.person_id} person={person} onChanged={onChanged} />
           ))}
         </tbody>
       </table>
@@ -428,6 +481,7 @@ export function BoardView() {
               sortBy={sortBy}
               sortDir={sortDir}
               onSort={toggleSort}
+              onChanged={() => setAttempt((value) => value + 1)}
             />
           ) : (
             <p className="contacts-filter-empty" role="status">
