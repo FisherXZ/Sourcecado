@@ -254,7 +254,7 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
     assert store_plan.record_count > 0
 
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(db) == 2
+    assert _user_version(db) == migrations.spec_for("people_db").current_version
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -326,12 +326,12 @@ def test_people_v2_moves_masked_surnames_out_of_canonical_history(tmp_path):
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert plan.from_version == 1
-    assert plan.to_version == 2
+    assert plan.to_version == migrations.spec_for("people_db").current_version
 
     outcome = migrations.apply_migrations(root)
 
     assert outcome.error is None
-    assert _user_version(root / "people.db") == 2
+    assert _user_version(root / "people.db") == migrations.spec_for("people_db").current_version
     loaded = PersonStore(root).get(person["person_id"])
     assert loaded is not None
     assert loaded["person_id"] == person["person_id"]
