@@ -18,6 +18,12 @@ const api = vi.hoisted(() => ({
   revertPerson: vi.fn(),
   searchPersonDriveEvidence: vi.fn(),
   setPersonSequence: vi.fn(),
+  getMembers: vi.fn(),
+  getTasks: vi.fn(),
+  setPersonOwner: vi.fn(),
+  addMember: vi.fn(),
+  createTask: vi.fn(),
+  updateTask: vi.fn(),
 }));
 
 vi.mock("../src/api", () => ({
@@ -33,6 +39,13 @@ vi.mock("../src/api", () => ({
   savePersonHandoff: api.savePersonHandoff,
   searchPersonDriveEvidence: api.searchPersonDriveEvidence,
   setPersonSequence: api.setPersonSequence,
+  getMembers: api.getMembers,
+  getTasks: api.getTasks,
+  setPersonOwner: api.setPersonOwner,
+  addMember: api.addMember,
+  createTask: api.createTask,
+  updateTask: api.updateTask,
+  TaskConflictError: class TaskConflictError extends Error {},
 }));
 
 const WAITING = {
@@ -146,6 +159,8 @@ function personFile(overrides: Record<string, unknown> = {}) {
 describe("reply filing on Contacts and the person file", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.getMembers.mockResolvedValue([]);
+    api.getTasks.mockResolvedValue([]);
     api.getBoard.mockResolvedValue(boardWith([WAITING], [REPLIED]));
     api.getPerson.mockResolvedValue(personFile());
     api.refreshReplies.mockResolvedValue({

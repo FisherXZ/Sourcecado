@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   getBoard,
@@ -7,6 +7,19 @@ import {
   type BoardPerson,
   type ReplyRefreshResult,
 } from "./api";
+import { TasksView } from "./Tasks";
+
+type SortColumn = "company" | "owner";
+type SortDir = "asc" | "desc";
+
+function compareText(a: string | null | undefined, b: string | null | undefined): number {
+  const left = (a ?? "").trim();
+  const right = (b ?? "").trim();
+  if (!left && !right) return 0;
+  if (!left) return 1; // nulls/blanks last
+  if (!right) return -1;
+  return left.localeCompare(right, undefined, { sensitivity: "base" });
+}
 
 function personName(person: BoardPerson): string {
   return [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
@@ -104,6 +117,9 @@ function ContactRow({ person }: { person: BoardPerson }) {
         <span className="contacts-secondary">{person.company || "No company recorded"}</span>
       </td>
       <td>
+        <span className="contacts-owner">{person.owner_name || "—"}</span>
+      </td>
+      <td>
         <span className={`contacts-sequence contacts-sequence-${person.sequence_state}`}>
           {sequence}
         </span>
@@ -124,14 +140,62 @@ function ContactRow({ person }: { person: BoardPerson }) {
   );
 }
 
-function ContactsTable({ people }: { people: BoardPerson[] }) {
+function SortHeader({
+  label,
+  column,
+  sortBy,
+  sortDir,
+  onSort,
+}: {
+  label: string;
+  column: SortColumn;
+  sortBy: SortColumn | null;
+  sortDir: SortDir;
+  onSort: (column: SortColumn) => void;
+}) {
+  const active = sortBy === column;
+  const arrow = active ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+  return (
+    <th scope="col" aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" className="contacts-sort" onClick={() => onSort(column)}>
+        {label}
+        {arrow}
+      </button>
+    </th>
+  );
+}
+
+function ContactsTable({
+  people,
+  sortBy,
+  sortDir,
+  onSort,
+}: {
+  people: BoardPerson[];
+  sortBy: SortColumn | null;
+  sortDir: SortDir;
+  onSort: (column: SortColumn) => void;
+}) {
   return (
     <div className="contacts-table-scroll">
       <table className="contacts-table" aria-label="Active sourcing contacts">
         <thead>
           <tr>
             <th scope="col">Contact</th>
-            <th scope="col">Role &amp; company</th>
+            <SortHeader
+              label="Role & company"
+              column="company"
+              sortBy={sortBy}
+              sortDir={sortDir}
+              onSort={onSort}
+            />
+            <SortHeader
+              label="Owner"
+              column="owner"
+              sortBy={sortBy}
+              sortDir={sortDir}
+              onSort={onSort}
+            />
             <th scope="col">Sequence</th>
             <th scope="col">Last contact</th>
             <th scope="col">Attention</th>
@@ -221,6 +285,18 @@ export function BoardView() {
   const [replyStatusText, setReplyStatusText] = useState<string | null>(null);
   const [sequenceFilter, setSequenceFilter] = useState<SequenceFilter>("all");
   const [contactQuery, setContactQuery] = useState("");
+  const [view, setView] = useState<"contacts" | "tasks">("contacts");
+  const [sortBy, setSortBy] = useState<SortColumn | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  function toggleSort(column: SortColumn) {
+    if (sortBy === column) {
+      setSortDir((dir) => (dir === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(column);
+      setSortDir("asc");
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -267,6 +343,13 @@ export function BoardView() {
       ? contacts
       : contacts.filter((person) => person.sequence_state === sequenceFilter)
     ).filter((person) => matchesContact(person, contactQuery));
+  const sortedContacts = useMemo(() => {
+    if (!sortBy) return visibleContacts;
+    const pick = (person: BoardPerson) =>
+      sortBy === "company" ? person.company : person.owner_name;
+    const rows = [...visibleContacts].sort((a, b) => compareText(pick(a), pick(b)));
+    return sortDir === "asc" ? rows : rows.reverse();
+  }, [visibleContacts, sortBy, sortDir]);
   const empty =
     board !== null &&
     contacts.length === 0;
@@ -277,15 +360,36 @@ export function BoardView() {
         <p className="eyebrow">Active sequences</p>
         <h1>Contacts</h1>
         <p>Keep active people moving from open outreach through completed follow-up.</p>
-        <div className="board-page-actions">
-          <button type="button" disabled={checking} onClick={() => void checkReplies()}>
-            {checking ? "Checking for replies…" : "Check for replies"}
+        <div className="board-view-toggle" role="group" aria-label="Switch view">
+          <button
+            type="button"
+            aria-pressed={view === "contacts"}
+            onClick={() => setView("contacts")}
+          >
+            Contacts
           </button>
-          {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
+          <button
+            type="button"
+            aria-pressed={view === "tasks"}
+            onClick={() => setView("tasks")}
+          >
+            Tasks
+          </button>
         </div>
+        {view === "contacts" ? (
+          <div className="board-page-actions">
+            <button type="button" disabled={checking} onClick={() => void checkReplies()}>
+              {checking ? "Checking for replies…" : "Check for replies"}
+            </button>
+            {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
+          </div>
+        ) : null}
       </header>
-      {board === null && !failed ? <p role="status">Loading contacts…</p> : null}
-      {failed ? (
+      {view === "tasks" ? <TasksView /> : null}
+      {view === "contacts" && board === null && !failed ? (
+        <p role="status">Loading contacts…</p>
+      ) : null}
+      {view === "contacts" && failed ? (
         <section className="route-error" role="alert">
           <p>Couldn’t load contacts.</p>
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
@@ -293,13 +397,13 @@ export function BoardView() {
           </button>
         </section>
       ) : null}
-      {empty ? (
+      {view === "contacts" && empty ? (
         <section className="route-empty" role="status">
           <h2>No active contacts</h2>
           <p>Start a sequence from a Person File to add someone here.</p>
         </section>
       ) : null}
-      {board && !empty ? (
+      {view === "contacts" && board && !empty ? (
         <section className="contacts-list" aria-label="Sequence contacts">
           <div className="contacts-controls">
             <ContactsFilters
@@ -318,8 +422,13 @@ export function BoardView() {
               />
             </label>
           </div>
-          {visibleContacts.length > 0 ? (
-            <ContactsTable people={visibleContacts} />
+          {sortedContacts.length > 0 ? (
+            <ContactsTable
+              people={sortedContacts}
+              sortBy={sortBy}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
           ) : (
             <p className="contacts-filter-empty" role="status">
               {contactQuery.trim()

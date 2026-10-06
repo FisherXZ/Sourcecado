@@ -365,11 +365,60 @@ export type BoardPerson = {
   company: string | null;
   sequence_state: string | null;
   board_lane?: "backlog" | "open" | "in_conversation" | "done";
+  owner_member_id?: string | null;
+  owner_name?: string | null;
   last_contact_at?: string | null;
   last_contact_direction?: "outbound" | "inbound" | null;
   replied?: boolean;
   replied_at?: string | null;
   follow_up?: FollowUp;
+};
+
+export type TaskState = "open" | "completed" | "cancelled";
+
+export type Task = {
+  task_id: string;
+  person_id: string;
+  person_name: string;
+  person_company: string | null;
+  title: string;
+  details: string | null;
+  due_date: string | null;
+  due_timezone: string | null;
+  state: TaskState;
+  origin: "human" | "assistant";
+  assignee_member_id: string | null;
+  assignee_name: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type Member = {
+  member_id: string;
+  name: string;
+  archived_at: string | null;
+  created_at: string;
+};
+
+export type TaskInput = {
+  title: string;
+  details?: string | null;
+  due_date?: string | null;
+  due_timezone?: string | null;
+  assignee_member_id?: string | null;
+  operation_id?: string;
+};
+
+export type TaskPatch = {
+  expectedVersion: number;
+  title?: string;
+  details?: string | null;
+  due_date?: string | null;
+  due_timezone?: string | null;
+  assignee_member_id?: string | null;
+  state?: TaskState;
 };
 
 export type Board = {
@@ -967,6 +1016,105 @@ export async function setPersonSequence(
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || `sequence ${res.status}`);
+  return body;
+}
+
+// ---- Tasks and committee members (shared records) ----
+
+export class TaskConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TaskConflictError";
+  }
+}
+
+export async function getTasks(params?: {
+  personId?: string;
+  state?: TaskState;
+  assignee?: string;
+}): Promise<Task[]> {
+  const query = new URLSearchParams();
+  if (params?.personId) query.set("person_id", params.personId);
+  if (params?.state) query.set("state", params.state);
+  if (params?.assignee) query.set("assignee", params.assignee);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const res = await get(`/v1/tasks${suffix}`);
+  if (!res.ok) throw new Error(`tasks ${res.status}`);
+  const body = await res.json();
+  return body.tasks as Task[];
+}
+
+export async function getMembers(): Promise<Member[]> {
+  const res = await get("/v1/members");
+  if (!res.ok) throw new Error(`members ${res.status}`);
+  const body = await res.json();
+  return body.members as Member[];
+}
+
+export async function addMember(name: string): Promise<Member> {
+  const res = await fetch(`${httpBase()}/v1/members`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `members ${res.status}`);
+  return body.member as Member;
+}
+
+export async function createTask(personId: string, input: TaskInput): Promise<Task> {
+  const payload = {
+    operation_id:
+      input.operation_id ??
+      (globalThis.crypto?.randomUUID?.() ?? `op-${Date.now()}-${Math.random()}`),
+    title: input.title,
+    details: input.details ?? null,
+    due_date: input.due_date ?? null,
+    due_timezone: input.due_timezone ?? null,
+    assignee_member_id: input.assignee_member_id ?? null,
+  };
+  const body = (await personPost(personId, "tasks", payload)) as { task: Task };
+  return body.task;
+}
+
+export async function updateTask(
+  personId: string,
+  taskId: string,
+  patch: TaskPatch,
+): Promise<Task> {
+  const { expectedVersion, ...fields } = patch;
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(personId)}/tasks/${encodeURIComponent(taskId)}`,
+    {
+      method: "PATCH",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_version: expectedVersion, ...fields }),
+    },
+  );
+  const body = await res.json();
+  if (res.status === 409) throw new TaskConflictError(body.error || "task conflict");
+  if (!res.ok) throw new Error(body.error || `task ${res.status}`);
+  return body.task as Task;
+}
+
+export async function setPersonOwner(
+  personId: string,
+  ownerMemberId: string | null,
+  expectedVersion: number,
+): Promise<{ person: PersonFile["person"] }> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(personId)}/owner`,
+    {
+      method: "PATCH",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        owner_member_id: ownerMemberId,
+        expected_version: expectedVersion,
+      }),
+    },
+  );
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `owner ${res.status}`);
   return body;
 }
 

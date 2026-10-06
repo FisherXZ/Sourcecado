@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { OutreachPanel } from "./OutreachPanel";
+import { PersonOwner, PersonTasks } from "./Tasks";
 
 import {
   attachPersonMeeting,
@@ -424,6 +425,15 @@ export function PersonFileView({ personId }: { personId: string }) {
           </p>
         ) : null}
       </section>
+
+      <PersonOwner
+        personId={personId}
+        ownerMemberId={(file.person.owner_member_id as string | null) ?? null}
+        version={file.person.version as number}
+        onChanged={() => void getPerson(personId).then(setFile)}
+      />
+
+      <PersonTasks person={file.person} />
 
       <div className="person-summary-grid">
         <section className="person-summary-card" aria-labelledby="person-outcome-heading">

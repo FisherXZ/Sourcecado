@@ -39,6 +39,12 @@ const api = vi.hoisted(() => ({
   renameSession: vi.fn(),
   setLastDestination: vi.fn(),
   setPersonSequence: vi.fn(),
+  getMembers: vi.fn(),
+  getTasks: vi.fn(),
+  setPersonOwner: vi.fn(),
+  addMember: vi.fn(),
+  createTask: vi.fn(),
+  updateTask: vi.fn(),
 }));
 
 vi.mock("../src/api", () => ({
@@ -74,6 +80,13 @@ vi.mock("../src/api", () => ({
   setPersona: vi.fn(),
   setLastDestination: api.setLastDestination,
   setPersonSequence: api.setPersonSequence,
+  getMembers: api.getMembers,
+  getTasks: api.getTasks,
+  setPersonOwner: api.setPersonOwner,
+  addMember: api.addMember,
+  createTask: api.createTask,
+  updateTask: api.updateTask,
+  TaskConflictError: class TaskConflictError extends Error {},
 }));
 
 describe("App shell routing", () => {
@@ -88,6 +101,8 @@ describe("App shell routing", () => {
       current_run: null,
     });
     api.getBoard.mockResolvedValue({ open: [], in_conversation: [], done: [] });
+    api.getMembers.mockResolvedValue([]);
+    api.getTasks.mockResolvedValue([]);
     api.getGmail.mockResolvedValue({ connected: false, email: null });
     api.getHealth.mockResolvedValue({ status: "ok", piece: "test", slice: 1, model: "test" });
     api.getInbox.mockResolvedValue({ items: [] });
