@@ -8,6 +8,7 @@ import re
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from coworker.person_identity import (
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -68,8 +69,17 @@ class PersonStore:
         self.base.mkdir(parents=True, exist_ok=True)
         os.chmod(self.base, 0o700)
         self.db_path = self.base / "people.db"
+        is_new = not self.db_path.exists()
+        if not is_new:
+            # Back up before constructor probes can modify historical data.
+            from coworker.migrations import apply_migrations, plan_migrations
+
+            outcome = apply_migrations(self.base, plan=plan_migrations(self.base, store_ids=("people_db",)))
+            if outcome.error or outcome.blocked:
+                raise RuntimeError("Person database upgrade failed; run Sourcecado Doctor. " + (outcome.error or ""))
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA foreign_keys = ON")
         os.chmod(self.db_path, 0o600)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(
@@ -142,7 +152,25 @@ class PersonStore:
             """
         )
         self._ensure_schema()
+        if is_new:
+            from coworker.crm_repository import TASK_SCHEMA
+
+            for statement in TASK_SCHEMA:
+                self._conn.execute(statement)
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()
+
+    @contextmanager
+    def crm_transaction(self):
+        """CRM reads/writes share the person lock; exceptions never leak writes."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
 
     def _ensure_schema(self) -> None:
         columns = {

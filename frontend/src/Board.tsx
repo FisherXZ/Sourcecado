@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TaskPanel } from "./crm/TaskPanel";
 
 import {
   getBoard,
@@ -213,7 +214,7 @@ function replyStatus(result: ReplyRefreshResult): string {
   return parts.join(" ");
 }
 
-export function BoardView() {
+export function BoardView({ view }: { view?: "tasks" } = {}) {
   const [board, setBoard] = useState<Board | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -223,6 +224,7 @@ export function BoardView() {
   const [contactQuery, setContactQuery] = useState("");
 
   useEffect(() => {
+    if (view === "tasks") return;
     let active = true;
     setFailed(false);
     getBoard().then(
@@ -236,7 +238,7 @@ export function BoardView() {
     return () => {
       active = false;
     };
-  }, [attempt]);
+  }, [attempt, view]);
 
   useEffect(() => {
     const refresh = () => setAttempt((value) => value + 1);
@@ -274,16 +276,21 @@ export function BoardView() {
   return (
     <main className="route-page board-page">
       <header className="board-page-header">
-        <p className="eyebrow">Active sequences</p>
+        <p className="eyebrow">{view === "tasks" ? "Saved work" : "Active sequences"}</p>
         <h1>Contacts</h1>
-        <p>Keep active people moving from open outreach through completed follow-up.</p>
-        <div className="board-page-actions">
+        <p>{view === "tasks" ? "Keep promises across all saved people, before and after outreach." : "Keep active people moving from open outreach through completed follow-up."}</p>
+        {view !== "tasks" ? <div className="board-page-actions">
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
             {checking ? "Checking for replies…" : "Check for replies"}
           </button>
           {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
-        </div>
+        </div> : null}
       </header>
+      <nav className="contacts-view-controls" aria-label="Contacts views">
+        <a href="#/board" aria-current={view !== "tasks" ? "page" : undefined}>Contacts</a>
+        <a href="#/board/tasks" aria-current={view === "tasks" ? "page" : undefined}>Tasks</a>
+      </nav>
+      {view === "tasks" ? <TaskPanel /> : <>
       {board === null && !failed ? <p role="status">Loading contacts…</p> : null}
       {failed ? (
         <section className="route-error" role="alert">
@@ -329,6 +336,7 @@ export function BoardView() {
           )}
         </section>
       ) : null}
+      </>}
     </main>
   );
 }

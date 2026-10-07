@@ -1,0 +1,48 @@
+.contacts-view-controls { display: flex; gap: 4px; margin: 16px 0; }
+.contacts-view-controls a { padding: 8px 16px; border-radius: 4px; color: var(--muted); text-decoration: none; }
+.contacts-view-controls a[aria-current="page"] { background: var(--accent-tint); color: var(--accent-deep); }
+.task-panel { min-width: 0; margin: 16px 0 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.task-panel-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; padding: 16px; }
+.task-panel-header h2 { margin: 0; font-size: 18px; }
+.task-panel-header p, .task-meta { display: block; margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.task-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.task-panel button, .task-timezone button { padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.task-panel button:hover, .task-timezone button:hover { background: var(--raised); }
+.task-panel button:disabled, .task-timezone button:disabled { opacity: .55; cursor: default; }
+.task-panel :is(button, input, textarea, select, a):focus-visible, .contacts-view-controls a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-panel > p { margin: 8px 16px; }
+.task-table-scroll { overflow-x: auto; }
+.task-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-table { width: 100%; min-width: 440px; border-collapse: collapse; font-size: 13px; text-align: left; }
+.task-table th { padding: 8px 16px; border-block: 1px solid var(--border); color: var(--muted); font-size: 11px; font-weight: 500; }
+.task-table td { padding: 6px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.task-table td:last-child { width: 64px; }
+.task-table tbody tr:last-child td { border-bottom: none; }
+.task-table tbody tr:hover { background: var(--raised); }
+.task-table strong { display: block; max-width: 400px; overflow-wrap: anywhere; font-weight: 500; }
+.task-table a { color: var(--accent-deep); }
+.task-table time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.task-row-details { display: block; max-width: 400px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 12px; }
+.task-empty { margin: 0; padding: 24px 16px; color: var(--muted); font-size: 13px; }
+.task-pagination:not(:empty) { padding: 8px 16px; border-top: 1px solid var(--border); }
+.task-editor { margin: 0 16px 16px; padding: 16px; border: 1px solid var(--border); border-radius: 4px; background: var(--canvas); }
+.task-editor h3 { margin: 0 0 16px; font-size: 14px; }
+.task-editor fieldset { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: start; gap: 8px; padding: 0; margin: 0 0 16px; border: none; min-width: 0; }
+.task-editor label { padding-top: 8px; font-size: 13px; }
+.task-editor :is(input, textarea, select), .task-timezone input { box-sizing: border-box; width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.task-editor textarea { resize: vertical; }
+.task-editor .task-meta, .task-person-picker > :is(p, div) { grid-column: 2; }
+.task-error { color: var(--error); font-size: 13px; }
+.task-conflict, .task-leave { margin: 16px 0; padding: 16px; border: 1px solid var(--border); background: var(--warn-bg); }
+.task-conflict h4, .task-leave h4 { margin: 0 0 8px; }
+.task-conflict strong { overflow-wrap: anywhere; }
+.task-details { white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-timezone { display: grid; gap: 8px; margin-top: 16px; }
+.task-timezone button { justify-self: start; }
+@media (max-width: 600px) {
+  .task-editor { margin: 0 8px 8px; padding: 8px; }
+  .task-editor fieldset { grid-template-columns: minmax(0, 1fr); }
+  .task-editor .task-meta, .task-person-picker > :is(p, div) { grid-column: 1; }
+  .task-panel-header { padding: 8px; }
+  .task-table th, .task-table td { padding-inline: 8px; }
+}

@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from coworker.agent_run_approval import EFFECT_STATEMENTS
+from coworker.crm_repository import TASK_SCHEMA
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
 from coworker.mcp import SCHEMA_VERSION as MCP_CONFIG_VERSION
 from coworker.people import SCHEMA_VERSION as PEOPLE_DB_VERSION
@@ -884,6 +885,13 @@ def _adopt(description: str, count: Callable, apply: Callable) -> tuple[Migratio
     )
 
 
+def _add_person_tasks(context: MigrationContext) -> int:
+    assert context.connection is not None
+    for statement in TASK_SCHEMA:
+        context.connection.execute(statement)
+    return 0
+
+
 # --- the registry --------------------------------------------------------
 
 REGISTRY: tuple[StoreSpec, ...] = (
@@ -983,12 +991,25 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 count=_count_masked_people_names,
                 apply=_separate_masked_people_names,
             ),
+            Migration(
+                from_version=2,
+                to_version=3,
+                description="Add durable person tasks, CRM change history and operation receipts.",
+                count=lambda context: 0,
+                apply=_add_person_tasks,
+            ),
         ),
         json_columns=(
             ("events", "payload"),
             ("person_attachments", "fields_json"),
             ("person_versions", "person_json"),
             ("person_versions", "attachments_json"),
+            ("person_tasks", "protected_fields"),
+            ("person_tasks", "source_refs"),
+            ("crm_changes", "after_json"),
+            ("crm_changes", "before_json"),
+            ("crm_changes", "source_refs"),
+            ("crm_operations", "response_json"),
         ),
     ),
     StoreSpec(
@@ -1311,10 +1332,11 @@ def _plan_store(root: Path, spec: StoreSpec) -> StorePlan:
     )
 
 
-def plan_migrations(root: str | Path) -> MigrationPlan:
+def plan_migrations(root: str | Path, *, store_ids: Iterable[str] | None = None) -> MigrationPlan:
     """Read every registered store and report what it would take to bring it current."""
     root = Path(root).expanduser()
-    return MigrationPlan(tuple(_plan_store(root, spec) for spec in REGISTRY))
+    specs = REGISTRY if store_ids is None else tuple(spec_for(store_id) for store_id in store_ids)
+    return MigrationPlan(tuple(_plan_store(root, spec) for spec in specs))
 
 
 # --- backup and restore --------------------------------------------------
@@ -1498,6 +1520,8 @@ def _apply_store(root: Path, plan: StorePlan, spec: StoreSpec) -> list[AppliedSt
         if spec.kind is StoreKind.SQLITE:
             conn = sqlite3.connect(store_path(root, spec))
             conn.row_factory = sqlite3.Row
+            if spec.store_id == "people_db":
+                conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("BEGIN IMMEDIATE")
         context = _context_for(root, spec, conn)
         for step in plan.steps:

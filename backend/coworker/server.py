@@ -72,6 +72,8 @@ from coworker.context_projection import (
     ProjectionIdentity,
     prepare_context_projection,
 )
+from coworker.crm_api import crm_router
+from coworker.crm_service import CrmService
 from coworker.diagnostic_bundle import (
     HEALTH_WINDOW_RUNS,
     BundleScanFailed,
@@ -418,6 +420,8 @@ def create_app(
     root = state if state is not None else state_dir()
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
+    app.state.crm = CrmService(app.state.people, app.state.store)
+    app.include_router(crm_router(app.state.crm))
     app.state.meeting_evidence = MeetingEvidenceStore(root, people=app.state.people)
     app.state.workspace_runtime = workspace_runtime or WorkspaceRuntime(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")

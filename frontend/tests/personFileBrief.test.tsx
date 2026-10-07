@@ -5,6 +5,8 @@ import { PersonFileView } from "../src/PersonFile";
 import { claim, livingBrief } from "./livingBrief";
 
 const api = vi.hoisted(() => ({
+  getTasks: vi.fn(async () => ({ tasks: [], next_offset: null })),
+  getTaskPreferences: vi.fn(async () => ({ timezone: "America/Los_Angeles" })),
   attachPersonMeeting: vi.fn(),
   attachPersonDriveEvidence: vi.fn(),
   getPerson: vi.fn(),
@@ -191,7 +193,7 @@ describe("the living brief on the person file", () => {
     );
     render(<PersonFileView personId="person one" />);
 
-    const banner = await screen.findByRole("status");
+    const banner = await screen.findByText(/Partial brief\./);
     expect(banner).toHaveTextContent("Partial brief.");
     expect(banner).toHaveTextContent("calendar");
     // The evidence that did land is still on the page.

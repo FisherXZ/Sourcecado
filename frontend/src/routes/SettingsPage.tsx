@@ -12,6 +12,7 @@ import {
 import { DiagnosticBundle } from "./DiagnosticBundle";
 import { ReleaseChannelSettings } from "./UpdateChannel";
 import { WorkspaceSettings } from "./WorkspaceSettings";
+import { TaskTimezone } from "../crm/TaskTimezone";
 
 type SettingsState =
   | { status: "loading" }
@@ -172,6 +173,8 @@ export function SettingsPage() {
               </div>
             </dl>
           </section>
+
+          <TaskTimezone />
 
           <section className="settings-card" aria-labelledby="persona-heading">
             <h2 id="persona-heading">On-duty persona</h2>

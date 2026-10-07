@@ -22,6 +22,9 @@ The durable record for one person: identity, company context, Apollo results, Gm
 **Sequence**
 A person the director is actively working. A sequence moves through exactly three operating states: Open, In conversation, and Done. It is not a sales deal, forecast, or automated drip campaign.
 
+**Person Task**
+A saved promise or next step attached to one live person, with a required title, optional details and optional calendar due date. A person can have several tasks. Manual task saves are independent of outreach, sequence state, Gmail and the AI. Task versions and change history belong to the task; reverting the person's record preserves them.
+
 **Living Brief**
 The compact, evidence-backed context that begins with the first draft and becomes more useful as the person file grows. Meeting preparation is a view of this brief, not a separate research project.
 
@@ -63,7 +66,7 @@ The accumulated person files, outcomes, source-backed notes, and handoffs that p
 The home surface where the director gives targets, asks questions, reviews work, and tells the assistant what to do next.
 
 **Contacts**
-The assistant's compact operating picture of active sequences. It presents Open, In conversation, and Done as table filters and keeps each row attached to its durable Person File. Kept people without a sequence remain stored in the internal Board projection but do not appear in Contacts yet. Contacts reports the work; it is not a CRM the director must constantly maintain.
+The assistant's compact operating picture. Its people table presents active sequences in Open, In conversation, and Done and links each row to its durable Person File. Its Tasks view shows the same saved tasks as those files across all live saved people, including kept people before outreach. Creating a task does not add someone to the active people table. Contacts reports the work; it is not a CRM the director must constantly maintain.
 
 **Person View**
 The full person file and handoff record. A compact version of the living brief may appear beside work in other surfaces.

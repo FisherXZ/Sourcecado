@@ -13,7 +13,7 @@ The active runtime is `backend/` (Python) and `frontend/` (React and Tauri). The
 - Build the local Sourcecado desktop product: Python/FastAPI backend plus React/Vite/Tauri UI.
 - Optimize for one sourcing director now while keeping person files intelligible to a later officer.
 - A sequence is a person being worked through Open, In conversation, and Done. A company is context, not a deal.
-- A kept person remains durable in the internal Board projection before outreach, but the Contacts surface shows only active sequences in Open, In conversation, and Done.
+- A kept person remains durable before outreach. The Contacts people table shows active sequences in Open, In conversation, and Done; its Tasks view includes all live saved people. Saving a task leaves sequence membership unchanged.
 - Apollo search may return candidates without an email. Enrichment is manual and credit-aware.
 - Sending is allowed only after explicit review and approval in Sourcecado. Never add auto-send.
 - Keep Gmail, Drive, Calendar, Granola, Apollo, and web work attached to the relevant person and run ledger.

@@ -182,6 +182,70 @@ export async function getHealth(): Promise<Health> {
   return res.json();
 }
 
+export type PersonTask = {
+  task_id: string;
+  person_id: string;
+  person_name: string;
+  person_company: string | null;
+  title: string;
+  details: string;
+  due_date: string | null;
+  due_timezone: string;
+  state: "open" | "completed" | "cancelled";
+  origin: "human" | "assistant";
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+export type TaskFields = { title: string; details: string; due_date: string | null };
+export type TaskIntent = TaskFields & { operation_id: string; expected_version?: number };
+export type TaskSave = { task: PersonTask; receipt: {
+  change_id: string; operation_id: string; task_id: string; version: number;
+  actor: "director"; reason: string; created_at: string;
+} };
+export type TaskPerson = { person_id: string; first_name?: string | null; last_name?: string | null; company?: string | null };
+
+export class CrmTaskError extends Error {
+  constructor(message: string, readonly status: number, readonly current: PersonTask | null = null) {
+    super(message);
+  }
+}
+
+async function crmRequest<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  const response = await fetch(`${httpBase()}${path}`, {
+    method,
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({}));
+    throw new CrmTaskError(typeof failure.error === "string" ? failure.error : "Couldn’t save task.",
+      response.status, failure.current ?? null);
+  }
+  return response.json();
+}
+
+export function getTasks(personId?: string, offset = 0): Promise<{ tasks: PersonTask[]; next_offset: number | null }> {
+  const params = new URLSearchParams({ offset: String(offset), limit: "50" });
+  if (personId) params.set("person_id", personId);
+  return crmRequest(`/v1/crm/tasks?${params}`);
+}
+export function getTaskPeople(query = "", offset = 0): Promise<{ people: TaskPerson[]; next_offset: number | null }> {
+  return crmRequest(`/v1/crm/people?${new URLSearchParams({ query, offset: String(offset), limit: "50" })}`);
+}
+export function getTaskPreferences(): Promise<{ timezone: string }> {
+  return crmRequest("/v1/crm/preferences");
+}
+export function saveTaskTimezone(timezone: string): Promise<{ timezone: string }> {
+  return crmRequest("/v1/crm/preferences", "PUT", { timezone });
+}
+export function createPersonTask(personId: string, intent: TaskIntent): Promise<TaskSave> {
+  return crmRequest(`/v1/people/${encodeURIComponent(personId)}/tasks`, "POST", intent);
+}
+export function updatePersonTask(personId: string, taskId: string, intent: TaskIntent): Promise<TaskSave> {
+  return crmRequest(`/v1/people/${encodeURIComponent(personId)}/tasks/${encodeURIComponent(taskId)}`, "PATCH", intent);
+}
+
 export async function getHello(): Promise<Hello> {
   const res = await get("/v1/hello");
   if (!res.ok) throw new Error(`hello ${res.status}`);

@@ -11,6 +11,7 @@ import {
   type SessionRow,
 } from "../api";
 import { BoardView } from "../Board";
+import { allowTaskNavigation } from "../crm/taskNavigation";
 import { PersonFileView } from "../PersonFile";
 import { ChatPage } from "../routes/ChatPage";
 import { moveDraft, readDraft } from "../chat/draftStorage";
@@ -54,6 +55,7 @@ export function AppShell() {
     isRootHash(window.location.hash) || Boolean(cachedChatRestoreHash),
   );
   const bootRestoreHashRef = useRef<string | null>(cachedChatRestoreHash);
+  const acceptedHashRef = useRef(window.location.hash);
   function openSearch() {
     searchReturnFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -73,6 +75,14 @@ export function AppShell() {
   }
   useEffect(() => {
     const onHashChange = () => {
+      // A queued hash event can arrive after a blocked destination restored
+      // this URL. Keep the pending choice instead of replacing it with home.
+      if (window.location.hash === acceptedHashRef.current) return;
+      if (!allowTaskNavigation(window.location.hash)) {
+        window.history.replaceState(null, "", acceptedHashRef.current || "#/");
+        return;
+      }
+      acceptedHashRef.current = window.location.hash;
       setRoute(parseHash(window.location.hash));
       setRailOpen(false);
     };
@@ -357,7 +367,7 @@ export function AppShell() {
       </main>
     );
   } else if (route.kind === "board") {
-    outlet = <BoardView />;
+    outlet = <BoardView view={route.view} />;
   } else if (route.kind === "person") {
     outlet = <PersonFileView personId={route.personId} />;
   } else if (route.kind === "skills") {

@@ -7,7 +7,9 @@ helps one operator find people, prepare tailored outreach, keep conversations
 moving, and leave a useful person file for the next officer.
 
 Chat is home. Contacts shows active sequences in Open, In conversation, and
-Done. Apollo enrichment spends credits and Gmail sending reaches real people;
+Done. Its Tasks view keeps promises for all saved people, including people
+before outreach; the same tasks appear in their person files. Apollo
+enrichment spends credits and Gmail sending reaches real people;
 both require explicit approval.
 
 ## Start here
