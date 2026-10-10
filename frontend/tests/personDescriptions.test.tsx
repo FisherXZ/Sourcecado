@@ -150,6 +150,47 @@ describe("DescriptionEditor", () => {
     expect(screen.getByLabelText("Short description")).toHaveValue("Half-written.");
   });
 
+  it("keeps text typed while a save is in flight instead of losing it", async () => {
+    let resolveSave!: (value: unknown) => void;
+    patchPersonDescription.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const saved = description({ authority: "human", text: "First.", version: 1 });
+    const onSaved = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <DescriptionEditor
+        personId="p1"
+        description={description()}
+        onSaved={onSaved}
+        onClose={onClose}
+      />,
+    );
+    const field = screen.getByLabelText("Short description");
+    fireEvent.change(field, { target: { value: "First." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // The request carries only the text present when Save was pressed...
+    expect(patchPersonDescription).toHaveBeenCalledWith("p1", "general", {
+      text: "First.",
+      expectedVersion: 0,
+    });
+    // ...but the user keeps typing while it is still in flight.
+    fireEvent.change(field, { target: { value: "First. And more." } });
+    resolveSave({
+      descriptions: descriptionsFrom(saved),
+      description: saved,
+      saved: true,
+    });
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(descriptionsFrom(saved)));
+    // The newer keystrokes survive the save's success handler.
+    expect(screen.getByLabelText("Short description")).toHaveValue("First. And more.");
+    // The editor stays open so the pending edit is not silently dropped.
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("cancel discards the draft back to the saved text", () => {
     const saved = description({ authority: "human", text: "Saved copy.", version: 1 });
     render(<DescriptionEditor personId="p1" description={saved} onSaved={vi.fn()} />);

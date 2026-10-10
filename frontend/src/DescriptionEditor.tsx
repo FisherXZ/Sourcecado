@@ -114,18 +114,34 @@ export function DescriptionEditor({
 
   async function save() {
     if (busy || overLimit || !dirty) return;
+    const submitted = value;
     setBusy(true);
     setStatus(null);
     try {
       const result = await patchPersonDescription(personId, slot, {
-        text: value,
+        text: submitted,
         expectedVersion: description.version,
       });
-      clearDescriptionDraft(personId, slot);
-      setDraft(null);
-      setStale(false);
-      onSaved(result.descriptions);
-      onClose?.();
+      // The textarea stays editable during the request, so the user may have
+      // typed past what we sent. Only retire the draft when it still matches
+      // the submitted text; otherwise keep the newer keystrokes and rebase
+      // them onto the version we just wrote, so nothing is lost and the next
+      // save is not falsely flagged stale (ticket #202 Done when #5).
+      const pending = readDescriptionDraft(personId, slot);
+      const savedVersion = result.descriptions[slot]?.version ?? description.version;
+      if (pending === null || pending.text === submitted) {
+        clearDescriptionDraft(personId, slot);
+        setDraft(null);
+        setStale(false);
+        onSaved(result.descriptions);
+        onClose?.();
+      } else {
+        writeDescriptionDraft(personId, slot, {
+          text: pending.text,
+          baseVersion: savedVersion,
+        });
+        onSaved(result.descriptions);
+      }
     } catch (error) {
       // A failed save leaves the unsaved text intact (Done when #5).
       if (error instanceof DescriptionSaveError && error.status === 409) {

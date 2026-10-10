@@ -191,6 +191,79 @@ def test_snapshot_captures_descriptions(tmp_path):
     assert captured["general"]["authority"] == "human"
 
 
+# --- store: revert restores descriptions (spec §8.2) ------------------------
+
+
+def _revert(store, person_id, *, to_version, expected_version):
+    return store.revert(
+        person_id,
+        to_version=to_version,
+        expected_version=expected_version,
+        actor="director",
+        rationale_summary="Director restored an earlier person version.",
+    )
+
+
+def test_revert_restores_replaced_description_text_and_protection(tmp_path):
+    store = PersonStore(tmp_path)
+    person = _person(store)
+    pid = person["person_id"]
+    _save(store, pid, "general", "Original summary.", expected_version=0)
+    original = store.get(pid)["version"]
+    _save(store, pid, "general", "Replaced summary.", expected_version=1)
+    replaced = store.get(pid)["version"]
+
+    _revert(store, pid, to_version=original, expected_version=replaced)
+
+    restored = store.descriptions(pid)["general"]
+    assert restored["text"] == "Original summary."
+    assert restored["authority"] == "human"
+    assert restored["version"] == 1
+
+
+def test_revert_restores_human_protection_after_release(tmp_path):
+    # The reviewer's second check: releasing protection then reverting to the
+    # protected snapshot must bring authority back to human, not leave it
+    # assistant (spec §8.2 — a revert cannot silently un-protect a human edit).
+    store = PersonStore(tmp_path)
+    person = _person(store)
+    pid = person["person_id"]
+    _save(store, pid, "detailed", "Mine to keep.", expected_version=0)
+    protected = store.get(pid)["version"]
+    store.patch_description(
+        pid,
+        "detailed",
+        expected_version=1,
+        release=True,
+        actor="director",
+        rationale_summary="Director let the assistant maintain the description.",
+    )
+    released_at = store.get(pid)["version"]
+    assert store.descriptions(pid)["detailed"]["authority"] == "assistant"
+
+    _revert(store, pid, to_version=protected, expected_version=released_at)
+
+    restored = store.descriptions(pid)["detailed"]
+    assert restored["authority"] == "human"
+    assert restored["text"] == "Mine to keep."
+
+
+def test_revert_to_a_pre_description_version_clears_the_row(tmp_path):
+    store = PersonStore(tmp_path)
+    person = _person(store)
+    pid = person["person_id"]
+    baseline = store.get(pid)["version"]  # snapshot has no description rows yet
+    _save(store, pid, "general", "Written later.", expected_version=0)
+    after_save = store.get(pid)["version"]
+
+    _revert(store, pid, to_version=baseline, expected_version=after_save)
+
+    general = store.descriptions(pid)["general"]
+    assert general["text"] is None
+    assert general["authority"] == "assistant"
+    assert general["version"] == 0
+
+
 # --- API --------------------------------------------------------------------
 
 

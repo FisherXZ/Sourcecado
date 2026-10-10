@@ -254,7 +254,7 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
     assert store_plan.record_count > 0
 
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(db) == 2
+    assert _user_version(db) == 3
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -272,7 +272,11 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        assert {"person_attachments", "person_versions"} <= tables
+        assert {
+            "person_attachments",
+            "person_versions",
+            "person_descriptions",
+        } <= tables
     finally:
         conn.close()
 
@@ -326,12 +330,12 @@ def test_people_v2_moves_masked_surnames_out_of_canonical_history(tmp_path):
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert plan.from_version == 1
-    assert plan.to_version == 2
+    assert plan.to_version == 3
 
     outcome = migrations.apply_migrations(root)
 
     assert outcome.error is None
-    assert _user_version(root / "people.db") == 2
+    assert _user_version(root / "people.db") == 3
     loaded = PersonStore(root).get(person["person_id"])
     assert loaded is not None
     assert loaded["person_id"] == person["person_id"]
@@ -373,6 +377,70 @@ def test_people_v2_moves_masked_surnames_out_of_canonical_history(tmp_path):
     )
     assert "Fisher" in title
     assert "Zh***g" not in title
+
+
+def test_people_v3_adds_the_description_table_to_an_existing_v2_database(tmp_path):
+    """An existing v2 people.db without person_descriptions is migrated, not
+    silently grown by a constructor probe (spec §8.3).
+
+    This is the reviewer's repro: a populated v2 database that predates the
+    description table must be reported PENDING, gain the table through the
+    registered 2->3 step with backup and rollback, and end at version 3 —
+    rather than having the table appear while user_version stays at 2.
+    """
+    from coworker.people import PersonStore
+
+    root = tmp_path / "state"
+    store = PersonStore(root)
+    person = store.keep_from_apollo(
+        apollo_id="apollo-desc",
+        first_name="Dana",
+        last_name_obfuscated="Reed",
+        title="Partner",
+        company="Codeology",
+    )
+    # Rewind to the real v2 shape: drop the table a v2 install never had and
+    # stamp the version back to 2.
+    store._conn.execute("DROP TABLE person_descriptions")
+    store._conn.execute("PRAGMA user_version = 2")
+    store._conn.commit()
+    store._conn.close()
+
+    db = root / "people.db"
+    assert "person_descriptions" not in migrations.table_names(
+        sqlite3.connect(db)
+    )
+
+    plan = _plan_for(migrations.plan_migrations(root), "people_db")
+    assert plan.status is StoreStatus.PENDING
+    assert plan.from_version == 2
+    assert plan.to_version == 3
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3)]
+
+    outcome = migrations.apply_migrations(root)
+    assert outcome.error is None
+    assert outcome.backup_id is not None
+    assert _user_version(db) == 3
+
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        assert "person_descriptions" in migrations.table_names(conn)
+        # The populated person and its slots survive the migration.
+        assert (
+            conn.execute(
+                "SELECT first_name FROM people WHERE person_id = ?",
+                (person["person_id"],),
+            ).fetchone()["first_name"]
+            == "Dana"
+        )
+    finally:
+        conn.close()
+
+    # Reopening the real store leaves the recorded version at current.
+    reopened = PersonStore(root)
+    assert reopened.descriptions(person["person_id"])["general"]["version"] == 0
+    assert _user_version(db) == 3
 
 
 def test_legacy_meeting_evidence_db_upgrades_from_the_pre_registry_shape(tmp_path):
@@ -482,7 +550,7 @@ def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
 
     # Constructing the stores must not knock the recorded version off current.
     assert _user_version(root / "club.db") == 2
-    assert _user_version(root / "people.db") == 2
+    assert _user_version(root / "people.db") == 3
 
 
 # --- failing closed ------------------------------------------------------

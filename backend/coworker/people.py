@@ -20,7 +20,10 @@ from coworker.person_identity import (
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
-SCHEMA_VERSION = 2
+# v3 adds the person_descriptions table (ticket #202); the constructor creates
+# it for a fresh database, and the registered 2->3 migration adopts an existing
+# one with backup and rollback.
+SCHEMA_VERSION = 3
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -354,6 +357,49 @@ class PersonStore:
                 created_at,
             ),
         )
+
+    def _restore_descriptions(
+        self, person_id: str, captured: dict[str, Any], now: str
+    ) -> None:
+        """Put a snapshot's description rows back during a person revert.
+
+        Restores each slot's text together with its per-slot authority and
+        source references (spec §8.2), so a revert can never silently
+        un-protect a human edit or drop a description's sources. A slot the
+        snapshot held in its untouched default (assistant-owned, no text,
+        version 0) is left with no row, which reads back as that same default.
+        """
+        self._conn.execute(
+            "DELETE FROM person_descriptions WHERE person_id = ?", (person_id,)
+        )
+        for slot in DESCRIPTION_SLOTS:
+            entry = captured.get(slot)
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            authority = str(entry.get("authority") or "assistant")
+            slot_version = int(entry.get("version") or 0)
+            if text is None and authority == "assistant" and slot_version == 0:
+                continue  # the untouched default carries no row
+            source_refs = entry.get("source_refs") or []
+            self._conn.execute(
+                """
+                INSERT INTO person_descriptions (
+                    person_id, slot, text, authority, source_refs, version,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    person_id,
+                    slot,
+                    text,
+                    authority if authority in ("human", "assistant") else "assistant",
+                    json.dumps(source_refs),
+                    slot_version,
+                    now,
+                    now,
+                ),
+            )
 
     def _receipt(
         self,
@@ -1811,12 +1857,17 @@ class PersonStore:
                 target_hidden_last_name = target_last_name
                 target_last_name = None
             attachments = json.loads(str(snapshot["attachments_json"]))
-            # NOTE (#202 §8.2 follow-up): snapshots carry description rows
-            # (person_json["descriptions"]), but revert does not yet restore
-            # them. Restoring text together with its per-slot authority — so a
-            # revert can never silently un-protect a human edit — is the
-            # deferred slice. Until then, descriptions keep their live state
-            # across a revert.
+            # Snapshots carry description rows under person_json["descriptions"]
+            # (text + per-slot authority + sources). Restore them below so a
+            # revert never silently un-protects a human edit or drops a
+            # description's sources (spec §8.2). A snapshot taken before #202
+            # has no such key; those predate descriptions, so there is nothing
+            # to restore and the live rows are left untouched.
+            restored_descriptions = (
+                target.get("descriptions")
+                if isinstance(target.get("descriptions"), dict)
+                else None
+            )
             now = self._now()
             next_version = expected_version + 1
             cursor = self._conn.execute(
@@ -1874,6 +1925,8 @@ class PersonStore:
                         now,
                     ),
                 )
+            if restored_descriptions is not None:
+                self._restore_descriptions(person_id, restored_descriptions, now)
             self._receipt(
                 person_id,
                 kind="revert",
