@@ -294,6 +294,94 @@
   color: var(--muted);
 }
 
+.contacts-description {
+  display: block;
+  max-width: 22rem;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contacts-description:hover {
+  background: var(--raised);
+}
+
+.contacts-description.is-muted {
+  color: var(--muted);
+}
+
+.contacts-description-edit {
+  max-width: 24rem;
+}
+
+/* Description editor, shared by Contacts and the person file. */
+.description-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.description-textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.description-editor-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.description-count.is-over {
+  color: var(--error-text, #9b3b2e);
+  font-weight: 600;
+}
+
+.description-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.description-release {
+  margin-left: auto;
+}
+
+.description-stale,
+.description-status {
+  font-size: 13px;
+  color: var(--pit, var(--muted));
+}
+
+.person-descriptions {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.person-description-slot h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .contacts-table a:focus-visible,
 .contacts-filters button:focus-visible,
 .contacts-search input:focus-visible,

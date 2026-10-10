@@ -116,7 +116,7 @@ from coworker.brief import (
     project,
     prompt_context,
 )
-from coworker.people import PersonStore
+from coworker.people import DESCRIPTION_SLOTS, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.prompt_contract import (
@@ -2105,6 +2105,7 @@ def create_app(
             )
         return {
             "person": person,
+            "descriptions": app.state.people.descriptions(person_id),
             # The redacted timeline goes in, so nothing the person view hides
             # from the ledger can reappear through the brief.
             "brief": brief_payload(project(person, timeline, session_id=session_id)),
@@ -2181,6 +2182,95 @@ def create_app(
         return {
             "person": app.state.people.get(person_id, expand_sources=True),
             "brief": brief_payload(person_brief(app.state.people, person_id)),
+            "versions": app.state.people.versions(person_id),
+            "saved": True,
+            "unchanged": False,
+        }
+
+    @app.patch("/v1/people/{person_id}/descriptions/{slot}")
+    async def people_description(person_id: str, slot: str, request: Request):
+        """Save a person-description slot, or release it to the assistant.
+
+        One route covers both actions (spec §7.2). Concurrency is slot-scoped:
+        the client sends the slot's `expected_version`. A text save makes the
+        slot human-authored (an empty string is an intentional, protected
+        blank); `release: true` hands the slot back to the assistant.
+        """
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if slot not in DESCRIPTION_SLOTS:
+            return JSONResponse(
+                {"error": "unknown description slot"}, status_code=404
+            )
+        payload = await request.json()
+        expected_version = payload.get("expected_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_version is required"}, status_code=400
+            )
+        release = bool(payload.get("release"))
+        text = payload.get("text")
+        if not release:
+            if text is None:
+                return JSONResponse(
+                    {"error": "text or release is required"}, status_code=400
+                )
+            if not isinstance(text, str):
+                return JSONResponse(
+                    {"error": "text must be a string"}, status_code=400
+                )
+
+        current = app.state.people.descriptions(person_id)[slot]
+        if int(current["version"]) != expected_version:
+            return JSONResponse(
+                {
+                    "error": (
+                        "stale record version: "
+                        f"expected {expected_version}, current {current['version']}"
+                    )
+                },
+                status_code=409,
+            )
+        if release:
+            unchanged = current["authority"] == "assistant"
+        else:
+            unchanged = (
+                current["authority"] == "human" and (current["text"] or "") == text
+            )
+        if unchanged:
+            return {
+                "descriptions": app.state.people.descriptions(person_id),
+                "description": current,
+                "person": app.state.people.get(person_id, expand_sources=True),
+                "versions": app.state.people.versions(person_id),
+                "saved": False,
+                "unchanged": True,
+            }
+        try:
+            description = app.state.people.patch_description(
+                person_id,
+                slot,
+                expected_version=expected_version,
+                text=None if release else text,
+                release=release,
+                actor="director",
+                rationale_summary=str(
+                    payload.get("rationale_summary")
+                    or (
+                        "Director let the assistant maintain the description."
+                        if release
+                        else "Director edited the description."
+                    )
+                ),
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status = 422 if "exceeds" in message else 409
+            return JSONResponse({"error": message}, status_code=status)
+        return {
+            "descriptions": app.state.people.descriptions(person_id),
+            "description": description,
+            "person": app.state.people.get(person_id, expand_sources=True),
             "versions": app.state.people.versions(person_id),
             "saved": True,
             "unchanged": False,
