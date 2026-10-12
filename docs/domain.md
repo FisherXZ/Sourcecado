@@ -22,6 +22,9 @@ The durable record for one person: identity, company context, Apollo results, Gm
 **Sequence**
 A person the director is actively working. A sequence moves through exactly three operating states: Open, In conversation, and Done. It is not a sales deal, forecast, or automated drip campaign.
 
+**Task**
+Something the director committed to do for one person, such as "Send project examples." A person can hold several tasks, each with an optional due date that is a calendar day in the director's saved timezone. One saved task record appears in both the Contacts Tasks view and the person's file. A task does not start a sequence, change Open / In conversation / Done, or put a kept person into Contacts.
+
 **Living Brief**
 The compact, evidence-backed context that begins with the first draft and becomes more useful as the person file grows. Meeting preparation is a view of this brief, not a separate research project.
 
@@ -63,7 +66,7 @@ The accumulated person files, outcomes, source-backed notes, and handoffs that p
 The home surface where the director gives targets, asks questions, reviews work, and tells the assistant what to do next.
 
 **Contacts**
-The assistant's compact operating picture of active sequences. It presents Open, In conversation, and Done as table filters and keeps each row attached to its durable Person File. Kept people without a sequence remain stored in the internal Board projection but do not appear in Contacts yet. Contacts reports the work; it is not a CRM the director must constantly maintain.
+The assistant's compact operating picture of active sequences. It presents Open, In conversation, and Done as table filters and keeps each row attached to its durable Person File. Kept people without a sequence remain stored in the internal Board projection but do not appear in Contacts yet. A Tasks view inside Contacts lists the open tasks of people in active sequences, grouped Overdue, Today, Upcoming, and No date. Contacts reports the work; it is not a CRM the director must constantly maintain.
 
 **Person View**
 The full person file and handoff record. A compact version of the living brief may appear beside work in other surfaces.

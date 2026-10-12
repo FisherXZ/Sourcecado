@@ -68,6 +68,17 @@ from coworker.connectors.google_oauth import (
     merge_scopes,
     save_google,
 )
+from coworker.crm_tasks import (
+    DEFAULT_TIMEZONE,
+    LIST_LIMIT_DEFAULT,
+    TASK_STATES,
+    TIMEZONE_SETTING,
+    TaskConflict,
+    TaskError,
+    TaskNotFound,
+    TaskService,
+    validate_timezone,
+)
 from coworker.context_projection import (
     ProjectionIdentity,
     prepare_context_projection,
@@ -418,6 +429,7 @@ def create_app(
     root = state if state is not None else state_dir()
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
+    app.state.tasks = TaskService(app.state.people)
     app.state.meeting_evidence = MeetingEvidenceStore(root, people=app.state.people)
     app.state.workspace_runtime = workspace_runtime or WorkspaceRuntime(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
@@ -1375,7 +1387,20 @@ def create_app(
             },
             "apollo": {"configured": bool(app.state.apollo_key)},
             "workspace": app.state.workspace_runtime.diagnostics(),
+            "timezone": _operator_timezone(),
         }
+
+    @app.post("/v1/settings/timezone")
+    async def set_timezone(request: Request):
+        payload = await request.json()
+        try:
+            timezone = validate_timezone(
+                payload.get("timezone") if isinstance(payload, dict) else None
+            )
+        except TaskError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        app.state.store.set_setting(TIMEZONE_SETTING, timezone)
+        return {"timezone": timezone}
 
     @app.post("/v1/settings/persona")
     async def set_persona(request: Request):
@@ -2000,6 +2025,91 @@ def create_app(
     @app.get("/v1/board")
     def board_get():
         return app.state.people.list_board()
+
+    def _operator_timezone() -> str:
+        """The director's saved IANA timezone; task dates are days in it."""
+        saved = app.state.store.get_setting(TIMEZONE_SETTING)
+        try:
+            return validate_timezone(saved)
+        except TaskError:
+            return DEFAULT_TIMEZONE
+
+    def _task_error(exc: TaskError) -> JSONResponse:
+        if isinstance(exc, TaskNotFound):
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        if isinstance(exc, TaskConflict):
+            body: dict[str, Any] = {"error": str(exc), "code": exc.code}
+            if exc.current is not None:
+                body["task"] = exc.current
+            return JSONResponse(body, status_code=409)
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.get("/v1/crm/tasks")
+    def crm_tasks(
+        person_id: str | None = None,
+        state: str = "open",
+        limit: int = LIST_LIMIT_DEFAULT,
+    ):
+        """One list of task records for Contacts and every person file.
+
+        Without `person_id` it is the global view, limited to people in an
+        active sequence so a task never moves a kept person into Contacts.
+        """
+        states = TASK_STATES if state == "all" else (state,)
+        try:
+            return app.state.tasks.list(
+                timezone=_operator_timezone(),
+                person_id=person_id or None,
+                states=states,
+                active_sequences_only=not person_id,
+                limit=limit,
+            )
+        except TaskError as exc:
+            return _task_error(exc)
+
+    @app.post("/v1/people/{person_id}/tasks", status_code=201)
+    async def people_task_create(person_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            # The author is whoever holds this local session: the director.
+            # A request cannot name a different actor.
+            result = app.state.tasks.create(
+                person_id,
+                title=payload.get("title"),
+                details=payload.get("details"),
+                due_date=payload.get("due_date"),
+                timezone=_operator_timezone(),
+                operation_id=payload.get("operation_id"),
+                actor="director",
+                reason=payload.get("reason"),
+            )
+        except TaskError as exc:
+            return _task_error(exc)
+        if result.get("replayed"):
+            return JSONResponse(result, status_code=200)
+        return result
+
+    @app.patch("/v1/people/{person_id}/tasks/{task_id}")
+    async def people_task_update(person_id: str, task_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        changes = payload.get("changes")
+        try:
+            return app.state.tasks.update(
+                person_id,
+                task_id,
+                changes=changes if isinstance(changes, dict) else {},
+                expected_version=payload.get("expected_version"),
+                timezone=_operator_timezone(),
+                operation_id=payload.get("operation_id"),
+                actor="director",
+                reason=payload.get("reason"),
+            )
+        except TaskError as exc:
+            return _task_error(exc)
 
     @app.post("/v1/replies/refresh")
     def replies_refresh():
