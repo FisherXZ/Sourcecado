@@ -604,6 +604,141 @@ export async function getPerson(id: string): Promise<PersonFile> {
   return res.json();
 }
 
+export type TaskDueStatus = "overdue" | "today" | "upcoming" | "none";
+
+export type PersonTask = {
+  task_id: string;
+  person_id: string;
+  title: string;
+  details: string;
+  due_date: string | null;
+  due_timezone: string | null;
+  state: "open" | "completed" | "cancelled";
+  origin: "human" | "assistant";
+  protected_fields: string[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+  due_status?: TaskDueStatus;
+  person?: {
+    person_id: string;
+    first_name: string | null;
+    last_name: string | null;
+    company: string | null;
+    sequence_state: string | null;
+  };
+};
+
+export type TaskListing = {
+  tasks: PersonTask[];
+  truncated: boolean;
+  timezone: string;
+  today: string;
+};
+
+export type TaskSaveResult = {
+  task: PersonTask;
+  change: { change_id: string } | null;
+  replayed: boolean;
+};
+
+export type TaskFields = {
+  title: string;
+  details: string;
+  due_date: string | null;
+};
+
+/** A task save the server refused. A stale edit carries the newer saved task. */
+export class TaskSaveError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly current: PersonTask | null;
+
+  constructor(message: string, status: number, code: string | null, current: PersonTask | null) {
+    super(message);
+    this.name = "TaskSaveError";
+    this.status = status;
+    this.code = code;
+    this.current = current;
+  }
+}
+
+/** One id per intended change, so a retried save is recognised, not repeated. */
+export function newOperationId(): string {
+  const random =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `ui-${random}`;
+}
+
+export async function listTasks(
+  options: { personId?: string; state?: "open" | "all" } = {},
+): Promise<TaskListing> {
+  const params = new URLSearchParams();
+  if (options.personId) params.set("person_id", options.personId);
+  if (options.state) params.set("state", options.state);
+  const query = params.toString();
+  const res = await get(`/v1/crm/tasks${query ? `?${query}` : ""}`);
+  if (!res.ok) throw new Error(`tasks ${res.status}`);
+  return res.json();
+}
+
+async function taskWrite(
+  method: "POST" | "PATCH",
+  path: string,
+  payload: Record<string, unknown>,
+): Promise<TaskSaveResult> {
+  const res = await fetch(`${httpBase()}${path}`, {
+    method,
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let body: Record<string, unknown> = {};
+  try {
+    body = await res.json();
+  } catch {
+    body = {};
+  }
+  if (!res.ok) {
+    throw new TaskSaveError(
+      typeof body.error === "string" ? body.error : `task ${res.status}`,
+      res.status,
+      typeof body.code === "string" ? body.code : null,
+      (body.task as PersonTask | undefined) ?? null,
+    );
+  }
+  return body as TaskSaveResult;
+}
+
+export function createTask(
+  personId: string,
+  input: TaskFields & { operationId: string },
+): Promise<TaskSaveResult> {
+  return taskWrite("POST", `/v1/people/${encodeURIComponent(personId)}/tasks`, {
+    title: input.title,
+    details: input.details,
+    due_date: input.due_date,
+    operation_id: input.operationId,
+  });
+}
+
+export function updateTask(
+  personId: string,
+  taskId: string,
+  input: { changes: Partial<TaskFields>; expectedVersion: number; operationId: string },
+): Promise<TaskSaveResult> {
+  return taskWrite(
+    "PATCH",
+    `/v1/people/${encodeURIComponent(personId)}/tasks/${encodeURIComponent(taskId)}`,
+    {
+      changes: input.changes,
+      expected_version: input.expectedVersion,
+      operation_id: input.operationId,
+    },
+  );
+}
+
 export async function refreshPersonMeetings(id: string): Promise<MeetingRefreshResult> {
   const res = await fetch(
     `${httpBase()}/v1/people/${encodeURIComponent(id)}/meetings/refresh`,
