@@ -1,0 +1,31 @@
+<p><b>Verdict.</b> The shell is an accessible skeleton that does not read as a GTM agent. Six causes: nothing renders for the first seconds of a run; reasoning is dropped in the backend (<code class="ev-code">turn.py:1173</code>); tool activity sits below the answer, collapsed; no icons anywhere; six telemetry stats at 11px in the header; small gray text is the default voice (28 muted rules, 15 at 12px, 9 at 11px in <code class="ev-code">chat.css</code>). Full write-up: <a href="investigation.md">investigation.md</a>.</p>
+
+<h4>App shell</h4>
+<div class="ev-grid">
+  <div class="ev-card"><img class="ev-img" src="refs/ours-empty-thread-1440.jpg" alt="Sourcecado empty thread at 1440"><p class="ev-cap">Rail: text-only destinations, glyph actions (✎ ○), placeholder account footer. Header: eyebrow + persona badge. One suggested prompt.</p></div>
+  <div class="ev-card"><img class="ev-img ev-mob" src="refs/ours-rail-390.jpg" alt="Sourcecado rail at 390"><p class="ev-cap">390px: the rail rendered open over the thread on load (observed once; verify).</p></div>
+</div>
+
+<h4>Run lifecycle</h4>
+<div class="ev-grid">
+  <div class="ev-card"><img class="ev-img" src="refs/ours-run-streaming-blank-1440.jpg" alt="Blank transcript while the run streams"><p class="ev-cap">0–5 s: reasoning and two tool calls stream from the model. Transcript stays blank; only the header timer moves.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-run-streaming-text-1440.jpg" alt="Answer streaming with budget line"><p class="ev-cap">Answer streams; "Checked 2 sources · 0s · Completed" appears below it, collapsed; a budget line flashes then disappears.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-run-complete-1440.jpg" alt="Run complete"><p class="ev-cap">Complete: cause below effect; "Copy response" is a 12px muted text link; six stats at 11px in the header.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-activity-expanded-1440.jpg" alt="Activity group expanded"><p class="ev-cap">Tool rows: label + "Inspect" text button + bold state word. No icon, no argument summary, no inline result.</p></div>
+</div>
+
+<h4>Inspector and approval</h4>
+<div class="ev-grid">
+  <div class="ev-card"><img class="ev-img" src="refs/ours-inspector-1440.jpg" alt="Inspector panel"><p class="ev-cap">Inspector: "TOOL DETAIL" eyebrow, epoch-ms timing, raw JSON in two details blocks, Close as a text button.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-approval-card-1440.jpg" alt="Approval card"><p class="ev-cap">Approval: label is past tense before anything happened; "consequential: waits for Allow or Deny" is policy jargon; Deny / Allow once are text-only.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-approval-expanded-1440.jpg" alt="Approval expanded"><p class="ev-cap">"Review full request and policy" reveals raw JSON arguments.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-approval-denied-1440.jpg" alt="After deny"><p class="ev-cap">After Deny: two receipts for one action, "Denied" (muted) then "Failed" (red).</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-failed-turn-1440.jpg" alt="Failed turn notice"><p class="ev-cap">Failed turn: beige notice with no Retry button.</p></div>
+</div>
+
+<h4>Rule check</h4>
+<table class="ev-table"><tr><th>Rule</th><th>Status</th><th>Count</th></tr>
+<tr><td>No text-only buttons</td><td class="ev-fail">Fails</td><td>10 in chat + app TSX</td></tr>
+<tr><td>No small gray text</td><td class="ev-fail">Fails</td><td>28 muted rules, 15 × 12px, 9 × 11px</td></tr>
+<tr><td>No field labels</td><td class="ev-pass">Passes</td><td>—</td></tr>
+<tr><td>No narrating sentences</td><td class="ev-fail">Fails</td><td>2 under the composer and shell</td></tr></table>

@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="60">
+<title>Sourcecado agent UI: reference board</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono&family=Lora:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Swap these tokens to match the project's DESIGN.md if it has one. Keep the class names. */
+:root{--bg:#1C1A17;--raised:#252320;--overlay:#2E2C28;--ink:#FFF8EB;--ink2:rgba(255,248,235,.82);
+--rule:rgba(255,248,235,.08);--rule2:rgba(255,248,235,.12);--amber:#E8A230;--amberM:rgba(232,162,48,.15);--green:#5CB77A;--red:#D4614E;
+--serif:'Lora',Georgia,serif;--sans:'Geist',system-ui,sans-serif;--mono:'Geist Mono',ui-monospace,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink2);font:14px/1.5 var(--sans)}
+a{color:var(--amber);text-decoration:none}
+h1,h2,h3{font-family:var(--serif);font-weight:400;color:var(--ink);margin:0}
+h1{font-size:38px;letter-spacing:-.015em;line-height:1.1}
+h2{font-size:20px;letter-spacing:-.01em}
+h3{font-size:16px;font-weight:500}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+@media(max-width:640px){.wrap{padding:0 16px}h1{font-size:28px}}
+.over{font:500 13px var(--sans);color:var(--ink2)}
+header{padding:56px 0 24px;border-bottom:1px solid var(--rule)}
+.tiles{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+.tile{display:flex;align-items:center;gap:8px;padding:6px 12px;border:1px solid var(--rule2);border-radius:8px;font-size:13px}
+.tile b{color:var(--ink);font-weight:500}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.top{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:16px;padding:24px 0;border-bottom:1px solid var(--rule)}
+.top.solo{grid-template-columns:1fr}
+@media(max-width:900px){.top{grid-template-columns:1fr}}
+.panel{background:var(--raised);border:1px solid var(--rule);border-radius:12px;padding:16px;overflow-x:auto}
+.graph{width:100%;min-width:640px;height:auto;display:block}
+.graph .e{fill:none;stroke:var(--rule2);stroke-width:1.4}
+.graph .n rect{fill:var(--bg);stroke-width:1.4}
+.graph .n:hover rect{fill:var(--overlay)}
+.graph .k{font:500 11px var(--mono);fill:var(--ink)}
+.graph .s{font:11px var(--sans);fill:var(--ink2)}
+.log{list-style:none;margin:8px 0 0;padding:0;max-height:300px;overflow:auto;font-size:13px}
+.log li{padding:6px 0;border-bottom:1px solid var(--rule)}
+.lt{display:block;font:13px var(--mono);color:var(--ink2)}
+section{padding:32px 0;border-bottom:1px solid var(--rule)}
+.sh{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.num{font:500 13px var(--mono)}
+.pill{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:999px;font-size:13px;background:rgba(255,248,235,.08);color:var(--ink)}
+.prl{background:var(--amberM);color:var(--amber)}
+.empty{border:1px dashed var(--rule2);border-radius:8px;padding:18px;color:var(--ink2);font-size:14px}
+/* shared classes agents use inside fragments */
+.ev-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.ev-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0 28px;align-items:start}
+@media(max-width:900px){.ev-row{grid-template-columns:1fr}}
+.ev-card{background:var(--raised);border:1px solid var(--rule);border-radius:8px;padding:14px}
+.ev-card h3{margin-bottom:8px}
+.ev-table{width:100%;border-collapse:collapse;font-size:13px}
+.ev-table th{font:600 13px var(--sans);color:var(--ink);text-align:left;padding:6px 8px;border-bottom:1px solid var(--rule2)}
+.ev-table td{padding:6px 8px;border-bottom:1px solid var(--rule);vertical-align:top}
+.ev-pass{color:var(--green)} .ev-fail{color:var(--red)} .ev-warn{color:var(--amber)}
+.ev-img{max-width:100%;border:1px solid var(--rule2);border-radius:8px;display:block}
+.ev-mob{max-width:260px}
+.ev-cap{font-size:14px;color:var(--ink2);margin-top:6px}
+.ev-code{font:13px/1.5 var(--mono);background:var(--bg);border:1px solid var(--rule);border-radius:8px;padding:10px;white-space:pre-wrap;overflow-x:auto;color:var(--ink2)}
+.ev-svg{width:100%;height:auto}
+.fx svg text{fill:var(--ink2);font-family:var(--sans)}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="over">Live evidence · refreshes every 60 s · assembled Mon 12 Oct 21:33</div>
+  <h1 style="margin-top:10px">Sourcecado agent UI: reference board</h1>
+  <p style="max-width:720px;margin:10px 0 0">Copycat references for the Sourcecado agent shell, thread, and streaming components. Products: Claude.ai, Clay, and one more GTM agent. Our current app is on the left of each comparison once the build lands.</p>
+  <div class="tiles"><div class="tile"><span class="dot" style="background:#E8A230"></span>In review <b>1</b></div></div>
+</div></header>
+<div class="wrap">
+  <div class="top"><div class="panel"><div class="over" style="margin-bottom:8px">Dependency graph · color = state</div><svg viewBox="0 0 190 104" class="graph"><a href="#taudit"><g class="n"><rect x="20" y="20" width="132" height="44" rx="8" style="stroke:#E8A230"/><circle cx="32" cy="34" r="4" fill="#E8A230"/><text x="42" y="38" class="k">#audit · audit</text><text x="30" y="54" class="s">Our current agent UI: </text></g></a></svg></div><div class="panel"><div class="over">Orchestrator log</div><ul class="log"><li><span class="lt">2026-10-12 19:55</span>Audit captured against a local mock model (dev provider keys return 401). Reference agents running: Claude.ai, Clay, Attio.</li></ul></div></div>
+  <section id="refs"><div class="sh"><span class="dot" style="background:#E8A230"></span><h2>References: app shell, thread, streaming, tools, approvals</h2></div><div class="fx"><div class="ev-product" id="refs-claude">
+<h3>Claude.ai: common patterns</h3>
+<ul>
+<li>Most controls carry an icon. Steps and menu rows have a 16px icon or logo tile. Claude.ai uses icon-only for repeat actions (star, thumbs, close) and icon + word for the rest (Share, Copy, Retry).</li>
+<li>The thread is quiet. A step is one bordered row: logo, verb + object in past tense, a result count, a chevron. The result opens under the row. Argument summaries are chips inside the row, not a second line.</li>
+<li>Composer first. Home shows one greeting, one large composer and four icon prompt chips. While a run is active the same send button becomes a stop square and the placeholder says "Queue another message".</li>
+<li>Results leave the thread. An inline card with an icon and "Open ..." opens a side panel with a title, a two-option switch, copy and download icons, and a close button.</li>
+<li>State words carry the status: "Thinking..." becomes "Thought for 31 seconds"; "Searching messages" becomes "Searched messages"; chips read "Idle", "Needs input", "Running".</li>
+<li>Permission prompts show the tool, the plain purpose, the exact payload, then numbered choices with the keys listed. Once, always (scoped) and no are separate choices.</li>
+<li>Light and dark use the same layout. Only surface and ink change. The accent stays on the same elements in both.</li>
+</ul>
+<p><strong>Do not copy:</strong> text-only buttons (the footer labels "Accept edits", "Opus 5" and "High", and "Open component" have no icon); the 11 to 12px gray disclaimer and "Last edited" lines; gray "Result" toggles and the gray group header "Used 4 integrations"; the gray footer key hints in the permission prompt; the serif display greeting; the one-line narration under "Building the launch deck". The Console transcript shows the right content (tokens, time) but small. Set ours at 13px or more in ink. Every image below is a product marketing or docs render, so sizes are estimates from the screenshot, not from CSS.</p>
+<h4>1. Sidebar / global rail</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-rail.png" alt="Collapsed icon rail: panel-toggle icon at the top, then five icon-only destinations, title chip beside it.">
+<p class="ev-cap">Collapsed icon rail: panel-toggle icon at the top, then five icon-only destinations, title chip beside it.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/blog/interactive-tools-in-claude">Claude blog: interactive tools in Claude</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-rail-2.png" alt="Session list grouped by state (Needs input, Working, Completed) with age, one-line status and key hints. A dark version exists at the same docs page.">
+<p class="ev-cap">Session list grouped by state (Needs input, Working, Completed) with age, one-line status and key hints. A dark version exists at the same docs page.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/agent-view">Claude Code docs: agent view</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Collapsed rail = about 52px wide, 1px right border, one 16px line icon per destination, 36px row pitch, no labels. The first icon (panel toggle) sits on the same row as the thread title.</li>
+<li>Icon order in the rail: circle-plus, chat bubble, stack, grid, angle brackets (labels are not visible when collapsed). Copy the idea: new thread first, history second, then destinations.</li>
+<li>Thread list grouped by state, not by date: "Needs input", "Working", "Completed". Group label = 14px semibold. Row = state glyph + name + one-line last status + age (12m, 3m, 1h) right-aligned.</li>
+<li>Summary line above the list: "1 awaiting input, 1 working, 2 completed". The selected row gets a full-width tint, not a border.</li>
+<li>Keys under the list: Enter open, Space reply, Ctrl+X delete, ? shortcuts. Show the keys as a footer row with key icons.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-rail.png for the collapsed rail and claude-rail-2.png for the thread list: grouping by "Needs input" is exactly what an approval-gated agent needs.</p>
+<p><strong>Gap:</strong> Full expanded sidebar (new chat button, search with Cmd+K, recents with hover rename/star/delete, account footer) not found on an allowed host. The help-center screenshots that show it are hosted on downloads.intercomcdn.com, which is not on the allow-list.</p>
+<h4>2. Thread header</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-header.png" alt="Breadcrumb header: wordmark, project chip with icon, thread title, then star, Share (lock icon + word) and a sliders icon button.">
+<p class="ev-cap">Breadcrumb header: wordmark, project chip with icon, thread title, then star, Share (lock icon + word) and a sliders icon button.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/projects">Anthropic news: Projects</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Console (Managed Agents)</strong></p>
+<img class="ev-img" src="refs/claude-header-2.png" alt="Run header: back arrow and breadcrumb, bold title with an "Idle" status chip, Actions menu, Ask Claude button, then a row of icon chips and run metrics.">
+<p class="ev-cap">Run header: back arrow and breadcrumb, bold title with an "Idle" status chip, Actions menu, Ask Claude button, then a row of icon chips and run metrics.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/platform/api">Claude platform page: Managed Agents</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Row 1: back arrow, "Sessions / Session id", up and down chevrons for previous and next run. Row 2: title at about 20px semibold, then a status chip right after it ("Idle", "Running").</li>
+<li>Right side of row 2: one outline button with a menu chevron ("Actions") and one outline button with the product icon ("Ask Claude"). Every button has an icon.</li>
+<li>Context chips under the title = icon + noun, one per input: automation name, environment, "1 file", vault. Each chip is a 28px pill with a 1px border. This is the project/context chip row.</li>
+<li>Metrics sit on the same line as the chips as plain text with leading icons: "22 hours ago", "5m 34s (2m 44s active)", "71.0k / 5.7k (100%)". They are mid-gray on cream here. Set ours in ink.</li>
+<li>Chat variant: "Project / Thread title" as a breadcrumb with a project icon, then star (pin) as an icon-only button on the far right.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-header-2.png: it is the only reference with a run-status chip plus context chips plus metrics. Use claude-header.png only for the breadcrumb and the star/Share pair.</p>
+<p><strong>Gap:</strong> Model or agent badge and an overflow (three dots) menu are not shown in any allowed image.</p>
+<h4>3. Empty thread / home</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-empty.png" alt="Home: spark glyph and serif greeting, large composer card, four icon+word prompt chips (Write, Code, Strategize, choice) below it. Frame at 12.5s of the Research demo video.">
+<p class="ev-cap">Home: spark glyph and serif greeting, large composer card, four icon+word prompt chips (Write, Code, Strategize, choice) below it. Frame at 12.5s of the Research demo video.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/research">Anthropic news: Research</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-empty-2.png" alt="Suggestions from a connected tool: a "From Drive" panel directly under the composer, one prompt per row, hover row with chevron, close button.">
+<p class="ev-cap">Suggestions from a connected tool: a "From Drive" panel directly under the composer, one prompt per row, hover row with chevron, close button.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/research">Anthropic news: Research</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Stack, centered, top to bottom: greeting (spark glyph 32px + one line, display size), composer card (about two thirds of the canvas width), prompt chips. Nothing else on the page: no cards, no tips.</li>
+<li>Prompt chips = 36px tall, 1px border, 10px radius, 16px line icon + one word. Four chips. Icons: pencil, angle brackets, chart line, light bulb.</li>
+<li>Connector suggestions: panel under the composer, header = tool logo + "From Drive" with an X to dismiss, rows of one sentence each, 1px dividers, hover row gets a tint and a right chevron.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-empty.png for the layout and chips. Borrow claude-empty-2.png for tool-sourced suggestions (our Apollo, Gmail, Drive and Calendar suggestions).</p>
+<h4>4. Composer</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-composer.png" alt="Claude Code on the web: one-line input with return glyph, environment chip and repo chip above it, a grouped popover, mode and model/effort row below.">
+<p class="ev-cap">Claude Code on the web: one-line input with return glyph, environment chip and repo chip above it, a grouped popover, mode and model/effort row below.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/cloud-environments">Claude Code docs: cloud environments</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-composer-2.png" alt="Running state: placeholder becomes "Queue another message", a filled square stop button replaces send, mode chip and attached-file chip in the footer. Dark mode.">
+<p class="ev-cap">Running state: placeholder becomes "Queue another message", a filled square stop button replaces send, mode chip and attached-file chip in the footer. Dark mode.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/product/claude-code">Claude product page: Claude Code</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Footer row, left to right: mode chip with icon ("Accept edits" or "Ask before editing", pencil icon), "+" attach button, file chip (paperclip + filename), mic, then on the right model and effort ("Opus 5", "High"), then the send button.</li>
+<li>Send button = about 40px rounded square, accent fill, up arrow. While a run is active it becomes a filled stop square in the same place and same size. The placeholder switches to "Queue another message".</li>
+<li>Popover menus group rows under a group label (Local, Cloud, Remote Control). Each row = 16px icon + name. The selected row has a tint, a gear icon button and a check on the right.</li>
+<li>The input stays open while a run is active: the placeholder says "Queue another message", so new messages queue behind the run.</li>
+<li>Chips above the input state the target (environment, repo) so the footer stays about mode and model.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-composer-2.png for the send/stop toggle, queue placeholder and mode chip. Borrow claude-composer.png for the grouped popover and chip placement.</p>
+<p><strong>Gap:</strong> The "+" menu with attach, connectors and skills toggles is not shown in any allowed still image. Keyboard hints for the composer are not shown either.</p>
+<h4>5. Reasoning / thinking disclosure</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-thinking.png" alt="Collapsed row "Thinking..." with a chevron while streaming, and the expanded block "Thought for 31 seconds" with a one-line truncated body.">
+<p class="ev-cap">Collapsed row "Thinking..." with a chevron while streaming, and the expanded block "Thought for 31 seconds" with a one-line truncated body.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/blog/interactive-tools-in-claude">Claude blog: interactive tools in Claude</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-thinking-2.png" alt="Working indicator without a thinking block: animated spark glyph, a bold task line, and a second line with the current step and a chevron. Frame at 1.2s.">
+<p class="ev-cap">Working indicator without a thinking block: animated spark glyph, a bold task line, and a second line with the current step and a chevron. Frame at 1.2s.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/features/artifacts">Claude features page: Artifacts</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Streaming state: bordered row, full width, 8px radius, 44px tall. Content = tool logo, name, "Thinking..." and a chevron at the far right. Click expands.</li>
+<li>Done state: chevron points down, label = "Thought for 31 seconds" at 15px in full ink, body below in one line with an ellipsis. The expanded body sits on a tinted panel.</li>
+<li>Both states are one block: "Thinking..." while running, "Thought for N seconds" after. The chevron toggles open and closed.</li>
+<li>Working line variant: spark glyph (animated), task line in ink, step line under it that changes as steps finish, chevron opens the step list.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-thinking.png: it shows both states in one image and the timing label. Use claude-thinking-2.png only for the live "current step" line.</p>
+<p><strong>Gap:</strong> No still image shows the body streaming text or the elapsed counter ticking. The streaming and collapse motion is taken from the two states above, not from a recording.</p>
+<h4>6. Tool-call step row</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-toolstep.png" alt="Step rows in a thread: tool logo, past-tense label, result count and chevron. The running row has a muted label and a spinner below.">
+<p class="ev-cap">Step rows in a thread: tool logo, past-tense label, result count and chevron. The running row has a muted label and a spinner below.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/research">Anthropic news: Research</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-toolstep-2.png" alt="Grouped steps: "Used 4 integrations" header, then a timeline of rows with one tool logo each and a "Result" toggle under each. Frame at 2.4s.">
+<p class="ev-cap">Grouped steps: "Used 4 integrations" header, then a timeline of rows with one tool logo each and a "Result" toggle under each. Frame at 2.4s.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/product/cowork">Claude product page: Cowork</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Row = 1px border, 8px radius, about 44px tall (3x the label size): 20px tool logo tile, label, right-aligned count ("4 results"), chevron down. Click expands the result under the row.</li>
+<li>Label tense shows state: "Searched recent events" (done, ink) and "Searching messages" (running, muted). A spinner sits under the running row. Done rows show a count. A failed row is not shown in Claude; ours needs an x.</li>
+<li>Group header: "Used 4 integrations" with a right chevron. Under it a vertical hairline joins the rows, each row = logo + one-line purpose + a "Result" toggle.</li>
+<li>One step = one tool call. The row names the verb and object ("Verify Gmail access"). Do not add arguments in a second gray line.</li>
+<li>Timing is not shown on these rows. Take per-step timing from the Console transcript in section 11.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-toolstep.png for the single row and the done/running difference. Borrow claude-toolstep-2.png for grouping several steps.</p>
+<p><strong>Gap:</strong> No claude.ai still shows a failed step row (x) or per-row elapsed time.</p>
+<h4>7. Structured tool result cards</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-resultcard.png" alt="Result groups inline: a search row with chips and a count, an expanded "Found 1 related project" row holding a nested card with thumbnail, and a field hover card.">
+<p class="ev-cap">Result groups inline: a search row with chips and a count, an expanded "Found 1 related project" row holding a nested card with thumbnail, and a field hover card.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/blog/interactive-tools-in-claude">Claude blog: interactive tools in Claude</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude desktop app</strong></p>
+<img class="ev-img" src="refs/claude-resultcard-2.png" alt="File result card: document tile, title, type, and an "open in" menu with the Google Drive logo. Crop of a frame at 7.2s.">
+<p class="ev-cap">File result card: document tile, title, type, and an "open in" menu with the Google Drive logo. Crop of a frame at 7.2s.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/product/overview">Claude product page: overview</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Result row = magnifier icon + "Searched for tables:" + argument chips (small tinted rounded tags, one per search term) + count ("5") + chevron. The chips are the argument summary.</li>
+<li>Expanded row holds a nested white card on the tinted panel: bold title, two-line description, meta row (icon + number, "Endorsed" green badge), and a chart thumbnail on the right.</li>
+<li>List results use "table &gt; column" rows with icons. Hover opens a small card: name, type tag in mono ("STRING"), description, code box.</li>
+<li>File card = 40px tile with type icon, title 14px semibold, type word under it, a menu button on the right with the destination logo and a chevron ("Google Drive").</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-resultcard.png for search and record cards. Borrow claude-resultcard-2.png for the file/document result (Drive file, draft, spreadsheet).</p>
+<p><strong>Gap:</strong> Web search result list with source citation chips and favicons: no allowed image shows it. Table result card: not found.</p>
+<h4>8. Side panel / inspector</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-sidepanel.png" alt="Artifact panel opened from an inline card: back arrow and title, Preview | Code switch, close; footer with copy and download.">
+<p class="ev-cap">Artifact panel opened from an inline card: back arrow and title, Preview | Code switch, close; footer with copy and download.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/projects">Anthropic news: Projects</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude desktop app</strong></p>
+<img class="ev-img" src="refs/claude-sidepanel-2.png" alt="Session window with a right inspector: four collapsible sections (Progress, Outputs, Claude in Chrome, Context), a panel-toggle icon in the title bar. Frame at 7.2s.">
+<p class="ev-cap">Session window with a right inspector: four collapsible sections (Progress, Outputs, Claude in Chrome, Context), a panel-toggle icon in the title bar. Frame at 7.2s.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/product/overview">Claude product page: overview</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Panel header (about 44px): back arrow, title, then a two-option segmented control "Preview | Code" (pill, selected option white), then an X close button on the far right.</li>
+<li>Open trigger: an inline card in the message with a "&lt;/&gt;" tile, a bold title and the line "Open component". The panel takes about the right 40% of the window.</li>
+<li>Footer row: left status text ("Last edited 2 seconds ago"), right icon buttons: copy, download. Keep the status in 13px ink.</li>
+<li>Inspector variant: right column of accordion rows, each a bold 14px label + chevron: Progress, Outputs, Claude in Chrome, Context. A toggle icon at the top right of the window shows or hides it.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-sidepanel.png for the open-from-a-card pattern and tabs. Borrow claude-sidepanel-2.png for an inspector made of Progress / Outputs / Context sections.</p>
+<h4>9. Permission / approval request</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-approval.png" alt="Tool permission prompt, light: tool label, plain description, the exact command between rules, then four numbered choices and the key hints.">
+<p class="ev-cap">Tool permission prompt, light: tool label, plain description, the exact command between rules, then four numbered choices and the key hints.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/permissions">Claude Code docs: permissions</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-approval-2.png" alt="The same prompt in dark mode. Accent color marks the tool label and the selected choice.">
+<p class="ev-cap">The same prompt in dark mode. Accent color marks the tool label and the selected choice.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/permissions">Claude Code docs: permissions</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Order: tool label ("Bash command") in the accent color, one plain line saying what it does ("Run the test suite"), a rule, the exact payload (<code>npm test</code>), a rule, then the state line "This command requires approval".</li>
+<li>Question: "Do you want to proceed?" Choices numbered 1 to 4: Yes / Yes, and do not ask again for: npm test * / Yes, and switch to auto mode / No. The selected choice has a pointer and the accent color.</li>
+<li>Allow once, Always allow (scoped to the command pattern), Deny map to choices 1, 2 and 4. Choice 3 is a mode switch. We do not need it.</li>
+<li>Keys: Up/Down or the number picks, Enter confirms, Esc cancels, Tab amends the command before it runs.</li>
+<li>Light and dark differ only in the surface and ink. The accent and the layout stay the same, so one component serves both.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-approval.png as the structure for our send/draft approval card. Add an icon to every choice and show the destination (To: person, mailbox) above the payload.</p>
+<p><strong>Gap:</strong> The claude.ai connector permission card (Allow once / Always allow / Deny buttons) and a resolved receipt state are not in any allowed image.</p>
+<h4>10. Usage / limits / cost display</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-usage.png" alt="Status line under the input: model, folder, branch on line 1; context bar with percent, cost and time on line 2.">
+<p class="ev-cap">Status line under the input: model, folder, branch on line 1; context bar with percent, cost and time on line 2.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/statusline">Claude Code docs: status line</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Console (Managed Agents)</strong></p>
+<img class="ev-img" src="refs/claude-usage-2.png" alt="Run transcript with per-event metrics: type pill, one-line summary, and right-aligned tokens and elapsed time. Transcript | Debug switch, filter, search.">
+<p class="ev-cap">Run transcript with per-event metrics: type pill, one-line summary, and right-aligned tokens and elapsed time. Transcript | Debug switch, filter, search.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/platform/api">Claude platform page: Managed Agents</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Quiet placement: one or two lines under the input, never in the thread. Line 2 = context bar (filled part = used) + "42%" + "$0.02" + elapsed "0m 2s". This is a configurable docs example, not a fixed product layout.</li>
+<li>Per-event metrics are right-aligned on the event row: token count ("780 toks", "1,878in / 100out"), a clock icon, duration ("3s"), and the offset in the run ("0:02").</li>
+<li>Event type is a colored pill (User, Agent, Bash, Write, Running) with the summary text after it. The pill gives scanning without a legend.</li>
+<li>Header metric: "71.0k / 5.7k (100%)" next to the run time in the thread header, as plain text with an icon.</li>
+<li>Tabs for views: Transcript | Debug, plus a filter menu ("All events") and a search icon.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-usage.png for the quiet status line and claude-usage-2.png for run metrics per event. Put both in Sourcecado ink at 13px or more.</p>
+<p><strong>Gap:</strong> claude.ai plan usage and session limit bars (Settings &gt; Usage) are only shown in help-center images on a host outside the allow-list.</p>
+<h4>11. Error state with recovery</h4>
+<p><strong>Borrow:</strong> No allowed image shows a failed turn or a failed tool with retry or reconnect. Do not substitute: use Retry from section 12 plus our own failed-step row from section 6.</p>
+<p><strong>Gap:</strong> No image of a failed turn, failed tool call, reconnect prompt or "continue without" in any allowed source. The only related control is the Retry button in the message action bar (section 12).</p>
+<h4>12. Message action bar</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-actions.png" alt="Action bar on an assistant message: Copy and Retry (icon + word), thumbs up and down (icon only), in a bordered pill on the bottom-right edge of the message.">
+<p class="ev-cap">Action bar on an assistant message: Copy and Retry (icon + word), thumbs up and down (icon only), in a bordered pill on the bottom-right edge of the message.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/projects">Anthropic news: Projects</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Placement: bottom-right corner of the assistant message, straddling the border. Bar = pill with 1px border, 28px tall, 4 buttons.</li>
+<li>Buttons in order: Copy (clipboard icon + word), Retry (circular arrow + word), thumbs up, thumbs down (icon only).</li>
+<li>Under the message: spark glyph at the left as the turn marker, and the model disclaimer at the right.</li>
+<li>Hover and last-message visibility are not shown in this image. Decide it ourselves. Edit on user messages is not shown either.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-actions.png for placement and button order. Keep Copy and Retry, drop thumbs unless we collect feedback.</p>
+<p><strong>Gap:</strong> Edit action on user messages and the hover state: no allowed image. A second image for this component was not found.</p>
+<h4>Gap list</h4>
+<table class="ev-table"><tr><th>Component</th><th>Missing</th></tr>
+<tr><td>Sidebar / global rail</td><td>Full expanded sidebar (new chat button, search with Cmd+K, recents with hover rename/star/delete, account footer) not found on an allowed host. The help-center screenshots that show it are hosted on downloads.intercomcdn.com, which is not on the allow-list.</td></tr>
+<tr><td>Thread header</td><td>Model or agent badge and an overflow (three dots) menu are not shown in any allowed image.</td></tr>
+<tr><td>Composer</td><td>The "+" menu with attach, connectors and skills toggles is not shown in any allowed still image. Keyboard hints for the composer are not shown either.</td></tr>
+<tr><td>Reasoning / thinking disclosure</td><td>No still image shows the body streaming text or the elapsed counter ticking. The streaming and collapse motion is taken from the two states above, not from a recording.</td></tr>
+<tr><td>Tool-call step row</td><td>No claude.ai still shows a failed step row (x) or per-row elapsed time.</td></tr>
+<tr><td>Structured tool result cards</td><td>Web search result list with source citation chips and favicons: no allowed image shows it. Table result card: not found.</td></tr>
+<tr><td>Permission / approval request</td><td>The claude.ai connector permission card (Allow once / Always allow / Deny buttons) and a resolved receipt state are not in any allowed image.</td></tr>
+<tr><td>Usage / limits / cost display</td><td>claude.ai plan usage and session limit bars (Settings &gt; Usage) are only shown in help-center images on a host outside the allow-list.</td></tr>
+<tr><td>Error state with recovery</td><td>No image of a failed turn, failed tool call, reconnect prompt or "continue without" in any allowed source. The only related control is the Retry button in the message action bar (section 12).</td></tr>
+<tr><td>Message action bar</td><td>Edit action on user messages and the hover state: no allowed image. A second image for this component was not found.</td></tr>
+</table>
+<p>Provenance: images come from claude.com, anthropic.com and code.claude.com pages, served from assets.claude.com, www-cdn.anthropic.com and code.claude.com/docs/images. Five files are single frames cut from official product-page videos (empty, thinking-2, toolstep-2, resultcard-2, sidepanel-2); the manifest gives the video URL and the note gives the frame time. Support-center screenshots were not used because their images sit on downloads.intercomcdn.com.</p>
+
+</div>
+<hr>
+<div class="ev-product" id="refs-clay">
+<h3>Clay: common patterns</h3>
+<p>All images are Clay marketing, changelog and blog renders of the real app UI, not raw screenshots. Sizes below are ratios read from the images. Map them to our 13-14px body.</p>
+<ul>
+<li>Light canvas, white surfaces, 1px light borders, almost no shadow inside the app. Cards sit near 8-10px radius, buttons near 6px. This fits Warm Operator with no change.</li>
+<li>Every row, chip and button starts with an icon: column type icons, provider logos on waterfall steps, check and X on Accept and Discard. Status is a leading glyph (spinner, then green check circle), not a sentence.</li>
+<li>Credits are a coin-icon pill next to the action it prices: "1 / row", "~2K total", "5.4 / row". They never appear as a paragraph.</li>
+<li>Provider identity is the trust signal. Each waterfall step and each enriched field carries the provider logo.</li>
+<li>The placeholder does the labelling in the composer: "What do you want to do with Clay?". It changes to "Ask questions and add enrichments" once a thread exists.</li>
+<li>One filled primary button per surface (Accept, Save, Import and run, Edit). All other buttons are outlined with an icon.</li>
+</ul>
+<p><b>Do not copy:</b> mid-gray secondary text (field labels, subtitles, empty-state text, "Not found" cells) and 11-12px chips break our 13px and no-muted rules. Config panels put labels above inputs ("Model", "Use Case", "Clay Credit Budget"). The Slack Approve and Deny buttons have no icons. The accent is blue, ours is avocado. Tilted and 3D frames in the changelog art are decoration, so copy only the UI inside.</p>
+<h4>1. Sidebar / workspace rail</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-rail.png" alt="App shell from the Signals page: icon-only destination column, labeled panel with scope switcher and collapse, link list, audiences list with search and plus."><p class="ev-cap">App shell from the Signals page: icon-only destination column, labeled panel with scope switcher and collapse, link list, audiences list with search and plus.</p><p class="ev-cap"><a href="https://www.clay.com/signals">Source: clay.com/signals</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-rail-2.png" alt="Audiences app: section header row &quot;All audiences&quot; with search and plus icons, then Created by me and Workspace groups."><p class="ev-cap">Audiences app: section header row &quot;All audiences&quot; with search and plus icons, then Created by me and Workspace groups.</p><p class="ev-cap"><a href="https://www.clay.com/audiences">Source: clay.com/audiences</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Two tiers. First, an icon-only column with 12 destinations and one tinted active square. Second, a labeled panel (about 5x wider) whose top row is the scope switcher ("Companies" with a chevron) and a panel-collapse icon on the right of the same row.</li><li>Destination link: 16px icon, label, row height about 2.4x text size, 8px gap. Active row is a tinted fill with accent icon and text. No borders.</li><li>Create lives in the section header, not a big button: "All audiences" with chevron, then a search icon and a "+" icon, right aligned.</li><li>Recent items are grouped under "Created by me" and "Workspace". Each item has a doc icon and a kebab on the right. The list fades out and ends with an "N more" row.</li><li>No account footer is shown in any Clay image.</li></ul>
+<p><b>Do not copy:</b> group labels and item text in the lower half are pale gray, and the icon column has no labels. Use full-ink labels and tooltips with names.</p>
+<p><b>Borrow:</b> rail (Signals page) for the whole structure. Take rail-2 for the section-header row with search and plus.</p>
+<h4>2. Header of a working surface</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-header.png" alt="Table header: title, green status dot, row count, updated time, overflow, square icon buttons with one filled primary, filter chips row."><p class="ev-cap">Table header: title, green status dot, row count, updated time, overflow, square icon buttons with one filled primary, filter chips row.</p><p class="ev-cap"><a href="https://www.clay.com/signals">Source: clay.com/signals</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-header-2.png" alt="Functions app: breadcrumb bar with Credits button and avatar, toolbar with mode, view, column and row counts, and Running/Archived/Up-to-date row states."><p class="ev-cap">Functions app: breadcrumb bar with Credits button and avatar, toolbar with mode, view, column and row counts, and Running/Archived/Up-to-date row states.</p><p class="ev-cap"><a href="https://www.clay.com/functions">Source: clay.com/functions</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Order left to right: title (bold, about 1.4x body), green status dot, row count, "Updated 4 minutes ago", "..." overflow. Right side: four square icon buttons, 6px radius. The last one is filled primary (the run bolt).</li><li>Second row: filter chip "Filters . 1" (tinted, filter icon), "Columns 186 / 302", search icon. Chips use a leading icon and a 1px border.</li><li>Run and credit status (header-2): breadcrumb "Functions v / name" on the left, a "Credits" icon button, help, theme and avatar on the right.</li><li>Toolbar states: mode switcher "Live Function v" (outlined, icon), "Default View v", "31/33 columns", "6,312/6,312 rows", filter count, sort count, search.</li><li>Row states are pills: "Running..." (spinner, green tint), "Archived" (box icon), and a green check with "Up to date" under each column header.</li></ul>
+<p><b>Do not copy:</b> "Updated 4 minutes ago" is gray at about 12px. Make it ink at 13px, or drop it.</p>
+<p><b>Borrow:</b> header for the thread header (title, dot, count, updated, overflow, icon cluster). Take header-2 for the Credits button and the Running pill.</p>
+<h4>3. Empty state / home</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-empty.png" alt="Sculptor suggested prompts as cards with an icon tile and one question each."><p class="ev-cap">Sculptor suggested prompts as cards with an icon tile and one question each.</p><p class="ev-cap"><a href="https://www.clay.com/blog/how-sculptor-turns-your-gtm-data-into-your-competitive-advantage">Source: clay.com/blog/how-sculptor-turns-your-gtm-data-into-your-competitive-advantage</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-empty-2.png" alt="Ask Claygent template list: title with count and close, two-line rows, selected row filled with an arrow."><p class="ev-cap">Ask Claygent template list: title with count and close, two-line rows, selected row filled with an arrow.</p><p class="ev-cap"><a href="https://www.clay.com/use-cases/account-research">Source: clay.com/use-cases/account-research</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Suggested starts as cards (empty): 3 columns, 16px+ radius, icon tile at top left (lightbulb = insight, magnifier = search, question mark = ask), then one question in about 1.5x body text.</li><li>Card text is a full question, not a label. The icon tile tells the type of ask.</li><li>Template list (empty-2): header with agent icon, title "Ask Claygent (50+ Templates)" and a close X. Rows are bold title plus one truncated line.</li><li>Selected row is filled accent with white text and an arrow icon at the right. Row radius is full pill, gap 8px.</li><li>No greeting line appears in any image. The home input is the hero (see composer).</li></ul>
+<p><b>Do not copy:</b> the cards have uneven heights, and the second text line in each template row is gray. Add a leading icon to every template row.</p>
+<p><b>Borrow:</b> empty-2 for a keyboard-navigable list with a filled selected row. Take empty for the icon-tile card, but make the cards equal height.</p>
+<h4>4. Prompt composer</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-composer.png" alt="Sculptor side panel: header icons, View previous messages button, collapsible plan card, composer with plus and send."><p class="ev-cap">Sculptor side panel: header icons, View previous messages button, collapsible plan card, composer with plus and send.</p><p class="ev-cap"><a href="https://www.clay.com/sculptor">Source: clay.com/sculptor</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-composer-2.png" alt="Sequencer prompt with column-reference chips and Update preview, Discard, Accept footer (also the approval pattern)."><p class="ev-cap">Sequencer prompt with column-reference chips and Update preview, Discard, Accept footer (also the approval pattern).</p><p class="ev-cap"><a href="https://www.clay.com/sequencer">Source: clay.com/sequencer</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-composer-3.png" alt="Sculptor panel mid-conversation: right-aligned user bubble, plain assistant text with headings, composer docked below with a context placeholder."><p class="ev-cap">Sculptor panel mid-conversation: right-aligned user bubble, plain assistant text with headings, composer docked below with a context placeholder.</p><p class="ev-cap"><a href="https://www.clay.com/sculptor">Source: clay.com/sculptor</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Panel header: product icon and name on the left, then history (list with play), "+" new chat and close X on the right. Under it, a "View previous messages" outlined button with a back arrow.</li><li>Input box: placeholder is a question, 2 rows tall, 10px radius. Bottom row: "+" outlined square button (context) at the left, send arrow square button at the right. Send is disabled until text exists.</li><li>Column references (composer-2): chips under the prompt, each with a type icon ("T") and an asterisk, 6px radius. Footer: ghost "Update preview" with refresh icon, outlined "Discard" with X, filled "Accept" with check.</li><li>Docked composer (composer-3): the user message is a right-aligned light bubble. The assistant reply has no bubble, uses headings, and fades out toward the composer. The placeholder switches to "Ask questions and add enrichments".</li><li>Home composer (Sculptor product page): the same box with a full-width green "Create table" button below it.</li></ul>
+<p><b>Do not copy:</b> the placeholder and the disabled send arrow are mid-gray. No model picker or keyboard hint is in the composer.</p>
+<p><b>Borrow:</b> composer for the box and the panel header. Take composer-2 for the "+" column-reference chips and the Accept and Discard footer.</p>
+<h4>5. Reasoning / thinking disclosure</h4>
+<p>Gap. No official Clay image shows reasoning or thinking text. See the gap list. The nearest pattern is the collapsible plan card in composer (card with a chevron, a type pill and two actions).</p>
+<h4>6. Agent step rows</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-toolstep.png" alt="Claygent step list: check circle for done, spinner for running, blank for pending; per-row streaming phase text in the table."><p class="ev-cap">Claygent step list: check circle for done, spinner for running, blank for pending; per-row streaming phase text in the table.</p><p class="ev-cap"><a href="https://www.clay.com/claygent">Source: clay.com/claygent</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-toolstep-2.png" alt="Clay agent step card: actor icon and name, three rows with right-aligned check or spinner, dotted link to the next action."><p class="ev-cap">Clay agent step card: actor icon and name, three rows with right-aligned check or spinner, dotted link to the next action.</p><p class="ev-cap"><a href="https://www.clay.com/">Source: clay.com/</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Step list card: title, then rows of about 2.4x text height with a 1px divider. Done = filled green check circle. Running = spinner glyph. Pending = blank slot. Same position in every row.</li><li>Phase text while a row runs: "Extracting data...", "Synthesizing insights...", "Structuring results...". Three fixed verbs, in order.</li><li>Grouping (toolstep-2): a card per actor with an icon tile, name and subtitle, then rows with the status icon right aligned. A dotted line links to the next action card.</li><li>Inputs get their own card before the steps ("Per-row data inputs"), with the same check and spinner glyphs.</li><li>Not shown: argument summaries, expand chevrons, timing. Add them ourselves: verb, object, then the argument in ink.</li></ul>
+<p><b>Do not copy:</b> rows are bare labels with no argument and no duration. Muted phase text is gray in the table cells.</p>
+<p><b>Borrow:</b> toolstep for the status glyph rules and the phase verbs. Take toolstep-2 for grouping steps under one actor.</p>
+<h4>7. Structured results</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-resultcard.png" alt="Waterfall provider list: First try, Then try, provider logo rows, a Load more row, and a result chip showing which provider returned data."><p class="ev-cap">Waterfall provider list: First try, Then try, provider logo rows, a Load more row, and a result chip showing which provider returned data.</p><p class="ev-cap"><a href="https://www.clay.com/use-cases/data-enrichment">Source: clay.com/use-cases/data-enrichment</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-resultcard-2.png" alt="Enriched card: header band, person row, fields each tagged with the source provider icon."><p class="ev-cap">Enriched card: header band, person row, fields each tagged with the source provider icon.</p><p class="ev-cap"><a href="https://www.clay.com/clay-for-sales">Source: clay.com/clay-for-sales</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-resultcard-3.png" alt="Provider picker grid with logo and name tiles (Apollo, ZoomInfo, Ocean.io, Clay DB, Clearbit, 6sense)."><p class="ev-cap">Provider picker grid with logo and name tiles (Apollo, ZoomInfo, Ocean.io, Clay DB, Clearbit, 6sense).</p><p class="ev-cap"><a href="https://www.clay.com/use-cases/tam-sourcing">Source: clay.com/use-cases/tam-sourcing</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Waterfall (resultcard): rows are a drag handle, "First try" or "Then try", then a filled bar with provider logo and name. A result chip beside the list ("ClearOut" with green check) shows which provider answered.</li><li>Value-type select above the list ("Mobile Phone (Global)", "EMEA Mobile") and a full-width "Load more" button at the end.</li><li>Enriched card (resultcard-2): colored header band with icon and "Enriched", person row (avatar, name, role), then fields. Each field has a small provider icon next to its label. This is the source-chip pattern.</li><li>Provider picker (resultcard-3): 2-column tiles, logo plus name, 6px radius, one full-width neutral row below ("Existing CRM contacts").</li><li>No people list rows are shown. Use the Enriched card header and field order for a person row.</li></ul>
+<p><b>Do not copy:</b> field labels sit above values in small uppercase gray. Use one row per field: icon, label, value, source logo.</p>
+<p><b>Borrow:</b> resultcard for waterfall steps and provider logos. Take resultcard-2 for the field with source icon.</p>
+<h4>8. Side panel / cell detail</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-sidepanel.png" alt="Function inspector: icon title, Edit button, overflow and collapse, Information section with Status, Credit cost, Owner rows."><p class="ev-cap">Function inspector: icon title, Edit button, overflow and collapse, Information section with Status, Credit cost, Owner rows.</p><p class="ev-cap"><a href="https://www.clay.com/functions">Source: clay.com/functions</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-sidepanel-2.png" alt="Add signal panel: breadcrumb with close, provider checkboxes each with a per-unit cost chip, full-width Generate topics button."><p class="ev-cap">Add signal panel: breadcrumb with close, provider checkboxes each with a per-unit cost chip, full-width Generate topics button.</p><p class="ev-cap"><a href="https://www.clay.com/signals">Source: clay.com/signals</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-sidepanel-3.png" alt="Claygent config panel: title with rename, Generate and Configure segmented tabs, model dropdown with search and Compare models link."><p class="ev-cap">Claygent config panel: title with rename, Generate and Configure segmented tabs, model dropdown with search and Compare models link.</p><p class="ev-cap"><a href="https://www.clay.com/blog/open-weight-models-are-now-in-claygent">Source: clay.com/blog/open-weight-models-are-now-in-claygent</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Title row: type icon, name, filled "Edit" button with icon, "..." overflow, collapse-right icon.</li><li>Collapsible "Information" section (chevron). Rows are icon, label left, value right: Status (green "Live" pill), Credit cost (coin pill "5.4 / row"), Who can edit, Owner, MCP integration.</li><li>Breadcrumb header (sidepanel-2): "Company signals > Add signal" with a close X. Checkbox rows end with a per-unit cost chip ("0.2 / topic / company"). Full-width outlined button with sparkle icon.</li><li>Tabs (sidepanel-3): segmented control "Generate | Configure", selected tab is a white raised segment. Use the same control for Raw and Formatted.</li><li>The panel docks right of the table and keeps the table visible. A rename pencil and a templates dropdown sit in the title row.</li></ul>
+<p><b>Do not copy:</b> the right-hand values ("Admins and editors", "Enabled") are light gray. Keep values in ink.</p>
+<p><b>Borrow:</b> sidepanel for the inspector: title row, Information rows and the credit pill. Take sidepanel-3 for the segmented tabs.</p>
+<h4>9. Review / approval before an external action</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-approval.png" alt="Import confirmation: what will happen, cost per row and total as coin chips, budget warning strip, auto-update toggle, Cancel and Import and run."><p class="ev-cap">Import confirmation: what will happen, cost per row and total as coin chips, budget warning strip, auto-update toggle, Cancel and Import and run.</p><p class="ev-cap"><a href="https://www.clay.com/changelog/product-roundup-25-q3-2-bce36">Source: clay.com/changelog/product-roundup-25-q3-2-bce36</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-approval-2.png" alt="Slack-delivered approval: question, optional feedback box, Approve and Deny buttons."><p class="ev-cap">Slack-delivered approval: question, optional feedback box, Approve and Deny buttons.</p><p class="ev-cap"><a href="https://www.clay.com/changelog/product-roundup-25-q3-2-bce36">Source: clay.com/changelog/product-roundup-25-q3-2-bce36</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Modal order: title with close X, one sentence on what will run, two cost rows ("Estimated cost per row" with info icon and "~2 / row" coin chip, "Estimated total cost" and "~2K total"), a warning strip, then the footer.</li><li>Warning strip: pale amber fill, flag icon, one line ("This run could use over 10% of your monthly credit budget").</li><li>Footer: toggle "Table auto-update is on" with info icon at the left. Outlined "Cancel" and filled "Import and run" at the right.</li><li>Out-of-app approval (approval-2): question with a mention, optional feedback box, green Approve and red Deny. Both lack icons, so add check and X.</li><li>The Accept and Discard footer in composer-2 is the inline version of the same decision.</li></ul>
+<p><b>Do not copy:</b> the strip text is small amber on pale amber, and the Deny and Approve buttons are text only.</p>
+<p><b>Borrow:</b> approval for the confirm card (cost rows, budget strip, Cancel and primary). The resolved state is a gap.</p>
+<h4>10. Credits / usage display</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-usage.png" alt="Model picker rows with key-or-credits choice, coin cost chip, info chip and a Recommended pill."><p class="ev-cap">Model picker rows with key-or-credits choice, coin cost chip, info chip and a Recommended pill.</p><p class="ev-cap"><a href="https://www.clay.com/changelog/introducing-claygent-neon">Source: clay.com/changelog/introducing-claygent-neon</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-usage-2.png" alt="Config footer: Try on 5 rows, coin pill &quot;1 / row&quot;, Save split button."><p class="ev-cap">Config footer: Try on 5 rows, coin pill &quot;1 / row&quot;, Save split button.</p><p class="ev-cap"><a href="https://www.clay.com/changelog/ai-action-consolidation">Source: clay.com/changelog/ai-action-consolidation</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-usage-3.png" alt="Data hub metric cards: title with plus, two labeled big numbers each."><p class="ev-cap">Data hub metric cards: title with plus, two labeled big numbers each.</p><p class="ev-cap"><a href="https://www.clay.com/claygent">Source: clay.com/claygent</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Model picker rows: name left, then a key icon "or" a coin chip with the cost, then an info chip. The default row is filled accent and carries a green "Recommended" pill.</li><li>Cost sits in the footer next to the action: outlined "Try on 5 rows", coin pill "1 / row", filled split "Save v".</li><li>Run metrics (usage-3): cards with a title, a "+" button, then two metric pairs. Label above, number about 2x body and bold ("226", "225K", "4.26M").</li><li>Header carries a "Credits" icon button and the panel carries "Credit cost 5.4 / row". Two places, both quiet pills.</li><li>Limits: "Table auto-update" and the monthly budget appear only in the approval strip, not on screen all the time.</li></ul>
+<p><b>Do not copy:</b> chips use 11-12px text and icon-only coins. Put the unit in words: "2 credits / row".</p>
+<p><b>Borrow:</b> usage for the cost chip on a choice row and the footer in usage-2 for the cost next to Run. Take usage-3 for run metric cards.</p>
+<h4>11. Error state with recovery</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-error.png" alt="Empty and skipped enrichment cells in the table: &quot;Not found&quot; and &quot;Run condition not met&quot;, selected cell outlined."><p class="ev-cap">Empty and skipped enrichment cells in the table: &quot;Not found&quot; and &quot;Run condition not met&quot;, selected cell outlined.</p><p class="ev-cap"><a href="https://www.clay.com/ai-formula">Source: clay.com/ai-formula</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-error-2.png" alt="Column running at 31% with a progress bar and an orange warning triangle on one row among green status dots."><p class="ev-cap">Column running at 31% with a progress bar and an orange warning triangle on one row among green status dots.</p><p class="ev-cap"><a href="https://www.clay.com/blog/open-weight-models-are-now-in-claygent">Source: clay.com/blog/open-weight-models-are-now-in-claygent</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Two distinct empty reasons in the cell, not red: "Not found" (the provider returned nothing) and "Run condition not met" (a rule skipped it).</li><li>Selected cell: 1px accent border and light accent fill. Filled cells are normal ink.</li><li>Column run state (error-2): progress bar with "31%" in the column header, a check icon at the right when done.</li><li>Per-row status is a dot plus "Response". An orange triangle replaces the dot on the row with a problem.</li><li>Missing: retry, fix connection, skip. Build them as outlined icon buttons in the step row.</li></ul>
+<p><b>Do not copy:</b> the empty-cell text is italic light gray. Use ink text, an icon, and a visible Retry button.</p>
+<p><b>Borrow:</b> error for the two empty-reason labels. Take error-2 for the triangle marker and progress bar.</p>
+<h4>12. Row / message actions</h4>
+<div class="ev-row"><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-actions.png" alt="Row context menu (Run 1 row, Insert row, Leave feedback, Delete 1 row in red) and the feedback panel it opens."><p class="ev-cap">Row context menu (Run 1 row, Insert row, Leave feedback, Delete 1 row in red) and the feedback panel it opens.</p><p class="ev-cap"><a href="https://www.clay.com/changelog/2024-11-15">Source: clay.com/changelog/2024-11-15</a></p></div><div class="ev-card"><div><b>Clay</b></div><img class="ev-img" src="refs/clay-actions-2.png" alt="Export menu: icon plus label rows and a filled Export action bar at the bottom."><p class="ev-cap">Export menu: icon plus label rows and a filled Export action bar at the bottom.</p><p class="ev-cap"><a href="https://www.clay.com/audiences">Source: clay.com/audiences</a></p></div></div>
+<p><b>Steal this:</b></p><ul><li>Context menu rows: icon plus label, 6px radius hover fill. Order: Run 1 row, Insert row, Leave feedback, divider, Delete 1 row (red text and red icon).</li><li>A menu item can open a sub-panel: back arrow, title, close X, one textarea with an example placeholder, right-aligned "Submit".</li><li>Action menu (actions-2): three icon rows, then a filled full-width "Export action" bar with an icon at the bottom.</li><li>Placement is a right-click or kebab menu, not hover icons. No copy, rerun or edit icons on messages exist.</li><li>Destructive item is last, after a divider, and the only red item.</li></ul>
+<p><b>Do not copy:</b> the feedback textarea has the question above it as a label. Put the question in the placeholder.</p>
+<p><b>Borrow:</b> actions for the menu structure and the destructive item. Take actions-2 for a primary action bar inside a menu.</p>
+<h4>Gap list</h4>
+<ul>
+<li>5. Reasoning / thinking disclosure: no official Clay image. "Claygent Replay" is only named in the Navigator changelog text.</li>
+<li>11. Failed step with retry, fix connection or skip: only empty-result cell states exist.</li>
+<li>12. Hover icon actions on messages (copy, rerun, edit): none. Only row context menus.</li>
+<li>9. Resolved approval state: none. Only the pending prompt.</li>
+<li>4. Keyboard hints and a model or tool picker inside the chat composer: none.</li>
+<li>Video-only demos (Claygent look-up, Sequencer product demo, MCP flows) were not used because the brief says images only. Frame grabs from <a href="https://www.clay.com/claygent">clay.com/claygent</a> and <a href="https://www.clay.com/sequencer">clay.com/sequencer</a> could fill the thinking and step gaps if approved.</li>
+</ul>
+
+</div>
+<hr>
+<div class="ev-product" id="refs-attio">
+<h3>Attio: common patterns</h3><ul>
+<li>Every control has an icon: nav rows, tabs, chips, and action buttons all carry a 16px line icon before the label. Icon-only buttons are the default for secondary actions.</li>
+<li>One chip style does four jobs: context, agent steps, sources, and suggestions. 1px border, 8px radius or pill, 28 to 32px tall, icon + label + optional count.</li>
+<li>The placeholder does the work. "Ask anything…" and "Search…" sit inside the field, with no label above it.</li>
+<li>Quiet density: 13 to 14px text, one-line rows around 32px, selected state is a neutral fill. Accent blue appears only on the primary button and the focus ring.</li>
+<li>Structure comes from 1px borders. Soft shadow appears only on floating layers: menus, popovers, and the record peek.</li>
+<li>Dark mode keeps the same layout and spacing. Surfaces move one step per level and borders get lighter (see the dark thread, model picker, and rail images).</li>
+<li>Agent work shows as past-tense verb chips, not prose.</li></ul>
+<p><strong>Do not copy:</strong> assistant narration before a tool call ("Let me get the call details first"); muted gray captions that carry real information (credits line, "Confidence level" labels, "Draft email" caption); text-only buttons (Deny, Always allow, Allow once, Discard, Auto); labels above fields in settings; random hue icon tiles; blue as the accent (ours is avocado #5B8C2A).</p>
+<h4>1. Sidebar / global rail</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-rail.png" alt="Attio rail"><p class="ev-cap">Light shell: workspace switcher + collapse, Quick Actions with cmd-K, search with /, destinations with icons, Pinned Views, Lists.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2023/record-creation-attribution">attio.com/changelog/2023/record-creation-attribution</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-rail-2.png" alt="Attio rail"><p class="ev-cap">Rail with search cmd-K, inbox button with unread badge, Home/Tasks/Notes/Calls, grouped Records and Lists, selected row, notifications popover.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-101/productivity/introduction-to-tasks">attio.com/help/reference/attio-101/productivity/introduction-to-tasks</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-rail-3.png" alt="Attio rail"><p class="ev-cap">Favorites with nested rows, Records, Lists with + on hover, footer rows (Invite teammates, Help); first frame of a GIF.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2024/pin-favorites-in-your-sidebar">attio.com/changelog/2024/pin-favorites-in-your-sidebar</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-rail-4.png" alt="Attio rail"><p class="ev-cap">Dark shell: same rail in dark, workspace switcher, search with cmd-K, Pinned Views, Lists; first frame of a GIF.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2023/report-and-list-duplication">attio.com/changelog/2023/report-and-list-duplication</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Order, top to bottom: workspace switcher (28px logo, name, chevron) with the collapse toggle at the far right; then Quick Actions with a <code>⌘K</code> keycap beside a search icon with a <code>/</code> keycap; then destinations; then collapsible groups (Records, Favorites, Pinned Views, Lists); then footer rows (Invite teammates, Help).</li><li>Destination row: 16px line icon + 14px label, one line, about 32px tall, 8px side padding. Selected row is a neutral fill with a 6px radius. No accent color on selection.</li><li>Counts: a small solid pill at the right edge of the row (Tasks 2). The inbox button carries a badge on its top-right corner (4). Group titles are collapsible with a chevron; Lists has a <code>+</code> at the right.</li><li>Entity icons are 16px rounded squares in one color per object type (People blue, Deals orange, Workspaces purple). Nested favorites indent one level under their parent row.</li><li>Dark: same layout and spacing. Rail surface is one step lighter than the canvas, selected row one step lighter again, icons keep their color.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-rail.png for structure and attio-rail-2.png for the inbox badge; copy attio-rail-4.png for the dark version.</p>
+<h4>2. Header of a record or AI thread</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-header.png" alt="Attio header"><p class="ev-cap">Ask Attio thread header: title, + new chat, history, overflow menu (Open in full page, Copy chat ID, Delete), close.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-header-2.png" alt="Attio header"><p class="ev-cap">Record header: logo + title, chip strip (owner, last interaction, value), tab row with count badges.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-101/productivity/introduction-to-notes">attio.com/help/reference/attio-101/productivity/introduction-to-notes</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-header-3.png" alt="Attio header"><p class="ev-cap">Dark thread header: title with favorite star, + history overflow close; user bubble right, assistant text left.</p><p class="ev-cap">Source: <a href="https://attio.com/engineering/blog/ask-attio-a-technical-look-at-our-new-agent">attio.com/engineering/blog/ask-attio-a-technical-look-at-our-new-agent</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Thread header is one row: title left (15px, medium), then four icon-only buttons right: <code>+</code> new chat, history clock, overflow dots, close <code>×</code>. Each is a 28px square with no border; hover shows a gray fill.</li><li>Overflow menu order: Open in full page (arrow icon), Copy chat ID (copy icon), Delete (trash icon, red text, last). Every row has an icon.</li><li>Record header: 28px logo tile + 18px title, then a tinted chip strip under it: owner chip with a status dot, last-interaction chip with a mail icon and relative time, value chip tinted purple. Chips are 28px tall, 1px border, pill radius, a thin vertical rule between groups.</li><li>Tabs: icon + label + count badge (Emails 2, Team 0). Selected tab gets a bordered rounded fill plus a 2px underline. Counts are 13px in a small gray square.</li><li>Dark thread header adds a favorite star right of the title; nothing else changes.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-header-2.png for context chips and tabs; copy attio-header.png for the overflow menu.</p>
+<h4>3. Empty state / home</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-empty.png" alt="Attio empty"><p class="ev-cap">Home: greeting, composer with Auto and / hints, two suggestion chips with icons, meetings list below.</p><p class="ev-cap">Source: <a href="https://attio.com/platform/universal-context">attio.com/platform/universal-context</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-empty-2.png" alt="Attio empty"><p class="ev-cap">Home close-up: Recent chat strip above the composer, two suggestion chips, Meetings row list.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Greeting is one line, about 20px semibold, left edge aligned with the composer edge. No subtitle, no paragraph.</li><li>The composer is the hero: 3 rows tall, 12px radius, blue focus ring. Two suggestion chips sit centered below it: colored 20px icon tile + verb phrase ("Prep for next meeting", "Recap last call").</li><li>Optional strip above the composer: history icon + "Recent chat" + title of the last thread. One click resumes it.</li><li>Below the fold: Meetings list with a date switcher (<code>‹ ›</code>), status dot + title + time on the right; the next item expands in place to show details and participants.</li><li>Map to Sourcecado: the Meetings list becomes the runs and approvals due today.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-empty.png: it shows the full shell around the greeting, composer, chips, and list.</p>
+<h4>4. Composer for Ask Attio / AI assistant</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-composer.png" alt="Attio composer"><p class="ev-cap">Slash menu in the composer: prompts with colored icons, New prompt, Browse prompts, Manage prompts; context chip, Auto, / key, send.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-composer-2.png" alt="Attio composer"><p class="ev-cap">Send turns into a stop square while running; tooltip reads Cancel message.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-composer-3.png" alt="Attio composer"><p class="ev-cap">Dark model picker: Auto at top, checked row, provider icons; the model name replaces Auto in the composer.</p><p class="ev-cap">Source: <a href="https://attio.com/engineering/blog/ask-attio-a-technical-look-at-our-new-agent">attio.com/engineering/blog/ask-attio-a-technical-look-at-our-new-agent</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Box: placeholder "Ask anything…" does the work, no label. Bottom bar left: context chip (video icon + record name, 1px border, 8px radius). Bottom bar right, in order: model text button ("Auto"), a <code>/</code> keycap in a 20px outlined square, 28px send button with an up-arrow icon.</li><li>Send states: idle with empty text is the accent at about 40% opacity; with text it is solid; while running it becomes an outlined button with a stop square. Tooltip "Cancel message".</li><li><code>/</code> opens a menu above the box: rows are a 20px colored icon tile + name, the list scrolls with a fade at the bottom, and a fixed footer holds New prompt (<code>+</code>), Browse prompts (grid icon), Manage prompts (gear icon).</li><li>Model picker opens above the button: "Auto" row first, a divider, then models with provider glyphs and a check on the selected one. After a pick, the model name and glyph replace "Auto".</li><li>Keys: <code>/</code> prompts, <code>@</code> inserts a record token (blue text), <code>⌘K</code> from the rail. Attio has no <code>+</code> context menu.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-composer.png for the skill menu and attio-composer-2.png for send to stop.</p>
+<h4>5. Reasoning / plan disclosure</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-thinking.png" alt="Attio thinking"><p class="ev-cap">Assistant turn: Thinking label, one line of intent, three outlined step chips, then a result card with a Draft pill.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2026/what-s-new-in-workflows">attio.com/changelog/2026/what-s-new-in-workflows</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-thinking-2.png" alt="Attio thinking"><p class="ev-cap">AI attribute reasoning popover: confidence dot and level, Reasoning paragraph, Citations as link chips.</p><p class="ev-cap">Source: <a href="https://attio.com/platform/web-agent">attio.com/platform/web-agent</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Turn order while the agent works: "Thinking" label, one sentence of intent, step chips under it, then the artifact card (title, Draft pill, two-line summary).</li><li>Reasoning on a result is a small popover with three blocks: Confidence level (dot + level), Reasoning (two or three lines), Citations (link-icon chips, blue, underlined). Labels and body sit on one card.</li><li>Confidence dot colors: green high, orange medium, red low. Same dot sits on the cell and in the popover.</li><li>Attio shows no expand and collapse control for thinking in these images; the label is static.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-thinking-2.png for reasoning plus citations; copy the step chips from attio-thinking.png.</p>
+<h4>6. Agent step rows</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-toolstep.png" alt="Attio toolstep"><p class="ev-cap">Inline tool rows in the thread: icon + past-tense verb + object, result count in muted text, between assistant sentences.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-toolstep-2.png" alt="Attio toolstep"><p class="ev-cap">Agent log panel: Agent and Tool rows with duration (0.8s) and clock time, credits chip, timeline bar, header stats.</p><p class="ev-cap">Source: <a href="https://attio.com/platform/custom-agents">attio.com/platform/custom-agents</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Inline chip: 16px icon + past-tense verb + object + muted result ("Searched call recordings: 1 result"). 32px tall, 1px border, pill radius, 8px vertical gap, sits between assistant lines.</li><li>Expanded log row: tag (Tool gray, Agent purple) + duration (0.8s) + clock time (0:00:43), then one line "Web fetch: <url>" truncated with an ellipsis.</li><li>Run header: status pill with a check ("Completed"), credits chip with a coin icon (24), runtime (25s), executions (3). Under it a timeline bar with one colored segment per step.</li><li>Node states in the run view: "Completed" green pill with a check, "Running" blue pill with a spinner, "Failed" red pill with a warning icon.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-toolstep.png for the in-thread chip; copy attio-toolstep-2.png for the expanded log.</p>
+<h4>7. Structured results inline</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-resultcard.png" alt="Attio resultcard"><p class="ev-cap">Record suggestion card: avatar + name, icon-labelled fields, primary Add to Attio button, Related records rows with chevrons.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2024/new-browser-extension-integrations">attio.com/changelog/2024/new-browser-extension-integrations</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-resultcard-2.png" alt="Attio resultcard"><p class="ev-cap">Enrichment cell: value + green confidence dot, popover with Confidence level, Reasoning, Citations as link chips.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2026/web-research-agent">attio.com/changelog/2026/web-research-agent</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-resultcard-3.png" alt="Attio resultcard"><p class="ev-cap">Source chip: globe icon, Searched web: 6 results, stacked favicons with +3 count.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Person card: header band with a sparkle icon + "Record suggestion"; body with 32px avatar and 16px name; field rows of icon + label + value; email and domain as pill chips (blue text, blue-tint border).</li><li>One full-width primary button with an icon ("Add to Attio"), then a "Related records" list: avatar, name, email, entity badge, chevron.</li><li>Agent-written columns are marked with a purple sparkle in the column header and a lilac tint on the cells. Each cell has an 8px confidence dot; hover adds a refresh icon beside it.</li><li>Source chip: globe icon + "Searched web: 6 results" + overlapping 20px favicons + a "+3" count.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-resultcard.png for the person card; copy attio-resultcard-3.png for source chips.</p>
+<h4>8. Side panel / record peek</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-sidepanel.png" alt="Attio sidepanel"><p class="ev-cap">Record peek: close, prev/next with 12 of 200 in Deals, help, overflow; title + action icon row; tabs with counts and gear.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2026/emails-on-deals-and-custom-objects">attio.com/changelog/2026/emails-on-deals-and-custom-objects</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-sidepanel-2.png" alt="Attio sidepanel"><p class="ev-cap">Peek with a right-hand Details and Comments pane: field rows with icons, Lists, 2 of 350 in People.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2025/auto-summaries-and-labels">attio.com/changelog/2025/auto-summaries-and-labels</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Top bar: close <code>×</code>, previous <code>∧</code> and next <code>∨</code> icon buttons, position text "12 of 200 in Deals", then help and overflow icons at the right.</li><li>Title row: 32px logo + 18px title; right side has one labeled primary button with an icon ("Compose email") and four icon-only buttons.</li><li>Tabs: icon + label + count, selected tab gets a soft fill and underline, "+2 more" overflow, gear at the far right to customize.</li><li>Two-pane variant: left is the active tab, right has Details and Comments tabs with field rows (icon, label, value) and collapsible sections with counts.</li><li>Prev and next step through the list without closing the panel. A resize handle is not visible in these images.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-sidepanel.png: it has the cleanest top bar and title row.</p>
+<h4>9. Review / approval before an external action</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-approval.png" alt="Attio approval"><p class="ev-cap">Review table before a write: per-attribute checkboxes, attribute and New value columns, 1/3 pager, Discard, Update (5) with cmd-Enter.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2026/ask-attio-to-take-action">attio.com/changelog/2026/ask-attio-to-take-action</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-approval-2.png" alt="Attio approval"><p class="ev-cap">Per-change cards: Update Role, Funding raised; each has an info icon and an Accept button with a check.</p><p class="ev-cap">Source: <a href="https://attio.com/platform/universal-context">attio.com/platform/universal-context</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-approval-3.png" alt="Attio approval"><p class="ev-cap">Inline permission card: Deny, Always allow, Allow once; above it the message action bar (copy, up, down, retry).</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Review table: record title row with icon; columns Attribute and New value; a checkbox on every row and a master checkbox in the header. Values render in the same chips as the record page.</li><li>Footer: pager "1/3" with chevrons when several records are queued, then Discard, then primary "Update (5)" with a <code>⌘↵</code> keycap. The count in the button equals the checked rows.</li><li>Per-change variant: cards grouped under the record (avatar + underlined name); each card has the field label with an info icon, the proposed value, and an Accept button with a check at the top right.</li><li>Permission variant: dashed-border card, one title, one sentence, then Deny (ghost), Always allow (outline), Allow once (primary), right aligned, primary last.</li><li>No resolved state is shown in any image.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-approval.png: swap the rows for To, Subject, and Body, and swap Update for Send.</p>
+<h4>10. Usage / credits / limits display</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-usage.png" alt="Attio usage"><p class="ev-cap">Ask Attio settings: Credits section, Credits used with reset date, Personal credits used 0/1,000, Workspace credits used.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/manage-ask-attio-settings">attio.com/help/reference/attio-ai/ask-attio/manage-ask-attio-settings</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-usage-2.png" alt="Attio usage"><p class="ev-cap">Credits line under the primary button: 104 of 200 credits used in September with an info icon.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2024/new-browser-extension-integrations">attio.com/changelog/2024/new-browser-extension-integrations</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-usage-3.png" alt="Attio usage"><p class="ev-cap">Per-step credits chip in the run panel (24), runtime 25s, executions 3.</p><p class="ev-cap">Source: <a href="https://attio.com/platform/custom-agents">attio.com/platform/custom-agents</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>At the point of spend: one centered line under the primary button, "104 of 200 credits used in September", with an info icon. It appears only next to the action that costs credits.</li><li>In settings: one bordered card with three rows, label on the left (reset date beside it), figure on the right ("0/1,000"). Rows are split by 1px rules.</li><li>In a run panel: a coin chip with the number (24) beside the status. In run history: a small coin chip per run.</li><li>Figures are right aligned.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-usage-2.png for the per-action line and attio-usage.png for the settings card.</p>
+<h4>11. Error state with recovery</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-error.png" alt="Attio error"><p class="ev-cap">Failed step: red Failed pill on the node and in the panel, red error sentence, credits used 0, runtime, executions.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/automations/workflows/troubleshooting-workflows">attio.com/help/reference/automations/workflows/troubleshooting-workflows</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-error-2.png" alt="Attio error"><p class="ev-cap">Failed run: red x with Run #3, Retry split button with Retry from start, Retry from failed, Retry with live workflow, plus tooltip.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/automations/workflows/troubleshooting-workflows">attio.com/help/reference/automations/workflows/troubleshooting-workflows</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-error-3.png" alt="Attio error"><p class="ev-cap">Run history list: green check and red x rows, Failed in red with date, credits chip per run, cancel and pause on the running run.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/automations/workflows/troubleshooting-workflows">attio.com/help/reference/automations/workflows/troubleshooting-workflows</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>Failed step: red pill with a warning icon and "Failed" above the node and in the panel; one red sentence below it that names the fix ("Please provide a List Entry, not a Record"); credits used 0 under it.</li><li>Run header: red <code>✕</code> + "Run #3", then a Retry split button with a <code>↻</code> icon. Menu rows: Retry from start, Retry from failed, Retry with live workflow. Each has a distinct <code>↻</code> variant and a tooltip that explains the hovered row.</li><li>Attempt switcher: dropdown with "Attempt #2" and a check, list rows with status icon + time.</li><li>History rows: green check or red <code>✕</code>, failed rows in red text with the date, credits chip, and cancel plus pause icons on the running row.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-error-2.png for the retry menu and attio-error.png for the failed step.</p>
+<h4>12. Hover action bar on rows and messages</h4><div class="ev-row"><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-actions.png" alt="Attio actions"><p class="ev-cap">Hover bar under a user message: copy and edit icons, tooltip Edit above the hovered icon.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-actions-2.png" alt="Attio actions"><p class="ev-cap">Under an assistant message: prev/next with 2/2, copy, thumbs up, thumbs down, retry, all icon-only.</p><p class="ev-cap">Source: <a href="https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio">attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio</a></p></div><div class="ev-card"><strong>Attio</strong><img class="ev-img" src="refs/attio-actions-3.png" alt="Attio actions"><p class="ev-cap">Record action bar: Compose email plus icon-only buttons; Edit actions menu with drag handles.</p><p class="ev-cap">Source: <a href="https://attio.com/changelog/2025/custom-record-actions">attio.com/changelog/2025/custom-record-actions</a></p></div></div>
+<p><strong>Steal this:</strong></p><ul><li>User message: two icon buttons under the bubble, right aligned: copy, edit. Each is a 28px square with a 6px radius; hover shows a gray fill and a dark tooltip ("Edit").</li><li>Assistant message: one row under the answer, left aligned: version pager <code>‹ 2/2 ›</code>, copy, thumbs up, thumbs down, retry. All icon-only, about 18px, 12px apart.</li><li>After a thumbs down, an inline card opens under the row (see the permission card in the approval section); the row stays visible.</li><li>Record action bar: one labeled primary button plus three icon-only buttons in an outlined group; an Edit action opens a drag-to-reorder list.</li></ul>
+<p><strong>Borrow:</strong> Copy attio-actions-2.png for assistant messages and attio-actions.png for user messages.</p>
+<h3>Gaps</h3><ul><li>Rail: no image of the collapsed icon rail, and none of hover actions on a favorites row.</li><li>Composer: no <code>+</code> context menu exists in Attio. Context is a chip, <code>@</code>, and <code>/</code>.</li><li>Reasoning: no expandable thinking disclosure and no streaming state with a spinner in the chat.</li><li>Agent steps: no chat step row with a spinner turning into a check. The spinner and check appear only on workflow nodes.</li><li>Approval: no Ask Attio approval for sending an email, and no resolved state. The closest are the update review table and the permission card.</li><li>Error: no chat-level failure or reconnect prompt. All three images are workflow runs.</li><li>Side panel: no image of resizing.</li></ul>
+</div></div></section>
+  <section id="taudit"><div class="sh"><span class="dot" style="background:#E8A230"></span><span class="num">#audit</span><h2>Our current agent UI: audit of shell, run lifecycle, inspector, approval</h2><span class="pill">audit</span><span class="pill">In review</span></div><div class="fx"><p><b>Verdict.</b> The shell is an accessible skeleton that does not read as a GTM agent. Six causes: nothing renders for the first seconds of a run; reasoning is dropped in the backend (<code class="ev-code">turn.py:1173</code>); tool activity sits below the answer, collapsed; no icons anywhere; six telemetry stats at 11px in the header; small gray text is the default voice (28 muted rules, 15 at 12px, 9 at 11px in <code class="ev-code">chat.css</code>). Full write-up: <a href="investigation.md">investigation.md</a>.</p>
+
+<h4>App shell</h4>
+<div class="ev-grid">
+  <div class="ev-card"><img class="ev-img" src="refs/ours-empty-thread-1440.jpg" alt="Sourcecado empty thread at 1440"><p class="ev-cap">Rail: text-only destinations, glyph actions (✎ ○), placeholder account footer. Header: eyebrow + persona badge. One suggested prompt.</p></div>
+  <div class="ev-card"><img class="ev-img ev-mob" src="refs/ours-rail-390.jpg" alt="Sourcecado rail at 390"><p class="ev-cap">390px: the rail rendered open over the thread on load (observed once; verify).</p></div>
+</div>
+
+<h4>Run lifecycle</h4>
+<div class="ev-grid">
+  <div class="ev-card"><img class="ev-img" src="refs/ours-run-streaming-blank-1440.jpg" alt="Blank transcript while the run streams"><p class="ev-cap">0–5 s: reasoning and two tool calls stream from the model. Transcript stays blank; only the header timer moves.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-run-streaming-text-1440.jpg" alt="Answer streaming with budget line"><p class="ev-cap">Answer streams; "Checked 2 sources · 0s · Completed" appears below it, collapsed; a budget line flashes then disappears.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-run-complete-1440.jpg" alt="Run complete"><p class="ev-cap">Complete: cause below effect; "Copy response" is a 12px muted text link; six stats at 11px in the header.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-activity-expanded-1440.jpg" alt="Activity group expanded"><p class="ev-cap">Tool rows: label + "Inspect" text button + bold state word. No icon, no argument summary, no inline result.</p></div>
+</div>
+
+<h4>Inspector and approval</h4>
+<div class="ev-grid">
+  <div class="ev-card"><img class="ev-img" src="refs/ours-inspector-1440.jpg" alt="Inspector panel"><p class="ev-cap">Inspector: "TOOL DETAIL" eyebrow, epoch-ms timing, raw JSON in two details blocks, Close as a text button.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-approval-card-1440.jpg" alt="Approval card"><p class="ev-cap">Approval: label is past tense before anything happened; "consequential: waits for Allow or Deny" is policy jargon; Deny / Allow once are text-only.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-approval-expanded-1440.jpg" alt="Approval expanded"><p class="ev-cap">"Review full request and policy" reveals raw JSON arguments.</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-approval-denied-1440.jpg" alt="After deny"><p class="ev-cap">After Deny: two receipts for one action, "Denied" (muted) then "Failed" (red).</p></div>
+  <div class="ev-card"><img class="ev-img" src="refs/ours-failed-turn-1440.jpg" alt="Failed turn notice"><p class="ev-cap">Failed turn: beige notice with no Retry button.</p></div>
+</div>
+
+<h4>Rule check</h4>
+<table class="ev-table"><tr><th>Rule</th><th>Status</th><th>Count</th></tr>
+<tr><td>No text-only buttons</td><td class="ev-fail">Fails</td><td>10 in chat + app TSX</td></tr>
+<tr><td>No small gray text</td><td class="ev-fail">Fails</td><td>28 muted rules, 15 × 12px, 9 × 11px</td></tr>
+<tr><td>No field labels</td><td class="ev-pass">Passes</td><td>—</td></tr>
+<tr><td>No narrating sentences</td><td class="ev-fail">Fails</td><td>2 under the composer and shell</td></tr></table>
+</div></section>
+</div>
+<div style="height:80px"></div>
+</body>
+</html>

@@ -1,0 +1,752 @@
+[
+  {
+    "file": "claude-rail.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "rail",
+    "source_page_url": "https://claude.com/blog/interactive-tools-in-claude",
+    "image_url": "https://assets.claude.com/577251f8c98cfeb6a67ffe98b4e1be7d29503e64.png",
+    "note": "Collapsed icon rail: panel-toggle icon at the top, then five icon-only destinations, title chip beside it."
+  },
+  {
+    "file": "claude-rail-2.png",
+    "product": "Claude Code",
+    "component": "rail",
+    "source_page_url": "https://code.claude.com/docs/en/agent-view",
+    "image_url": "https://code.claude.com/docs/images/agent-view-light.png",
+    "note": "Session list grouped by state (Needs input, Working, Completed) with age, one-line status and key hints. A dark version exists at the same docs page."
+  },
+  {
+    "component": "rail",
+    "product": "Claude",
+    "gap": "Full expanded sidebar (new chat button, search with Cmd+K, recents with hover rename/star/delete, account footer) not found on an allowed host. The help-center screenshots that show it are hosted on downloads.intercomcdn.com, which is not on the allow-list."
+  },
+  {
+    "file": "claude-header.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "header",
+    "source_page_url": "https://www.anthropic.com/news/projects",
+    "image_url": "https://www-cdn.anthropic.com/images/4zrzovbb/website/c5823949d9350145ce2fda51acbc7076f2139cd0-1920x1080.png",
+    "note": "Breadcrumb header: wordmark, project chip with icon, thread title, then star, Share (lock icon + word) and a sliders icon button."
+  },
+  {
+    "file": "claude-header-2.png",
+    "product": "Claude Console (Managed Agents)",
+    "component": "header",
+    "source_page_url": "https://claude.com/platform/api",
+    "image_url": "https://assets.claude.com/47d7f15e3a1a7ee8c9303a801582d2eaeb183fb6.png",
+    "note": "Run header: back arrow and breadcrumb, bold title with an \"Idle\" status chip, Actions menu, Ask Claude button, then a row of icon chips and run metrics."
+  },
+  {
+    "component": "header",
+    "product": "Claude",
+    "gap": "Model or agent badge and an overflow (three dots) menu are not shown in any allowed image."
+  },
+  {
+    "file": "claude-empty.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "empty",
+    "source_page_url": "https://www.anthropic.com/news/research",
+    "image_url": "https://assets.claude.com/3c87b703466e6f61ed7222f39344337416bf3df2.mp4",
+    "note": "Home: spark glyph and serif greeting, large composer card, four icon+word prompt chips (Write, Code, Strategize, choice) below it. Frame at 12.5s of the Research demo video."
+  },
+  {
+    "file": "claude-empty-2.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "empty",
+    "source_page_url": "https://www.anthropic.com/news/research",
+    "image_url": "https://assets.claude.com/2de448df750ac57760e61a59fe8af1defc46d86e.png",
+    "note": "Suggestions from a connected tool: a \"From Drive\" panel directly under the composer, one prompt per row, hover row with chevron, close button."
+  },
+  {
+    "file": "claude-composer.png",
+    "product": "Claude Code",
+    "component": "composer",
+    "source_page_url": "https://code.claude.com/docs/en/cloud-environments",
+    "image_url": "https://code.claude.com/docs/images/cloud-environment-selector.png",
+    "note": "Claude Code on the web: one-line input with return glyph, environment chip and repo chip above it, a grouped popover, mode and model/effort row below."
+  },
+  {
+    "file": "claude-composer-2.png",
+    "product": "Claude Code",
+    "component": "composer",
+    "source_page_url": "https://claude.com/product/claude-code",
+    "image_url": "https://assets.claude.com/454390de9d9ccefb6082b7c2440c7547c1ec3964.webp",
+    "note": "Running state: placeholder becomes \"Queue another message\", a filled square stop button replaces send, mode chip and attached-file chip in the footer. Dark mode."
+  },
+  {
+    "component": "composer",
+    "product": "Claude",
+    "gap": "The \"+\" menu with attach, connectors and skills toggles is not shown in any allowed still image. Keyboard hints for the composer are not shown either."
+  },
+  {
+    "file": "claude-thinking.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "thinking",
+    "source_page_url": "https://claude.com/blog/interactive-tools-in-claude",
+    "image_url": "https://assets.claude.com/577251f8c98cfeb6a67ffe98b4e1be7d29503e64.png",
+    "note": "Collapsed row \"Thinking...\" with a chevron while streaming, and the expanded block \"Thought for 31 seconds\" with a one-line truncated body."
+  },
+  {
+    "file": "claude-thinking-2.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "thinking",
+    "source_page_url": "https://claude.com/features/artifacts",
+    "image_url": "https://assets.claude.com/c5788873a7fbd74ad7caec11fa90610ee8d8bc14.webm",
+    "note": "Working indicator without a thinking block: animated spark glyph, a bold task line, and a second line with the current step and a chevron. Frame at 1.2s."
+  },
+  {
+    "component": "thinking",
+    "product": "Claude",
+    "gap": "No still image shows the body streaming text or the elapsed counter ticking. The streaming and collapse motion is taken from the two states above, not from a recording."
+  },
+  {
+    "file": "claude-toolstep.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "toolstep",
+    "source_page_url": "https://www.anthropic.com/news/research",
+    "image_url": "https://assets.claude.com/d94666bde1a93acd0d678ecf8c4017230a6416a5.png",
+    "note": "Step rows in a thread: tool logo, past-tense label, result count and chevron. The running row has a muted label and a spinner below."
+  },
+  {
+    "file": "claude-toolstep-2.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "toolstep",
+    "source_page_url": "https://claude.com/product/cowork",
+    "image_url": "https://assets.claude.com/0d948b3a3dbf8e9669c90f8a669af1be99dd2fa0.webm",
+    "note": "Grouped steps: \"Used 4 integrations\" header, then a timeline of rows with one tool logo each and a \"Result\" toggle under each. Frame at 2.4s."
+  },
+  {
+    "component": "toolstep",
+    "product": "Claude",
+    "gap": "No claude.ai still shows a failed step row (x) or per-row elapsed time."
+  },
+  {
+    "file": "claude-resultcard.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "resultcard",
+    "source_page_url": "https://claude.com/blog/interactive-tools-in-claude",
+    "image_url": "https://assets.claude.com/577251f8c98cfeb6a67ffe98b4e1be7d29503e64.png",
+    "note": "Result groups inline: a search row with chips and a count, an expanded \"Found 1 related project\" row holding a nested card with thumbnail, and a field hover card."
+  },
+  {
+    "file": "claude-resultcard-2.png",
+    "product": "Claude desktop app",
+    "component": "resultcard",
+    "source_page_url": "https://claude.com/product/overview",
+    "image_url": "https://assets.claude.com/713c0c02f030abb3c3e1ca45aadc75a28e377197.webm",
+    "note": "File result card: document tile, title, type, and an \"open in\" menu with the Google Drive logo. Crop of a frame at 7.2s."
+  },
+  {
+    "component": "resultcard",
+    "product": "Claude",
+    "gap": "Web search result list with source citation chips and favicons: no allowed image shows it. Table result card: not found."
+  },
+  {
+    "file": "claude-sidepanel.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "sidepanel",
+    "source_page_url": "https://www.anthropic.com/news/projects",
+    "image_url": "https://www-cdn.anthropic.com/images/4zrzovbb/website/c5823949d9350145ce2fda51acbc7076f2139cd0-1920x1080.png",
+    "note": "Artifact panel opened from an inline card: back arrow and title, Preview | Code switch, close; footer with copy and download."
+  },
+  {
+    "file": "claude-sidepanel-2.png",
+    "product": "Claude desktop app",
+    "component": "sidepanel",
+    "source_page_url": "https://claude.com/product/overview",
+    "image_url": "https://assets.claude.com/713c0c02f030abb3c3e1ca45aadc75a28e377197.webm",
+    "note": "Session window with a right inspector: four collapsible sections (Progress, Outputs, Claude in Chrome, Context), a panel-toggle icon in the title bar. Frame at 7.2s."
+  },
+  {
+    "file": "claude-approval.png",
+    "product": "Claude Code",
+    "component": "approval",
+    "source_page_url": "https://code.claude.com/docs/en/permissions",
+    "image_url": "https://code.claude.com/docs/images/permission-prompt-bash-light.png",
+    "note": "Tool permission prompt, light: tool label, plain description, the exact command between rules, then four numbered choices and the key hints."
+  },
+  {
+    "file": "claude-approval-2.png",
+    "product": "Claude Code",
+    "component": "approval",
+    "source_page_url": "https://code.claude.com/docs/en/permissions",
+    "image_url": "https://code.claude.com/docs/images/permission-prompt-bash-dark.png",
+    "note": "The same prompt in dark mode. Accent color marks the tool label and the selected choice."
+  },
+  {
+    "component": "approval",
+    "product": "Claude",
+    "gap": "The claude.ai connector permission card (Allow once / Always allow / Deny buttons) and a resolved receipt state are not in any allowed image."
+  },
+  {
+    "file": "claude-usage.png",
+    "product": "Claude Code",
+    "component": "usage",
+    "source_page_url": "https://code.claude.com/docs/en/statusline",
+    "image_url": "https://code.claude.com/docs/images/statusline-multiline.png",
+    "note": "Status line under the input: model, folder, branch on line 1; context bar with percent, cost and time on line 2."
+  },
+  {
+    "file": "claude-usage-2.png",
+    "product": "Claude Console (Managed Agents)",
+    "component": "usage",
+    "source_page_url": "https://claude.com/platform/api",
+    "image_url": "https://assets.claude.com/47d7f15e3a1a7ee8c9303a801582d2eaeb183fb6.png",
+    "note": "Run transcript with per-event metrics: type pill, one-line summary, and right-aligned tokens and elapsed time. Transcript | Debug switch, filter, search."
+  },
+  {
+    "component": "usage",
+    "product": "Claude",
+    "gap": "claude.ai plan usage and session limit bars (Settings > Usage) are only shown in help-center images on a host outside the allow-list."
+  },
+  {
+    "component": "error",
+    "product": "Claude",
+    "gap": "No image of a failed turn, failed tool call, reconnect prompt or \"continue without\" in any allowed source. The only related control is the Retry button in the message action bar (section 12)."
+  },
+  {
+    "file": "claude-actions.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "actions",
+    "source_page_url": "https://www.anthropic.com/news/projects",
+    "image_url": "https://www-cdn.anthropic.com/images/4zrzovbb/website/c5823949d9350145ce2fda51acbc7076f2139cd0-1920x1080.png",
+    "note": "Action bar on an assistant message: Copy and Retry (icon + word), thumbs up and down (icon only), in a bordered pill on the bottom-right edge of the message."
+  },
+  {
+    "component": "actions",
+    "product": "Claude",
+    "gap": "Edit action on user messages and the hover state: no allowed image. A second image for this component was not found."
+  },
+  {
+    "file": "clay-rail.png",
+    "product": "Clay",
+    "component": "rail",
+    "source_page_url": "https://www.clay.com/signals",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a7f6098d11ae7752df67af9_TopicIntent_new.avif",
+    "note": "App shell from the Signals page: icon-only destination column, labeled panel with scope switcher and collapse, link list, audiences list with search and plus."
+  },
+  {
+    "file": "clay-rail-2.png",
+    "product": "Clay",
+    "component": "rail",
+    "source_page_url": "https://www.clay.com/audiences",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a3a111bdc2fd711be9c6a7d_414b806de774344b8139c242ac6fced5_ABM.avif",
+    "note": "Audiences app: section header row \"All audiences\" with search and plus icons, then Created by me and Workspace groups."
+  },
+  {
+    "file": "clay-header.png",
+    "product": "Clay",
+    "component": "header",
+    "source_page_url": "https://www.clay.com/signals",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a7f6098d11ae7752df67af9_TopicIntent_new.avif",
+    "note": "Table header: title, green status dot, row count, updated time, overflow, square icon buttons with one filled primary, filter chips row."
+  },
+  {
+    "file": "clay-header-2.png",
+    "product": "Clay",
+    "component": "header",
+    "source_page_url": "https://www.clay.com/functions",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/69dd8de91b52fdc13e8b7397_12e4d3c680a37fe19e48498680c13254_functions-visual.png",
+    "note": "Functions app: breadcrumb bar with Credits button and avatar, toolbar with mode, view, column and row counts, and Running/Archived/Up-to-date row states."
+  },
+  {
+    "file": "clay-empty.png",
+    "product": "Clay",
+    "component": "empty",
+    "source_page_url": "https://www.clay.com/blog/how-sculptor-turns-your-gtm-data-into-your-competitive-advantage",
+    "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/690374d7046c1b93f4a0cc5c_5dce15f9.avif",
+    "note": "Sculptor suggested prompts as cards with an icon tile and one question each."
+  },
+  {
+    "file": "clay-empty-2.png",
+    "product": "Clay",
+    "component": "empty",
+    "source_page_url": "https://www.clay.com/use-cases/account-research",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6943253216a03b00791a9147_Account%20research%20at%20scale01.jpg",
+    "note": "Ask Claygent template list: title with count and close, two-line rows, selected row filled with an arrow."
+  },
+  {
+    "file": "clay-composer.png",
+    "product": "Clay",
+    "component": "composer",
+    "source_page_url": "https://www.clay.com/sculptor",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/68c898f8dcf34a6442235799_d2b1bdb5014302d3dff5e18262ae4136_Workflow%20acceleration.avif",
+    "note": "Sculptor side panel: header icons, View previous messages button, collapsible plan card, composer with plus and send."
+  },
+  {
+    "file": "clay-composer-2.png",
+    "product": "Clay",
+    "component": "composer",
+    "source_page_url": "https://www.clay.com/sequencer",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a95ac3daf4a36f6548d908c_sequencer-opengraph.png",
+    "note": "Sequencer prompt with column-reference chips and Update preview, Discard, Accept footer (also the approval pattern)."
+  },
+  {
+    "file": "clay-composer-3.png",
+    "product": "Clay",
+    "component": "composer",
+    "source_page_url": "https://www.clay.com/sculptor",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/68c9ac086f7098cdaf221bb6_Understand_actondata.png",
+    "note": "Sculptor panel mid-conversation: right-aligned user bubble, plain assistant text with headings, composer docked below with a context placeholder."
+  },
+  {
+    "file": "clay-toolstep.png",
+    "product": "Clay",
+    "component": "toolstep",
+    "source_page_url": "https://www.clay.com/claygent",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a6ad93e814d0abb89ed4195_claygent-hero-7.avif",
+    "note": "Claygent step list: check circle for done, spinner for running, blank for pending; per-row streaming phase text in the table."
+  },
+  {
+    "file": "clay-toolstep-2.png",
+    "product": "Clay",
+    "component": "toolstep",
+    "source_page_url": "https://www.clay.com/",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a1797e635ca38900bfbb10a_case-4.avif",
+    "note": "Clay agent step card: actor icon and name, three rows with right-aligned check or spinner, dotted link to the next action."
+  },
+  {
+    "file": "clay-resultcard.png",
+    "product": "Clay",
+    "component": "resultcard",
+    "source_page_url": "https://www.clay.com/use-cases/data-enrichment",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/69714194ec0845268014c05e_Waterfall_CRMEnrich.avif",
+    "note": "Waterfall provider list: First try, Then try, provider logo rows, a Load more row, and a result chip showing which provider returned data."
+  },
+  {
+    "file": "clay-resultcard-2.png",
+    "product": "Clay",
+    "component": "resultcard",
+    "source_page_url": "https://www.clay.com/clay-for-sales",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/697a57ee7c5368bd2cd1349a_b52f67831fb2baee1794f38092c326cd_Enrich%20reps%E2%80%99%20ad-hoc_Sales%20%281%29.avif",
+    "note": "Enriched card: header band, person row, fields each tagged with the source provider icon."
+  },
+  {
+    "file": "clay-resultcard-3.png",
+    "product": "Clay",
+    "component": "resultcard",
+    "source_page_url": "https://www.clay.com/use-cases/tam-sourcing",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a6769e132df69d1cd8a48e4_UI-sectiontam.png",
+    "note": "Provider picker grid with logo and name tiles (Apollo, ZoomInfo, Ocean.io, Clay DB, Clearbit, 6sense)."
+  },
+  {
+    "file": "clay-sidepanel.png",
+    "product": "Clay",
+    "component": "sidepanel",
+    "source_page_url": "https://www.clay.com/functions",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/69dd8de91b52fdc13e8b7397_12e4d3c680a37fe19e48498680c13254_functions-visual.png",
+    "note": "Function inspector: icon title, Edit button, overflow and collapse, Information section with Status, Credit cost, Owner rows."
+  },
+  {
+    "file": "clay-sidepanel-2.png",
+    "product": "Clay",
+    "component": "sidepanel",
+    "source_page_url": "https://www.clay.com/signals",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a7f6098d11ae7752df67af9_TopicIntent_new.avif",
+    "note": "Add signal panel: breadcrumb with close, provider checkboxes each with a per-unit cost chip, full-width Generate topics button."
+  },
+  {
+    "file": "clay-sidepanel-3.png",
+    "product": "Clay",
+    "component": "sidepanel",
+    "source_page_url": "https://www.clay.com/blog/open-weight-models-are-now-in-claygent",
+    "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/6a5560e8b9b2875f3bebf645_Open-weight-models_blog-inline-2.avif",
+    "note": "Claygent config panel: title with rename, Generate and Configure segmented tabs, model dropdown with search and Compare models link."
+  },
+  {
+    "file": "clay-approval.png",
+    "product": "Clay",
+    "component": "approval",
+    "source_page_url": "https://www.clay.com/changelog/product-roundup-25-q3-2-bce36",
+    "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/687d827b19a1ec2707903e5c_CleanShot%202025-07-20%20at%2019.57.36%402x.avif",
+    "note": "Import confirmation: what will happen, cost per row and total as coin chips, budget warning strip, auto-update toggle, Cancel and Import and run."
+  },
+  {
+    "file": "clay-approval-2.png",
+    "product": "Clay",
+    "component": "approval",
+    "source_page_url": "https://www.clay.com/changelog/product-roundup-25-q3-2-bce36",
+    "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/687d82077d1362f24d426c1e_CleanShot%202025-07-20%20at%2019.55.41%402x.avif",
+    "note": "Slack-delivered approval: question, optional feedback box, Approve and Deny buttons."
+  },
+  {
+    "file": "clay-usage.png",
+    "product": "Clay",
+    "component": "usage",
+    "source_page_url": "https://www.clay.com/changelog/introducing-claygent-neon",
+    "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/669637623fdf61a3938880a6_img-claygent-neon.avif",
+    "note": "Model picker rows with key-or-credits choice, coin cost chip, info chip and a Recommended pill."
+  },
+  {
+    "file": "clay-usage-2.png",
+    "product": "Clay",
+    "component": "usage",
+    "source_page_url": "https://www.clay.com/changelog/ai-action-consolidation",
+    "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/6707f7b06fdd84e4b3954c6b_CleanShot%202024-10-10%20at%2011.49.31%402x.avif",
+    "note": "Config footer: Try on 5 rows, coin pill \"1 / row\", Save split button."
+  },
+  {
+    "file": "clay-usage-3.png",
+    "product": "Clay",
+    "component": "usage",
+    "source_page_url": "https://www.clay.com/claygent",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a6adfe03db17a6091dc0c9d_claygent-meta-og-character.png",
+    "note": "Data hub metric cards: title with plus, two labeled big numbers each."
+  },
+  {
+    "file": "clay-error.png",
+    "product": "Clay",
+    "component": "error",
+    "source_page_url": "https://www.clay.com/ai-formula",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/673dbab1ce54620949925647_img-card-ai-formula-1.avif",
+    "note": "Empty and skipped enrichment cells in the table: \"Not found\" and \"Run condition not met\", selected cell outlined."
+  },
+  {
+    "file": "clay-error-2.png",
+    "product": "Clay",
+    "component": "error",
+    "source_page_url": "https://www.clay.com/blog/open-weight-models-are-now-in-claygent",
+    "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/6a5560e8b9b2875f3bebf645_Open-weight-models_blog-inline-2.avif",
+    "note": "Column running at 31% with a progress bar and an orange warning triangle on one row among green status dots."
+  },
+  {
+    "file": "clay-actions.png",
+    "product": "Clay",
+    "component": "actions",
+    "source_page_url": "https://www.clay.com/changelog/2024-11-15",
+    "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/6737d1fbe35152c1da730e7b_6737d0d7af122b1c7349dca3_Screenshot%25202024-11-15%2520at%25202.51.39%25E2%2580%25AFPM.avif",
+    "note": "Row context menu (Run 1 row, Insert row, Leave feedback, Delete 1 row in red) and the feedback panel it opens."
+  },
+  {
+    "file": "clay-actions-2.png",
+    "product": "Clay",
+    "component": "actions",
+    "source_page_url": "https://www.clay.com/audiences",
+    "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a3a11ce11df7428a0e76059_fb727d42b61acfd7418e75ec51235e9f_ABM3.avif",
+    "note": "Export menu: icon plus label rows and a filled Export action bar at the bottom."
+  },
+  {
+    "component": "thinking",
+    "product": "Clay",
+    "gap": "Clay shows no reasoning or thinking disclosure in any official image; Claygent Navigator mentions \"Claygent Replay\" for reviewing steps but no screenshot exists."
+  },
+  {
+    "component": "error",
+    "product": "Clay",
+    "gap": "No image shows a failed agent step or enrichment error with retry, fix-connection or skip actions; only empty-result cell states exist."
+  },
+  {
+    "component": "actions",
+    "product": "Clay",
+    "gap": "No image shows hover icon actions (copy, rerun, edit) on chat messages; only a row context menu exists."
+  },
+  {
+    "component": "approval",
+    "product": "Clay",
+    "gap": "No image shows the resolved state (approved or denied) of an approval; only the pending prompt."
+  },
+  {
+    "component": "composer",
+    "product": "Clay",
+    "gap": "No official image shows keyboard hints or a model/tool picker inside the chat composer; model choice lives in the column config panel."
+  },
+  {
+    "file": "attio-rail.png",
+    "product": "Attio",
+    "component": "rail",
+    "source_page_url": "https://attio.com/changelog/2023/record-creation-attribution",
+    "image_url": "https://a.storyblok.com/f/234930/2656x1427/baf54c1a0a/record-creation-attribution.png",
+    "note": "Light shell: workspace switcher + collapse, Quick Actions with cmd-K, search with /, destinations with icons, Pinned Views, Lists."
+  },
+  {
+    "file": "attio-rail-2.png",
+    "product": "Attio",
+    "component": "rail",
+    "source_page_url": "https://attio.com/help/reference/attio-101/productivity/introduction-to-tasks",
+    "image_url": "https://a.storyblok.com/f/234930/1438x1307/f083891709/task-assignment-notification.png",
+    "note": "Rail with search cmd-K, inbox button with unread badge, Home/Tasks/Notes/Calls, grouped Records and Lists, selected row, notifications popover."
+  },
+  {
+    "file": "attio-rail-3.png",
+    "product": "Attio",
+    "component": "rail",
+    "source_page_url": "https://attio.com/changelog/2024/pin-favorites-in-your-sidebar",
+    "image_url": "https://a.storyblok.com/f/234930/800x493/9632fb8422/pin-favorites.gif",
+    "note": "Favorites with nested rows, Records, Lists with + on hover, footer rows (Invite teammates, Help); first frame of a GIF."
+  },
+  {
+    "file": "attio-rail-4.png",
+    "product": "Attio",
+    "component": "rail",
+    "source_page_url": "https://attio.com/changelog/2023/report-and-list-duplication",
+    "image_url": "https://a.storyblok.com/f/234930/1280x720/e1b7f19b3a/report-and-list-duplication.gif",
+    "note": "Dark shell: same rail in dark, workspace switcher, search with cmd-K, Pinned Views, Lists; first frame of a GIF."
+  },
+  {
+    "file": "attio-header.png",
+    "product": "Attio",
+    "component": "header",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x912/3856701aba/ask-attio-options-menu.png",
+    "note": "Ask Attio thread header: title, + new chat, history, overflow menu (Open in full page, Copy chat ID, Delete), close."
+  },
+  {
+    "file": "attio-header-2.png",
+    "product": "Attio",
+    "component": "header",
+    "source_page_url": "https://attio.com/help/reference/attio-101/productivity/introduction-to-notes",
+    "image_url": "https://a.storyblok.com/f/234930/1379x825/c2d1537ed7/notes007.png",
+    "note": "Record header: logo + title, chip strip (owner, last interaction, value), tab row with count badges."
+  },
+  {
+    "file": "attio-header-3.png",
+    "product": "Attio",
+    "component": "header",
+    "source_page_url": "https://attio.com/engineering/blog/ask-attio-a-technical-look-at-our-new-agent",
+    "image_url": "https://a.storyblok.com/f/234930/3840x2988/17f95aa561/ask-attio-_-draft-emails-1.png",
+    "note": "Dark thread header: title with favorite star, + history overflow close; user bubble right, assistant text left."
+  },
+  {
+    "file": "attio-empty.png",
+    "product": "Attio",
+    "component": "empty",
+    "source_page_url": "https://attio.com/platform/universal-context",
+    "image_url": "https://a.storyblok.com/f/234930/3503x1955/a0abc96ca7/uc-showcase-transparent-3x.png",
+    "note": "Home: greeting, composer with Auto and / hints, two suggestion chips with icons, meetings list below."
+  },
+  {
+    "file": "attio-empty-2.png",
+    "product": "Attio",
+    "component": "empty",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x1080/d5828a83d2/ask-attio-home-composer.png",
+    "note": "Home close-up: Recent chat strip above the composer, two suggestion chips, Meetings row list."
+  },
+  {
+    "file": "attio-composer.png",
+    "product": "Attio",
+    "component": "composer",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x1563/3d2010c685/ask-attio-add-a-prompt.png",
+    "note": "Slash menu in the composer: prompts with colored icons, New prompt, Browse prompts, Manage prompts; context chip, Auto, / key, send."
+  },
+  {
+    "file": "attio-composer-2.png",
+    "product": "Attio",
+    "component": "composer",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x649/922fefecf3/ask-attio-cancel-message.png",
+    "note": "Send turns into a stop square while running; tooltip reads Cancel message."
+  },
+  {
+    "file": "attio-composer-3.png",
+    "product": "Attio",
+    "component": "composer",
+    "source_page_url": "https://attio.com/engineering/blog/ask-attio-a-technical-look-at-our-new-agent",
+    "image_url": "https://a.storyblok.com/f/234930/804x694/562c06862b/llm.png",
+    "note": "Dark model picker: Auto at top, checked row, provider icons; the model name replaces Auto in the composer."
+  },
+  {
+    "file": "attio-thinking.png",
+    "product": "Attio",
+    "component": "thinking",
+    "source_page_url": "https://attio.com/changelog/2026/what-s-new-in-workflows",
+    "image_url": "https://a.storyblok.com/f/234930/3840x2160/4a24c5dca3/workflows.png",
+    "note": "Assistant turn: Thinking label, one line of intent, three outlined step chips, then a result card with a Draft pill."
+  },
+  {
+    "file": "attio-thinking-2.png",
+    "product": "Attio",
+    "component": "thinking",
+    "source_page_url": "https://attio.com/platform/web-agent",
+    "image_url": "https://a.storyblok.com/f/234930/1200x948/5e1fdb040c/web-agent-reasoning-transparent-figma.png",
+    "note": "AI attribute reasoning popover: confidence dot and level, Reasoning paragraph, Citations as link chips."
+  },
+  {
+    "file": "attio-toolstep.png",
+    "product": "Attio",
+    "component": "toolstep",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x1380/198993d585/ask-attio-summarize-last-meeting.png",
+    "note": "Inline tool rows in the thread: icon + past-tense verb + object, result count in muted text, between assistant sentences."
+  },
+  {
+    "file": "attio-toolstep-2.png",
+    "product": "Attio",
+    "component": "toolstep",
+    "source_page_url": "https://attio.com/platform/custom-agents",
+    "image_url": "https://a.storyblok.com/f/234930/2327x1392/a26f7a8007/custom-agents-showcase.png",
+    "note": "Agent log panel: Agent and Tool rows with duration (0.8s) and clock time, credits chip, timeline bar, header stats."
+  },
+  {
+    "file": "attio-resultcard.png",
+    "product": "Attio",
+    "component": "resultcard",
+    "source_page_url": "https://attio.com/changelog/2024/new-browser-extension-integrations",
+    "image_url": "https://a.storyblok.com/f/234930/7680x4320/d2527ebcab/brox-integrations.png",
+    "note": "Record suggestion card: avatar + name, icon-labelled fields, primary Add to Attio button, Related records rows with chevrons."
+  },
+  {
+    "file": "attio-resultcard-2.png",
+    "product": "Attio",
+    "component": "resultcard",
+    "source_page_url": "https://attio.com/changelog/2026/web-research-agent",
+    "image_url": "https://a.storyblok.com/f/234930/7680x4320/2aafe4b4e2/ai-attributes-update.png",
+    "note": "Enrichment cell: value + green confidence dot, popover with Confidence level, Reasoning, Citations as link chips."
+  },
+  {
+    "file": "attio-resultcard-3.png",
+    "product": "Attio",
+    "component": "resultcard",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x488/58e5f32b48/ask-attio-search-web.png",
+    "note": "Source chip: globe icon, Searched web: 6 results, stacked favicons with +3 count."
+  },
+  {
+    "file": "attio-sidepanel.png",
+    "product": "Attio",
+    "component": "sidepanel",
+    "source_page_url": "https://attio.com/changelog/2026/emails-on-deals-and-custom-objects",
+    "image_url": "https://a.storyblok.com/f/234930/7680x4320/ec342c3252/emails-on-deals.png",
+    "note": "Record peek: close, prev/next with 12 of 200 in Deals, help, overflow; title + action icon row; tabs with counts and gear."
+  },
+  {
+    "file": "attio-sidepanel-2.png",
+    "product": "Attio",
+    "component": "sidepanel",
+    "source_page_url": "https://attio.com/changelog/2025/auto-summaries-and-labels",
+    "image_url": "https://a.storyblok.com/f/234930/7680x4320/b4fc21a120/email-summaries-and-tags.png",
+    "note": "Peek with a right-hand Details and Comments pane: field rows with icons, Lists, 2 of 350 in People."
+  },
+  {
+    "file": "attio-approval.png",
+    "product": "Attio",
+    "component": "approval",
+    "source_page_url": "https://attio.com/changelog/2026/ask-attio-to-take-action",
+    "image_url": "https://a.storyblok.com/f/234930/7680x4320/b06fb3860d/ask-attio-actions.png",
+    "note": "Review table before a write: per-attribute checkboxes, attribute and New value columns, 1/3 pager, Discard, Update (5) with cmd-Enter."
+  },
+  {
+    "file": "attio-approval-2.png",
+    "product": "Attio",
+    "component": "approval",
+    "source_page_url": "https://attio.com/platform/universal-context",
+    "image_url": "https://a.storyblok.com/f/234930/1200x948/619645e960/uc-approval-transparent-3x.png",
+    "note": "Per-change cards: Update Role, Funding raised; each has an info icon and an Accept button with a check."
+  },
+  {
+    "file": "attio-approval-3.png",
+    "product": "Attio",
+    "component": "approval",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x873/259abfdcff/ask-attio-allow-share-feedback.png",
+    "note": "Inline permission card: Deny, Always allow, Allow once; above it the message action bar (copy, up, down, retry)."
+  },
+  {
+    "file": "attio-usage.png",
+    "product": "Attio",
+    "component": "usage",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/manage-ask-attio-settings",
+    "image_url": "https://a.storyblok.com/f/234930/2454x1592/302454e112/manage-ask-attio-settings.png",
+    "note": "Ask Attio settings: Credits section, Credits used with reset date, Personal credits used 0/1,000, Workspace credits used."
+  },
+  {
+    "file": "attio-usage-2.png",
+    "product": "Attio",
+    "component": "usage",
+    "source_page_url": "https://attio.com/changelog/2024/new-browser-extension-integrations",
+    "image_url": "https://a.storyblok.com/f/234930/7680x4320/d2527ebcab/brox-integrations.png",
+    "note": "Credits line under the primary button: 104 of 200 credits used in September with an info icon."
+  },
+  {
+    "file": "attio-usage-3.png",
+    "product": "Attio",
+    "component": "usage",
+    "source_page_url": "https://attio.com/platform/custom-agents",
+    "image_url": "https://a.storyblok.com/f/234930/2327x1392/a26f7a8007/custom-agents-showcase.png",
+    "note": "Per-step credits chip in the run panel (24), runtime 25s, executions 3."
+  },
+  {
+    "file": "attio-error.png",
+    "product": "Attio",
+    "component": "error",
+    "source_page_url": "https://attio.com/help/reference/automations/workflows/troubleshooting-workflows",
+    "image_url": "https://a.storyblok.com/f/234930/1618x994/6fa2e9447a/failed-run-error-message.png",
+    "note": "Failed step: red Failed pill on the node and in the panel, red error sentence, credits used 0, runtime, executions."
+  },
+  {
+    "file": "attio-error-2.png",
+    "product": "Attio",
+    "component": "error",
+    "source_page_url": "https://attio.com/help/reference/automations/workflows/troubleshooting-workflows",
+    "image_url": "https://a.storyblok.com/f/234930/1202x758/39008495ee/retry-with-live-workflow.png",
+    "note": "Failed run: red x with Run #3, Retry split button with Retry from start, Retry from failed, Retry with live workflow, plus tooltip."
+  },
+  {
+    "file": "attio-error-3.png",
+    "product": "Attio",
+    "component": "error",
+    "source_page_url": "https://attio.com/help/reference/automations/workflows/troubleshooting-workflows",
+    "image_url": "https://a.storyblok.com/f/234930/2471x1521/1aafe4d190/access-the-run-viewer.png",
+    "note": "Run history list: green check and red x rows, Failed in red with date, credits chip per run, cancel and pause on the running run."
+  },
+  {
+    "file": "attio-actions.png",
+    "product": "Attio",
+    "component": "actions",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x912/e155c2a55a/ask-attio-edit-message.png",
+    "note": "Hover bar under a user message: copy and edit icons, tooltip Edit above the hovered icon."
+  },
+  {
+    "file": "attio-actions-2.png",
+    "product": "Attio",
+    "component": "actions",
+    "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+    "image_url": "https://a.storyblok.com/f/234930/1920x1554/27c5c307cd/ask-attio-message-retries-arrows.png",
+    "note": "Under an assistant message: prev/next with 2/2, copy, thumbs up, thumbs down, retry, all icon-only."
+  },
+  {
+    "file": "attio-actions-3.png",
+    "product": "Attio",
+    "component": "actions",
+    "source_page_url": "https://attio.com/changelog/2025/custom-record-actions",
+    "image_url": "https://a.storyblok.com/f/234930/3840x2160/63b462cb20/record-actions.jpg",
+    "note": "Record action bar: Compose email plus icon-only buttons; Edit actions menu with drag handles."
+  },
+  {
+    "component": "rail",
+    "product": "Attio",
+    "gap": "No image of the collapsed icon rail and none of hover actions on a favorites row; only the collapse toggle is visible."
+  },
+  {
+    "component": "composer",
+    "product": "Attio",
+    "gap": "Attio has no + context menu; context is a chip, @ mention, and / prompts."
+  },
+  {
+    "component": "thinking",
+    "product": "Attio",
+    "gap": "No expandable thinking disclosure and no streaming state in any official image."
+  },
+  {
+    "component": "toolstep",
+    "product": "Attio",
+    "gap": "No chat step row with spinner to check; that state appears only on workflow nodes."
+  },
+  {
+    "component": "approval",
+    "product": "Attio",
+    "gap": "No approval for a send action and no resolved state in official images."
+  },
+  {
+    "component": "error",
+    "product": "Attio",
+    "gap": "No chat-level failure or reconnect prompt; only workflow run errors."
+  },
+  {
+    "component": "sidepanel",
+    "product": "Attio",
+    "gap": "No image showing the resize handle."
+  }
+]
