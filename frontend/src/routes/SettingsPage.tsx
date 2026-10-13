@@ -9,6 +9,7 @@ import {
   type Settings,
   type WorkspaceDiagnostics,
 } from "../api";
+import { connectorStatus } from "../connectorStatus";
 import { DiagnosticBundle } from "./DiagnosticBundle";
 import { ReleaseChannelSettings } from "./UpdateChannel";
 import { WorkspaceSettings } from "./WorkspaceSettings";
@@ -47,13 +48,6 @@ const EMPTY_WORKSPACE: WorkspaceDiagnostics = {
   host_approvals: [],
   tasks: [],
 };
-
-function connectorStatusLabel(status: string): string {
-  if (status === "connected") return "Connected";
-  if (status === "configured") return "Configured";
-  if (status === "missing") return "Needs setup";
-  return "Needs attention";
-}
 
 function providerLabel(provider: ProviderVerification["provider"]): string {
   return {
@@ -260,12 +254,23 @@ export function SettingsPage() {
           <section className="settings-section settings-connectors" aria-labelledby="connectors-heading">
             <h2 id="connectors-heading">Connections</h2>
             <ul aria-label="Connector status">
-              {state.connectors.map((connector) => (
-                <li key={connector.id}>
-                  <span>{connector.title}</span>
-                  <strong>{connectorStatusLabel(connector.status)}</strong>
-                </li>
-              ))}
+              {state.connectors.map((connector) => {
+                const status = connectorStatus(connector);
+                return (
+                  <li key={connector.id}>
+                    <span>{connector.title}</span>
+                    <span className="settings-connector-state">
+                      <span className={`connection-status tone-${status.tone}`}>{status.label}</span>
+                      <a
+                        href={connector.repairRoute}
+                        aria-label={`${status.action} ${connector.title}`}
+                      >
+                        {status.action}
+                      </a>
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           </section>
 

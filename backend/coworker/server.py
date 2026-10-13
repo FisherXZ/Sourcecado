@@ -1705,7 +1705,7 @@ def create_app(
             else:
                 health = {
                     "category": "setup_required",
-                    "label": "Available",
+                    "label": "Not connected",
                     "message": "This connection has not been set up yet.",
                 }
                 recovery = {
@@ -1728,6 +1728,9 @@ def create_app(
                 "missing_scopes": missing_scopes,
                 "health": health,
                 "recovery": recovery,
+                # A completed sign-in proved the grant; a saved key was never
+                # checked. Neither is a live probe of the connection today.
+                "verified": status == "connected" and not manual_configuration,
                 "supported_actions": supported_actions,
                 "available_actions": available_actions,
                 "repair_route": f"#/connections/{connector_id}",

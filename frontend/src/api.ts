@@ -1633,6 +1633,7 @@ export type Connector = {
   missingScopes: string[];
   health: { category: string; label: string; message: string };
   recovery: { category: string; actionLabel: string; message: string } | null;
+  verified: boolean;
   supportedActions: string[];
   availableActions: ConnectorAction[];
   repairRoute: string;
@@ -1712,6 +1713,7 @@ function normalizeConnector(value: unknown): Connector | null {
             actionLabel: text(rawRecovery.action_label, "Try again"),
             message: text(rawRecovery.message, "Try the connection again."),
           },
+    verified: raw.verified === true,
     supportedActions: textList(raw.supported_actions),
     availableActions: textList(raw.available_actions).filter(
       (action): action is ConnectorAction => CONNECTOR_ACTIONS.has(action as ConnectorAction),
