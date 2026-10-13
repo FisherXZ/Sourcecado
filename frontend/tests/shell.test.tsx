@@ -41,7 +41,8 @@ const api = vi.hoisted(() => ({
   setPersonSequence: vi.fn(),
 }));
 
-vi.mock("../src/api", async () => ({
+vi.mock("../src/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/api")>()),
   ...(await import("./taskApi")).taskApiMock(),
   connectCalendar: vi.fn(),
   connectDrive: vi.fn(),

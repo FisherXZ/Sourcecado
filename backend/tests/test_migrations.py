@@ -255,7 +255,7 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
     assert store_plan.record_count > 0
 
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(db) == 3
+    assert _user_version(db) == 4
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -273,7 +273,11 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
-        assert {"person_attachments", "person_versions"} <= tables
+        assert {
+            "person_attachments",
+            "person_versions",
+            "person_descriptions",
+        } <= tables
     finally:
         conn.close()
 
@@ -327,12 +331,12 @@ def test_people_v2_moves_masked_surnames_out_of_canonical_history(tmp_path):
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert plan.from_version == 1
-    assert plan.to_version == 3
+    assert plan.to_version == 4
 
     outcome = migrations.apply_migrations(root)
 
     assert outcome.error is None
-    assert _user_version(root / "people.db") == 3
+    assert _user_version(root / "people.db") == 4
     loaded = PersonStore(root).get(person["person_id"])
     assert loaded is not None
     assert loaded["person_id"] == person["person_id"]
@@ -374,6 +378,70 @@ def test_people_v2_moves_masked_surnames_out_of_canonical_history(tmp_path):
     )
     assert "Fisher" in title
     assert "Zh***g" not in title
+
+
+def test_people_v3_adds_the_description_table_to_an_existing_v2_database(tmp_path):
+    """An existing v2 people.db without person_descriptions is migrated, not
+    silently grown by a constructor probe (spec §8.3).
+
+    This is the reviewer's repro: a populated v2 database that predates the
+    description table must be reported PENDING, gain the table through the
+    registered 2->3 step with backup and rollback, and end at version 3 —
+    rather than having the table appear while user_version stays at 2.
+    """
+    from coworker.people import PersonStore
+
+    root = tmp_path / "state"
+    store = PersonStore(root)
+    person = store.keep_from_apollo(
+        apollo_id="apollo-desc",
+        first_name="Dana",
+        last_name_obfuscated="Reed",
+        title="Partner",
+        company="Codeology",
+    )
+    # Rewind to the real v2 shape: drop the table a v2 install never had and
+    # stamp the version back to 2.
+    store._conn.execute("DROP TABLE person_descriptions")
+    store._conn.execute("PRAGMA user_version = 2")
+    store._conn.commit()
+    store._conn.close()
+
+    db = root / "people.db"
+    assert "person_descriptions" not in migrations.table_names(
+        sqlite3.connect(db)
+    )
+
+    plan = _plan_for(migrations.plan_migrations(root), "people_db")
+    assert plan.status is StoreStatus.PENDING
+    assert plan.from_version == 2
+    assert plan.to_version == 4
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4)]
+
+    outcome = migrations.apply_migrations(root)
+    assert outcome.error is None
+    assert outcome.backup_id is not None
+    assert _user_version(db) == 4
+
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        assert "person_descriptions" in migrations.table_names(conn)
+        # The populated person and its slots survive the migration.
+        assert (
+            conn.execute(
+                "SELECT first_name FROM people WHERE person_id = ?",
+                (person["person_id"],),
+            ).fetchone()["first_name"]
+            == "Dana"
+        )
+    finally:
+        conn.close()
+
+    # Reopening the real store leaves the recorded version at current.
+    reopened = PersonStore(root)
+    assert reopened.descriptions(person["person_id"])["general"]["version"] == 0
+    assert _user_version(db) == 4
 
 
 def test_legacy_meeting_evidence_db_upgrades_from_the_pre_registry_shape(tmp_path):
@@ -483,12 +551,11 @@ def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
 
     # Constructing the stores must not knock the recorded version off current.
     assert _user_version(root / "club.db") == 2
-    assert _user_version(root / "people.db") == 3
-
+    assert _user_version(root / "people.db") == 4
 
 
 def _people_v2_with_handoff_and_restricted_source(root: Path) -> str:
-    """A populated version 2 people.db, as an install before tasks left it."""
+    """A populated version 2 people.db, from before descriptions and tasks."""
     from coworker.people import PersonStore
 
     people = PersonStore(root)
@@ -520,7 +587,7 @@ def _people_v2_with_handoff_and_restricted_source(root: Path) -> str:
     people._conn.close()
     conn = sqlite3.connect(root / "people.db")
     try:
-        for name in ("crm_operations", "crm_changes", "person_tasks"):
+        for name in ("crm_operations", "crm_changes", "person_tasks", "person_descriptions"):
             conn.execute(f"DROP TABLE {name}")
         conn.execute("PRAGMA user_version = 2")
         conn.commit()
@@ -549,12 +616,12 @@ def test_people_v3_adds_tasks_and_leaves_existing_people_intact(tmp_path):
 
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
-    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3)]
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4)]
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
     assert outcome.backup_id is not None
-    assert _user_version(root / "people.db") == 3
+    assert _user_version(root / "people.db") == 4
 
     after = _dump_database(root / "people.db")
     assert after["integrity"] == ["ok"]
@@ -580,10 +647,10 @@ def test_people_v3_adds_tasks_and_leaves_existing_people_intact(tmp_path):
     )["task"]
     assert task["person_id"] == person_id
     # Opening the store again must not knock the recorded version off current.
-    assert _user_version(root / "people.db") == 3
+    assert _user_version(root / "people.db") == 4
 
 
-def test_a_failed_people_v3_step_restores_the_v2_database(tmp_path, monkeypatch):
+def test_a_failed_people_tasks_step_restores_the_v2_database(tmp_path, monkeypatch):
     root = tmp_path / "state"
     _people_v2_with_handoff_and_restricted_source(root)
     before = _dump_database(root / "people.db")
@@ -597,8 +664,8 @@ def test_a_failed_people_v3_step_restores_the_v2_database(tmp_path, monkeypatch)
     broken = migrations.dataclasses.replace(
         original,
         migrations=(
-            *original.migrations[:2],
-            dataclasses.replace(original.migrations[2], apply=explode),
+            *original.migrations[:3],
+            dataclasses.replace(original.migrations[3], apply=explode),
         ),
     )
     monkeypatch.setattr(
@@ -619,16 +686,16 @@ def test_a_failed_people_v3_step_restores_the_v2_database(tmp_path, monkeypatch)
 
     monkeypatch.undo()
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(root / "people.db") == 3
+    assert _user_version(root / "people.db") == 4
 
 
-def test_a_fresh_people_db_reaches_v3_with_empty_task_tables(tmp_path):
+def test_a_fresh_people_db_reaches_v4_with_empty_task_tables(tmp_path):
     from coworker.people import PersonStore
 
     root = tmp_path / "state"
     PersonStore(root)._conn.close()
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(root / "people.db") == 3
+    assert _user_version(root / "people.db") == 4
     dump = _dump_database(root / "people.db")
     assert dump["rows"]["person_tasks"] == []
     assert dump["rows"]["people"] == []

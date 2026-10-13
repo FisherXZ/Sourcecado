@@ -17,7 +17,8 @@ const api = vi.hoisted(() => ({
   setPersonSequence: vi.fn(),
 }));
 
-vi.mock("../src/api", async () => ({
+vi.mock("../src/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/api")>()),
   ...api,
   ...(await import("./taskApi")).taskApiMock(),
 }));

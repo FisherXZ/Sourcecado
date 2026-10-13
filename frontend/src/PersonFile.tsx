@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
 
+import { DescriptionEditor } from "./DescriptionEditor";
 import { OutreachPanel } from "./OutreachPanel";
 import { TaskList } from "./Tasks";
 
 import {
   attachPersonMeeting,
   attachPersonDriveEvidence,
+  defaultPersonDescriptions,
   getPerson,
   openPersonSourcingChat,
   refreshPersonMeetings,
@@ -426,6 +428,42 @@ export function PersonFileView({ personId }: { personId: string }) {
             Couldn’t update the sequence state. Try again.
           </p>
         ) : null}
+      </section>
+
+      <section className="person-section" aria-labelledby="person-description-heading">
+        <h2 id="person-description-heading">Description</h2>
+        <p>
+          Readable context about this person. Editing either field protects it
+          as your own until you let the assistant maintain it again.
+        </p>
+        {(() => {
+          const descriptions = file.descriptions ?? defaultPersonDescriptions();
+          const reload = () => {
+            void getPerson(personId).then(setFile);
+          };
+          return (
+            <div className="person-descriptions">
+              <div className="person-description-slot">
+                <h3>Short description</h3>
+                <DescriptionEditor
+                  personId={personId}
+                  description={descriptions.general}
+                  onSaved={reload}
+                  rows={2}
+                />
+              </div>
+              <div className="person-description-slot">
+                <h3>Detailed description</h3>
+                <DescriptionEditor
+                  personId={personId}
+                  description={descriptions.detailed}
+                  onSaved={reload}
+                  rows={6}
+                />
+              </div>
+            </div>
+          );
+        })()}
       </section>
 
       <div className="person-section person-tasks">
