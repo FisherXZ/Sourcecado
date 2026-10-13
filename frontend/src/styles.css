@@ -1179,6 +1179,53 @@
   font-weight: 600;
 }
 
+.task-edit-btn {
+  flex: none;
+  align-self: center;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.task-edit-btn:hover {
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+/* Undo toast after completing a task */
+.task-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--accent-deep);
+  color: var(--canvas);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.task-toast button {
+  border: 0;
+  background: transparent;
+  color: var(--canvas);
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ---- Buttons + links shared by tasks ---- */
 .task-btn-primary {
   border: 0;

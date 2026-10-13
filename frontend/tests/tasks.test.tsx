@@ -116,6 +116,29 @@ describe("Tasks view", () => {
     );
   });
 
+  it("offers an Undo after completing, which reopens the task", async () => {
+    render(<TasksView />);
+    await screen.findByText("Send examples");
+    fireEvent.click(screen.getByLabelText("Complete task: Reply to Leo"));
+    const undo = await screen.findByRole("button", { name: "Undo" }, { timeout: 1500 });
+    api.updateTask.mockClear();
+    fireEvent.click(undo);
+    await waitFor(() =>
+      expect(api.updateTask).toHaveBeenCalledWith(
+        "p1",
+        "today",
+        expect.objectContaining({ state: "open" }),
+      ),
+    );
+  });
+
+  it("opens the edit modal from the per-row Edit button", async () => {
+    render(<TasksView />);
+    await screen.findByText("Send examples");
+    fireEvent.click(screen.getByLabelText("Edit task: Reply to Leo"));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
   it("reveals completed tasks on demand", async () => {
     render(<TasksView />);
     await screen.findByText("Send examples");

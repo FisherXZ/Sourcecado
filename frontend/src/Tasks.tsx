@@ -127,6 +127,14 @@ function TaskRow({
           ) : null}
         </div>
       </div>
+      <button
+        type="button"
+        className="task-edit-btn"
+        aria-label={`Edit task: ${task.title}`}
+        onClick={() => onEdit(task)}
+      >
+        Edit
+      </button>
     </li>
   );
 }
@@ -392,37 +400,86 @@ function TaskModal({
 
 // ---- shared completion handling ----
 
+type UndoTarget = { personId: string; taskId: string; title: string; version: number };
+
 function useTaskActions(reload: () => void) {
   const [completing, setCompleting] = useState<Set<string>>(new Set());
+  const [undoTarget, setUndoTarget] = useState<UndoTarget | null>(null);
+  const clearTimer = useRef<number | undefined>(undefined);
+
+  function scheduleUndoClear() {
+    window.clearTimeout(clearTimer.current);
+    clearTimer.current = window.setTimeout(() => setUndoTarget(null), 7000);
+  }
 
   function toggle(task: Task) {
     if (task.state === "open") {
       // Linger with a strike-through, then move it to completed.
       setCompleting((prev) => new Set(prev).add(task.task_id));
-      window.setTimeout(async () => {
-        try {
-          await updateTask(task.person_id, task.task_id, {
-            expectedVersion: task.version,
-            state: "completed",
-          });
-        } finally {
-          setCompleting((prev) => {
-            const next = new Set(prev);
-            next.delete(task.task_id);
-            return next;
-          });
-          reload();
-        }
+      window.setTimeout(() => {
+        void (async () => {
+          try {
+            const updated = await updateTask(task.person_id, task.task_id, {
+              expectedVersion: task.version,
+              state: "completed",
+            });
+            // Offer a one-click undo against the completed task's new version.
+            setUndoTarget({
+              personId: task.person_id,
+              taskId: task.task_id,
+              title: task.title,
+              version: updated.version,
+            });
+            scheduleUndoClear();
+          } catch {
+            // Leave the task open; the reload below reflects the server truth.
+          } finally {
+            setCompleting((prev) => {
+              const next = new Set(prev);
+              next.delete(task.task_id);
+              return next;
+            });
+            reload();
+          }
+        })();
       }, 600);
     } else {
       void updateTask(task.person_id, task.task_id, {
         expectedVersion: task.version,
         state: "open",
-      }).finally(reload);
+      })
+        .catch(() => undefined)
+        .finally(reload);
     }
   }
 
-  return { completing, toggle };
+  function undo() {
+    if (!undoTarget) return;
+    const target = undoTarget;
+    setUndoTarget(null);
+    window.clearTimeout(clearTimer.current);
+    void updateTask(target.personId, target.taskId, {
+      expectedVersion: target.version,
+      state: "open",
+    })
+      .catch(() => undefined)
+      .finally(reload);
+  }
+
+  return { completing, toggle, undoTarget, undo };
+}
+
+function UndoToast({ title, onUndo }: { title: string; onUndo: () => void }) {
+  return (
+    <div className="task-toast" role="status">
+      <span>
+        Completed “{title}”
+      </span>
+      <button type="button" onClick={onUndo}>
+        Undo
+      </button>
+    </div>
+  );
 }
 
 // ---- global two-column Tasks view ----
@@ -452,7 +509,7 @@ export function TasksView() {
     );
   }, []);
 
-  const { completing, toggle } = useTaskActions(reload);
+  const { completing, toggle, undoTarget, undo } = useTaskActions(reload);
 
   async function handleAddMember(name: string): Promise<Member | null> {
     try {
@@ -581,6 +638,8 @@ export function TasksView() {
           onAddMember={handleAddMember}
         />
       ) : null}
+
+      {undoTarget ? <UndoToast title={undoTarget.title} onUndo={undo} /> : null}
     </section>
   );
 }
@@ -681,7 +740,7 @@ export function PersonTasks({ person }: { person: BoardPerson }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [person.person_id]);
 
-  const { completing, toggle } = useTaskActions(reload);
+  const { completing, toggle, undoTarget, undo } = useTaskActions(reload);
 
   async function handleAddMember(name: string): Promise<Member | null> {
     try {
@@ -761,6 +820,8 @@ export function PersonTasks({ person }: { person: BoardPerson }) {
           onAddMember={handleAddMember}
         />
       ) : null}
+
+      {undoTarget ? <UndoToast title={undoTarget.title} onUndo={undo} /> : null}
     </section>
   );
 }
