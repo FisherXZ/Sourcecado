@@ -21,7 +21,7 @@ from coworker.person_identity import (
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -154,8 +154,9 @@ class PersonStore:
         self._ensure_schema()
         if is_new:
             from coworker.crm_repository import TASK_SCHEMA
+            from coworker.crm_mail_repository import MAIL_SCHEMA
 
-            for statement in TASK_SCHEMA:
+            for statement in (*TASK_SCHEMA, *MAIL_SCHEMA):
                 self._conn.execute(statement)
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()

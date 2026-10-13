@@ -38,6 +38,7 @@ from typing import Any
 
 from coworker.agent_run_approval import EFFECT_STATEMENTS
 from coworker.crm_repository import TASK_SCHEMA
+from coworker.crm_mail_repository import MAIL_SCHEMA
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
 from coworker.mcp import SCHEMA_VERSION as MCP_CONFIG_VERSION
 from coworker.people import SCHEMA_VERSION as PEOPLE_DB_VERSION
@@ -892,6 +893,13 @@ def _add_person_tasks(context: MigrationContext) -> int:
     return 0
 
 
+def _add_tracked_mail(context: MigrationContext) -> int:
+    assert context.connection is not None
+    for statement in MAIL_SCHEMA:
+        context.connection.execute(statement)
+    return 0
+
+
 # --- the registry --------------------------------------------------------
 
 REGISTRY: tuple[StoreSpec, ...] = (
@@ -997,6 +1005,13 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 description="Add durable person tasks, CRM change history and operation receipts.",
                 count=lambda context: 0,
                 apply=_add_person_tasks,
+            ),
+            Migration(
+                from_version=3,
+                to_version=4,
+                description="Add tracked Gmail evidence, collection progress and pending analysis revisions.",
+                count=lambda context: 0,
+                apply=_add_tracked_mail,
             ),
         ),
         json_columns=(

@@ -3,6 +3,7 @@
 import pytest
 
 from coworker.crm_mail import classify_outbound
+from coworker.crm_mail_repository import MailRepository
 from coworker.people import PersonStore
 from coworker.reply_filing import build_index
 from coworker.run_evidence import Evidence
@@ -70,3 +71,35 @@ def test_untracked_mail_drafts_and_trash_are_skipped(tmp_path, changes):
     people = PersonStore(tmp_path)
     tracked_person(people)
     assert classify_outbound(outgoing(**changes), build_index(people), account=ACCOUNT).evidence is Evidence.ABSENT
+
+
+def test_evidence_and_pending_analysis_survive_restart_without_duplicates(tmp_path):
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    mail = MailRepository(people)
+    message = outgoing(received_at="2026-10-12T12:00:00+00:00", snippet="Sent in Gmail")
+    assert mail.save_message(pid, message, direction="outbound", account=ACCOUNT,
+        content={"body": "A real response", "body_state": "present"}) is True
+    assert mail.save_message(pid, message, direction="outbound", account=ACCOUNT,
+        content={"body": "A real response", "body_state": "present"}) is False
+    people._conn.close()
+    restarted = MailRepository(PersonStore(tmp_path))
+    assert restarted.message(ACCOUNT, "gmail-response")["body"] == "A real response"
+    assert restarted.analysis_state(pid) == {"latest_evidence_revision": 1, "analyzed_revision": 0, "status": "pending"}
+
+
+def test_failed_check_preserves_success_and_separate_checkpoints(tmp_path):
+    people = PersonStore(tmp_path)
+    mail = MailRepository(people)
+    people.set_reply_cursor("100")
+    mail.finish_check(status="ok", account=ACCOUNT, outbound_after=None, checked_at="2026-10-12T12:00:00+00:00")
+    mail.finish_check(status="partial", account=ACCOUNT, outbound_after="thread-a", checked_at="2026-10-12T12:01:00+00:00")
+    mail.finish_check(status="failed", account=ACCOUNT, warning="gmail_unavailable", checked_at="2026-10-12T12:02:00+00:00")
+    people._conn.close()
+    restarted = MailRepository(PersonStore(tmp_path))
+    state = restarted.sync_state()
+    assert state["last_success_at"] == "2026-10-12T12:00:00+00:00"
+    assert state["status"] == "failed"
+    assert state["warning"] == "gmail_unavailable"
+    assert state["outbound_after"] == "thread-a"
+    assert restarted.people.reply_cursor() == "100"

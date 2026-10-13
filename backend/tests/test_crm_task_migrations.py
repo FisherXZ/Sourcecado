@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 from coworker import migrations
-from coworker.people import PersonStore
+from coworker.people import PersonStore, SCHEMA_VERSION
 from tests.state_fixtures import LEGACY_PERSON_ID, build_legacy_state
 
 
@@ -17,7 +17,7 @@ def snapshot(path):
 
 def test_fresh_database_is_current_and_enforces_foreign_keys(tmp_path):
     people = PersonStore(tmp_path)
-    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert people._conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert people._conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert migrations.plan_migrations(tmp_path, store_ids=("people_db",)).pending == ()
@@ -30,7 +30,7 @@ def test_constructor_upgrades_legacy_people_only_and_preserves_handoffs(tmp_path
     person = people.get(LEGACY_PERSON_ID)
     assert person["first_name"] == "Dana"
     assert person["sequence_state"] == "open"
-    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert (root / "club.db").read_bytes() == conversations_before
     assert migrations.list_backups(root)
     assert people._conn.execute("SELECT count(*) FROM person_tasks").fetchone()[0] == 0
