@@ -262,7 +262,7 @@ def test_the_database_itself_refuses_a_task_for_a_missing_person(tmp_path):
     people._conn.rollback()
 
 
-def test_a_request_cannot_choose_its_author_or_change_task_state(tmp_path):
+def test_a_request_cannot_choose_its_author(tmp_path):
     app = _app(tmp_path)
     client = TestClient(app)
     pid = _keep(app.state.people)["person_id"]
@@ -271,16 +271,13 @@ def test_a_request_cannot_choose_its_author_or_change_task_state(tmp_path):
     ).json()
     assert created["task"]["origin"] == "human"
     assert created["change"]["actor"] == "director"
-    rejected = client.patch(
-        f"/v1/people/{pid}/tasks/{created['task']['task_id']}",
+    undone = client.post(
+        f"/v1/people/{pid}/crm-changes/{created['change']['change_id']}/undo",
         headers=HEADERS,
-        json={
-            "operation_id": "op-complete-now",
-            "expected_version": 1,
-            "changes": {"state": "completed"},
-        },
+        json={"operation_id": "op-impersonate-undo", "actor": "assistant"},
     )
-    assert rejected.status_code == 400
+    # Creation has nothing to restore; the request's actor field is ignored.
+    assert undone.status_code == 400
 
 
 # --- retries and conflicts ----------------------------------------------
@@ -465,3 +462,226 @@ def test_a_task_does_not_start_outreach_or_add_a_kept_person_to_contacts(tmp_pat
         == 1
     )
     assert app.state.people.timeline(pid) == timeline_before
+
+
+# --- complete, reopen, cancel and undo -----------------------------------
+
+
+def _set_state(client, pid, task, state, operation_id, **extra):
+    return client.patch(
+        f"/v1/people/{pid}/tasks/{task['task_id']}",
+        headers=HEADERS,
+        json={
+            "operation_id": operation_id,
+            "expected_version": task["version"],
+            "changes": {"state": state},
+            **extra,
+        },
+    )
+
+
+def _undo(client, pid, change_id, operation_id):
+    return client.post(
+        f"/v1/people/{pid}/crm-changes/{change_id}/undo",
+        headers=HEADERS,
+        json={"operation_id": operation_id},
+    )
+
+
+def test_complete_cancel_and_reopen_show_in_both_lists_and_keep_history(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    pid = _keep(app.state.people)["person_id"]
+    app.state.people.set_sequence(pid, "open", actor="director")
+    first = _create(client, pid, "op-lc-first", title="Send examples", due_date="2026-10-16").json()["task"]
+    second = _create(client, pid, "op-lc-second", title="Ask about cohort").json()["task"]
+
+    done = _set_state(client, pid, first, "completed", "op-lc-complete")
+    assert done.status_code == 200
+    task = done.json()["task"]
+    assert task["state"] == "completed"
+    assert task["version"] == 2
+    assert task["completed_at"] is not None
+    assert "state" in task["protected_fields"]
+    assert done.json()["change"]["action"] == "complete"
+
+    cancelled = _set_state(client, pid, second, "cancelled", "op-lc-cancel").json()["task"]
+    assert cancelled["state"] == "cancelled"
+    reopened = _set_state(client, pid, cancelled, "open", "op-lc-reopen").json()
+    assert reopened["task"]["state"] == "open"
+    assert reopened["task"]["completed_at"] is None
+    assert reopened["change"]["action"] == "reopen"
+
+    # The global and the person list agree, open and all.
+    for params in ({}, {"person_id": pid}):
+        open_ids = [
+            t["task_id"]
+            for t in client.get("/v1/crm/tasks", headers=HEADERS, params=params).json()["tasks"]
+        ]
+        assert open_ids == [second["task_id"]]
+        everything = client.get(
+            "/v1/crm/tasks", headers=HEADERS, params={**params, "state": "all"}
+        ).json()["tasks"]
+        assert {t["task_id"]: t["state"] for t in everything} == {
+            first["task_id"]: "completed",
+            second["task_id"]: "open",
+        }
+
+    history = client.get(
+        f"/v1/people/{pid}/tasks/{second['task_id']}/changes", headers=HEADERS
+    ).json()["changes"]
+    assert [row["action"] for row in history] == ["create", "cancel", "reopen"]
+    assert all(row["actor"] == "director" for row in history)
+    assert client.get(
+        f"/v1/people/{pid}/tasks/task_{'0' * 32}/changes", headers=HEADERS
+    ).status_code == 404
+
+    # A finished task reopens first; it cannot jump between finished states.
+    assert _set_state(client, pid, task, "cancelled", "op-lc-bad-1").status_code == 400
+    assert _set_state(client, pid, task, "paused", "op-lc-bad-2").status_code == 400
+
+
+def test_completing_a_task_leaves_other_tasks_and_the_person_alone(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    people = app.state.people
+    pid = _keep(people)["person_id"]
+    people.set_sequence(pid, "in_conversation", actor="director")
+    person_before = people.get(pid)
+    timeline_before = people.timeline(pid)
+    a = _create(client, pid, "op-alone-task-a", title="A").json()["task"]
+    b = _create(client, pid, "op-alone-task-b", title="B").json()["task"]
+
+    assert _set_state(client, pid, a, "completed", "op-alone-complete").status_code == 200
+    assert app.state.tasks.get(pid, b["task_id"]) == b
+    person_after = people.get(pid)
+    assert person_after["sequence_state"] == "in_conversation"
+    assert person_after["version"] == person_before["version"]
+    assert people.timeline(pid) == timeline_before
+
+    # Marking the person Done keeps the unfinished task visible.
+    people.set_sequence(pid, "done", actor="director")
+    listed = client.get("/v1/crm/tasks", headers=HEADERS).json()["tasks"]
+    assert [t["task_id"] for t in listed] == [b["task_id"]]
+    assert listed[0]["person"]["sequence_state"] == "done"
+
+
+def test_a_repeated_state_change_replays_the_receipt(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    pid = _keep(app.state.people)["person_id"]
+    task = _create(client, pid, "op-retry-state-create", title="Call").json()["task"]
+    first = _set_state(client, pid, task, "completed", "op-retry-complete")
+    again = _set_state(client, pid, task, "completed", "op-retry-complete")
+    assert first.status_code == again.status_code == 200
+    assert again.json()["replayed"] is True
+    assert again.json()["task"]["version"] == 2
+    assert [row["action"] for row in app.state.tasks.changes(task["task_id"])] == [
+        "create",
+        "complete",
+    ]
+    # Same id, different body.
+    other = _set_state(client, pid, task, "cancelled", "op-retry-complete")
+    assert other.status_code == 409
+    assert other.json()["code"] == "operation_conflict"
+    # A stale state change returns the current task and writes nothing.
+    stale = _set_state(client, pid, task, "cancelled", "op-retry-stale")
+    assert stale.status_code == 409
+    assert stale.json()["task"]["state"] == "completed"
+    assert app.state.tasks.get(pid, task["task_id"])["version"] == 2
+
+
+def test_undo_writes_a_compensating_change_and_keeps_history(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    pid = _keep(app.state.people)["person_id"]
+    task = _create(client, pid, "op-undo-create", title="Draft", due_date="2026-10-16").json()["task"]
+    completed = _set_state(client, pid, task, "completed", "op-undo-complete").json()
+    change_id = completed["change"]["change_id"]
+
+    undone = _undo(client, pid, change_id, "op-undo-first")
+    assert undone.status_code == 200
+    body = undone.json()
+    assert body["task"]["state"] == "open"
+    assert body["task"]["completed_at"] is None
+    assert body["task"]["due_date"] == "2026-10-16"
+    assert body["task"]["version"] == 3
+    assert body["change"]["action"] == "undo"
+    assert body["change"]["compensates_change_id"] == change_id
+
+    history = app.state.tasks.changes(task["task_id"])
+    assert [row["action"] for row in history] == ["create", "complete", "undo"]
+    assert history[-1]["compensates_change_id"] == change_id
+
+    # Replaying the undo returns the same receipt; a second undo of the same
+    # change is a conflict because the task has moved on.
+    replay = _undo(client, pid, change_id, "op-undo-first")
+    assert replay.status_code == 200 and replay.json()["replayed"] is True
+    again = _undo(client, pid, change_id, "op-undo-second")
+    assert again.status_code == 409
+    assert again.json()["task"]["version"] == 3
+    assert len(app.state.tasks.changes(task["task_id"])) == 3
+
+    # Undoing the undo re-completes the task.
+    redo = _undo(client, pid, body["change"]["change_id"], "op-undo-third").json()
+    assert redo["task"]["state"] == "completed" and redo["task"]["version"] == 4
+
+    assert _undo(client, pid, "chg_" + "f" * 32, "op-undo-missing").status_code == 404
+    other = _keep(app.state.people, apollo_id="leo", first_name="Leo")["person_id"]
+    assert _undo(client, other, change_id, "op-undo-wrong-person").status_code == 404
+
+
+def test_undo_refuses_to_erase_a_later_edit(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    pid = _keep(app.state.people)["person_id"]
+    task = _create(client, pid, "op-later-create", title="Draft").json()["task"]
+    completed = _set_state(client, pid, task, "completed", "op-later-complete").json()
+    later = client.patch(
+        f"/v1/people/{pid}/tasks/{task['task_id']}",
+        headers=HEADERS,
+        json={
+            "operation_id": "op-later-edit",
+            "expected_version": 2,
+            "changes": {"title": "Draft the proposal"},
+        },
+    ).json()["task"]
+
+    conflict = _undo(client, pid, completed["change"]["change_id"], "op-later-undo")
+    assert conflict.status_code == 409
+    assert conflict.json()["code"] == "task_conflict"
+    assert conflict.json()["task"] == later
+    current = app.state.tasks.get(pid, task["task_id"])
+    assert current["title"] == "Draft the proposal"
+    assert current["state"] == "completed"
+    assert current["version"] == 3
+    assert [row["action"] for row in app.state.tasks.changes(task["task_id"])] == [
+        "create",
+        "complete",
+        "update",
+    ]
+
+
+def test_a_committed_state_change_is_found_by_operation_id_after_restart(tmp_path):
+    app = _app(tmp_path)
+    client = TestClient(app)
+    pid = _keep(app.state.people)["person_id"]
+    task = _create(client, pid, "op-crash-create", title="Call").json()["task"]
+    # The server commits, then the process stops before the client sees it.
+    _set_state(client, pid, task, "completed", "op-crash-complete")
+    app.state.people._conn.close()
+
+    reopened = TestClient(create_app(token=TOKEN, state=tmp_path, provider=None))
+    retry = _set_state(reopened, pid, task, "completed", "op-crash-complete")
+    assert retry.status_code == 200
+    assert retry.json()["replayed"] is True
+    assert retry.json()["task"]["state"] == "completed"
+    history = reopened.get(
+        f"/v1/people/{pid}/tasks/{task['task_id']}/changes", headers=HEADERS
+    ).json()["changes"]
+    assert [row["action"] for row in history] == ["create", "complete"]
+    assert len(
+        reopened.get(
+            "/v1/crm/tasks", headers=HEADERS, params={"person_id": pid, "state": "all"}
+        ).json()["tasks"]
+    ) == 1

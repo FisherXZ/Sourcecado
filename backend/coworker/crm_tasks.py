@@ -11,8 +11,12 @@ original receipt instead of writing again; reusing the id for different
 arguments is a conflict. Edits are checked against the task's own version, so
 new evidence on the person never invalidates an open task edit.
 
-Completing, cancelling, AI suggestions and attention ranking are later work;
-this module covers creating and editing.
+A state change (complete, reopen, cancel) is an edit of the `state` field and
+goes through the same path. Undo writes a new compensating change that
+restores the values the undone change replaced; it never deletes history,
+and it refuses when the task has moved past the version that change produced.
+
+AI suggestions and attention ranking are later work.
 """
 
 from __future__ import annotations
@@ -32,6 +36,16 @@ if TYPE_CHECKING:
 TASK_STATES = ("open", "completed", "cancelled")
 TASK_ORIGINS = ("human", "assistant")
 TASK_EDIT_FIELDS = ("title", "details", "due_date")
+TASK_CHANGE_FIELDS = (*TASK_EDIT_FIELDS, "state")
+# Which state may follow which, and the history action that records it.
+TASK_TRANSITIONS = {
+    ("open", "completed"): "complete",
+    ("open", "cancelled"): "cancel",
+    ("completed", "open"): "reopen",
+    ("cancelled", "open"): "reopen",
+}
+# The task fields an undo restores from the undone change's "before" record.
+UNDO_FIELDS = ("title", "details", "due_date", "due_timezone", "state", "completed_at")
 TITLE_MAX = 200
 DETAILS_MAX = 4000
 REASON_MAX = 500
@@ -43,6 +57,7 @@ LIST_LIMIT_MAX = 500
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _OPERATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 _TASK_ID_RE = re.compile(r"^task_[0-9a-f]{32}$")
+_CHANGE_ID_RE = re.compile(r"^chg_[0-9a-f]{32}$")
 
 # Executed one statement at a time, never through `executescript`, which
 # commits first: the migration step runs these inside its own transaction and
@@ -86,7 +101,9 @@ CRM_TASK_STATEMENTS: tuple[str, ...] = (
         entity_type TEXT NOT NULL CHECK (entity_type IN ('task')),
         entity_id TEXT NOT NULL,
         entity_version INTEGER NOT NULL CHECK (entity_version >= 1),
-        action TEXT NOT NULL CHECK (action IN ('create', 'update')),
+        action TEXT NOT NULL CHECK (
+            action IN ('create', 'update', 'complete', 'reopen', 'cancel', 'undo')
+        ),
         before_json TEXT,
         after_json TEXT NOT NULL,
         actor TEXT NOT NULL CHECK (actor IN ('director', 'assistant')),
@@ -219,6 +236,12 @@ def due_status(due: str | None, today: date) -> str:
 
 
 _DUE_RANK = {"overdue": 0, "today": 1, "upcoming": 2, "none": 3}
+_DEFAULT_REASON = {
+    "update": "Edited a task",
+    "complete": "Marked done",
+    "reopen": "Reopened",
+    "cancel": "Cancelled",
+}
 
 
 class TaskService:
@@ -391,6 +414,7 @@ class TaskService:
         session_id: str | None,
         run_id: str | None,
         now: str,
+        compensates: str | None = None,
     ) -> dict[str, Any]:
         change_id = "chg_" + uuid.uuid4().hex
         change = {
@@ -402,6 +426,7 @@ class TaskService:
             "actor": actor,
             "reason": reason,
             "operation_id": operation_id,
+            "compensates_change_id": compensates,
             "created_at": now,
         }
         self._conn.execute(
@@ -409,8 +434,9 @@ class TaskService:
             INSERT INTO crm_changes (
                 change_id, person_id, entity_type, entity_id, entity_version,
                 action, before_json, after_json, actor, reason, source_refs,
-                operation_id, session_id, run_id, created_at
-            ) VALUES (?, ?, 'task', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                operation_id, session_id, run_id, compensates_change_id,
+                created_at
+            ) VALUES (?, ?, 'task', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 change_id,
@@ -426,6 +452,7 @@ class TaskService:
                 operation_id,
                 session_id,
                 run_id,
+                compensates,
                 now,
             ),
         )
@@ -453,7 +480,7 @@ class TaskService:
             rows = self._conn.execute(
                 """
                 SELECT change_id, entity_version, action, actor, reason,
-                       operation_id, created_at
+                       operation_id, compensates_change_id, created_at
                 FROM crm_changes
                 WHERE entity_type = 'task' AND entity_id = ?
                 ORDER BY created_at, entity_version
@@ -566,8 +593,8 @@ class TaskService:
             raise TaskNotFound("unknown task")
         operation = _clean_operation_id(operation_id)
         if not isinstance(changes, dict) or not changes:
-            raise TaskError("nothing to change: send title, details or due_date")
-        unknown = set(changes) - set(TASK_EDIT_FIELDS)
+            raise TaskError("nothing to change: send title, details, due_date or state")
+        unknown = set(changes) - set(TASK_CHANGE_FIELDS)
         if unknown:
             raise TaskError(f"unsupported task fields {sorted(unknown)}")
         if (
@@ -583,6 +610,10 @@ class TaskService:
             clean["details"] = _clean_details(changes["details"])
         if "due_date" in changes:
             clean["due_date"] = _clean_due_date(changes["due_date"])
+        if "state" in changes:
+            if changes["state"] not in TASK_STATES:
+                raise TaskError("state must be open, completed or cancelled")
+            clean["state"] = changes["state"]
         timezone = validate_timezone(timezone)
         fingerprint = _fingerprint(
             {
@@ -615,52 +646,178 @@ class TaskService:
                 if not changed:
                     # Nothing differs: no new version, no history row.
                     return {"task": before, "change": None, "replayed": False}
+                action = "update"
+                if "state" in changed:
+                    action = TASK_TRANSITIONS.get((before["state"], changed["state"]))
+                    if action is None:
+                        raise TaskError(
+                            f"a {before['state']} task cannot become {changed['state']}"
+                        )
+                # The director's own words and completion decisions are
+                # protected from later automatic rewrites.
                 protected = set(before["protected_fields"])
                 if actor == "director":
                     protected |= set(changed)
-                if "due_date" in changed:
-                    next_timezone = timezone if changed["due_date"] else None
-                else:
-                    next_timezone = before["due_timezone"]
                 now = datetime.now(UTC).isoformat()
-                assignments = [f"{field} = ?" for field in changed]
-                cursor = self._conn.execute(
-                    f"""
-                    UPDATE person_tasks SET
-                        {", ".join(assignments)},
-                        due_timezone = ?, protected_fields = ?,
-                        version = version + 1, updated_at = ?
-                    WHERE task_id = ? AND person_id = ? AND version = ?
-                    """,
-                    (
-                        *changed.values(),
-                        next_timezone,
-                        json.dumps(sorted(protected)),
-                        now,
-                        task_id,
-                        person_id,
-                        expected_version,
-                    ),
+                if "due_date" in changed:
+                    changed["due_timezone"] = timezone if changed["due_date"] else None
+                if action in ("complete", "cancel"):
+                    changed["completed_at"] = now
+                elif action == "reopen":
+                    changed["completed_at"] = None
+                task = self._write(
+                    person_id,
+                    task_id,
+                    changed,
+                    protected=protected,
+                    expected_version=expected_version,
+                    now=now,
                 )
-                if cursor.rowcount != 1:
-                    raise TaskConflict(
-                        "this task changed since you opened it",
-                        code="task_conflict",
-                        current=self._task_dict(self._load_task(person_id, task_id)),
-                    )
-                task = self._task_dict(self._load_task(person_id, task_id))
                 response = self._record(
                     operation_id=operation,
                     fingerprint=fingerprint,
                     person_id=person_id,
                     task=task,
-                    action="update",
+                    action=action,
                     before=before,
                     actor=actor,
-                    reason=_clean_reason(reason, "Edited a task"),
+                    reason=_clean_reason(reason, _DEFAULT_REASON[action]),
                     session_id=session_id,
                     run_id=run_id,
                     now=now,
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return response
+
+    def _write(
+        self,
+        person_id: str,
+        task_id: str,
+        changed: dict[str, Any],
+        *,
+        protected: set[str],
+        expected_version: int,
+        now: str,
+    ) -> dict[str, Any]:
+        """Apply column changes as one new version; conflict if the row moved."""
+        assignments = [f"{field} = ?" for field in changed]
+        cursor = self._conn.execute(
+            f"""
+            UPDATE person_tasks SET
+                {", ".join(assignments)},
+                protected_fields = ?, version = version + 1, updated_at = ?
+            WHERE task_id = ? AND person_id = ? AND version = ?
+            """,
+            (
+                *changed.values(),
+                json.dumps(sorted(protected)),
+                now,
+                task_id,
+                person_id,
+                expected_version,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise TaskConflict(
+                "this task changed since you opened it",
+                code="task_conflict",
+                current=self._task_dict(self._load_task(person_id, task_id)),
+            )
+        return self._task_dict(self._load_task(person_id, task_id))
+
+    def undo(
+        self,
+        person_id: str,
+        change_id: str,
+        *,
+        operation_id: object,
+        actor: str,
+        reason: object = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Restore what one recorded change replaced, as a new change.
+
+        Only the task that change touched moves; nothing else on the person
+        is read or written. If the task's version is newer than the one the
+        change produced, a later edit exists and the undo is refused with
+        the current task, so that edit is never erased.
+        """
+        if actor not in ("director", "assistant"):
+            raise TaskError(f"invalid actor {actor}")
+        if not _CHANGE_ID_RE.match(change_id):
+            raise TaskNotFound("unknown change")
+        operation = _clean_operation_id(operation_id)
+        fingerprint = _fingerprint(
+            {
+                "op": "task.undo",
+                "person_id": person_id,
+                "change_id": change_id,
+                "actor": actor,
+            }
+        )
+        with self._lock:
+            try:
+                replay = self._replay(operation, fingerprint)
+                if replay is not None:
+                    return replay
+                self._live_person(person_id)
+                row = self._conn.execute(
+                    """
+                    SELECT entity_id, entity_version, action, before_json
+                    FROM crm_changes
+                    WHERE change_id = ? AND person_id = ? AND entity_type = 'task'
+                    """,
+                    (change_id, person_id),
+                ).fetchone()
+                if row is None:
+                    raise TaskNotFound("unknown change")
+                if row["before_json"] is None:
+                    raise TaskError("creating a task cannot be undone; cancel it instead")
+                task_id = str(row["entity_id"])
+                current = self._task_dict(self._load_task(person_id, task_id))
+                if current["version"] != int(row["entity_version"]):
+                    raise TaskConflict(
+                        "this task changed again after that change",
+                        code="task_conflict",
+                        current=current,
+                    )
+                restored = json.loads(str(row["before_json"]))
+                changed = {
+                    field: restored[field]
+                    for field in UNDO_FIELDS
+                    if restored[field] != current[field]
+                }
+                if not changed:
+                    return {"task": current, "change": None, "replayed": False}
+                protected = set(current["protected_fields"])
+                if actor == "director":
+                    protected |= set(changed) & set(TASK_CHANGE_FIELDS)
+                now = datetime.now(UTC).isoformat()
+                task = self._write(
+                    person_id,
+                    task_id,
+                    changed,
+                    protected=protected,
+                    expected_version=current["version"],
+                    now=now,
+                )
+                response = self._record(
+                    operation_id=operation,
+                    fingerprint=fingerprint,
+                    person_id=person_id,
+                    task=task,
+                    action="undo",
+                    before=current,
+                    actor=actor,
+                    reason=_clean_reason(reason, f"Undid: {row['action']}"),
+                    session_id=session_id,
+                    run_id=run_id,
+                    now=now,
+                    compensates=change_id,
                 )
                 self._conn.commit()
             except Exception:
