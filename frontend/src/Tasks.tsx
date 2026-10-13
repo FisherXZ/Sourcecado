@@ -97,10 +97,14 @@ function TaskFieldsForm({
   idPrefix,
   draft,
   onChange,
+  disabled = false,
 }: {
   idPrefix: string;
   draft: Draft;
   onChange: (draft: Draft) => void;
+  // Locked while a save is in flight so text typed against a form that is
+  // about to close on success cannot be silently discarded.
+  disabled?: boolean;
 }) {
   return (
     <>
@@ -111,6 +115,7 @@ function TaskFieldsForm({
           value={draft.title}
           maxLength={200}
           required
+          disabled={disabled}
           onChange={(event) => onChange({ ...draft, title: event.currentTarget.value })}
         />
       </p>
@@ -121,6 +126,7 @@ function TaskFieldsForm({
           rows={2}
           value={draft.details}
           maxLength={4000}
+          disabled={disabled}
           onChange={(event) => onChange({ ...draft, details: event.currentTarget.value })}
         />
       </p>
@@ -130,6 +136,7 @@ function TaskFieldsForm({
           id={`${idPrefix}-due`}
           type="date"
           value={draft.dueDate}
+          disabled={disabled}
           onChange={(event) => onChange({ ...draft, dueDate: event.currentTarget.value })}
         />
       </p>
@@ -189,6 +196,7 @@ function TaskComposer({
           <select
             id="task-new-person"
             value={owner}
+            disabled={busy}
             onChange={(event) => setOwner(event.currentTarget.value)}
           >
             <option value="">Choose a person</option>
@@ -202,7 +210,7 @@ function TaskComposer({
           </select>
         </p>
       )}
-      <TaskFieldsForm idPrefix="task-new" draft={draft} onChange={setDraft} />
+      <TaskFieldsForm idPrefix="task-new" draft={draft} onChange={setDraft} disabled={busy} />
       <div className="task-form-actions">
         <button type="submit" disabled={busy}>
           {busy ? "Saving…" : "Save task"}
@@ -291,7 +299,7 @@ function TaskEditor({ task, onClose }: { task: PersonTask; onClose: () => void }
           <p>Your unsaved text is kept below. Save to replace the saved version, or cancel.</p>
         </div>
       ) : null}
-      <TaskFieldsForm idPrefix={idPrefix} draft={draft} onChange={setDraft} />
+      <TaskFieldsForm idPrefix={idPrefix} draft={draft} onChange={setDraft} disabled={busy} />
       <div className="task-form-actions">
         <button type="submit" disabled={busy}>
           {busy ? "Saving…" : "Save"}

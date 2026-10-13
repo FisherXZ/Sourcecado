@@ -244,6 +244,74 @@ describe("shared person tasks", () => {
     expect(first).toBe(second);
   });
 
+  it("locks the new-task fields while a save is in flight so later text can't be dropped", async () => {
+    fakeServer();
+    let release: (() => void) | null = null;
+    api.createTask.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ task: null, change: null, replayed: false });
+        }),
+    );
+    render(<TaskList personId="per_maya" />);
+    await screen.findByText("No open tasks for this person.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
+    const form = screen.getByRole("form", { name: "New task" });
+    fireEvent.change(within(form).getByLabelText("Task"), { target: { value: "Draft proposal" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Save task" }));
+
+    // While the save is open the fields are disabled, so a director cannot type
+    // text into a form that closes on success and silently lose it.
+    await waitFor(() =>
+      expect((within(form).getByLabelText("Task") as HTMLInputElement).disabled).toBe(true),
+    );
+    expect((within(form).getByLabelText("Description (optional)") as HTMLTextAreaElement).disabled).toBe(
+      true,
+    );
+    expect((within(form).getByLabelText("Due date (optional)") as HTMLInputElement).disabled).toBe(true);
+
+    await act(async () => {
+      release!();
+    });
+    await waitFor(() => expect(screen.queryByRole("form", { name: "New task" })).toBeNull());
+  });
+
+  it("locks the edit fields while a save is in flight", async () => {
+    fakeServer();
+    render(<TaskList personId="per_maya" />);
+    await screen.findByText("No open tasks for this person.");
+    await addTask(document.body, { title: "Draft proposal" });
+    await screen.findByText("Draft proposal");
+
+    let release: (() => void) | null = null;
+    api.updateTask.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ task: null, change: null, replayed: false });
+        }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit task Draft proposal" }));
+    const editor = screen.getByRole("form", { name: "Edit task Draft proposal" });
+    fireEvent.change(within(editor).getByLabelText("Task"), { target: { value: "Rewritten title" } });
+    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect((within(editor).getByLabelText("Task") as HTMLInputElement).disabled).toBe(true),
+    );
+    expect(
+      (within(editor).getByLabelText("Description (optional)") as HTMLTextAreaElement).disabled,
+    ).toBe(true);
+
+    await act(async () => {
+      release!();
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("form", { name: "Edit task Draft proposal" })).toBeNull(),
+    );
+  });
+
   it("shows the newer saved task on a conflict and keeps the director's text", async () => {
     const server = fakeServer();
     render(<TaskList personId="per_maya" />);
