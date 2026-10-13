@@ -370,6 +370,7 @@ export type BoardPerson = {
   replied?: boolean;
   replied_at?: string | null;
   follow_up?: FollowUp;
+  descriptions?: PersonDescriptions;
 };
 
 export type Board = {
@@ -378,6 +379,42 @@ export type Board = {
   in_conversation: BoardPerson[];
   done: BoardPerson[];
 };
+
+export type DescriptionSlot = "general" | "detailed";
+export type DescriptionAuthority = "assistant" | "human";
+
+/** One description slot: its text, who owns it, and its own version. */
+export type PersonDescription = {
+  slot: DescriptionSlot;
+  text: string | null;
+  authority: DescriptionAuthority;
+  source_refs: string[];
+  version: number;
+};
+
+export type PersonDescriptions = Record<DescriptionSlot, PersonDescription>;
+
+export const DESCRIPTION_SLOTS: DescriptionSlot[] = ["general", "detailed"];
+
+/** Both slots at their never-touched default: assistant-owned, unsummarized. */
+export function defaultPersonDescriptions(): PersonDescriptions {
+  return {
+    general: {
+      slot: "general",
+      text: null,
+      authority: "assistant",
+      source_refs: [],
+      version: 0,
+    },
+    detailed: {
+      slot: "detailed",
+      text: null,
+      authority: "assistant",
+      source_refs: [],
+      version: 0,
+    },
+  };
+}
 
 export type PersonSourceRef = {
   id: string;
@@ -496,6 +533,7 @@ export type PersonFile = {
   versions?: Array<{ version: number; created_at: string }>;
   sourcing_chat: { session_id: string; person_id: string } | null;
   meeting_evidence?: MeetingEvidenceView;
+  descriptions?: PersonDescriptions;
 };
 
 export type MeetingEvidence = {
@@ -1017,6 +1055,47 @@ export async function savePersonHandoff(
   const payload = await res.json();
   if (!res.ok) throw new Error(payload.error || `handoff ${res.status}`);
   return payload;
+}
+
+/** A failed description save, carrying the HTTP status so the editor can tell
+ * a stale-version conflict (409) from an over-limit rejection (422). */
+export class DescriptionSaveError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "DescriptionSaveError";
+    this.status = status;
+  }
+}
+
+export async function patchPersonDescription(
+  id: string,
+  slot: DescriptionSlot,
+  body:
+    | { text: string; expectedVersion: number }
+    | { release: true; expectedVersion: number },
+): Promise<{
+  descriptions: PersonDescriptions;
+  description: PersonDescription;
+  saved: boolean;
+  unchanged?: boolean;
+}> {
+  const payload: Record<string, unknown> = { expected_version: body.expectedVersion };
+  if ("release" in body) payload.release = true;
+  else payload.text = body.text;
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(id)}/descriptions/${slot}`,
+    {
+      method: "PATCH",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  const data = await res.json();
+  if (!res.ok) {
+    throw new DescriptionSaveError(res.status, data.error || `description ${res.status}`);
+  }
+  return data;
 }
 
 export async function pinSession(

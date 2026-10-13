@@ -651,6 +651,51 @@ def _count_people_db(context: MigrationContext) -> int:
     return _sqlite_adoption_count(context, _PEOPLE_ADDED_COLUMNS, _PEOPLE_ADDED_TABLES)
 
 
+# Ticket #202 added per-slot person descriptions. The constructor creates the
+# table for a fresh database; this restates its DDL because the registry, not
+# the constructor, is the release contract for what version 3 means. Kept byte
+# for byte in step with the CREATE TABLE in people.py's PersonStore.__init__.
+_PEOPLE_DESCRIPTIONS_TABLE = """
+    CREATE TABLE IF NOT EXISTS person_descriptions (
+        person_id TEXT NOT NULL,
+        slot TEXT NOT NULL,
+        text TEXT,
+        authority TEXT NOT NULL DEFAULT 'assistant',
+        source_refs TEXT NOT NULL DEFAULT '[]',
+        version INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (person_id, slot)
+    )
+"""
+
+
+def _count_people_descriptions(context: MigrationContext) -> int:
+    """1 when the description table is still missing, else 0.
+
+    No person row is read or rewritten: the step only adds an empty table, so
+    there is nothing to backfill and no past summary to invent (spec §8.3).
+    """
+    conn = context.connection
+    assert conn is not None
+    return 0 if "person_descriptions" in table_names(conn) else 1
+
+
+def _add_people_descriptions(context: MigrationContext) -> int:
+    """Add the per-slot person description table to a version 2 people store.
+
+    Run as a single statement, never through executescript, which issues a
+    COMMIT that would end the transaction `_apply_store` opened and leave the
+    rollback with nothing to undo. SQLite rolls DDL back like any other
+    statement, so a failed run really does leave the store at version 2.
+    """
+    conn = context.connection
+    assert conn is not None
+    touched = _count_people_descriptions(context)
+    conn.execute(_PEOPLE_DESCRIPTIONS_TABLE)
+    return touched
+
+
 def _count_masked_people_names(context: MigrationContext) -> int:
     conn = context.connection
     assert conn is not None
@@ -983,12 +1028,24 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 count=_count_masked_people_names,
                 apply=_separate_masked_people_names,
             ),
+            Migration(
+                from_version=2,
+                to_version=3,
+                description=(
+                    "Add the per-slot person description table so short and "
+                    "detailed descriptions, their sources, and their human-edit "
+                    "protection persist and migrate with backup and rollback."
+                ),
+                count=_count_people_descriptions,
+                apply=_add_people_descriptions,
+            ),
         ),
         json_columns=(
             ("events", "payload"),
             ("person_attachments", "fields_json"),
             ("person_versions", "person_json"),
             ("person_versions", "attachments_json"),
+            ("person_descriptions", "source_refs"),
         ),
     ),
     StoreSpec(
