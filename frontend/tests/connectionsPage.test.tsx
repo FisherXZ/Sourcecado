@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Connector } from "../src/api";
 import { ConnectionsPage } from "../src/routes/ConnectionsPage";
+import { connector } from "./connectorFixtures";
 
 const api = vi.hoisted(() => ({
   connectConnector: vi.fn(),
@@ -19,34 +19,6 @@ vi.mock("../src/api", async () => {
     getConnectors: api.getConnectors,
   };
 });
-
-function connector(overrides: Partial<Connector> & Pick<Connector, "id" | "title">): Connector {
-  return {
-    id: overrides.id,
-    title: overrides.title,
-    description: `${overrides.title} source connection.`,
-    status: "available",
-    catalogGroup: "available",
-    email: null,
-    requiredScopes: [],
-    missingScopes: [],
-    health: {
-      category: "setup_required",
-      label: "Available",
-      message: "This connection has not been set up yet.",
-    },
-    recovery: {
-      category: "connect",
-      actionLabel: "Connect",
-      message: "Start authorization, then return to this detail page.",
-    },
-    supportedActions: [],
-    availableActions: ["connect"],
-    repairRoute: `#/connections/${overrides.id}`,
-    authorizationGroup: overrides.id === "granola" ? "granola" : null,
-    ...overrides,
-  };
-}
 
 const gmailAvailable = connector({
   id: "gmail",
@@ -67,6 +39,7 @@ const driveConnected = connector({
   email: "operator@example.com",
   health: { category: "healthy", label: "Ready", message: "This connection is ready to use." },
   recovery: null,
+  verified: true,
   supportedActions: ["Search files", "Read files"],
   availableActions: ["disconnect"],
   authorizationGroup: "google",
@@ -234,7 +207,7 @@ describe("ConnectionsPage", () => {
 
     render(<ConnectionsPage connectorId="gmail" />);
     const detail = await screen.findByRole("region", { name: "Gmail connection details" });
-    expect(within(detail).getAllByText("Available")).not.toHaveLength(0);
+    expect(within(detail).getAllByText("Not connected")).not.toHaveLength(0);
 
     fireEvent.focus(window);
 

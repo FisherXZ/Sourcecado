@@ -80,6 +80,7 @@ describe("connector API boundary", () => {
           actionLabel: "Finish setup",
           message: "Reconnect and approve the listed permissions.",
         },
+        verified: false,
         supportedActions: ["Search and read email", "Create drafts for review"],
         availableActions: ["reconnect", "disconnect"],
         repairRoute: "#/connections/gmail",
@@ -88,6 +89,29 @@ describe("connector API boundary", () => {
     ]);
     expect(JSON.stringify(body)).not.toContain("oauth-secret-never-render");
     expect(JSON.stringify(body)).not.toContain("api-secret-never-render");
+  });
+
+  it("reads verified only from a literal true and never upgrades a malformed status", async () => {
+    fetchMock.mockResolvedValue(
+      response({
+        connectors: [
+          { id: "gmail", title: "Gmail", status: "connected", verified: true },
+          { id: "drive", title: "Drive", status: "connected", verified: "true" },
+          { id: "calendar", title: "Calendar", status: "connected", verified: 1 },
+          { id: "apollo", title: "Apollo", status: "connected" },
+          { id: "granola", title: "Granola", status: "mystery", verified: true },
+        ],
+      }),
+    );
+
+    const { connectors } = await getConnectors();
+    const byId = Object.fromEntries(connectors.map((item) => [item.id, item]));
+
+    expect(byId.gmail.verified).toBe(true);
+    expect(byId.drive.verified).toBe(false);
+    expect(byId.calendar.verified).toBe(false);
+    expect(byId.apollo.verified).toBe(false);
+    expect(byId.granola.status).toBe("failed");
   });
 
   it("starts each supported connector through its existing endpoint", async () => {
