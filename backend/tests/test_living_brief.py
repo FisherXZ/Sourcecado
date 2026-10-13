@@ -130,7 +130,8 @@ def test_inbound_reply_is_last_contact_and_answers_what_they_want(tmp_path):
         source="gmail",
         kind="send",
         summary="Sent draft draft-1",
-        payload={"sent": True, "to": "ada@analytic.example"},
+        payload={"sent": True, "to": "ada@analytic.example", "thread_id": "t-1",
+                 "received_at": "2026-08-25T10:00:00+00:00"},
     )
     store.upsert_external_event(
         pid,

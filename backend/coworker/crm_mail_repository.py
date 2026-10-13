@@ -26,7 +26,7 @@ MAIL_SCHEMA = (
         status TEXT NOT NULL CHECK(status IN ('never', 'ok', 'partial', 'failed')),
         last_attempt_at TEXT, last_success_at TEXT, warning TEXT,
         outbound_after TEXT, outbound_checked_at TEXT,
-        inbound_page_token TEXT, inbound_target_history_id TEXT
+        inbound_page_token TEXT, inbound_target_history_id TEXT, resync_history_id TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS crm_analysis_state (
         person_id TEXT PRIMARY KEY REFERENCES people(person_id),
@@ -62,37 +62,56 @@ class MailRepository:
                 "SELECT latest_evidence_revision, analyzed_revision FROM crm_analysis_state WHERE person_id = ?",
                 (person_id,)).fetchone()
         result = dict(row) if row else {"latest_evidence_revision": 0, "analyzed_revision": 0}
-        result["status"] = "pending" if result["latest_evidence_revision"] != result["analyzed_revision"] else "not_analyzed"
+        result["status"] = "pending" if result["latest_evidence_revision"] != result["analyzed_revision"] else "current" if result["latest_evidence_revision"] else "not_analyzed"
         return result
+
+    def incomplete_body_count(self, account: str) -> int:
+        with self.people._lock:
+            return self.people._conn.execute("""SELECT count(*) FROM gmail_messages m
+                JOIN people p ON p.person_id = m.person_id
+                WHERE m.account = ? AND m.body_state != 'present' AND p.deleted_at IS NULL""", (account,)).fetchone()[0]
 
     def sync_state(self) -> dict[str, Any]:
         with self.people._lock:
             row = self.people._conn.execute("SELECT * FROM gmail_collection_state WHERE id = 1").fetchone()
         return dict(row) if row else {"status": "never", "account": None, "last_attempt_at": None,
             "last_success_at": None, "warning": None, "outbound_after": None,
-            "outbound_checked_at": None, "inbound_page_token": None, "inbound_target_history_id": None}
+            "outbound_checked_at": None, "inbound_page_token": None, "inbound_target_history_id": None, "resync_history_id": None}
+
+    def public_sync_state(self) -> dict[str, Any]:
+        state = self.sync_state()
+        return {key: state.get(key) for key in ("status", "last_attempt_at", "last_success_at", "warning", "outbound_checked_at")}
 
     def finish_check(self, *, status: str, account: str | None, warning: str | None = None,
         outbound_after: str | None = None, checked_at: str | None = None,
-        inbound_page_token: str | None = None, inbound_target_history_id: str | None = None) -> None:
+        inbound_page_token: str | None = None, inbound_target_history_id: str | None = None,
+        resync_history_id: str | None = None, advance_inbound: bool = False,
+        inbound_cursor: str | None = None) -> None:
         now = checked_at or self.people._now()
         prior = self.sync_state()
         # A failed attempt records a warning, never advances a replay boundary.
         if status == "failed":
+            account = prior["account"]
             outbound_after = prior["outbound_after"]
             inbound_page_token = prior["inbound_page_token"]
             inbound_target_history_id = prior["inbound_target_history_id"]
+            resync_history_id = prior.get("resync_history_id")
         with self.people.crm_transaction() as conn:
-            conn.execute("""INSERT INTO gmail_collection_state VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            conn.execute("""INSERT INTO gmail_collection_state VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET account=excluded.account, status=excluded.status,
                 last_attempt_at=excluded.last_attempt_at, last_success_at=excluded.last_success_at,
                 warning=excluded.warning, outbound_after=excluded.outbound_after,
                 outbound_checked_at=excluded.outbound_checked_at,
                 inbound_page_token=excluded.inbound_page_token,
-                inbound_target_history_id=excluded.inbound_target_history_id""",
+                inbound_target_history_id=excluded.inbound_target_history_id,
+                resync_history_id=excluded.resync_history_id""",
                 (account, status, now, now if status == "ok" else prior["last_success_at"], warning,
                  outbound_after, now if status == "ok" else prior["outbound_checked_at"],
-                 inbound_page_token, inbound_target_history_id))
+                 inbound_page_token, inbound_target_history_id, resync_history_id))
+            if advance_inbound and status != "failed":
+                conn.execute("""INSERT INTO reply_sync VALUES (1, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET history_id=excluded.history_id, updated_at=excluded.updated_at""",
+                    (inbound_cursor, now))
 
     def save_message(self, person_id: str, message: dict[str, Any], *, direction: str,
         account: str, content: dict[str, Any]) -> bool:
@@ -101,6 +120,7 @@ class MailRepository:
             raise ValueError("Gmail message and thread identity are required")
         payload = {"direction": direction, "message_id": mid, "thread_id": thread,
             "from": message.get("from"), "to": message.get("to"), "subject": message.get("subject"),
+            "rfc_message_id": message.get("rfc_message_id"), "in_reply_to": message.get("in_reply_to"),
             "snippet": str(message.get("snippet") or "")[:1000], "received_at": message.get("received_at"),
             "source_ref": source_ref(mid, thread, account), "untrusted": True, "read_only": True,
             "body_state": content["body_state"]}

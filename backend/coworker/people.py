@@ -10,6 +10,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -689,7 +690,7 @@ class PersonStore:
         with self._lock:
             row = self._load_person_row(person_id)
             already = self._conn.execute(
-                "SELECT event_id FROM events WHERE person_id = ? AND external_key = ?",
+                "SELECT event_id, kind, payload FROM events WHERE person_id = ? AND external_key = ?",
                 (person_id, external_key),
             ).fetchone()
             if already is None:
@@ -715,6 +716,18 @@ class PersonStore:
                     "UPDATE people SET updated_at = ? WHERE person_id = ?",
                     (self._now(), person_id),
                 )
+                self._conn.commit()
+            elif already["kind"] == "mail":
+                collected = json.loads(already["payload"])
+                if collected.get("direction") != "outbound":
+                    raise ValueError("Approved send conflicts with collected message direction")
+                # Collection is read-only evidence, never a send approval. If
+                # the sanctioned send path later files its receipt, preserve
+                # that authority on the same event rather than losing it.
+                self._conn.execute("""UPDATE events SET kind = 'send', summary = ?, payload = ?,
+                    actor = ?, session_id = ?, run_id = ?, tool = 'gmail_send' WHERE event_id = ?""",
+                    (f"Sent approved outreach to {to}", json.dumps({**collected, **payload}),
+                     actor, session_id, run_id, already["event_id"]))
                 self._conn.commit()
             event = self._event_dict(
                 self._conn.execute(
@@ -938,25 +951,45 @@ class PersonStore:
     def mail_state(self, person_id: str) -> dict[str, Any]:
         """Last contact, replied state, and whether the person needs attention.
 
-        Ordering comes from the ledger, not from comparing timestamps: the
-        events are read in write order, so the last mail event seen is the
-        latest one whatever format its stamp is in.
+        Compare message times, not filing order: a historical thread reread
+        must not turn old incoming mail into a new unanswered reply. Each
+        thread keeps its own reminder; replying on another thread cannot clear it.
         """
-        direction: str | None = None
-        last_at: str | None = None
-        replied = False
-        replied_at: str | None = None
+        mail = []
         for event in self.timeline(person_id):
             payload = (
                 event.get("payload") if isinstance(event.get("payload"), dict) else {}
             )
             created = str(event.get("created_at") or "") or None
+            direction = payload.get("direction")
             if event.get("kind") == "send" and payload.get("sent"):
-                direction, last_at = "outbound", created
-            elif payload.get("direction") == "inbound":
-                replied = True
-                replied_at = payload.get("received_at") or created
-                direction, last_at = "inbound", replied_at
+                direction = "outbound"
+            if direction not in {"inbound", "outbound"}:
+                continue
+            source_time = payload.get("received_at")
+            at = source_time or (created if event.get("kind") == "send" or direction == "inbound" else None)
+            known_time = bool(source_time or event.get("kind") == "send")
+            try:
+                stamp = datetime.fromisoformat(at)
+            except (ValueError, TypeError):
+                try:
+                    stamp = parsedate_to_datetime(at)
+                except (ValueError, TypeError):
+                    stamp = datetime.min.replace(tzinfo=UTC)
+                    known_time = False
+            stamp = stamp.replace(tzinfo=stamp.tzinfo or UTC).astimezone(UTC)
+            mail.append((stamp, len(mail), direction, at, payload, known_time))
+        mail.sort(key=lambda item: (item[0], item[1]))
+        incoming = [item for item in mail if item[2] == "inbound"]
+        latest_incoming = {item[4].get("thread_id"): item for item in incoming}
+        unanswered = []
+        for thread, reply in latest_incoming.items():
+            answered = any(item[2] == "outbound" and item[4].get("thread_id") == thread and item[5] and reply[5]
+                and (item[0], item[1]) > (reply[0], reply[1])
+                and (not item[4].get("in_reply_to") or item[4]["in_reply_to"] == reply[4].get("rfc_message_id"))
+                for item in mail)
+            if not answered:
+                unanswered.append(reply[4].get("message_id"))
         with self._lock:
             rows = self._conn.execute(
                 """
@@ -965,23 +998,45 @@ class PersonStore:
                 """,
                 (person_id,),
             ).fetchall()
-        needs_review = any(
-            json.loads(str(row["fields_json"])).get("kind") == "unassigned_reply"
-            for row in rows
-        )
-        if direction == "inbound":
+        gaps = [json.loads(str(row["fields_json"])) for row in rows]
+        needs_review = any(gap.get("kind") == "unassigned_reply" and not gap.get("resolved") for gap in gaps)
+        if unanswered:
             follow_up = {"needed": True, "reason": "reply_unanswered"}
         elif needs_review:
             follow_up = {"needed": True, "reason": "reply_needs_review"}
         else:
             follow_up = {"needed": False, "reason": None}
         return {
-            "last_contact_at": last_at,
-            "last_contact_direction": direction,
-            "replied": replied,
-            "replied_at": replied_at,
+            "last_contact_at": mail[-1][3] if mail else None,
+            "last_contact_direction": mail[-1][2] if mail else None,
+            "replied": bool(incoming),
+            "replied_at": incoming[-1][3] if incoming else None,
             "follow_up": follow_up,
+            "unanswered_message_ids": unanswered,
         }
+
+    def resolve_reply_gap(self, person_id: str, *, message_id: str) -> None:
+        """Resolve only this message's ambiguity, retaining the explanation/audit."""
+        with self.crm_transaction() as conn:
+            gap = conn.execute("""SELECT * FROM person_attachments
+                WHERE person_id = ? AND record_type = 'knowledge_gap' AND idempotency_key = ?""",
+                (person_id, f"gmail:reply:{message_id}")).fetchone()
+            if not gap:
+                return
+            fields = json.loads(gap["fields_json"])
+            if fields.get("resolved"):
+                return
+            now = self._now()
+            fields.update({"resolved": True, "resolved_at": now})
+            conn.execute("UPDATE person_attachments SET fields_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(fields, sort_keys=True), now, gap["id"]))
+            row = self._load_person_row(person_id)
+            version = int(row["version"]) + 1
+            conn.execute("UPDATE people SET version = ?, updated_at = ? WHERE person_id = ?", (version, now, person_id))
+            self._receipt(person_id, kind="reply_gap_resolved", summary="Matched previously unassigned Gmail message.",
+                payload={"id": gap["id"], "message_id": message_id, "version": version}, actor="assistant",
+                session_id=None, run_id=None)
+            self._snapshot(person_id, version, now)
 
     def get(
         self,

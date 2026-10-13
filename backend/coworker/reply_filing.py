@@ -110,6 +110,7 @@ def _is_forwarded(subject: str | None) -> bool:
 class SentOutreach:
     person_id: str
     recipient: str
+    account: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,7 @@ class OutboundIndex:
     accounts: frozenset[str]
 
 
-def build_index(people: PersonStore) -> OutboundIndex:
+def build_index(people: PersonStore, *, account: str | None = None) -> OutboundIndex:
     """Read the send receipts the approved-send path already files.
 
     Nothing new is stored for this. ``PersonStore.record_approved_send``
@@ -145,10 +146,12 @@ def build_index(people: PersonStore) -> OutboundIndex:
             if not thread_id or not recipient:
                 continue
             addresses.setdefault(recipient, set()).add(person_id)
-            account = address_of(payload.get("account"))
-            if account:
-                accounts.add(account)
-            sent = SentOutreach(person_id=person_id, recipient=recipient)
+            sending_account = address_of(payload.get("account"))
+            if account and sending_account and sending_account != account:
+                continue
+            if sending_account:
+                accounts.add(sending_account)
+            sent = SentOutreach(person_id=person_id, recipient=recipient, account=sending_account)
             if sent not in threads.setdefault(thread_id, []):
                 threads[thread_id].append(sent)
     return OutboundIndex(
