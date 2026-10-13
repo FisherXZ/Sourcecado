@@ -2117,6 +2117,31 @@ def create_app(
             return JSONResponse({"error": str(exc)}, status_code=409)
         return {"person": app.state.people.get(person["person_id"], expand_sources=True)}
 
+    @app.delete("/v1/people/{person_id}")
+    async def people_delete(person_id: str, request: Request):
+        current = app.state.people.get(person_id)
+        if current is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        expected_version = payload.get("expected_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_version is required"}, status_code=400
+            )
+        try:
+            # Soft delete: sets deleted_at, keeps history and the person's tasks.
+            result = app.state.people.delete(
+                person_id,
+                expected_version=expected_version,
+                actor="director",
+                rationale_summary=str(
+                    payload.get("rationale_summary") or "Director removed the contact."
+                ),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return result
+
     @app.post("/v1/replies/refresh")
     def replies_refresh():
         """Read inbound Gmail since the cursor and file what it can attribute.

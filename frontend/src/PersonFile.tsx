@@ -6,6 +6,7 @@ import { PersonOwner, PersonTasks } from "./Tasks";
 import {
   attachPersonMeeting,
   attachPersonDriveEvidence,
+  deletePerson,
   getPerson,
   openPersonSourcingChat,
   refreshPersonMeetings,
@@ -146,6 +147,8 @@ export function PersonFileView({ personId }: { personId: string }) {
   const [attempt, setAttempt] = useState(0);
   const [moving, setMoving] = useState<string | null>(null);
   const [moveFailed, setMoveFailed] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removeFailed, setRemoveFailed] = useState(false);
   const [openingChat, setOpeningChat] = useState(false);
   const [chatFailed, setChatFailed] = useState(false);
   const [meetingBusy, setMeetingBusy] = useState<string | null>(null);
@@ -206,6 +209,30 @@ export function PersonFileView({ personId }: { personId: string }) {
       setMoveFailed(true);
     } finally {
       setMoving(null);
+    }
+  }
+
+  async function removeContact() {
+    if (!file || removing) return;
+    const version = file.person.version;
+    if (typeof version !== "number") return;
+    if (
+      !window.confirm(
+        `Remove ${file.brief.who || "this contact"} from Contacts? ` +
+          "This can be recovered from version history.",
+      )
+    ) {
+      return;
+    }
+    setRemoving(true);
+    setRemoveFailed(false);
+    try {
+      await deletePerson(personId, version);
+      window.dispatchEvent(new Event("sourcecado:board-changed"));
+      window.location.hash = "#/board";
+    } catch {
+      setRemoveFailed(true);
+      setRemoving(false);
     }
   }
 
@@ -385,10 +412,21 @@ export function PersonFileView({ personId }: { personId: string }) {
                 ? "Open sourcing chat"
                 : "Create sourcing chat"}
           </button>
+          <button
+            type="button"
+            className="person-remove"
+            disabled={removing}
+            onClick={() => void removeContact()}
+          >
+            {removing ? "Removing…" : "Remove contact"}
+          </button>
           {chatFailed ? (
             <p role="alert">
               Couldn’t open this person’s sourcing chat. Refresh the person file and try again.
             </p>
+          ) : null}
+          {removeFailed ? (
+            <p role="alert">Couldn’t remove this contact. Refresh and try again.</p>
           ) : null}
         </div>
       </header>

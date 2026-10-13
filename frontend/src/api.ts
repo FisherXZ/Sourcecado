@@ -1118,6 +1118,20 @@ export async function setPersonOwner(
   return body;
 }
 
+export async function deletePerson(
+  id: string,
+  expectedVersion: number,
+): Promise<{ deleted: boolean; id: string }> {
+  const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ expected_version: expectedVersion }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `delete ${res.status}`);
+  return body;
+}
+
 export async function revertPerson(
   id: string,
   body: { toVersion: number; expectedVersion: number; rationaleSummary: string },

@@ -1197,6 +1197,26 @@
   color: var(--text);
 }
 
+.person-remove {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--error);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.person-remove:hover:not(:disabled) {
+  border-color: var(--error);
+}
+
+.person-remove:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Undo toast after completing a task */
 .task-toast {
   position: fixed;
