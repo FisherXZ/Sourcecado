@@ -749,10 +749,19 @@
   border-bottom: 0;
 }
 
-.settings-connectors li strong {
-  color: var(--muted);
+.settings-connector-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-connector-state a {
+  min-width: 52px;
+  padding: 6px 0;
+  color: var(--accent-deep);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
+  text-align: right;
 }
 
 .workspace-settings {
@@ -1158,22 +1167,19 @@
   white-space: nowrap;
 }
 
-.connection-status.status-connected {
+.connection-status.tone-ok {
   border-color: var(--accent);
   background: var(--accent-tint);
   color: var(--accent-deep);
 }
 
-.connection-status.status-authorizing,
-.connection-status.status-missing_scopes,
-.connection-status.status-degraded,
-.connection-status.status-reconnect_required {
+.connection-status.tone-warn {
   border-color: var(--warn);
   background: var(--warn-bg);
   color: var(--warn);
 }
 
-.connection-status.status-failed {
+.connection-status.tone-error {
   border-color: var(--error);
   background: var(--error-bg);
   color: var(--error);

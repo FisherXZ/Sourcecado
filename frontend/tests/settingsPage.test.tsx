@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SettingsPage } from "../src/routes/SettingsPage";
+import { connector } from "./connectorFixtures";
 
 const api = vi.hoisted(() => ({
   createWorkspaceGrant: vi.fn(),
@@ -169,20 +170,15 @@ describe("SettingsPage", () => {
     api.getConnectors.mockResolvedValue({
       connectors: [
         {
-          id: "gmail",
-          title: "Gmail",
-          status: "connected",
+          ...connector({ id: "gmail", title: "Gmail", status: "connected", verified: true }),
           email: "operator@example.com",
           access_token: "oauth-secret-never-render",
         },
         {
-          id: "apollo",
-          title: "Apollo",
-          status: "configured",
-          email: null,
+          ...connector({ id: "apollo", title: "Apollo", status: "connected" }),
           api_key: "apollo-secret-never-render",
         },
-        { id: "drive", title: "Drive", status: "missing", email: null },
+        connector({ id: "drive", title: "Drive", status: "missing_scopes" }),
       ],
     });
 
@@ -203,7 +199,11 @@ describe("SettingsPage", () => {
     expect(within(connectors).getByText("Apollo")).toBeInTheDocument();
     expect(within(connectors).getByText("Configured")).toBeInTheDocument();
     expect(within(connectors).getByText("Drive")).toBeInTheDocument();
-    expect(within(connectors).getByText("Needs setup")).toBeInTheDocument();
+    expect(within(connectors).getByText("Missing permissions")).toBeInTheDocument();
+    expect(within(connectors).getByRole("link", { name: "Fix Drive" })).toHaveAttribute(
+      "href",
+      "#/connections/drive",
+    );
 
     expect(container).not.toHaveTextContent("provider/gpt-secret-implementation-id");
     expect(container).not.toHaveTextContent("sk-settings-never-render");
