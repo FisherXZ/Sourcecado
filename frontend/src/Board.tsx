@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { TaskPanel } from "./crm/TaskPanel";
+import { MailFreshness } from "./crm/MailFreshness";
 
 import {
   getBoard,
@@ -196,10 +197,11 @@ function matchesContact(person: BoardPerson, query: string): boolean {
 
 /** What the refresh did, said plainly. Counts come from the server. */
 function replyStatus(result: ReplyRefreshResult): string {
-  if (result.status !== "ok") {
+  if (result.status === "failed") {
     return "Couldn’t reach Gmail. The last checked point is unchanged.";
   }
   const parts: string[] = [];
+  if (result.status === "partial") parts.push("Collection is unfinished. Refresh again to continue.");
   if (result.filed > 0) {
     parts.push(`Filed ${result.filed} ${result.filed === 1 ? "reply" : "replies"}.`);
   }
@@ -208,8 +210,9 @@ function replyStatus(result: ReplyRefreshResult): string {
       `${result.unassigned} ${result.unassigned === 1 ? "reply" : "replies"} need review.`,
     );
   }
+  if (result.outgoing) parts.push(`Collected ${result.outgoing} outgoing ${result.outgoing === 1 ? "message" : "messages"}.`);
   if (parts.length === 0) {
-    return `Checked ${result.scanned} ${result.scanned === 1 ? "message" : "messages"}. No new replies.`;
+    return `Checked ${result.scanned} ${result.scanned === 1 ? "message" : "messages"}. No new mail.`;
   }
   return parts.join(" ");
 }
@@ -255,7 +258,7 @@ export function BoardView({ view }: { view?: "tasks" } = {}) {
       setReplyStatusText(replyStatus(result.refresh));
       setBoard(result.board);
     } catch {
-      setReplyStatusText("Couldn’t check for replies. Try again.");
+      setReplyStatusText("Couldn’t check Gmail. Try again.");
     } finally {
       setChecking(false);
     }
@@ -281,10 +284,11 @@ export function BoardView({ view }: { view?: "tasks" } = {}) {
         <p>{view === "tasks" ? "Keep promises across all saved people, before and after outreach." : "Keep active people moving from open outreach through completed follow-up."}</p>
         {view !== "tasks" ? <div className="board-page-actions">
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
-            {checking ? "Checking for replies…" : "Check for replies"}
+            {checking ? "Checking Gmail…" : "Refresh Gmail"}
           </button>
           {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
         </div> : null}
+        {view !== "tasks" && board ? <MailFreshness state={board.mail_sync} /> : null}
       </header>
       <nav className="contacts-view-controls" aria-label="Contacts views">
         <a href="#/board" aria-current={view !== "tasks" ? "page" : undefined}>Contacts</a>

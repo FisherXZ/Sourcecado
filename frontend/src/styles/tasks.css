@@ -1,6 +1,9 @@
 .contacts-view-controls { display: flex; gap: 4px; margin: 16px 0; }
-.contacts-view-controls a { padding: 8px 16px; border-radius: 4px; color: var(--muted); text-decoration: none; }
-.contacts-view-controls a[aria-current="page"] { background: var(--accent-tint); color: var(--accent-deep); }
+.contacts-view-controls :is(a, button) { padding: 8px 16px; border-radius: 4px; color: var(--muted); text-decoration: none; }
+.contacts-view-controls button { font: inherit; background: transparent; border: 0; cursor: pointer; }
+.contacts-view-controls a[aria-current="page"], .contacts-view-controls button[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-deep); }
+.person-mail-activity a { color: var(--accent-deep); text-underline-offset: 2px; }
+.person-mail-activity a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-panel { min-width: 0; margin: 16px 0 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .task-panel-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; padding: 16px; }
 .task-panel-header h2 { margin: 0; font-size: 18px; }
@@ -9,7 +12,7 @@
 .task-panel button, .task-timezone button { padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
 .task-panel button:hover, .task-timezone button:hover { background: var(--raised); }
 .task-panel button:disabled, .task-timezone button:disabled { opacity: .55; cursor: default; }
-.task-panel :is(button, input, textarea, select, a):focus-visible, .contacts-view-controls a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-panel :is(button, input, textarea, select, a):focus-visible, .contacts-view-controls :is(a, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-panel > p { margin: 8px 16px; }
 .task-table-scroll { overflow-x: auto; }
 .task-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

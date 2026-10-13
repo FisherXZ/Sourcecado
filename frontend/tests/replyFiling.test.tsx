@@ -196,7 +196,7 @@ describe("reply filing on Contacts and the person file", () => {
     render(<BoardView />);
     await screen.findByRole("link", { name: /Ada Analytic/ });
 
-    fireEvent.click(screen.getByRole("button", { name: "Check for replies" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Gmail" }));
 
     await waitFor(() => expect(api.refreshReplies).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("Filed 1 reply.")).toBeInTheDocument();
@@ -209,7 +209,7 @@ describe("reply filing on Contacts and the person file", () => {
     });
     render(<BoardView />);
     await screen.findByRole("link", { name: /Ada Analytic/ });
-    fireEvent.click(screen.getByRole("button", { name: "Check for replies" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Gmail" }));
 
     expect(await screen.findByText("2 replies need review.")).toBeInTheDocument();
   });
@@ -221,10 +221,10 @@ describe("reply filing on Contacts and the person file", () => {
     });
     render(<BoardView />);
     await screen.findByRole("link", { name: /Ada Analytic/ });
-    fireEvent.click(screen.getByRole("button", { name: "Check for replies" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Gmail" }));
 
     expect(
-      await screen.findByText("Checked 4 messages. No new replies."),
+      await screen.findByText("Checked 4 messages. No new mail."),
     ).toBeInTheDocument();
   });
 
@@ -235,7 +235,7 @@ describe("reply filing on Contacts and the person file", () => {
     });
     render(<BoardView />);
     await screen.findByRole("link", { name: /Ada Analytic/ });
-    fireEvent.click(screen.getByRole("button", { name: "Check for replies" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Gmail" }));
 
     expect(
       await screen.findByText(
@@ -247,7 +247,7 @@ describe("reply filing on Contacts and the person file", () => {
   it("shows the reply summary, timestamp, source, and follow-up state on the person", async () => {
     render(<PersonFileView personId="person-replied" />);
 
-    const section = await screen.findByRole("region", { name: "Replies" });
+    const section = await screen.findByRole("region", { name: "Gmail activity" });
     expect(
       within(section).getByText("They replied and are waiting on a response."),
     ).toBeInTheDocument();
@@ -258,9 +258,9 @@ describe("reply filing on Contacts and the person file", () => {
       within(section).getByText("Thursday works. Send an invite."),
     ).toBeInTheDocument();
     expect(within(section).getByText(/2026-08-26T09:15:00/)).toBeInTheDocument();
-    expect(
-      within(section).getByRole("link", { name: /Open Gmail thread thread_1/ }),
-    ).toHaveAttribute("href", "https://mail.google.com/mail/u/0/#all/thread_1");
+    const links = within(section).getAllByRole("link", { name: /Open Gmail thread thread_1/ });
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(link).toHaveAttribute("href", "https://mail.google.com/mail/u/0/#all/thread_1");
   });
 
   it("shows an unassigned reply as a question, not as this person's reply", async () => {
@@ -295,18 +295,18 @@ describe("reply filing on Contacts and the person file", () => {
     );
     render(<PersonFileView personId="person-replied" />);
 
-    const section = await screen.findByRole("region", { name: "Replies" });
+    const section = await screen.findByRole("region", { name: "Gmail activity" });
     expect(
       within(section).getByText(
-        "A reply arrived that could not be tied to this person.",
+        "A message arrived that could not be tied to this person.",
       ),
     ).toBeInTheDocument();
-    expect(within(section).getByRole("heading", { name: "Unassigned replies" })).toBeInTheDocument();
+    expect(within(section).getByRole("heading", { name: "Unassigned messages" })).toBeInTheDocument();
     expect(within(section).getByText(/Who sent this reply\?/)).toBeInTheDocument();
     expect(
       within(section).getByText(/Nothing was filed on this person/),
     ).toBeInTheDocument();
-    expect(within(section).getByText("No inbound reply filed yet.")).toBeInTheDocument();
+    expect(within(section).getByText("No messages collected yet.")).toBeInTheDocument();
   });
 
   it("says no reply yet when nothing has come back", async () => {
@@ -323,7 +323,7 @@ describe("reply filing on Contacts and the person file", () => {
     );
     render(<PersonFileView personId="person-replied" />);
 
-    const section = await screen.findByRole("region", { name: "Replies" });
+    const section = await screen.findByRole("region", { name: "Gmail activity" });
     expect(within(section).getByText("No reply yet.")).toBeInTheDocument();
   });
 });
