@@ -45,6 +45,7 @@ The [engineering index](engineering/README.md) maps the active backend and front
 
 - [Approved send](engineering/approved-send.md)
 - [Reply filing](engineering/reply-filing.md)
+- [Tracked Gmail activity](engineering/gmail-activity.md)
 - [Durable person tasks](engineering/person-tasks.md)
 - [Living brief](engineering/living-brief.md)
 - [Meeting evidence](engineering/meeting-evidence.md)
@@ -64,8 +65,12 @@ The [engineering index](engineering/README.md) maps the active backend and front
 - [0001 Manual run does not consume the weekly slot](engineering/adr/0001-manual-run-does-not-consume-weekly-slot.md)
 - [0002 Workspace runtime](engineering/adr/0002-sourcecado-workspace-runtime.md)
 - [0003 macOS preview packaging](engineering/adr/0003-macos-preview-artifact-packaging.md)
+- [0004 Person task transactions](engineering/adr/0004-person-task-transactions.md)
+- [0005 Tracked mail evidence](engineering/adr/0005-tracked-mail-evidence.md)
 
 ## Current execution records
+
+- [October 12 Gmail activity verification](verification/2026-10-12-gmail-activity.md) — #207 checks and Windows verification limits
 
 - [September 21 onboarding architecture review](audit/2026-09-21-onboarding-architecture-review.md) — authority paths, restart boundaries, database policy, and proposed backlog dispositions
 - [September 21 onboarding correctness review](audit/2026-09-21-onboarding-correctness-review.md) — confirmed product gaps and bounded verification
