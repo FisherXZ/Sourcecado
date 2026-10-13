@@ -824,7 +824,7 @@ def _add_person_tasks(context: MigrationContext) -> int:
 
 # The people.db version that the crm_changes rebuild starts from. If another
 # step lands first, bump this and PEOPLE_DB_VERSION together.
-CRM_CHANGES_REBUILD_FROM = 3
+CRM_CHANGES_REBUILD_FROM = 4
 
 
 def _count_crm_changes(context: MigrationContext) -> int:

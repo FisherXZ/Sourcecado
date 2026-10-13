@@ -417,13 +417,13 @@ def test_people_v3_adds_the_description_table_to_an_existing_v2_database(tmp_pat
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert plan.from_version == 2
-    assert plan.to_version == 4
-    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4)]
+    assert plan.to_version == migrations.spec_for("people_db").current_version
+    assert [(step.from_version, step.to_version) for step in plan.steps][:2] == [(2, 3), (3, 4)]
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
     assert outcome.backup_id is not None
-    assert _user_version(db) == 4
+    assert _user_version(db) == migrations.spec_for("people_db").current_version
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -443,7 +443,7 @@ def test_people_v3_adds_the_description_table_to_an_existing_v2_database(tmp_pat
     # Reopening the real store leaves the recorded version at current.
     reopened = PersonStore(root)
     assert reopened.descriptions(person["person_id"])["general"]["version"] == 0
-    assert _user_version(db) == 4
+    assert _user_version(db) == migrations.spec_for("people_db").current_version
 
 
 def test_legacy_meeting_evidence_db_upgrades_from_the_pre_registry_shape(tmp_path):
@@ -618,7 +618,7 @@ def test_people_v3_adds_tasks_and_leaves_existing_people_intact(tmp_path):
 
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
-    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (REBUILD_FROM, REBUILD_FROM + 1)]
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4), (REBUILD_FROM, REBUILD_FROM + 1)]
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
