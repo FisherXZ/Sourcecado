@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
+import { DescriptionEditor, describeDescription } from "./DescriptionEditor";
 import {
+  defaultPersonDescriptions,
   getBoard,
   refreshReplies,
   type Board,
@@ -62,6 +64,44 @@ const SEQUENCE_FILTERS: { value: SequenceFilter; label: string }[] = [
   { value: "done", label: "Done" },
 ];
 
+function ContactDescriptionCell({ person }: { person: BoardPerson }) {
+  const [editing, setEditing] = useState(false);
+  const general = (person.descriptions ?? defaultPersonDescriptions()).general;
+  const { text, muted } = describeDescription(general);
+  if (editing) {
+    return (
+      <div
+        className="contacts-description-edit"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        <DescriptionEditor
+          personId={person.person_id}
+          description={general}
+          rows={2}
+          onSaved={() =>
+            window.dispatchEvent(new Event("sourcecado:board-changed"))
+          }
+          onClose={() => setEditing(false)}
+        />
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`contacts-description${muted ? " is-muted" : ""}`}
+      aria-label="Edit short description"
+      onClick={(event) => {
+        event.stopPropagation();
+        setEditing(true);
+      }}
+    >
+      {text}
+    </button>
+  );
+}
+
 function ContactRow({ person }: { person: BoardPerson }) {
   const name = personName(person);
   const sequence = SEQUENCE_LABEL[person.sequence_state ?? ""] ?? "Unknown";
@@ -75,11 +115,12 @@ function ContactRow({ person }: { person: BoardPerson }) {
       tabIndex={0}
       aria-label={`Open Person File for ${name}`}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest("a")) return;
+        if ((event.target as HTMLElement).closest("a, button, textarea")) return;
         openPersonFile();
       }}
       onKeyDown={(event) => {
         if (event.key !== "Enter") return;
+        if ((event.target as HTMLElement).closest("button, textarea")) return;
         event.preventDefault();
         openPersonFile();
       }}
@@ -102,6 +143,9 @@ function ContactRow({ person }: { person: BoardPerson }) {
       <td>
         <span className="contacts-primary">{person.title || "No title recorded"}</span>
         <span className="contacts-secondary">{person.company || "No company recorded"}</span>
+      </td>
+      <td>
+        <ContactDescriptionCell person={person} />
       </td>
       <td>
         <span className={`contacts-sequence contacts-sequence-${person.sequence_state}`}>
@@ -132,6 +176,7 @@ function ContactsTable({ people }: { people: BoardPerson[] }) {
           <tr>
             <th scope="col">Contact</th>
             <th scope="col">Role &amp; company</th>
+            <th scope="col">Description</th>
             <th scope="col">Sequence</th>
             <th scope="col">Last contact</th>
             <th scope="col">Attention</th>
