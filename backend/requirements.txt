@@ -4,3 +4,5 @@ httpx>=0.27
 pytest>=8
 mcp>=1.28.1,<2
 pypdf>=5,<7
+# Offline IANA timezone data, including Windows and frozen desktop builds.
+tzdata>=2026.4

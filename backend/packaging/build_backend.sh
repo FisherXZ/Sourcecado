@@ -34,6 +34,8 @@ echo "==> building sourcecado-backend"
   --paths "$BACKEND_DIR" \
   --add-data "$BACKEND_DIR/coworker/personas:coworker/personas" \
   --add-data "$BACKEND_DIR/coworker/builtin_skills:coworker/builtin_skills" \
+  --hidden-import tzdata \
+  --collect-data tzdata \
   --hidden-import uvicorn.loops.auto \
   --hidden-import uvicorn.loops.uvloop \
   --hidden-import uvicorn.protocols.http.auto \

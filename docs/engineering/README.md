@@ -31,6 +31,7 @@ Python venv; a packaged app uses the frozen backend.
 
 - [Reviewed enrichment and approved sending](approved-send.md)
 - [Reply filing](reply-filing.md)
+- [Durable person tasks](person-tasks.md)
 - [Living brief](living-brief.md)
 - [Meeting evidence](meeting-evidence.md) and [legal artifacts](legal-artifacts.md)
 
@@ -46,6 +47,7 @@ Python venv; a packaged app uses the frozen backend.
 - [Manual runs preserve the weekly slot](adr/0001-manual-run-does-not-consume-weekly-slot.md)
 - [Workspace authority and shell execution](adr/0002-sourcecado-workspace-runtime.md)
 - [macOS preview packaging](adr/0003-macos-preview-artifact-packaging.md)
+- [Tasks share the person database](adr/0004-person-task-transactions.md)
 
 Product language in [domain.md](../domain.md) takes precedence over runtime and
 course terminology. The [product specification](../superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md)

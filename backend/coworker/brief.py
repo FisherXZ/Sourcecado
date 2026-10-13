@@ -320,6 +320,10 @@ def _attachment_ref(record: dict[str, Any], *, fallback: datetime) -> ContextSou
 def _claims(
     person: dict[str, Any], events: list[dict[str, Any]], *, now: datetime
 ) -> tuple[list[ProjectionItem], int]:
+    # Task saves are audit receipts, not learned facts about this person.
+    # Filter before the evidence cap so editing tasks cannot displace mail or
+    # meeting evidence from the brief and its generated successor handoff.
+    events = [event for event in events if event.get("kind") != "crm_task"]
     pid = str(person["person_id"])
     record_stamp = _stamp(person.get("updated_at"), fallback=now)
     record_ref = _ref(
@@ -840,6 +844,8 @@ def _handoff_metadata(
         if saved is None:
             continue
         for index, event in enumerate(events[saved[0] + 1 :], start=saved[0] + 1):
+            if event.get("kind") == "crm_task":
+                continue
             payload = _payload(event)
             fields = payload.get("fields")
             is_handoff_patch = (

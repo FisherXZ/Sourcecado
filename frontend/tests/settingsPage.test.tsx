@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/api", () => ({
+  getTaskPreferences: vi.fn(async () => ({ timezone: "America/Los_Angeles" })),
   createWorkspaceGrant: api.createWorkspaceGrant,
   exportDiagnosticBundle: api.exportDiagnosticBundle,
   previewDiagnosticBundle: api.previewDiagnosticBundle,

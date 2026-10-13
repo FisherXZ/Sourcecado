@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { OutreachPanel } from "./OutreachPanel";
+import { TaskPanel } from "./crm/TaskPanel";
 
 import {
   attachPersonMeeting,
@@ -161,7 +162,7 @@ export function PersonFileView({ personId }: { personId: string }) {
   useEffect(() => {
     let active = true;
     setFailed(false);
-    setFile(null);
+    setFile(current => current?.person.person_id === personId ? current : null);
     getPerson(personId).then(
       (next) => {
         if (active) setFile(next);
@@ -332,7 +333,7 @@ export function PersonFileView({ personId }: { personId: string }) {
     }
   }
 
-  if (failed) {
+  if (failed && !file) {
     return (
       <main className="route-page person-page">
         <h1>Person</h1>
@@ -392,6 +393,7 @@ export function PersonFileView({ personId }: { personId: string }) {
         </div>
       </header>
 
+      {failed ? <p className="task-error" role="alert">Couldn’t refresh this person file. Previously loaded work is kept.</p> : null}
       {file.brief.partial ? (
         <p className="person-partial" role="status">
           Partial brief. {file.brief.partial_sources.join(", ")} could not be
@@ -424,6 +426,8 @@ export function PersonFileView({ personId }: { personId: string }) {
           </p>
         ) : null}
       </section>
+
+      <TaskPanel key={personId} personId={personId} />
 
       <div className="person-summary-grid">
         <section className="person-summary-card" aria-labelledby="person-outcome-heading">

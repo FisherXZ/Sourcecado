@@ -3,6 +3,7 @@
 @import "./styles/chat.css";
 @import "./styles/route.css";
 @import "./styles/responsive.css";
+@import "./styles/tasks.css";
 
 /* Contacts and person-file routes. This stays here (not in styles/route.css)
    because tests/boardPersonStyles.test.ts reads src/styles.css directly
