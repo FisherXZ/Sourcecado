@@ -38,6 +38,7 @@ from typing import Any
 
 from coworker.agent_run_approval import EFFECT_STATEMENTS
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
+from coworker.crm_tasks import CRM_TASK_STATEMENTS
 from coworker.mcp import SCHEMA_VERSION as MCP_CONFIG_VERSION
 from coworker.people import SCHEMA_VERSION as PEOPLE_DB_VERSION
 from coworker.person_identity import (
@@ -797,6 +798,26 @@ def _separate_masked_people_names(context: MigrationContext) -> int:
     return touched
 
 
+def _count_person_tasks(context: MigrationContext) -> int:
+    """No row is read or rewritten. The step adds empty task tables."""
+    return 0
+
+
+def _add_person_tasks(context: MigrationContext) -> int:
+    """Add person tasks, their change history and operation receipts.
+
+    Existing people, timelines, handoffs and source restrictions are not
+    touched, and no task is invented for anyone. Executed one statement at a
+    time so a failure rolls back with the step's transaction (see
+    `_add_agent_run_effects`).
+    """
+    conn = context.connection
+    assert conn is not None
+    for statement in CRM_TASK_STATEMENTS:
+        conn.execute(statement)
+    return 0
+
+
 # DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
 # constructor still adds it with a column-existence probe; version 1 is that
 # column being present and recorded.
@@ -1011,7 +1032,9 @@ REGISTRY: tuple[StoreSpec, ...] = (
         relative_path="people.db",
         current_version=PEOPLE_DB_VERSION,
         version_channel=VersionChannel.SQLITE_USER_VERSION,
-        description="Person files, their ledger events, attachments, and versions.",
+        description=(
+            "Person files, their ledger events, attachments, versions, and tasks."
+        ),
         migrations=_adopt(
             "Adopt the person schema shipped before the registry existed.",
             _count_people_db,
@@ -1039,6 +1062,16 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 count=_count_people_descriptions,
                 apply=_add_people_descriptions,
             ),
+            Migration(
+                from_version=3,
+                to_version=4,
+                description=(
+                    "Add person tasks with their change history and operation "
+                    "receipts, without creating any task for existing people."
+                ),
+                count=_count_person_tasks,
+                apply=_add_person_tasks,
+            ),
         ),
         json_columns=(
             ("events", "payload"),
@@ -1046,6 +1079,12 @@ REGISTRY: tuple[StoreSpec, ...] = (
             ("person_versions", "person_json"),
             ("person_versions", "attachments_json"),
             ("person_descriptions", "source_refs"),
+            ("person_tasks", "protected_fields"),
+            ("person_tasks", "source_refs"),
+            ("crm_changes", "before_json"),
+            ("crm_changes", "after_json"),
+            ("crm_changes", "source_refs"),
+            ("crm_operations", "response_json"),
         ),
     ),
     StoreSpec(

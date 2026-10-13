@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 
-import { OutreachPanel } from "./OutreachPanel";
 import { DescriptionEditor } from "./DescriptionEditor";
+import { OutreachPanel } from "./OutreachPanel";
+import { TaskList } from "./Tasks";
 
 import {
   attachPersonMeeting,
@@ -163,7 +164,9 @@ export function PersonFileView({ personId }: { personId: string }) {
   useEffect(() => {
     let active = true;
     setFailed(false);
-    setFile(null);
+    // A refresh of the same person keeps the page mounted, so an open task
+    // editor keeps its unsaved text. Switching person starts clean.
+    setFile((current) => (current?.person.person_id === personId ? current : null));
     getPerson(personId).then(
       (next) => {
         if (active) setFile(next);
@@ -462,6 +465,10 @@ export function PersonFileView({ personId }: { personId: string }) {
           );
         })()}
       </section>
+
+      <div className="person-section person-tasks">
+        <TaskList personId={personId} heading="Tasks" />
+      </div>
 
       <div className="person-summary-grid">
         <section className="person-summary-card" aria-labelledby="person-outcome-heading">

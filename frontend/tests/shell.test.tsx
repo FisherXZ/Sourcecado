@@ -43,6 +43,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("../src/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/api")>()),
+  ...(await import("./taskApi")).taskApiMock(),
   connectCalendar: vi.fn(),
   connectDrive: vi.fn(),
   connectGmail: vi.fn(),

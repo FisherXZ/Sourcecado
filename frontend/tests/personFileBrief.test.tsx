@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
 vi.mock("../src/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/api")>()),
   ...api,
+  ...(await import("./taskApi")).taskApiMock(),
 }));
 
 function personFile(brief = livingBrief()) {

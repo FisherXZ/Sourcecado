@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from coworker.crm_tasks import CRM_TASK_STATEMENTS
 from coworker.person_identity import (
     apollo_surname_is_masked,
     without_apollo_name_masks,
@@ -20,10 +21,11 @@ from coworker.person_identity import (
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
-# v3 adds the person_descriptions table (ticket #202); the constructor creates
-# it for a fresh database, and the registered 2->3 migration adopts an existing
-# one with backup and rollback.
-SCHEMA_VERSION = 3
+# v3 adds the person_descriptions table (ticket #202); v4 adds the person_tasks,
+# crm_changes and crm_operations tables (ticket #200). The constructor creates
+# them for a fresh database, and the registered 2->3 and 3->4 migrations adopt an
+# existing one with backup and rollback.
+SCHEMA_VERSION = 4
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -79,6 +81,10 @@ class PersonStore:
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         os.chmod(self.db_path, 0o600)
         self._conn.row_factory = sqlite3.Row
+        # SQLite enforces foreign keys per connection. Task and CRM-change rows
+        # reference people(person_id), so a write for a missing person fails
+        # here even if a caller skips the service's own check.
+        self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS people (
@@ -160,6 +166,8 @@ class PersonStore:
             """
         )
         self._ensure_schema()
+        for statement in CRM_TASK_STATEMENTS:
+            self._conn.execute(statement)
         self._conn.commit()
 
     def _ensure_schema(self) -> None:

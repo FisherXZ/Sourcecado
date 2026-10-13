@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("../src/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/api")>()),
+  ...(await import("./taskApi")).taskApiMock(),
   attachPersonMeeting: api.attachPersonMeeting,
   attachPersonDriveEvidence: api.attachPersonDriveEvidence,
   getBoard: api.getBoard,

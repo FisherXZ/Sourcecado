@@ -824,7 +824,313 @@
   opacity: .65;
 }
 
+/* Contacts / Tasks view switch and the shared task list. The same rows render
+   in Contacts and in a person file; colour appears only for overdue work and
+   always beside a text label. */
+.contacts-view-switch {
+  display: inline-flex;
+  gap: 2px;
+  margin-top: 14px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  justify-self: start;
+}
+
+.contacts-view-switch button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.contacts-view-switch button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.task-list {
+  min-width: 0;
+}
+
+.contacts-list .task-list {
+  padding: 4px 14px 14px;
+}
+
+.task-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+}
+
+.task-list-header h2,
+.task-list-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.task-list-header button,
+.task-row-action,
+.task-form-actions button,
+.task-list-error button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.task-form-actions button[type="submit"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.task-list-header button:disabled,
+.task-form-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .6;
+}
+
+.task-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 0 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-group-label h3,
+.task-group-label h4 {
+  margin: 0;
+  color: var(--muted);
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.task-group-count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 9999px;
+  background: var(--canvas);
+  color: var(--muted);
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 10px;
+  text-align: center;
+}
+
+.task-row {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-row-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.task-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-details {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-meta a {
+  color: var(--accent-deep);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.task-due {
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-row.is-overdue .task-due {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.task-form {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  margin: 8px 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--canvas);
+}
+
+.task-field {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.task-field label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.task-field input,
+.task-field textarea,
+.task-field select {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.task-field-date input {
+  max-width: 200px;
+  font-family: ui-monospace, "Geist Mono", monospace;
+}
+
+.task-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-form [role="alert"],
+.task-list-error p {
+  margin: 0;
+  color: var(--error);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-conflict {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12px;
+}
+
+.task-conflict p {
+  margin: 0;
+  color: var(--warn);
+}
+
+.task-conflict dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 8px 0;
+  color: var(--text);
+}
+
+.task-conflict dt {
+  font-weight: 600;
+}
+
+.task-conflict dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-list-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.task-list-status,
+.task-list-timezone {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.contacts-view-switch button:focus-visible,
+.task-list-header button:focus-visible,
+.task-row-action:focus-visible,
+.task-form-actions button:focus-visible,
+.task-list-error button:focus-visible,
+.task-meta a:focus-visible,
+.task-field input:focus-visible,
+.task-field textarea:focus-visible,
+.task-field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 @media (max-width: 767px) {
+  .contacts-view-switch button,
+  .task-list-header button,
+  .task-row-action,
+  .task-form-actions button,
+  .task-list-error button,
+  .task-field input,
+  .task-field textarea,
+  .task-field select {
+    min-height: 44px;
+  }
+
+  .task-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .person-summary-grid {
     grid-template-columns: 1fr;
   }
