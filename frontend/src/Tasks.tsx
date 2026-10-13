@@ -571,6 +571,7 @@ export function TasksView() {
           <div className="tasks-column-head tasks-column-head-row">
             <span>Assigned to</span>
             <select
+              className="tasks-member-select"
               aria-label="Filter by member"
               value={selectedMember}
               onChange={(event) => setSelectedMember(event.currentTarget.value)}
