@@ -480,7 +480,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
 
   const finished = task.state !== "open";
   return (
-    <li className={`task-row is-${status} is-state-${task.state}`}>
+    <li className={`task-row is-${finished ? "finished" : status} is-state-${task.state}`}>
       {editing ? (
         <TaskEditor task={task} onClose={() => setEditing(false)} />
       ) : (
@@ -496,7 +496,11 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
                 </a>
               ) : null}
               <span className="task-due">
-                {task.due_date ? `${DUE_LABEL[status]} · ${task.due_date}` : "No date"}
+                {!task.due_date
+                  ? "No date"
+                  : finished
+                    ? `Due ${task.due_date}`
+                    : `${DUE_LABEL[status]} · ${task.due_date}`}
               </span>
               <span>{task.origin === "assistant" ? "Added by assistant" : "Added by you"}</span>
             </span>

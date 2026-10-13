@@ -12,6 +12,8 @@ import pytest
 from coworker import migrations
 from coworker.agent_run_approval import EFFECT_STATEMENTS
 from coworker.migrations import (
+    CRM_CHANGES_REBUILD_FROM as REBUILD_FROM,
+    PEOPLE_DB_VERSION,
     BackupFailed,
     Migration,
     StoreKind,
@@ -255,7 +257,7 @@ def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
     assert store_plan.record_count > 0
 
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(db) == 4
+    assert _user_version(db) == PEOPLE_DB_VERSION
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -331,12 +333,12 @@ def test_people_v2_moves_masked_surnames_out_of_canonical_history(tmp_path):
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert plan.from_version == 1
-    assert plan.to_version == 4
+    assert plan.to_version == PEOPLE_DB_VERSION
 
     outcome = migrations.apply_migrations(root)
 
     assert outcome.error is None
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
     loaded = PersonStore(root).get(person["person_id"])
     assert loaded is not None
     assert loaded["person_id"] == person["person_id"]
@@ -551,7 +553,7 @@ def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
 
     # Constructing the stores must not knock the recorded version off current.
     assert _user_version(root / "club.db") == 2
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
 
 
 def _people_v2_with_handoff_and_restricted_source(root: Path) -> str:
@@ -616,12 +618,12 @@ def test_people_v3_adds_tasks_and_leaves_existing_people_intact(tmp_path):
 
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
-    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4)]
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (REBUILD_FROM, REBUILD_FROM + 1)]
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
     assert outcome.backup_id is not None
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
 
     after = _dump_database(root / "people.db")
     assert after["integrity"] == ["ok"]
@@ -647,7 +649,7 @@ def test_people_v3_adds_tasks_and_leaves_existing_people_intact(tmp_path):
     )["task"]
     assert task["person_id"] == person_id
     # Opening the store again must not knock the recorded version off current.
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
 
 
 def test_a_failed_people_tasks_step_restores_the_v2_database(tmp_path, monkeypatch):
@@ -687,16 +689,16 @@ def test_a_failed_people_tasks_step_restores_the_v2_database(tmp_path, monkeypat
 
     monkeypatch.undo()
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
 
 
-def test_a_fresh_people_db_reaches_v4_with_empty_task_tables(tmp_path):
+def test_a_fresh_people_db_reaches_the_current_version_with_empty_task_tables(tmp_path):
     from coworker.people import PersonStore
 
     root = tmp_path / "state"
     PersonStore(root)._conn.close()
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
     dump = _dump_database(root / "people.db")
     assert dump["rows"]["person_tasks"] == []
     assert dump["rows"]["people"] == []
@@ -724,8 +726,9 @@ CREATE TABLE crm_changes (
 """
 
 
-def _people_v3_with_a_task(root: Path) -> tuple[str, str]:
-    """A v3 people.db: one task, its create change and its operation receipt."""
+def _people_before_crm_rebuild(root: Path) -> tuple[str, str]:
+    """A people.db one version before the crm_changes rebuild: one task, its
+    create change and its operation receipt, in the pre-rebuild table."""
     from coworker.crm_tasks import TaskService
     from coworker.people import PersonStore
 
@@ -763,19 +766,19 @@ def _people_v3_with_a_task(root: Path) -> tuple[str, str]:
             f"INSERT INTO crm_operations VALUES ({', '.join('?' * len(operations[0]))})",
             operations,
         )
-        conn.execute("PRAGMA user_version = 3")
+        conn.execute(f"PRAGMA user_version = {REBUILD_FROM}")
         conn.commit()
     finally:
         conn.close()
     return person_id, task["task_id"]
 
 
-def test_people_v4_widens_crm_changes_and_keeps_every_row(tmp_path):
+def test_the_crm_changes_rebuild_keeps_every_row(tmp_path):
     from coworker.crm_tasks import TaskService
     from coworker.people import PersonStore
 
     root = tmp_path / "state"
-    person_id, task_id = _people_v3_with_a_task(root)
+    person_id, task_id = _people_before_crm_rebuild(root)
     before = _dump_database(root / "people.db")
     conn = sqlite3.connect(root / "people.db")
     with pytest.raises(sqlite3.IntegrityError):
@@ -786,11 +789,13 @@ def test_people_v4_widens_crm_changes_and_keeps_every_row(tmp_path):
 
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
-    assert [(step.from_version, step.to_version) for step in plan.steps] == [(3, 4)]
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [
+        (REBUILD_FROM, REBUILD_FROM + 1)
+    ]
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
     assert outcome.applied[-1].record_count == 1
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
 
     after = _dump_database(root / "people.db")
     assert after["integrity"] == ["ok"]
@@ -829,12 +834,12 @@ def test_people_v4_widens_crm_changes_and_keeps_every_row(tmp_path):
         actor="director",
     )
     assert replay["replayed"] is True and replay["task"]["task_id"] == task_id
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
 
 
-def test_a_failed_people_v4_step_restores_the_v3_database(tmp_path, monkeypatch):
+def test_a_failed_crm_changes_rebuild_restores_the_previous_database(tmp_path, monkeypatch):
     root = tmp_path / "state"
-    _people_v3_with_a_task(root)
+    _people_before_crm_rebuild(root)
     before = _dump_database(root / "people.db")
 
     def explode(context):
@@ -846,9 +851,9 @@ def test_a_failed_people_v4_step_restores_the_v3_database(tmp_path, monkeypatch)
     original = migrations.spec_for("people_db")
     broken = migrations.dataclasses.replace(
         original,
-        migrations=(
-            *original.migrations[:3],
-            dataclasses.replace(original.migrations[3], apply=explode),
+        migrations=tuple(
+            dataclasses.replace(step, apply=explode) if step.from_version == REBUILD_FROM else step
+            for step in original.migrations
         ),
     )
     monkeypatch.setattr(
@@ -861,11 +866,11 @@ def test_a_failed_people_v4_step_restores_the_v3_database(tmp_path, monkeypatch)
     assert outcome.error is not None
     assert "people_db" in outcome.rolled_back
     assert _dump_database(root / "people.db") == before
-    assert _user_version(root / "people.db") == 3
+    assert _user_version(root / "people.db") == REBUILD_FROM
 
     monkeypatch.undo()
     assert migrations.apply_migrations(root).error is None
-    assert _user_version(root / "people.db") == 4
+    assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
 
 
 # --- failing closed ------------------------------------------------------

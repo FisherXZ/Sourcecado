@@ -945,6 +945,7 @@
 
 .task-row {
   display: flex;
+  flex-wrap: wrap;
   min-height: 44px;
   align-items: center;
   justify-content: space-between;
@@ -1047,6 +1048,7 @@
 
 .task-history {
   display: grid;
+  flex-basis: 100%;
   gap: 8px;
   width: 100%;
   margin: 8px 0 4px;

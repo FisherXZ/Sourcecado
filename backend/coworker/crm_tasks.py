@@ -64,7 +64,7 @@ _CHANGE_ID_RE = re.compile(r"^chg_[0-9a-f]{32}$")
 CRM_CHANGES_COLUMNS = """
         change_id TEXT PRIMARY KEY,
         person_id TEXT NOT NULL REFERENCES people(person_id),
-        entity_type TEXT NOT NULL CHECK (entity_type IN ('task', 'description')),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('task')),
         entity_id TEXT NOT NULL,
         entity_version INTEGER NOT NULL CHECK (entity_version >= 1),
         action TEXT NOT NULL CHECK (
