@@ -657,6 +657,7 @@ export type PersonTask = {
   version: number;
   created_at: string;
   updated_at: string;
+  completed_at: string | null;
   due_status?: TaskDueStatus;
   person?: {
     person_id: string;
@@ -678,6 +679,20 @@ export type TaskSaveResult = {
   task: PersonTask;
   change: { change_id: string } | null;
   replayed: boolean;
+};
+
+export type TaskChangeAction = "create" | "update" | "complete" | "reopen" | "cancel" | "undo";
+
+/** One recorded change to a task. `compensates_change_id` marks an undo. */
+export type TaskChange = {
+  change_id: string;
+  entity_version: number;
+  action: TaskChangeAction;
+  actor: "director" | "assistant";
+  reason: string;
+  operation_id: string;
+  compensates_change_id: string | null;
+  created_at: string;
 };
 
 export type TaskFields = {
@@ -722,6 +737,17 @@ export async function listTasks(
   return res.json();
 }
 
+export async function listTaskChanges(
+  personId: string,
+  taskId: string,
+): Promise<TaskChange[]> {
+  const res = await get(
+    `/v1/people/${encodeURIComponent(personId)}/tasks/${encodeURIComponent(taskId)}/changes`,
+  );
+  if (!res.ok) throw new Error(`task changes ${res.status}`);
+  return ((await res.json()) as { changes: TaskChange[] }).changes;
+}
+
 async function taskWrite(
   method: "POST" | "PATCH",
   path: string,
@@ -764,7 +790,11 @@ export function createTask(
 export function updateTask(
   personId: string,
   taskId: string,
-  input: { changes: Partial<TaskFields>; expectedVersion: number; operationId: string },
+  input: {
+    changes: Partial<TaskFields> & { state?: PersonTask["state"] };
+    expectedVersion: number;
+    operationId: string;
+  },
 ): Promise<TaskSaveResult> {
   return taskWrite(
     "PATCH",
@@ -774,6 +804,19 @@ export function updateTask(
       expected_version: input.expectedVersion,
       operation_id: input.operationId,
     },
+  );
+}
+
+/** Undo one recorded change as a new compensating change; 409 if the task moved on. */
+export function undoTaskChange(
+  personId: string,
+  changeId: string,
+  input: { operationId: string },
+): Promise<TaskSaveResult> {
+  return taskWrite(
+    "POST",
+    `/v1/people/${encodeURIComponent(personId)}/crm-changes/${encodeURIComponent(changeId)}/undo`,
+    { operation_id: input.operationId },
   );
 }
 
