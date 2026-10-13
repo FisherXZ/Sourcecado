@@ -89,6 +89,19 @@ def test_evidence_and_pending_analysis_survive_restart_without_duplicates(tmp_pa
     assert restarted.analysis_state(pid) == {"latest_evidence_revision": 1, "analyzed_revision": 0, "status": "pending"}
 
 
+def test_gmail_preview_entities_are_readable_untrusted_text(tmp_path):
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    gmail = mailbox()
+    gmail.deliver(thread_id="thread-ada", message_id="encoded-preview", sender=ADDRESS,
+        to=ACCOUNT, subject="Re: Hello", snippet="Sourcecado&#39;s &amp; &lt;script&gt;text&lt;/script&gt;", body="Plain body")
+    result = refresh_mail(people, TrackedMailReader(gmail))
+    assert result["filed"] == 1
+    event = next(event for event in people.timeline(pid) if event["payload"].get("message_id") == "encoded-preview")
+    assert event["payload"]["snippet"] == "Sourcecado's & <script>text</script>"
+    assert event["payload"]["untrusted"] is True
+
+
 def test_failed_check_preserves_success_and_separate_checkpoints(tmp_path):
     people = PersonStore(tmp_path)
     mail = MailRepository(people)

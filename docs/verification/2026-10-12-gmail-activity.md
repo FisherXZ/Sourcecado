@@ -35,12 +35,16 @@ The affected backend suites passed **228 tests**, including mail collection,
 migrations, API, legacy reply filing, approved send/enrichment, person storage,
 tasks and living-brief behavior. Focused UI suites passed **35 tests**. The final
 `npm --prefix frontend run build` passed TypeScript checking and the Vite build;
-it retains existing large-chunk and missing marketing-image warnings.
+it retains existing large-chunk and missing marketing-image warnings. The live
+test exposed HTML entities in Gmail previews. A new regression test failed before
+decoding them into untrusted plain text, then **96 related Gmail tests passed**
+after the correction. React continues escaping preview text rather than treating
+it as markup.
 
-The final full backend run reported **1,759 passed, 256 failed, 2 errors and
+The broad backend run before the preview correction reported **1,759 passed, 256 failed, 2 errors and
 3 skipped**. A separate original-code baseline reported **1,738 passed,
 258 failed, 2 errors and 3 skipped**. Comparing JUnit failure identities found
-**no new failures** in the final implementation. Two baseline failures were
+**no new failures** in that comparison. Two baseline failures were
 absent in the final run; this does not establish a fix for those untouched paths.
 The inherited failures include Windows filesystem permission, symlink and
 directory-fsync assumptions. No tests were disabled or thresholds weakened.
@@ -60,10 +64,19 @@ evidence of a real Gmail send.
 
 ## Limits and follow-through
 
-Real Gmail OAuth and the user-reviewed email test are being configured in a
-separate external development state directory. No real send was claimed by the
-automated or example-browser checks above. Gmail credentials and runtime tokens
-are not committed. Native Tauri/macOS behavior remains unverified on this host.
+Real Gmail OAuth was subsequently configured in a separate external development
+state directory. The operator reviewed the real draft and clicked Sourcecado's
+existing **Allow once and send** control. Sourcecado reported a Gmail message and
+thread identity. Manual refresh collected the outgoing message with present body
+evidence while retaining its approval receipt. A repeated refresh kept one
+message row, one activity event and an unchanged evidence revision. The UI showed
+the saved last-success time and separate pending analysis. Personal addresses,
+credentials and runtime tokens are not committed in this record.
+
+No real incoming reply or reply sent directly in Gmail has yet been observed in
+this test. Those paths are covered by the deterministic tests above and remain
+additional live verification when the recipient replies. Native Tauri/macOS
+behavior remains unverified on this host.
 
 #208 owns automatic refresh timing, request coalescing and later analysis
 execution. The reusable collection entry point and persisted boundaries are

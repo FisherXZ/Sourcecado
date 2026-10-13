@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -708,7 +709,6 @@ class GmailApi:
             "to": headers.get("to"),
             "subject": headers.get("subject"),
             "date": headers.get("date"),
-            "snippet": data.get("snippet"),
             "body": body,
             "truncated": len(full_body) > 8000,
             "sent": "SENT" in (data.get("labelIds") or []),
@@ -755,7 +755,7 @@ def inbound_message_view(data: dict[str, Any]) -> dict[str, Any]:
         "reply_to": headers.get("reply-to"),
         "delivered_to": headers.get("delivered-to"),
         "subject": headers.get("subject"),
-        "snippet": str(data.get("snippet") or ""),
+        "snippet": html.unescape(str(data.get("snippet") or "")),
         "received_at": _received_at(data.get("internalDate")) or headers.get("date"),
         "history_id": str(data.get("historyId") or "") or None,
     }
