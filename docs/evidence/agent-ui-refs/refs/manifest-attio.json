@@ -1,0 +1,301 @@
+[
+ {
+  "file": "attio-rail.png",
+  "product": "Attio",
+  "component": "rail",
+  "source_page_url": "https://attio.com/changelog/2023/record-creation-attribution",
+  "image_url": "https://a.storyblok.com/f/234930/2656x1427/baf54c1a0a/record-creation-attribution.png",
+  "note": "Light shell: workspace switcher + collapse, Quick Actions with cmd-K, search with /, destinations with icons, Pinned Views, Lists."
+ },
+ {
+  "file": "attio-rail-2.png",
+  "product": "Attio",
+  "component": "rail",
+  "source_page_url": "https://attio.com/help/reference/attio-101/productivity/introduction-to-tasks",
+  "image_url": "https://a.storyblok.com/f/234930/1438x1307/f083891709/task-assignment-notification.png",
+  "note": "Rail with search cmd-K, inbox button with unread badge, Home/Tasks/Notes/Calls, grouped Records and Lists, selected row, notifications popover."
+ },
+ {
+  "file": "attio-rail-3.png",
+  "product": "Attio",
+  "component": "rail",
+  "source_page_url": "https://attio.com/changelog/2024/pin-favorites-in-your-sidebar",
+  "image_url": "https://a.storyblok.com/f/234930/800x493/9632fb8422/pin-favorites.gif",
+  "note": "Favorites with nested rows, Records, Lists with + on hover, footer rows (Invite teammates, Help); first frame of a GIF."
+ },
+ {
+  "file": "attio-rail-4.png",
+  "product": "Attio",
+  "component": "rail",
+  "source_page_url": "https://attio.com/changelog/2023/report-and-list-duplication",
+  "image_url": "https://a.storyblok.com/f/234930/1280x720/e1b7f19b3a/report-and-list-duplication.gif",
+  "note": "Dark shell: same rail in dark, workspace switcher, search with cmd-K, Pinned Views, Lists; first frame of a GIF."
+ },
+ {
+  "file": "attio-header.png",
+  "product": "Attio",
+  "component": "header",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x912/3856701aba/ask-attio-options-menu.png",
+  "note": "Ask Attio thread header: title, + new chat, history, overflow menu (Open in full page, Copy chat ID, Delete), close."
+ },
+ {
+  "file": "attio-header-2.png",
+  "product": "Attio",
+  "component": "header",
+  "source_page_url": "https://attio.com/help/reference/attio-101/productivity/introduction-to-notes",
+  "image_url": "https://a.storyblok.com/f/234930/1379x825/c2d1537ed7/notes007.png",
+  "note": "Record header: logo + title, chip strip (owner, last interaction, value), tab row with count badges."
+ },
+ {
+  "file": "attio-header-3.png",
+  "product": "Attio",
+  "component": "header",
+  "source_page_url": "https://attio.com/engineering/blog/ask-attio-a-technical-look-at-our-new-agent",
+  "image_url": "https://a.storyblok.com/f/234930/3840x2988/17f95aa561/ask-attio-_-draft-emails-1.png",
+  "note": "Dark thread header: title with favorite star, + history overflow close; user bubble right, assistant text left."
+ },
+ {
+  "file": "attio-empty.png",
+  "product": "Attio",
+  "component": "empty",
+  "source_page_url": "https://attio.com/platform/universal-context",
+  "image_url": "https://a.storyblok.com/f/234930/3503x1955/a0abc96ca7/uc-showcase-transparent-3x.png",
+  "note": "Home: greeting, composer with Auto and / hints, two suggestion chips with icons, meetings list below."
+ },
+ {
+  "file": "attio-empty-2.png",
+  "product": "Attio",
+  "component": "empty",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x1080/d5828a83d2/ask-attio-home-composer.png",
+  "note": "Home close-up: Recent chat strip above the composer, two suggestion chips, Meetings row list."
+ },
+ {
+  "file": "attio-composer.png",
+  "product": "Attio",
+  "component": "composer",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x1563/3d2010c685/ask-attio-add-a-prompt.png",
+  "note": "Slash menu in the composer: prompts with colored icons, New prompt, Browse prompts, Manage prompts; context chip, Auto, / key, send."
+ },
+ {
+  "file": "attio-composer-2.png",
+  "product": "Attio",
+  "component": "composer",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x649/922fefecf3/ask-attio-cancel-message.png",
+  "note": "Send turns into a stop square while running; tooltip reads Cancel message."
+ },
+ {
+  "file": "attio-composer-3.png",
+  "product": "Attio",
+  "component": "composer",
+  "source_page_url": "https://attio.com/engineering/blog/ask-attio-a-technical-look-at-our-new-agent",
+  "image_url": "https://a.storyblok.com/f/234930/804x694/562c06862b/llm.png",
+  "note": "Dark model picker: Auto at top, checked row, provider icons; the model name replaces Auto in the composer."
+ },
+ {
+  "file": "attio-thinking.png",
+  "product": "Attio",
+  "component": "thinking",
+  "source_page_url": "https://attio.com/changelog/2026/what-s-new-in-workflows",
+  "image_url": "https://a.storyblok.com/f/234930/3840x2160/4a24c5dca3/workflows.png",
+  "note": "Assistant turn: Thinking label, one line of intent, three outlined step chips, then a result card with a Draft pill."
+ },
+ {
+  "file": "attio-thinking-2.png",
+  "product": "Attio",
+  "component": "thinking",
+  "source_page_url": "https://attio.com/platform/web-agent",
+  "image_url": "https://a.storyblok.com/f/234930/1200x948/5e1fdb040c/web-agent-reasoning-transparent-figma.png",
+  "note": "AI attribute reasoning popover: confidence dot and level, Reasoning paragraph, Citations as link chips."
+ },
+ {
+  "file": "attio-toolstep.png",
+  "product": "Attio",
+  "component": "toolstep",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x1380/198993d585/ask-attio-summarize-last-meeting.png",
+  "note": "Inline tool rows in the thread: icon + past-tense verb + object, result count in muted text, between assistant sentences."
+ },
+ {
+  "file": "attio-toolstep-2.png",
+  "product": "Attio",
+  "component": "toolstep",
+  "source_page_url": "https://attio.com/platform/custom-agents",
+  "image_url": "https://a.storyblok.com/f/234930/2327x1392/a26f7a8007/custom-agents-showcase.png",
+  "note": "Agent log panel: Agent and Tool rows with duration (0.8s) and clock time, credits chip, timeline bar, header stats."
+ },
+ {
+  "file": "attio-resultcard.png",
+  "product": "Attio",
+  "component": "resultcard",
+  "source_page_url": "https://attio.com/changelog/2024/new-browser-extension-integrations",
+  "image_url": "https://a.storyblok.com/f/234930/7680x4320/d2527ebcab/brox-integrations.png",
+  "note": "Record suggestion card: avatar + name, icon-labelled fields, primary Add to Attio button, Related records rows with chevrons."
+ },
+ {
+  "file": "attio-resultcard-2.png",
+  "product": "Attio",
+  "component": "resultcard",
+  "source_page_url": "https://attio.com/changelog/2026/web-research-agent",
+  "image_url": "https://a.storyblok.com/f/234930/7680x4320/2aafe4b4e2/ai-attributes-update.png",
+  "note": "Enrichment cell: value + green confidence dot, popover with Confidence level, Reasoning, Citations as link chips."
+ },
+ {
+  "file": "attio-resultcard-3.png",
+  "product": "Attio",
+  "component": "resultcard",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x488/58e5f32b48/ask-attio-search-web.png",
+  "note": "Source chip: globe icon, Searched web: 6 results, stacked favicons with +3 count."
+ },
+ {
+  "file": "attio-sidepanel.png",
+  "product": "Attio",
+  "component": "sidepanel",
+  "source_page_url": "https://attio.com/changelog/2026/emails-on-deals-and-custom-objects",
+  "image_url": "https://a.storyblok.com/f/234930/7680x4320/ec342c3252/emails-on-deals.png",
+  "note": "Record peek: close, prev/next with 12 of 200 in Deals, help, overflow; title + action icon row; tabs with counts and gear."
+ },
+ {
+  "file": "attio-sidepanel-2.png",
+  "product": "Attio",
+  "component": "sidepanel",
+  "source_page_url": "https://attio.com/changelog/2025/auto-summaries-and-labels",
+  "image_url": "https://a.storyblok.com/f/234930/7680x4320/b4fc21a120/email-summaries-and-tags.png",
+  "note": "Peek with a right-hand Details and Comments pane: field rows with icons, Lists, 2 of 350 in People."
+ },
+ {
+  "file": "attio-approval.png",
+  "product": "Attio",
+  "component": "approval",
+  "source_page_url": "https://attio.com/changelog/2026/ask-attio-to-take-action",
+  "image_url": "https://a.storyblok.com/f/234930/7680x4320/b06fb3860d/ask-attio-actions.png",
+  "note": "Review table before a write: per-attribute checkboxes, attribute and New value columns, 1/3 pager, Discard, Update (5) with cmd-Enter."
+ },
+ {
+  "file": "attio-approval-2.png",
+  "product": "Attio",
+  "component": "approval",
+  "source_page_url": "https://attio.com/platform/universal-context",
+  "image_url": "https://a.storyblok.com/f/234930/1200x948/619645e960/uc-approval-transparent-3x.png",
+  "note": "Per-change cards: Update Role, Funding raised; each has an info icon and an Accept button with a check."
+ },
+ {
+  "file": "attio-approval-3.png",
+  "product": "Attio",
+  "component": "approval",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x873/259abfdcff/ask-attio-allow-share-feedback.png",
+  "note": "Inline permission card: Deny, Always allow, Allow once; above it the message action bar (copy, up, down, retry)."
+ },
+ {
+  "file": "attio-usage.png",
+  "product": "Attio",
+  "component": "usage",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/manage-ask-attio-settings",
+  "image_url": "https://a.storyblok.com/f/234930/2454x1592/302454e112/manage-ask-attio-settings.png",
+  "note": "Ask Attio settings: Credits section, Credits used with reset date, Personal credits used 0/1,000, Workspace credits used."
+ },
+ {
+  "file": "attio-usage-2.png",
+  "product": "Attio",
+  "component": "usage",
+  "source_page_url": "https://attio.com/changelog/2024/new-browser-extension-integrations",
+  "image_url": "https://a.storyblok.com/f/234930/7680x4320/d2527ebcab/brox-integrations.png",
+  "note": "Credits line under the primary button: 104 of 200 credits used in September with an info icon."
+ },
+ {
+  "file": "attio-usage-3.png",
+  "product": "Attio",
+  "component": "usage",
+  "source_page_url": "https://attio.com/platform/custom-agents",
+  "image_url": "https://a.storyblok.com/f/234930/2327x1392/a26f7a8007/custom-agents-showcase.png",
+  "note": "Per-step credits chip in the run panel (24), runtime 25s, executions 3."
+ },
+ {
+  "file": "attio-error.png",
+  "product": "Attio",
+  "component": "error",
+  "source_page_url": "https://attio.com/help/reference/automations/workflows/troubleshooting-workflows",
+  "image_url": "https://a.storyblok.com/f/234930/1618x994/6fa2e9447a/failed-run-error-message.png",
+  "note": "Failed step: red Failed pill on the node and in the panel, red error sentence, credits used 0, runtime, executions."
+ },
+ {
+  "file": "attio-error-2.png",
+  "product": "Attio",
+  "component": "error",
+  "source_page_url": "https://attio.com/help/reference/automations/workflows/troubleshooting-workflows",
+  "image_url": "https://a.storyblok.com/f/234930/1202x758/39008495ee/retry-with-live-workflow.png",
+  "note": "Failed run: red x with Run #3, Retry split button with Retry from start, Retry from failed, Retry with live workflow, plus tooltip."
+ },
+ {
+  "file": "attio-error-3.png",
+  "product": "Attio",
+  "component": "error",
+  "source_page_url": "https://attio.com/help/reference/automations/workflows/troubleshooting-workflows",
+  "image_url": "https://a.storyblok.com/f/234930/2471x1521/1aafe4d190/access-the-run-viewer.png",
+  "note": "Run history list: green check and red x rows, Failed in red with date, credits chip per run, cancel and pause on the running run."
+ },
+ {
+  "file": "attio-actions.png",
+  "product": "Attio",
+  "component": "actions",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x912/e155c2a55a/ask-attio-edit-message.png",
+  "note": "Hover bar under a user message: copy and edit icons, tooltip Edit above the hovered icon."
+ },
+ {
+  "file": "attio-actions-2.png",
+  "product": "Attio",
+  "component": "actions",
+  "source_page_url": "https://attio.com/help/reference/attio-ai/ask-attio/chat-with-ask-attio",
+  "image_url": "https://a.storyblok.com/f/234930/1920x1554/27c5c307cd/ask-attio-message-retries-arrows.png",
+  "note": "Under an assistant message: prev/next with 2/2, copy, thumbs up, thumbs down, retry, all icon-only."
+ },
+ {
+  "file": "attio-actions-3.png",
+  "product": "Attio",
+  "component": "actions",
+  "source_page_url": "https://attio.com/changelog/2025/custom-record-actions",
+  "image_url": "https://a.storyblok.com/f/234930/3840x2160/63b462cb20/record-actions.jpg",
+  "note": "Record action bar: Compose email plus icon-only buttons; Edit actions menu with drag handles."
+ },
+ {
+  "component": "rail",
+  "product": "Attio",
+  "gap": "No image of the collapsed icon rail and none of hover actions on a favorites row; only the collapse toggle is visible."
+ },
+ {
+  "component": "composer",
+  "product": "Attio",
+  "gap": "Attio has no + context menu; context is a chip, @ mention, and / prompts."
+ },
+ {
+  "component": "thinking",
+  "product": "Attio",
+  "gap": "No expandable thinking disclosure and no streaming state in any official image."
+ },
+ {
+  "component": "toolstep",
+  "product": "Attio",
+  "gap": "No chat step row with spinner to check; that state appears only on workflow nodes."
+ },
+ {
+  "component": "approval",
+  "product": "Attio",
+  "gap": "No approval for a send action and no resolved state in official images."
+ },
+ {
+  "component": "error",
+  "product": "Attio",
+  "gap": "No chat-level failure or reconnect prompt; only workflow run errors."
+ },
+ {
+  "component": "sidepanel",
+  "product": "Attio",
+  "gap": "No image showing the resize handle."
+ }
+]

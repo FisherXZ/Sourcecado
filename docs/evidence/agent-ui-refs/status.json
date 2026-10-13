@@ -1,0 +1,19 @@
+{
+  "title": "Sourcecado agent UI: reference board",
+  "intro": "Copycat references for the Sourcecado agent shell, thread, and streaming components. Products: Claude.ai, Clay, and one more GTM agent. Our current app is on the left of each comparison once the build lands.",
+  "refs_title": "References: app shell, thread, streaming, tools, approvals",
+  "tickets": {
+    "audit": {
+      "title": "Our current agent UI: audit of shell, run lifecycle, inspector, approval",
+      "type": "audit",
+      "state": "review",
+      "blocked": []
+    }
+  },
+  "log": [
+    {
+      "t": "2026-10-12 19:55",
+      "m": "Audit captured against a local mock model (dev provider keys return 401). Reference agents running: Claude.ai, Clay, Attio."
+    }
+  ]
+}

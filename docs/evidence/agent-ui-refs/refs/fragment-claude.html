@@ -1,0 +1,278 @@
+<h3>Claude.ai: common patterns</h3>
+<ul>
+<li>Most controls carry an icon. Steps and menu rows have a 16px icon or logo tile. Claude.ai uses icon-only for repeat actions (star, thumbs, close) and icon + word for the rest (Share, Copy, Retry).</li>
+<li>The thread is quiet. A step is one bordered row: logo, verb + object in past tense, a result count, a chevron. The result opens under the row. Argument summaries are chips inside the row, not a second line.</li>
+<li>Composer first. Home shows one greeting, one large composer and four icon prompt chips. While a run is active the same send button becomes a stop square and the placeholder says "Queue another message".</li>
+<li>Results leave the thread. An inline card with an icon and "Open ..." opens a side panel with a title, a two-option switch, copy and download icons, and a close button.</li>
+<li>State words carry the status: "Thinking..." becomes "Thought for 31 seconds"; "Searching messages" becomes "Searched messages"; chips read "Idle", "Needs input", "Running".</li>
+<li>Permission prompts show the tool, the plain purpose, the exact payload, then numbered choices with the keys listed. Once, always (scoped) and no are separate choices.</li>
+<li>Light and dark use the same layout. Only surface and ink change. The accent stays on the same elements in both.</li>
+</ul>
+<p><strong>Do not copy:</strong> text-only buttons (the footer labels "Accept edits", "Opus 5" and "High", and "Open component" have no icon); the 11 to 12px gray disclaimer and "Last edited" lines; gray "Result" toggles and the gray group header "Used 4 integrations"; the gray footer key hints in the permission prompt; the serif display greeting; the one-line narration under "Building the launch deck". The Console transcript shows the right content (tokens, time) but small. Set ours at 13px or more in ink. Every image below is a product marketing or docs render, so sizes are estimates from the screenshot, not from CSS.</p>
+<h4>1. Sidebar / global rail</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-rail.png" alt="Collapsed icon rail: panel-toggle icon at the top, then five icon-only destinations, title chip beside it.">
+<p class="ev-cap">Collapsed icon rail: panel-toggle icon at the top, then five icon-only destinations, title chip beside it.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/blog/interactive-tools-in-claude">Claude blog: interactive tools in Claude</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-rail-2.png" alt="Session list grouped by state (Needs input, Working, Completed) with age, one-line status and key hints. A dark version exists at the same docs page.">
+<p class="ev-cap">Session list grouped by state (Needs input, Working, Completed) with age, one-line status and key hints. A dark version exists at the same docs page.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/agent-view">Claude Code docs: agent view</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Collapsed rail = about 52px wide, 1px right border, one 16px line icon per destination, 36px row pitch, no labels. The first icon (panel toggle) sits on the same row as the thread title.</li>
+<li>Icon order in the rail: circle-plus, chat bubble, stack, grid, angle brackets (labels are not visible when collapsed). Copy the idea: new thread first, history second, then destinations.</li>
+<li>Thread list grouped by state, not by date: "Needs input", "Working", "Completed". Group label = 14px semibold. Row = state glyph + name + one-line last status + age (12m, 3m, 1h) right-aligned.</li>
+<li>Summary line above the list: "1 awaiting input, 1 working, 2 completed". The selected row gets a full-width tint, not a border.</li>
+<li>Keys under the list: Enter open, Space reply, Ctrl+X delete, ? shortcuts. Show the keys as a footer row with key icons.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-rail.png for the collapsed rail and claude-rail-2.png for the thread list: grouping by "Needs input" is exactly what an approval-gated agent needs.</p>
+<p><strong>Gap:</strong> Full expanded sidebar (new chat button, search with Cmd+K, recents with hover rename/star/delete, account footer) not found on an allowed host. The help-center screenshots that show it are hosted on downloads.intercomcdn.com, which is not on the allow-list.</p>
+<h4>2. Thread header</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-header.png" alt="Breadcrumb header: wordmark, project chip with icon, thread title, then star, Share (lock icon + word) and a sliders icon button.">
+<p class="ev-cap">Breadcrumb header: wordmark, project chip with icon, thread title, then star, Share (lock icon + word) and a sliders icon button.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/projects">Anthropic news: Projects</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Console (Managed Agents)</strong></p>
+<img class="ev-img" src="refs/claude-header-2.png" alt="Run header: back arrow and breadcrumb, bold title with an "Idle" status chip, Actions menu, Ask Claude button, then a row of icon chips and run metrics.">
+<p class="ev-cap">Run header: back arrow and breadcrumb, bold title with an "Idle" status chip, Actions menu, Ask Claude button, then a row of icon chips and run metrics.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/platform/api">Claude platform page: Managed Agents</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Row 1: back arrow, "Sessions / Session id", up and down chevrons for previous and next run. Row 2: title at about 20px semibold, then a status chip right after it ("Idle", "Running").</li>
+<li>Right side of row 2: one outline button with a menu chevron ("Actions") and one outline button with the product icon ("Ask Claude"). Every button has an icon.</li>
+<li>Context chips under the title = icon + noun, one per input: automation name, environment, "1 file", vault. Each chip is a 28px pill with a 1px border. This is the project/context chip row.</li>
+<li>Metrics sit on the same line as the chips as plain text with leading icons: "22 hours ago", "5m 34s (2m 44s active)", "71.0k / 5.7k (100%)". They are mid-gray on cream here. Set ours in ink.</li>
+<li>Chat variant: "Project / Thread title" as a breadcrumb with a project icon, then star (pin) as an icon-only button on the far right.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-header-2.png: it is the only reference with a run-status chip plus context chips plus metrics. Use claude-header.png only for the breadcrumb and the star/Share pair.</p>
+<p><strong>Gap:</strong> Model or agent badge and an overflow (three dots) menu are not shown in any allowed image.</p>
+<h4>3. Empty thread / home</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-empty.png" alt="Home: spark glyph and serif greeting, large composer card, four icon+word prompt chips (Write, Code, Strategize, choice) below it. Frame at 12.5s of the Research demo video.">
+<p class="ev-cap">Home: spark glyph and serif greeting, large composer card, four icon+word prompt chips (Write, Code, Strategize, choice) below it. Frame at 12.5s of the Research demo video.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/research">Anthropic news: Research</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-empty-2.png" alt="Suggestions from a connected tool: a "From Drive" panel directly under the composer, one prompt per row, hover row with chevron, close button.">
+<p class="ev-cap">Suggestions from a connected tool: a "From Drive" panel directly under the composer, one prompt per row, hover row with chevron, close button.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/research">Anthropic news: Research</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Stack, centered, top to bottom: greeting (spark glyph 32px + one line, display size), composer card (about two thirds of the canvas width), prompt chips. Nothing else on the page: no cards, no tips.</li>
+<li>Prompt chips = 36px tall, 1px border, 10px radius, 16px line icon + one word. Four chips. Icons: pencil, angle brackets, chart line, light bulb.</li>
+<li>Connector suggestions: panel under the composer, header = tool logo + "From Drive" with an X to dismiss, rows of one sentence each, 1px dividers, hover row gets a tint and a right chevron.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-empty.png for the layout and chips. Borrow claude-empty-2.png for tool-sourced suggestions (our Apollo, Gmail, Drive and Calendar suggestions).</p>
+<h4>4. Composer</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-composer.png" alt="Claude Code on the web: one-line input with return glyph, environment chip and repo chip above it, a grouped popover, mode and model/effort row below.">
+<p class="ev-cap">Claude Code on the web: one-line input with return glyph, environment chip and repo chip above it, a grouped popover, mode and model/effort row below.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/cloud-environments">Claude Code docs: cloud environments</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-composer-2.png" alt="Running state: placeholder becomes "Queue another message", a filled square stop button replaces send, mode chip and attached-file chip in the footer. Dark mode.">
+<p class="ev-cap">Running state: placeholder becomes "Queue another message", a filled square stop button replaces send, mode chip and attached-file chip in the footer. Dark mode.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/product/claude-code">Claude product page: Claude Code</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Footer row, left to right: mode chip with icon ("Accept edits" or "Ask before editing", pencil icon), "+" attach button, file chip (paperclip + filename), mic, then on the right model and effort ("Opus 5", "High"), then the send button.</li>
+<li>Send button = about 40px rounded square, accent fill, up arrow. While a run is active it becomes a filled stop square in the same place and same size. The placeholder switches to "Queue another message".</li>
+<li>Popover menus group rows under a group label (Local, Cloud, Remote Control). Each row = 16px icon + name. The selected row has a tint, a gear icon button and a check on the right.</li>
+<li>The input stays open while a run is active: the placeholder says "Queue another message", so new messages queue behind the run.</li>
+<li>Chips above the input state the target (environment, repo) so the footer stays about mode and model.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-composer-2.png for the send/stop toggle, queue placeholder and mode chip. Borrow claude-composer.png for the grouped popover and chip placement.</p>
+<p><strong>Gap:</strong> The "+" menu with attach, connectors and skills toggles is not shown in any allowed still image. Keyboard hints for the composer are not shown either.</p>
+<h4>5. Reasoning / thinking disclosure</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-thinking.png" alt="Collapsed row "Thinking..." with a chevron while streaming, and the expanded block "Thought for 31 seconds" with a one-line truncated body.">
+<p class="ev-cap">Collapsed row "Thinking..." with a chevron while streaming, and the expanded block "Thought for 31 seconds" with a one-line truncated body.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/blog/interactive-tools-in-claude">Claude blog: interactive tools in Claude</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-thinking-2.png" alt="Working indicator without a thinking block: animated spark glyph, a bold task line, and a second line with the current step and a chevron. Frame at 1.2s.">
+<p class="ev-cap">Working indicator without a thinking block: animated spark glyph, a bold task line, and a second line with the current step and a chevron. Frame at 1.2s.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/features/artifacts">Claude features page: Artifacts</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Streaming state: bordered row, full width, 8px radius, 44px tall. Content = tool logo, name, "Thinking..." and a chevron at the far right. Click expands.</li>
+<li>Done state: chevron points down, label = "Thought for 31 seconds" at 15px in full ink, body below in one line with an ellipsis. The expanded body sits on a tinted panel.</li>
+<li>Both states are one block: "Thinking..." while running, "Thought for N seconds" after. The chevron toggles open and closed.</li>
+<li>Working line variant: spark glyph (animated), task line in ink, step line under it that changes as steps finish, chevron opens the step list.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-thinking.png: it shows both states in one image and the timing label. Use claude-thinking-2.png only for the live "current step" line.</p>
+<p><strong>Gap:</strong> No still image shows the body streaming text or the elapsed counter ticking. The streaming and collapse motion is taken from the two states above, not from a recording.</p>
+<h4>6. Tool-call step row</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-toolstep.png" alt="Step rows in a thread: tool logo, past-tense label, result count and chevron. The running row has a muted label and a spinner below.">
+<p class="ev-cap">Step rows in a thread: tool logo, past-tense label, result count and chevron. The running row has a muted label and a spinner below.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/research">Anthropic news: Research</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-toolstep-2.png" alt="Grouped steps: "Used 4 integrations" header, then a timeline of rows with one tool logo each and a "Result" toggle under each. Frame at 2.4s.">
+<p class="ev-cap">Grouped steps: "Used 4 integrations" header, then a timeline of rows with one tool logo each and a "Result" toggle under each. Frame at 2.4s.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/product/cowork">Claude product page: Cowork</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Row = 1px border, 8px radius, about 44px tall (3x the label size): 20px tool logo tile, label, right-aligned count ("4 results"), chevron down. Click expands the result under the row.</li>
+<li>Label tense shows state: "Searched recent events" (done, ink) and "Searching messages" (running, muted). A spinner sits under the running row. Done rows show a count. A failed row is not shown in Claude; ours needs an x.</li>
+<li>Group header: "Used 4 integrations" with a right chevron. Under it a vertical hairline joins the rows, each row = logo + one-line purpose + a "Result" toggle.</li>
+<li>One step = one tool call. The row names the verb and object ("Verify Gmail access"). Do not add arguments in a second gray line.</li>
+<li>Timing is not shown on these rows. Take per-step timing from the Console transcript in section 11.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-toolstep.png for the single row and the done/running difference. Borrow claude-toolstep-2.png for grouping several steps.</p>
+<p><strong>Gap:</strong> No claude.ai still shows a failed step row (x) or per-row elapsed time.</p>
+<h4>7. Structured tool result cards</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-resultcard.png" alt="Result groups inline: a search row with chips and a count, an expanded "Found 1 related project" row holding a nested card with thumbnail, and a field hover card.">
+<p class="ev-cap">Result groups inline: a search row with chips and a count, an expanded "Found 1 related project" row holding a nested card with thumbnail, and a field hover card.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/blog/interactive-tools-in-claude">Claude blog: interactive tools in Claude</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude desktop app</strong></p>
+<img class="ev-img" src="refs/claude-resultcard-2.png" alt="File result card: document tile, title, type, and an "open in" menu with the Google Drive logo. Crop of a frame at 7.2s.">
+<p class="ev-cap">File result card: document tile, title, type, and an "open in" menu with the Google Drive logo. Crop of a frame at 7.2s.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/product/overview">Claude product page: overview</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Result row = magnifier icon + "Searched for tables:" + argument chips (small tinted rounded tags, one per search term) + count ("5") + chevron. The chips are the argument summary.</li>
+<li>Expanded row holds a nested white card on the tinted panel: bold title, two-line description, meta row (icon + number, "Endorsed" green badge), and a chart thumbnail on the right.</li>
+<li>List results use "table &gt; column" rows with icons. Hover opens a small card: name, type tag in mono ("STRING"), description, code box.</li>
+<li>File card = 40px tile with type icon, title 14px semibold, type word under it, a menu button on the right with the destination logo and a chevron ("Google Drive").</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-resultcard.png for search and record cards. Borrow claude-resultcard-2.png for the file/document result (Drive file, draft, spreadsheet).</p>
+<p><strong>Gap:</strong> Web search result list with source citation chips and favicons: no allowed image shows it. Table result card: not found.</p>
+<h4>8. Side panel / inspector</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-sidepanel.png" alt="Artifact panel opened from an inline card: back arrow and title, Preview | Code switch, close; footer with copy and download.">
+<p class="ev-cap">Artifact panel opened from an inline card: back arrow and title, Preview | Code switch, close; footer with copy and download.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/projects">Anthropic news: Projects</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude desktop app</strong></p>
+<img class="ev-img" src="refs/claude-sidepanel-2.png" alt="Session window with a right inspector: four collapsible sections (Progress, Outputs, Claude in Chrome, Context), a panel-toggle icon in the title bar. Frame at 7.2s.">
+<p class="ev-cap">Session window with a right inspector: four collapsible sections (Progress, Outputs, Claude in Chrome, Context), a panel-toggle icon in the title bar. Frame at 7.2s.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/product/overview">Claude product page: overview</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Panel header (about 44px): back arrow, title, then a two-option segmented control "Preview | Code" (pill, selected option white), then an X close button on the far right.</li>
+<li>Open trigger: an inline card in the message with a "&lt;/&gt;" tile, a bold title and the line "Open component". The panel takes about the right 40% of the window.</li>
+<li>Footer row: left status text ("Last edited 2 seconds ago"), right icon buttons: copy, download. Keep the status in 13px ink.</li>
+<li>Inspector variant: right column of accordion rows, each a bold 14px label + chevron: Progress, Outputs, Claude in Chrome, Context. A toggle icon at the top right of the window shows or hides it.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-sidepanel.png for the open-from-a-card pattern and tabs. Borrow claude-sidepanel-2.png for an inspector made of Progress / Outputs / Context sections.</p>
+<h4>9. Permission / approval request</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-approval.png" alt="Tool permission prompt, light: tool label, plain description, the exact command between rules, then four numbered choices and the key hints.">
+<p class="ev-cap">Tool permission prompt, light: tool label, plain description, the exact command between rules, then four numbered choices and the key hints.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/permissions">Claude Code docs: permissions</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-approval-2.png" alt="The same prompt in dark mode. Accent color marks the tool label and the selected choice.">
+<p class="ev-cap">The same prompt in dark mode. Accent color marks the tool label and the selected choice.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/permissions">Claude Code docs: permissions</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Order: tool label ("Bash command") in the accent color, one plain line saying what it does ("Run the test suite"), a rule, the exact payload (<code>npm test</code>), a rule, then the state line "This command requires approval".</li>
+<li>Question: "Do you want to proceed?" Choices numbered 1 to 4: Yes / Yes, and do not ask again for: npm test * / Yes, and switch to auto mode / No. The selected choice has a pointer and the accent color.</li>
+<li>Allow once, Always allow (scoped to the command pattern), Deny map to choices 1, 2 and 4. Choice 3 is a mode switch. We do not need it.</li>
+<li>Keys: Up/Down or the number picks, Enter confirms, Esc cancels, Tab amends the command before it runs.</li>
+<li>Light and dark differ only in the surface and ink. The accent and the layout stay the same, so one component serves both.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-approval.png as the structure for our send/draft approval card. Add an icon to every choice and show the destination (To: person, mailbox) above the payload.</p>
+<p><strong>Gap:</strong> The claude.ai connector permission card (Allow once / Always allow / Deny buttons) and a resolved receipt state are not in any allowed image.</p>
+<h4>10. Usage / limits / cost display</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude Code</strong></p>
+<img class="ev-img" src="refs/claude-usage.png" alt="Status line under the input: model, folder, branch on line 1; context bar with percent, cost and time on line 2.">
+<p class="ev-cap">Status line under the input: model, folder, branch on line 1; context bar with percent, cost and time on line 2.</p>
+<p class="ev-cap">Source: <a href="https://code.claude.com/docs/en/statusline">Claude Code docs: status line</a></p>
+</div>
+<div class="ev-card">
+<p><strong>Claude Console (Managed Agents)</strong></p>
+<img class="ev-img" src="refs/claude-usage-2.png" alt="Run transcript with per-event metrics: type pill, one-line summary, and right-aligned tokens and elapsed time. Transcript | Debug switch, filter, search.">
+<p class="ev-cap">Run transcript with per-event metrics: type pill, one-line summary, and right-aligned tokens and elapsed time. Transcript | Debug switch, filter, search.</p>
+<p class="ev-cap">Source: <a href="https://claude.com/platform/api">Claude platform page: Managed Agents</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Quiet placement: one or two lines under the input, never in the thread. Line 2 = context bar (filled part = used) + "42%" + "$0.02" + elapsed "0m 2s". This is a configurable docs example, not a fixed product layout.</li>
+<li>Per-event metrics are right-aligned on the event row: token count ("780 toks", "1,878in / 100out"), a clock icon, duration ("3s"), and the offset in the run ("0:02").</li>
+<li>Event type is a colored pill (User, Agent, Bash, Write, Running) with the summary text after it. The pill gives scanning without a legend.</li>
+<li>Header metric: "71.0k / 5.7k (100%)" next to the run time in the thread header, as plain text with an icon.</li>
+<li>Tabs for views: Transcript | Debug, plus a filter menu ("All events") and a search icon.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-usage.png for the quiet status line and claude-usage-2.png for run metrics per event. Put both in Sourcecado ink at 13px or more.</p>
+<p><strong>Gap:</strong> claude.ai plan usage and session limit bars (Settings &gt; Usage) are only shown in help-center images on a host outside the allow-list.</p>
+<h4>11. Error state with recovery</h4>
+<p><strong>Borrow:</strong> No allowed image shows a failed turn or a failed tool with retry or reconnect. Do not substitute: use Retry from section 12 plus our own failed-step row from section 6.</p>
+<p><strong>Gap:</strong> No image of a failed turn, failed tool call, reconnect prompt or "continue without" in any allowed source. The only related control is the Retry button in the message action bar (section 12).</p>
+<h4>12. Message action bar</h4>
+<div class="ev-row">
+<div class="ev-card">
+<p><strong>Claude.ai (web and desktop app)</strong></p>
+<img class="ev-img" src="refs/claude-actions.png" alt="Action bar on an assistant message: Copy and Retry (icon + word), thumbs up and down (icon only), in a bordered pill on the bottom-right edge of the message.">
+<p class="ev-cap">Action bar on an assistant message: Copy and Retry (icon + word), thumbs up and down (icon only), in a bordered pill on the bottom-right edge of the message.</p>
+<p class="ev-cap">Source: <a href="https://www.anthropic.com/news/projects">Anthropic news: Projects</a></p>
+</div>
+</div>
+<p><strong>Steal this:</strong></p><ul>
+<li>Placement: bottom-right corner of the assistant message, straddling the border. Bar = pill with 1px border, 28px tall, 4 buttons.</li>
+<li>Buttons in order: Copy (clipboard icon + word), Retry (circular arrow + word), thumbs up, thumbs down (icon only).</li>
+<li>Under the message: spark glyph at the left as the turn marker, and the model disclaimer at the right.</li>
+<li>Hover and last-message visibility are not shown in this image. Decide it ourselves. Edit on user messages is not shown either.</li>
+</ul>
+<p><strong>Borrow:</strong> Borrow claude-actions.png for placement and button order. Keep Copy and Retry, drop thumbs unless we collect feedback.</p>
+<p><strong>Gap:</strong> Edit action on user messages and the hover state: no allowed image. A second image for this component was not found.</p>
+<h4>Gap list</h4>
+<table class="ev-table"><tr><th>Component</th><th>Missing</th></tr>
+<tr><td>Sidebar / global rail</td><td>Full expanded sidebar (new chat button, search with Cmd+K, recents with hover rename/star/delete, account footer) not found on an allowed host. The help-center screenshots that show it are hosted on downloads.intercomcdn.com, which is not on the allow-list.</td></tr>
+<tr><td>Thread header</td><td>Model or agent badge and an overflow (three dots) menu are not shown in any allowed image.</td></tr>
+<tr><td>Composer</td><td>The "+" menu with attach, connectors and skills toggles is not shown in any allowed still image. Keyboard hints for the composer are not shown either.</td></tr>
+<tr><td>Reasoning / thinking disclosure</td><td>No still image shows the body streaming text or the elapsed counter ticking. The streaming and collapse motion is taken from the two states above, not from a recording.</td></tr>
+<tr><td>Tool-call step row</td><td>No claude.ai still shows a failed step row (x) or per-row elapsed time.</td></tr>
+<tr><td>Structured tool result cards</td><td>Web search result list with source citation chips and favicons: no allowed image shows it. Table result card: not found.</td></tr>
+<tr><td>Permission / approval request</td><td>The claude.ai connector permission card (Allow once / Always allow / Deny buttons) and a resolved receipt state are not in any allowed image.</td></tr>
+<tr><td>Usage / limits / cost display</td><td>claude.ai plan usage and session limit bars (Settings &gt; Usage) are only shown in help-center images on a host outside the allow-list.</td></tr>
+<tr><td>Error state with recovery</td><td>No image of a failed turn, failed tool call, reconnect prompt or "continue without" in any allowed source. The only related control is the Retry button in the message action bar (section 12).</td></tr>
+<tr><td>Message action bar</td><td>Edit action on user messages and the hover state: no allowed image. A second image for this component was not found.</td></tr>
+</table>
+<p>Provenance: images come from claude.com, anthropic.com and code.claude.com pages, served from assets.claude.com, www-cdn.anthropic.com and code.claude.com/docs/images. Five files are single frames cut from official product-page videos (empty, thinking-2, toolstep-2, resultcard-2, sidepanel-2); the manifest gives the video URL and the note gives the frame time. Support-center screenshots were not used because their images sit on downloads.intercomcdn.com.</p>
