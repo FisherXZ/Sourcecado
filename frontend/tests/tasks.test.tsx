@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { PersonTask } from "../src/api";
+import type { PersonTask, TaskChange } from "../src/api";
 import { BoardView } from "../src/Board";
 import { PersonFileView } from "../src/PersonFile";
 import { TaskList } from "../src/Tasks";
@@ -13,6 +13,8 @@ const api = vi.hoisted(() => ({
   listTasks: vi.fn(),
   createTask: vi.fn(),
   updateTask: vi.fn(),
+  listTaskChanges: vi.fn(),
+  undoTaskChange: vi.fn(),
 }));
 
 vi.mock("../src/api", async (importOriginal) => ({
@@ -43,7 +45,32 @@ const LEO = {
 function fakeServer() {
   const tasks = new Map<string, PersonTask>();
   const operations = new Map<string, PersonTask>();
+  const changes = new Map<string, TaskChange & { task_id: string; before: PersonTask }>();
   let next = 1;
+  let changeNext = 1;
+
+  function record(
+    before: PersonTask,
+    after: PersonTask,
+    action: TaskChange["action"],
+    compensates: string | null = null,
+  ): TaskChange {
+    const change = {
+      change_id: `chg_${changeNext}`,
+      task_id: after.task_id,
+      before,
+      entity_version: after.version,
+      action,
+      actor: "director" as const,
+      reason: "",
+      operation_id: "op",
+      compensates_change_id: compensates,
+      created_at: `2026-10-12T11:00:0${changeNext}Z`,
+    };
+    changeNext += 1;
+    changes.set(change.change_id, change);
+    return change;
+  }
   const people: Record<string, typeof MAYA> = { per_maya: MAYA, per_leo: LEO };
 
   function status(due: string | null): PersonTask["due_status"] {
@@ -68,9 +95,10 @@ function fakeServer() {
     };
   }
 
-  api.listTasks.mockImplementation(async (options: { personId?: string } = {}) => ({
+  api.listTasks.mockImplementation(async (options: { personId?: string; state?: string } = {}) => ({
     tasks: [...tasks.values()]
       .filter((task) => !options.personId || task.person_id === options.personId)
+      .filter((task) => options.state === "all" || task.state === "open")
       .map(view),
     truncated: false,
     timezone: "America/Los_Angeles",
@@ -96,10 +124,12 @@ function fakeServer() {
         version: 1,
         created_at: `2026-10-12T10:00:0${next}Z`,
         updated_at: `2026-10-12T10:00:0${next}Z`,
+        completed_at: null,
       };
       tasks.set(task.task_id, task);
       operations.set(input.operationId, task);
-      return { task: view(task), change: { change_id: "chg" }, replayed: false };
+      const change = record(task, task, "create");
+      return { task: view(task), change: { change_id: change.change_id }, replayed: false };
     },
   );
   api.updateTask.mockImplementation(
@@ -112,12 +142,40 @@ function fakeServer() {
       if (current.version !== input.expectedVersion) {
         throw new TaskSaveError("changed", 409, "task_conflict", view(current));
       }
-      const updated = { ...current, ...input.changes, version: current.version + 1 };
+      const updated = {
+        ...current,
+        ...input.changes,
+        version: current.version + 1,
+        updated_at: `2026-10-12T12:00:0${current.version + 1}Z`,
+      };
       tasks.set(taskId, updated);
-      return { task: view(updated), change: { change_id: "chg" }, replayed: false };
+      const action =
+        input.changes.state === "completed"
+          ? "complete"
+          : input.changes.state === "cancelled"
+            ? "cancel"
+            : input.changes.state === "open"
+              ? "reopen"
+              : "update";
+      const change = record(current, updated, action);
+      return { task: view(updated), change: { change_id: change.change_id }, replayed: false };
     },
   );
-  return { tasks };
+  api.listTaskChanges.mockImplementation(async (_personId: string, taskId: string) =>
+    [...changes.values()].filter((change) => change.task_id === taskId),
+  );
+  api.undoTaskChange.mockImplementation(async (_personId: string, changeId: string) => {
+    const change = changes.get(changeId)!;
+    const current = tasks.get(change.task_id)!;
+    if (current.version !== change.entity_version) {
+      throw new TaskSaveError("moved on", 409, "task_conflict", view(current));
+    }
+    const restored = { ...current, state: change.before.state, title: change.before.title, version: current.version + 1 };
+    tasks.set(current.task_id, restored);
+    const undo = record(current, restored, "undo", changeId);
+    return { task: view(restored), change: { change_id: undo.change_id }, replayed: false };
+  });
+  return { tasks, changes };
 }
 
 async function addTask(scope: HTMLElement, fields: { title: string; due?: string; person?: string }) {
@@ -376,6 +434,88 @@ describe("shared person tasks", () => {
     render(<PersonFileView personId="per_maya" />);
     const section = await screen.findByRole("region", { name: "Tasks" });
     await within(section).findByText("No open tasks for this person.");
-    expect(api.listTasks).toHaveBeenCalledWith({ personId: "per_maya" });
+    expect(api.listTasks).toHaveBeenCalledWith({ personId: "per_maya", state: "all" });
+  });
+
+  it("completes, cancels and reopens from either list, keeping finished tasks in History", async () => {
+    fakeServer();
+    render(
+      <>
+        <div data-testid="person">
+          <TaskList personId="per_maya" heading="Maya's tasks" />
+        </div>
+        <div data-testid="contacts">
+          <BoardView />
+        </div>
+      </>,
+    );
+    const person = screen.getByTestId("person");
+    const contacts = screen.getByTestId("contacts");
+    await within(person).findByText("No open tasks for this person.");
+    await addTask(person, { title: "Send project examples", due: "2026-10-16" });
+    await addTask(person, { title: "Ask about spring cohort" });
+    fireEvent.click(await within(contacts).findByRole("button", { name: "Tasks" }));
+    const global = await within(contacts).findByRole("region", { name: "Open tasks" });
+    await within(global).findByText("Send project examples");
+
+    // Done from Contacts: the person list moves it into History too.
+    fireEvent.click(within(global).getByRole("button", { name: "Mark task Send project examples done" }));
+    const personHistory = await within(person).findByText("History");
+    expect(within(person).getByText("Completed")).toBeTruthy();
+    expect(within(person).getByRole("heading", { name: "No date" })).toBeTruthy();
+    expect(within(person).queryByRole("heading", { name: "Upcoming" })).toBeNull();
+    expect(within(global).getByText("Completed")).toBeTruthy();
+    expect(api.updateTask).toHaveBeenLastCalledWith(
+      "per_maya",
+      "task_1",
+      expect.objectContaining({ changes: { state: "completed" }, expectedVersion: 1 }),
+    );
+    // The other task is untouched.
+    expect(within(global).getByRole("button", { name: "Mark task Ask about spring cohort done" })).toBeTruthy();
+
+    // Cancel from the person file, then reopen from Contacts.
+    fireEvent.click(within(person).getByRole("button", { name: "Cancel task Ask about spring cohort" }));
+    await within(global).findByText("Cancelled");
+    await within(person).findByText("No open tasks for this person.");
+    expect(personHistory.closest("details")).toBeTruthy();
+    fireEvent.click(within(global).getByRole("button", { name: "Reopen task Ask about spring cohort" }));
+    await within(person).findByRole("button", { name: "Mark task Ask about spring cohort done" });
+    expect(within(person).queryByText("Cancelled")).toBeNull();
+    expect(within(global).getByRole("button", { name: "Mark task Ask about spring cohort done" })).toBeTruthy();
+  });
+
+  it("undoes a change from the task's history, and reports a conflict after a newer edit", async () => {
+    const server = fakeServer();
+    render(<TaskList personId="per_maya" />);
+    await screen.findByText("No open tasks for this person.");
+    await addTask(document.body, { title: "Draft proposal" });
+    await screen.findByText("Draft proposal");
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark task Draft proposal done" }));
+    await screen.findByText("Completed");
+    fireEvent.click(screen.getByRole("button", { name: "Changes to Draft proposal" }));
+    const history = await screen.findByRole("group", { name: "Changes to Draft proposal" });
+    await within(history).findByText("Marked done");
+    expect(within(history).getByText("Created")).toBeTruthy();
+    expect(within(history).queryByRole("button", { name: /Undo created/ })).toBeNull();
+
+    fireEvent.click(within(history).getByRole("button", { name: "Undo marked done on Draft proposal" }));
+    await screen.findByRole("button", { name: "Mark task Draft proposal done" });
+    expect(screen.queryByText("Completed")).toBeNull();
+    expect(api.undoTaskChange).toHaveBeenCalledWith("per_maya", "chg_2", expect.anything());
+
+    // A newer edit lands; undoing the earlier completion must not erase it.
+    fireEvent.click(screen.getByRole("button", { name: "Mark task Draft proposal done" }));
+    await screen.findByText("Completed");
+    const saved = server.tasks.get("task_1")!;
+    server.tasks.set("task_1", { ...saved, title: "Draft the proposal", version: saved.version + 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Changes to Draft proposal" }));
+    const reopened = await screen.findByRole("group", { name: "Changes to Draft proposal" });
+    const undoButtons = await within(reopened).findAllByRole("button", { name: /^Undo marked done/ });
+    fireEvent.click(undoButtons[0]);
+    const notice = await within(reopened).findByRole("alert");
+    expect(notice.textContent).toContain("newer edit");
+    await screen.findByText("Draft the proposal");
+    expect(screen.getByText("Completed")).toBeTruthy();
   });
 });

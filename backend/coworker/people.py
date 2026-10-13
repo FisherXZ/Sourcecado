@@ -22,10 +22,11 @@ _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
 # v3 adds the person_descriptions table (ticket #202); v4 adds the person_tasks,
-# crm_changes and crm_operations tables (ticket #200). The constructor creates
-# them for a fresh database, and the registered 2->3 and 3->4 migrations adopt an
+# crm_changes and crm_operations tables (ticket #200); v5 rebuilds crm_changes
+# with the task lifecycle actions (ticket #201). The constructor creates them for
+# a fresh database, and the registered 2->3, 3->4 and 4->5 migrations adopt an
 # existing one with backup and rollback.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)

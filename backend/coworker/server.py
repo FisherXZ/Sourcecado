@@ -2114,6 +2114,31 @@ def create_app(
         except TaskError as exc:
             return _task_error(exc)
 
+    @app.get("/v1/people/{person_id}/tasks/{task_id}/changes")
+    def people_task_changes(person_id: str, task_id: str):
+        """The recorded history of one task, oldest first."""
+        try:
+            app.state.tasks.get(person_id, task_id)
+        except TaskError as exc:
+            return _task_error(exc)
+        return {"changes": app.state.tasks.changes(task_id)}
+
+    @app.post("/v1/people/{person_id}/crm-changes/{change_id}/undo")
+    async def people_change_undo(person_id: str, change_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.tasks.undo(
+                person_id,
+                change_id,
+                operation_id=payload.get("operation_id"),
+                actor="director",
+                reason=payload.get("reason"),
+            )
+        except TaskError as exc:
+            return _task_error(exc)
+
     @app.post("/v1/replies/refresh")
     def replies_refresh():
         """Read inbound Gmail since the cursor and file what it can attribute.

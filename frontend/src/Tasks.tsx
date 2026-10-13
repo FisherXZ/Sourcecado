@@ -2,12 +2,16 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
   createTask,
+  listTaskChanges,
   listTasks,
   newOperationId,
   TaskSaveError,
+  undoTaskChange,
   updateTask,
   type BoardPerson,
   type PersonTask,
+  type TaskChange,
+  type TaskChangeAction,
   type TaskDueStatus,
   type TaskFields,
   type TaskListing,
@@ -28,6 +32,21 @@ const DUE_LABEL: Record<TaskDueStatus, string> = {
   today: "Due today",
   upcoming: "Upcoming",
   none: "No date",
+};
+
+const STATE_LABEL: Record<PersonTask["state"], string> = {
+  open: "Open",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
+
+const ACTION_LABEL: Record<TaskChangeAction, string> = {
+  create: "Created",
+  update: "Edited",
+  complete: "Marked done",
+  reopen: "Reopened",
+  cancel: "Cancelled",
+  undo: "Undid a change",
 };
 
 type Draft = { title: string; details: string; dueDate: string };
@@ -61,6 +80,9 @@ function taskPersonName(task: PersonTask): string {
 
 function saveFailure(error: unknown): string {
   if (error instanceof TaskSaveError) {
+    if (error.code === "task_conflict") {
+      return "This task changed since it was loaded. Showing the current version.";
+    }
     if (error.status === 404) {
       return "This person or task no longer exists. Your text is still here.";
     }
@@ -313,20 +335,152 @@ function TaskEditor({ task, onClose }: { task: PersonTask; onClose: () => void }
   );
 }
 
-function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }) {
-  const [editing, setEditing] = useState(false);
-  const status = statusOf(task);
-  const editButton = useRef<HTMLButtonElement>(null);
-  const wasEditing = useRef(false);
+/** The recorded changes of one task, newest first, each with Undo. */
+function TaskHistory({ task, onClose }: { task: PersonTask; onClose: () => void }) {
+  const [changes, setChanges] = useState<TaskChange[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const operation = useOperationId();
 
   useEffect(() => {
-    // Return focus to the row's Edit control when the editor closes.
+    let active = true;
+    listTaskChanges(task.person_id, task.task_id).then(
+      (next) => {
+        if (!active) return;
+        setChanges([...next].reverse());
+        setFailed(false);
+      },
+      () => {
+        if (active) setFailed(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [task.person_id, task.task_id, task.version, attempt]);
+
+  async function undo(change: TaskChange) {
+    if (busy) return;
+    setBusy(change.change_id);
+    setNotice(null);
+    try {
+      await undoTaskChange(task.person_id, change.change_id, {
+        operationId: operation.forPayload({ undo: change.change_id }),
+      });
+      operation.settle();
+      window.dispatchEvent(new Event(TASKS_CHANGED));
+    } catch (failure) {
+      if (failure instanceof TaskSaveError && failure.code === "task_conflict") {
+        operation.settle();
+        setNotice("That change was followed by a newer edit. The current version is kept.");
+        window.dispatchEvent(new Event(TASKS_CHANGED));
+      } else {
+        setNotice(saveFailure(failure));
+      }
+    } finally {
+      setBusy(null);
+      setAttempt((value) => value + 1);
+    }
+  }
+
+  return (
+    <div className="task-history" aria-label={`Changes to ${task.title}`} role="group">
+      {changes === null && !failed ? <p className="task-list-status">Loading changes…</p> : null}
+      {failed ? (
+        <div className="task-list-error" role="alert">
+          <p>Couldn’t load changes.</p>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {changes ? (
+        <ol className="task-history-rows">
+          {changes.map((change) => (
+            <li key={change.change_id} className="task-history-row">
+              <span className="task-history-copy">
+                <strong>{ACTION_LABEL[change.action] ?? change.action}</strong>
+                <span className="task-meta">
+                  <span>{change.actor === "assistant" ? "Assistant" : "You"}</span>
+                  <span className="task-due">{change.created_at.slice(0, 16).replace("T", " ")}</span>
+                  {change.reason && change.reason !== ACTION_LABEL[change.action] ? (
+                    <span>{change.reason}</span>
+                  ) : null}
+                </span>
+              </span>
+              {change.action !== "create" ? (
+                <button
+                  type="button"
+                  className="task-row-action"
+                  aria-label={`Undo ${ACTION_LABEL[change.action].toLowerCase()} on ${task.title}`}
+                  disabled={busy !== null}
+                  onClick={() => void undo(change)}
+                >
+                  {busy === change.change_id ? "Undoing…" : "Undo"}
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {notice ? <p role="alert">{notice}</p> : null}
+      <button type="button" className="task-row-action" onClick={onClose}>
+        Hide changes
+      </button>
+    </div>
+  );
+}
+
+function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }) {
+  const [editing, setEditing] = useState(false);
+  const [history, setHistory] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const status = statusOf(task);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const historyButton = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  const wasHistory = useRef(false);
+  const operation = useOperationId();
+
+  useEffect(() => {
+    // Return focus to the row's control when its panel closes.
     if (wasEditing.current && !editing) editButton.current?.focus();
     wasEditing.current = editing;
   }, [editing]);
+  useEffect(() => {
+    if (wasHistory.current && !history) historyButton.current?.focus();
+    wasHistory.current = history;
+  }, [history]);
 
+  async function setState(state: PersonTask["state"]) {
+    if (busy) return;
+    setBusy(true);
+    setNotice(null);
+    try {
+      await updateTask(task.person_id, task.task_id, {
+        changes: { state },
+        expectedVersion: task.version,
+        operationId: operation.forPayload({ task: task.task_id, state, version: task.version }),
+      });
+      operation.settle();
+      window.dispatchEvent(new Event(TASKS_CHANGED));
+    } catch (failure) {
+      if (failure instanceof TaskSaveError && failure.code === "task_conflict") {
+        operation.settle();
+        window.dispatchEvent(new Event(TASKS_CHANGED));
+      }
+      setNotice(saveFailure(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const finished = task.state !== "open";
   return (
-    <li className={`task-row is-${status}`}>
+    <li className={`task-row is-${finished ? "finished" : status} is-state-${task.state}`}>
       {editing ? (
         <TaskEditor task={task} onClose={() => setEditing(false)} />
       ) : (
@@ -335,34 +489,87 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
             <strong className="task-title">{task.title}</strong>
             {task.details ? <span className="task-details">{task.details}</span> : null}
             <span className="task-meta">
+              {finished ? <span className="task-state">{STATE_LABEL[task.state]}</span> : null}
               {showPerson ? (
                 <a href={`#/people/${encodeURIComponent(task.person_id)}`}>
                   {taskPersonName(task)}
                 </a>
               ) : null}
               <span className="task-due">
-                {task.due_date ? `${DUE_LABEL[status]} · ${task.due_date}` : "No date"}
+                {!task.due_date
+                  ? "No date"
+                  : finished
+                    ? `Due ${task.due_date}`
+                    : `${DUE_LABEL[status]} · ${task.due_date}`}
               </span>
               <span>{task.origin === "assistant" ? "Added by assistant" : "Added by you"}</span>
             </span>
+            {notice ? <p className="task-row-notice" role="alert">{notice}</p> : null}
           </div>
-          <button
-            ref={editButton}
-            type="button"
-            className="task-row-action"
-            aria-label={`Edit task ${task.title}`}
-            onClick={() => setEditing(true)}
-          >
-            Edit
-          </button>
+          <div className="task-row-actions">
+            {finished ? (
+              <button
+                type="button"
+                className="task-row-action"
+                aria-label={`Reopen task ${task.title}`}
+                disabled={busy}
+                onClick={() => void setState("open")}
+              >
+                Reopen
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="task-row-action"
+                  aria-label={`Mark task ${task.title} done`}
+                  disabled={busy}
+                  onClick={() => void setState("completed")}
+                >
+                  Done
+                </button>
+                <button
+                  type="button"
+                  className="task-row-action"
+                  aria-label={`Cancel task ${task.title}`}
+                  disabled={busy}
+                  onClick={() => void setState("cancelled")}
+                >
+                  Cancel
+                </button>
+                <button
+                  ref={editButton}
+                  type="button"
+                  className="task-row-action"
+                  aria-label={`Edit task ${task.title}`}
+                  disabled={busy}
+                  onClick={() => setEditing(true)}
+                >
+                  Edit
+                </button>
+              </>
+            )}
+            <button
+              ref={historyButton}
+              type="button"
+              className="task-row-action"
+              aria-label={`Changes to ${task.title}`}
+              aria-expanded={history}
+              onClick={() => setHistory((value) => !value)}
+            >
+              Changes
+            </button>
+          </div>
         </>
       )}
+      {history ? <TaskHistory task={task} onClose={() => setHistory(false)} /> : null}
     </li>
   );
 }
 
 /**
- * Open tasks, grouped Overdue / Today / Upcoming / No date.
+ * Open tasks, grouped Overdue / Today / Upcoming / No date, with completed
+ * and cancelled tasks kept in a collapsible History section.
  *
  * With `personId` it is that person's list; without it, the global list in
  * Contacts. Both read the same saved records, and a save in either reloads
@@ -394,7 +601,7 @@ export function TaskList({
   useEffect(() => {
     let active = true;
     setLoading(true);
-    listTasks(personId ? { personId } : {}).then(
+    listTasks({ ...(personId ? { personId } : {}), state: "all" }).then(
       (next) => {
         if (!active) return;
         setListing(next);
@@ -424,8 +631,13 @@ export function TaskList({
   }, []);
 
   const showPerson = !personId;
-  const tasks = (listing?.tasks ?? []).filter((task) => (matches ? matches(task) : true));
-  const filteredOut = listing !== null && listing.tasks.length > 0 && tasks.length === 0;
+  const matching = (listing?.tasks ?? []).filter((task) => (matches ? matches(task) : true));
+  const tasks = matching.filter((task) => task.state === "open");
+  const finished = matching
+    .filter((task) => task.state !== "open")
+    .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0));
+  const openCount = (listing?.tasks ?? []).filter((task) => task.state === "open").length;
+  const filteredOut = listing !== null && listing.tasks.length > 0 && matching.length === 0;
 
   return (
     <section
@@ -473,7 +685,7 @@ export function TaskList({
           </button>
         </div>
       ) : null}
-      {listing !== null && listing.tasks.length === 0 ? (
+      {listing !== null && openCount === 0 ? (
         <p className="task-list-status" role="status">
           {personId
             ? "No open tasks for this person."
@@ -503,6 +715,18 @@ export function TaskList({
             ];
           })}
         </ul>
+      ) : null}
+      {finished.length > 0 ? (
+        <details className="task-history-section">
+          <summary>
+            History <span className="task-group-count">{finished.length}</span>
+          </summary>
+          <ul className="task-rows">
+            {finished.map((task) => (
+              <TaskRow key={task.task_id} task={task} showPerson={showPerson} />
+            ))}
+          </ul>
+        </details>
       ) : null}
       {listing?.truncated ? (
         <p className="task-list-status">Showing the first {listing.tasks.length} tasks.</p>
