@@ -116,7 +116,7 @@ from coworker.brief import (
     project,
     prompt_context,
 )
-from coworker.people import PersonStore
+from coworker.people import PersonStore, VersionConflict
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.prompt_contract import (
@@ -2000,6 +2000,147 @@ def create_app(
     @app.get("/v1/board")
     def board_get():
         return app.state.people.list_board()
+
+    # ---- Tasks and committee members (shared records) ----
+
+    @app.get("/v1/members")
+    def members_list():
+        return {"members": app.state.people.list_members()}
+
+    @app.post("/v1/members")
+    async def members_add(request: Request):
+        payload = await request.json()
+        try:
+            member = app.state.people.add_member(str(payload.get("name") or ""))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"member": member}
+
+    @app.get("/v1/tasks")
+    def tasks_list(
+        person_id: str | None = None,
+        state: str | None = None,
+        assignee: str | None = None,
+    ):
+        try:
+            tasks = app.state.people.list_tasks(
+                person_id=person_id, state=state, assignee_member_id=assignee
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"tasks": tasks}
+
+    @app.post("/v1/people/{person_id}/tasks")
+    async def tasks_create(person_id: str, request: Request):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        actor = str(payload.get("actor") or "director")
+        try:
+            task = app.state.people.create_task(
+                person_id,
+                title=str(payload.get("title") or ""),
+                details=payload.get("details"),
+                due_date=payload.get("due_date"),
+                due_timezone=payload.get("due_timezone"),
+                assignee_member_id=payload.get("assignee_member_id"),
+                origin="assistant" if actor == "assistant" else "human",
+                actor=actor,
+                operation_id=payload.get("operation_id"),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return {"task": task}
+
+    @app.patch("/v1/people/{person_id}/tasks/{task_id}")
+    async def tasks_update(person_id: str, task_id: str, request: Request):
+        payload = await request.json()
+        expected_version = payload.get("expected_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_version is required"}, status_code=400
+            )
+        actor = str(payload.get("actor") or "director")
+        # Only forward fields the caller actually sent, so an omitted field is
+        # left untouched rather than cleared.
+        changes: dict[str, Any] = {}
+        for name in (
+            "title",
+            "details",
+            "due_date",
+            "due_timezone",
+            "assignee_member_id",
+            "state",
+        ):
+            if name in payload:
+                changes[name] = payload[name]
+        try:
+            task = app.state.people.update_task(
+                task_id,
+                expected_version=expected_version,
+                actor=actor,
+                **changes,
+            )
+        except VersionConflict as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if task["person_id"] != person_id:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"task": task}
+
+    @app.patch("/v1/people/{person_id}/owner")
+    async def people_owner(person_id: str, request: Request):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        expected_version = payload.get("expected_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_version is required"}, status_code=400
+            )
+        owner_member_id = payload.get("owner_member_id")
+        if owner_member_id is not None:
+            try:
+                app.state.people._require_member(str(owner_member_id))
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+        try:
+            person = app.state.people.patch(
+                person_id,
+                fields={"owner_member_id": owner_member_id},
+                expected_version=expected_version,
+                actor="director",
+                rationale_summary="Set contact owner.",
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return {"person": app.state.people.get(person["person_id"], expand_sources=True)}
+
+    @app.delete("/v1/people/{person_id}")
+    async def people_delete(person_id: str, request: Request):
+        current = app.state.people.get(person_id)
+        if current is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        expected_version = payload.get("expected_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_version is required"}, status_code=400
+            )
+        try:
+            # Soft delete: sets deleted_at, keeps history and the person's tasks.
+            result = app.state.people.delete(
+                person_id,
+                expected_version=expected_version,
+                actor="director",
+                rationale_summary=str(
+                    payload.get("rationale_summary") or "Director removed the contact."
+                ),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return result
 
     @app.post("/v1/replies/refresh")
     def replies_refresh():

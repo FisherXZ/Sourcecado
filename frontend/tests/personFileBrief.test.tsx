@@ -15,6 +15,13 @@ const api = vi.hoisted(() => ({
   savePersonHandoff: vi.fn(),
   searchPersonDriveEvidence: vi.fn(),
   setPersonSequence: vi.fn(),
+  getMembers: vi.fn(),
+  getTasks: vi.fn(),
+  setPersonOwner: vi.fn(),
+  addMember: vi.fn(),
+  createTask: vi.fn(),
+  updateTask: vi.fn(),
+  TaskConflictError: class TaskConflictError extends Error {},
 }));
 
 vi.mock("../src/api", () => api);
@@ -33,6 +40,8 @@ function personFile(brief = livingBrief()) {
 describe("the living brief on the person file", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.getMembers.mockResolvedValue([]);
+    api.getTasks.mockResolvedValue([]);
     api.getPerson.mockResolvedValue(personFile());
     api.savePersonHandoff.mockResolvedValue({
       person: { person_id: "person one" },

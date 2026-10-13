@@ -560,3 +560,46 @@ def test_board_move_rejects_invalid_state_and_unknown_person(tmp_path):
         json={"state": "open", "actor": "director"},
     )
     assert missing.status_code == 404
+
+
+def test_delete_person_removes_it_from_the_board(tmp_path):
+    app = _app(tmp_path)
+    person = app.state.people.keep_from_apollo(
+        apollo_id="del-1",
+        first_name="Maya",
+        last_name_obfuscated="Chen",
+        title="Engineer",
+        company="Stripe",
+    )
+    pid = person["person_id"]
+    app.state.people.set_sequence(pid, "open", actor="director")
+    client = TestClient(app)
+
+    current = app.state.people.get(pid)
+    res = client.request(
+        "DELETE",
+        f"/v1/people/{pid}",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"expected_version": current["version"]},
+    )
+    assert res.status_code == 200
+    assert res.json()["deleted"] is True
+    # gone from the board and normal reads, history preserved
+    assert app.state.people.get(pid) is None
+    board = app.state.people.list_board()
+    assert all(p["person_id"] != pid for lane in board.values() for p in lane)
+
+
+def test_delete_person_rejects_stale_version(tmp_path):
+    app = _app(tmp_path)
+    person = app.state.people.keep_from_apollo(
+        apollo_id="del-2", first_name="Leo", last_name_obfuscated="Park", title="PM",
+        company="Airbnb",
+    )
+    res = TestClient(app).request(
+        "DELETE",
+        f"/v1/people/{person['person_id']}",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"expected_version": 999},
+    )
+    assert res.status_code == 409

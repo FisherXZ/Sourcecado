@@ -194,11 +194,12 @@
   white-space: nowrap;
 }
 
-.contacts-table th:nth-child(1) { width: 25%; }
-.contacts-table th:nth-child(2) { width: 28%; }
-.contacts-table th:nth-child(3) { width: 17%; }
-.contacts-table th:nth-child(4) { width: 18%; }
-.contacts-table th:nth-child(5) { width: 12%; }
+.contacts-table th:nth-child(1) { width: 22%; }
+.contacts-table th:nth-child(2) { width: 24%; }
+.contacts-table th:nth-child(3) { width: 14%; }
+.contacts-table th:nth-child(4) { width: 15%; }
+.contacts-table th:nth-child(5) { width: 15%; }
+.contacts-table th:nth-child(6) { width: 10%; }
 
 .contacts-table td:first-child a {
   color: var(--text);
@@ -283,6 +284,29 @@
 .contacts-sequence-done {
   background: var(--raised);
   color: var(--muted);
+}
+
+/* Inline sequence editor: a native select dressed as the status pill. The
+   state-specific colour classes above supply its background and text colour. */
+.contacts-sequence-select {
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.contacts-sequence-select:hover {
+  border-color: var(--muted);
+}
+
+.contacts-sequence-select:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .contacts-last-contact {
@@ -906,4 +930,517 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--raised);
+}
+
+/* ============================================================
+   Tasks: Contacts/Tasks toggle, sortable contacts columns, the
+   two-column Tasks view, task rows, and the new/edit task modal.
+   All colors come from the Warm Operator tokens.
+   ============================================================ */
+
+.board-view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  margin: 12px 0 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--raised);
+}
+
+.board-view-toggle button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 16px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.board-view-toggle button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* Sortable headers + owner cell */
+.contacts-sort {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.contacts-sort:hover {
+  color: var(--text);
+}
+
+.contacts-owner {
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* ---- Tasks view ---- */
+.tasks-view {
+  margin-top: 8px;
+}
+
+.tasks-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
+.tasks-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 760px) {
+  .tasks-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tasks-column {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.tasks-column-head {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.tasks-column-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tasks-column-head-row select {
+  max-width: 55%;
+}
+
+/* Member filter: the pill look of the Contacts sequence dropdown. */
+.tasks-member-select {
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tasks-member-select:hover {
+  border-color: var(--muted);
+}
+
+.tasks-column-sub {
+  margin: 2px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tasks-column-head-row + .task-group {
+  margin-top: 14px;
+}
+
+.tasks-empty {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.tasks-completed {
+  margin-top: 20px;
+}
+
+/* ---- Task groups + rows ---- */
+.task-group {
+  margin-top: 16px;
+}
+
+.task-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.task-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.task-group-overdue { color: var(--error); }
+.task-group-today { color: var(--warn); }
+.task-group-upcoming { color: var(--accent-deep); }
+.task-group-nodate { color: var(--muted); }
+
+.task-group-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  padding: 0 7px;
+  border-radius: 999px;
+}
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--canvas);
+  transition: opacity 0.25s ease;
+}
+
+.task-row-completing {
+  opacity: 0.55;
+}
+
+.task-row-completing .task-row-title,
+.task-row-done .task-row-title {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.task-check {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  flex: none;
+  cursor: pointer;
+}
+
+.task-row-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.task-row-title {
+  display: block;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  color: var(--text);
+  font: inherit;
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+}
+
+.task-row-title:hover {
+  color: var(--accent-deep);
+}
+
+.task-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.task-row-person {
+  color: var(--muted);
+}
+
+.task-due {
+  font-weight: 600;
+}
+
+.task-due-overdue { color: var(--error); }
+.task-due-today { color: var(--warn); }
+.task-due-upcoming { color: var(--accent-deep); }
+.task-due-nodate { color: var(--muted); }
+
+.task-assignee {
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.task-edit-btn {
+  flex: none;
+  align-self: center;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.task-edit-btn:hover {
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+.person-remove {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--error);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.person-remove:hover:not(:disabled) {
+  border-color: var(--error);
+}
+
+.person-remove:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Undo toast after completing a task */
+.task-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--accent-deep);
+  color: var(--canvas);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.task-toast button {
+  border: 0;
+  background: transparent;
+  color: var(--canvas);
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- Buttons + links shared by tasks ---- */
+.task-btn-primary {
+  border: 0;
+  background: var(--accent);
+  color: var(--canvas);
+  font-weight: 600;
+  font-size: 12.5px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.task-btn-primary:hover {
+  background: var(--accent-deep);
+}
+
+.task-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.task-btn-ghost {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 550;
+  font-size: 12.5px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.task-btn-ghost:hover {
+  border-color: var(--muted);
+}
+
+.task-link {
+  border: 0;
+  background: transparent;
+  color: var(--accent-deep);
+  font-weight: 600;
+  font-size: 12px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+/* ---- Modal ---- */
+.task-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(30, 24, 20, 0.42);
+}
+
+.task-modal {
+  width: 100%;
+  max-width: 440px;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28);
+}
+
+.task-modal h2 {
+  margin: 0 0 16px;
+  font-size: 17px;
+}
+
+.task-field {
+  display: block;
+  margin-bottom: 13px;
+}
+
+.task-field > span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.task-field input[type="text"],
+.task-field input[type="date"],
+.task-field select,
+.task-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.task-field textarea {
+  resize: vertical;
+}
+
+.task-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.task-presets button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.task-presets button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--canvas);
+}
+
+.task-presets input[type="date"] {
+  width: auto;
+  flex: 1;
+  min-width: 130px;
+}
+
+.task-assignee-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.task-assignee-row select {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--canvas);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.task-modal-error {
+  margin: 4px 0 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
+.task-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+/* ---- Person file: owner + tasks ---- */
+.person-tasks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.person-tasks-head h2 {
+  margin: 0;
+}
+
+.person-owner .task-assignee-row {
+  max-width: 360px;
 }

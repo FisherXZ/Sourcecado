@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from coworker.person_identity import (
     apollo_surname_is_masked,
@@ -20,11 +21,13 @@ from coworker.person_identity import (
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
 ACTORS = ("director", "assistant")
+TASK_STATES = ("open", "completed", "cancelled")
+TASK_ORIGINS = ("human", "assistant")
 ATTACHMENT_TYPES = frozenset({"artifact", "knowledge_gap", "source_ref"})
 PERSON_PATCH_FIELDS = frozenset(
     {
@@ -33,6 +36,7 @@ PERSON_PATCH_FIELDS = frozenset(
         "title",
         "company",
         "target",
+        "owner_member_id",
         "handoff_who",
         "handoff_wanted",
         "handoff_happened",
@@ -50,6 +54,18 @@ SOURCES = (
 )
 
 
+class VersionConflict(ValueError):
+    """Raised when an optimistic-concurrency version check fails.
+
+    Subclasses ValueError so existing callers that catch ValueError keep
+    working; new routes catch it first to answer 409 instead of 400.
+    """
+
+
+# Sentinel for update_task: distinguishes "field omitted" from "set to null".
+_UNSET: Any = object()
+
+
 def _clean(value: str | None) -> str | None:
     return (value or "").strip() or None
 
@@ -60,6 +76,14 @@ def _new_person_id() -> str:
 
 def _new_event_id() -> str:
     return "evt_" + uuid.uuid4().hex
+
+
+def _new_task_id() -> str:
+    return "tsk_" + uuid.uuid4().hex
+
+
+def _new_member_id() -> str:
+    return "mem_" + uuid.uuid4().hex
 
 
 class PersonStore:
@@ -87,6 +111,7 @@ class PersonStore:
                 phone TEXT,
                 sequence_state TEXT,
                 target TEXT,
+                owner_member_id TEXT,
                 handoff_who TEXT,
                 handoff_wanted TEXT,
                 handoff_happened TEXT,
@@ -139,6 +164,32 @@ class PersonStore:
                 history_id TEXT,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS crm_members (
+                member_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                archived_at TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS person_tasks (
+                task_id TEXT PRIMARY KEY,
+                person_id TEXT NOT NULL REFERENCES people(person_id),
+                title TEXT NOT NULL,
+                details TEXT,
+                due_date TEXT,
+                due_timezone TEXT,
+                state TEXT NOT NULL DEFAULT 'open',
+                origin TEXT NOT NULL DEFAULT 'human',
+                assignee_member_id TEXT REFERENCES crm_members(member_id),
+                operation_id TEXT UNIQUE,
+                version INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS person_tasks_by_person
+                ON person_tasks(person_id, state, due_date);
+            CREATE INDEX IF NOT EXISTS person_tasks_by_due
+                ON person_tasks(state, due_date, task_id);
             """
         )
         self._ensure_schema()
@@ -160,6 +211,10 @@ class PersonStore:
         if "apollo_last_name_obfuscated" not in columns:
             self._conn.execute(
                 "ALTER TABLE people ADD COLUMN apollo_last_name_obfuscated TEXT"
+            )
+        if "owner_member_id" not in columns:
+            self._conn.execute(
+                "ALTER TABLE people ADD COLUMN owner_member_id TEXT"
             )
         self._conn.execute(
             """
@@ -992,6 +1047,8 @@ class PersonStore:
         visible_restricted = sum(1 for item in attachments if item["restricted"])
         person["restricted_source_count"] = int(restricted_hidden) - visible_restricted
         person.update(self.mail_state(person_id))
+        person["owner_name"] = self._member_name(person.get("owner_member_id"))
+        person["tasks"] = self.list_tasks(person_id=person_id)
         return person
 
     def set_sequence(
@@ -1083,6 +1140,7 @@ class PersonStore:
                 else "backlog"
             )
             person["board_lane"] = lane
+            person["owner_name"] = self._member_name(person.get("owner_member_id"))
             board[lane].append(person)
         return board
 
@@ -1096,6 +1154,372 @@ class PersonStore:
                 """
             ).fetchall()
         return [person for row in rows if (person := self._person_dict(row))]
+
+    # ---- Committee members (lightweight local labels, not accounts) ----
+
+    def _member_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "member_id": str(row["member_id"]),
+            "name": str(row["name"]),
+            "archived_at": row["archived_at"],
+            "created_at": str(row["created_at"]),
+        }
+
+    def _member_name(self, member_id: str | None) -> str | None:
+        if not member_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT name FROM crm_members WHERE member_id = ?",
+                (member_id,),
+            ).fetchone()
+        return str(row["name"]) if row is not None else None
+
+    def _require_member(self, member_id: str) -> None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM crm_members WHERE member_id = ? AND archived_at IS NULL",
+                (member_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("unknown member")
+
+    def list_members(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
+        query = "SELECT * FROM crm_members"
+        if not include_archived:
+            query += " WHERE archived_at IS NULL"
+        query += " ORDER BY name COLLATE NOCASE"
+        with self._lock:
+            rows = self._conn.execute(query).fetchall()
+        return [self._member_dict(row) for row in rows]
+
+    def add_member(self, name: str) -> dict[str, Any]:
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("member name is required")
+        if len(name) > 120:
+            raise ValueError("member name too long")
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT * FROM crm_members WHERE name = ?",
+                (name,),
+            ).fetchone()
+            if existing is not None:
+                if existing["archived_at"]:
+                    self._conn.execute(
+                        "UPDATE crm_members SET archived_at = NULL WHERE member_id = ?",
+                        (existing["member_id"],),
+                    )
+                    self._conn.commit()
+                    existing = self._conn.execute(
+                        "SELECT * FROM crm_members WHERE member_id = ?",
+                        (existing["member_id"],),
+                    ).fetchone()
+                return self._member_dict(existing)
+            member_id = _new_member_id()
+            self._conn.execute(
+                "INSERT INTO crm_members (member_id, name) VALUES (?, ?)",
+                (member_id, name),
+            )
+            self._conn.commit()
+            row = self._conn.execute(
+                "SELECT * FROM crm_members WHERE member_id = ?",
+                (member_id,),
+            ).fetchone()
+        return self._member_dict(row)
+
+    def archive_member(self, member_id: str) -> None:
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE crm_members SET archived_at = ? "
+                "WHERE member_id = ? AND archived_at IS NULL",
+                (self._now(), member_id),
+            )
+            self._conn.commit()
+        if cursor.rowcount != 1:
+            raise ValueError("unknown member")
+
+    # ---- Tasks ----
+
+    _TASK_SELECT = """
+        SELECT t.*,
+               p.first_name AS person_first_name,
+               p.last_name AS person_last_name,
+               p.company AS person_company,
+               m.name AS assignee_name
+        FROM person_tasks t
+        JOIN people p ON p.person_id = t.person_id
+        LEFT JOIN crm_members m ON m.member_id = t.assignee_member_id
+    """
+
+    def _task_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        first = _clean(item.pop("person_first_name", None))
+        last = _clean(item.pop("person_last_name", None))
+        person_name = " ".join(part for part in (first, last) if part) or "Unknown"
+        return {
+            "task_id": str(item["task_id"]),
+            "person_id": str(item["person_id"]),
+            "person_name": person_name,
+            "person_company": _clean(item.pop("person_company", None)),
+            "title": str(item["title"]),
+            "details": item.get("details"),
+            "due_date": item.get("due_date"),
+            "due_timezone": item.get("due_timezone"),
+            "state": str(item["state"]),
+            "origin": str(item["origin"]),
+            "assignee_member_id": item.get("assignee_member_id"),
+            "assignee_name": item.get("assignee_name"),
+            "version": int(item.get("version") or 1),
+            "created_at": str(item["created_at"]),
+            "updated_at": str(item["updated_at"]),
+            "completed_at": item.get("completed_at"),
+        }
+
+    def _valid_due_date(self, value: str | None) -> str | None:
+        value = _clean(value)
+        if value is None:
+            return None
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("due_date must be an explicit YYYY-MM-DD date") from exc
+        return value
+
+    def _valid_timezone(self, value: str | None) -> str | None:
+        value = _clean(value)
+        if value is None:
+            return None
+        try:
+            ZoneInfo(value)
+        except Exception as exc:  # ZoneInfoNotFoundError and input errors
+            raise ValueError(f"invalid due_timezone {value!r}") from exc
+        return value
+
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                self._TASK_SELECT + " WHERE t.task_id = ?",
+                (task_id,),
+            ).fetchone()
+        return self._task_dict(row) if row is not None else None
+
+    def list_tasks(
+        self,
+        *,
+        person_id: str | None = None,
+        state: str | None = None,
+        assignee_member_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["p.deleted_at IS NULL"]
+        params: list[Any] = []
+        if person_id is not None:
+            clauses.append("t.person_id = ?")
+            params.append(person_id)
+        if state is not None:
+            if state not in TASK_STATES:
+                raise ValueError(f"invalid task state {state}")
+            clauses.append("t.state = ?")
+            params.append(state)
+        if assignee_member_id is not None:
+            clauses.append("t.assignee_member_id = ?")
+            params.append(assignee_member_id)
+        query = (
+            self._TASK_SELECT
+            + " WHERE "
+            + " AND ".join(clauses)
+            # Deterministic: dated first by date, undated last, then creation, then id.
+            + " ORDER BY t.due_date IS NULL, t.due_date, t.created_at, t.task_id"
+        )
+        with self._lock:
+            rows = self._conn.execute(query, params).fetchall()
+        return [self._task_dict(row) for row in rows]
+
+    def create_task(
+        self,
+        person_id: str,
+        *,
+        title: str,
+        actor: str,
+        details: str | None = None,
+        due_date: str | None = None,
+        due_timezone: str | None = None,
+        assignee_member_id: str | None = None,
+        origin: str = "human",
+        operation_id: str | None = None,
+        rationale_summary: str = "Created task",
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._require_audit(actor, rationale_summary)
+        if origin not in TASK_ORIGINS:
+            raise ValueError(f"invalid task origin {origin}")
+        title = (title or "").strip()
+        if not title:
+            raise ValueError("task title is required")
+        if len(title) > 500:
+            raise ValueError("task title too long")
+        details = _clean(details)
+        if details and len(details) > 8000:
+            raise ValueError("task details too long")
+        due_date = self._valid_due_date(due_date)
+        due_timezone = self._valid_timezone(due_timezone)
+        operation_id = _clean(operation_id)
+        with self._lock:
+            self._load_person_row(person_id)
+            if assignee_member_id is not None:
+                self._require_member(assignee_member_id)
+            if operation_id is not None:
+                existing = self._conn.execute(
+                    "SELECT task_id FROM person_tasks WHERE operation_id = ?",
+                    (operation_id,),
+                ).fetchone()
+                if existing is not None:
+                    # Idempotent replay: return the original task, add nothing.
+                    task = self.get_task(str(existing["task_id"]))
+                    assert task is not None
+                    return task
+            task_id = _new_task_id()
+            now = self._now()
+            self._conn.execute(
+                """
+                INSERT INTO person_tasks (
+                    task_id, person_id, title, details, due_date, due_timezone,
+                    state, origin, assignee_member_id, operation_id, version,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    task_id,
+                    person_id,
+                    title,
+                    details,
+                    due_date,
+                    due_timezone,
+                    origin,
+                    assignee_member_id,
+                    operation_id,
+                    now,
+                    now,
+                ),
+            )
+            self._receipt(
+                person_id,
+                kind="task",
+                summary=f"Added task: {title}",
+                payload={
+                    "task_id": task_id,
+                    "action": "create",
+                    "state": "open",
+                    "due_date": due_date,
+                    "assignee_member_id": assignee_member_id,
+                    "version": 1,
+                },
+                actor=actor,
+                session_id=session_id,
+                run_id=run_id,
+                tool="task_create",
+            )
+            self._conn.commit()
+        task = self.get_task(task_id)
+        assert task is not None
+        return task
+
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        expected_version: int,
+        actor: str,
+        title: Any = _UNSET,
+        details: Any = _UNSET,
+        due_date: Any = _UNSET,
+        due_timezone: Any = _UNSET,
+        assignee_member_id: Any = _UNSET,
+        state: Any = _UNSET,
+        rationale_summary: str = "Updated task",
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._require_audit(actor, rationale_summary)
+        updates: dict[str, Any] = {}
+        if title is not _UNSET:
+            cleaned = (title or "").strip()
+            if not cleaned:
+                raise ValueError("task title is required")
+            if len(cleaned) > 500:
+                raise ValueError("task title too long")
+            updates["title"] = cleaned
+        if details is not _UNSET:
+            cleaned_details = _clean(details)
+            if cleaned_details and len(cleaned_details) > 8000:
+                raise ValueError("task details too long")
+            updates["details"] = cleaned_details
+        if due_date is not _UNSET:
+            updates["due_date"] = self._valid_due_date(due_date)
+        if due_timezone is not _UNSET:
+            updates["due_timezone"] = self._valid_timezone(due_timezone)
+        if assignee_member_id is not _UNSET:
+            if assignee_member_id is not None:
+                self._require_member(assignee_member_id)
+            updates["assignee_member_id"] = assignee_member_id
+        if state is not _UNSET:
+            if state not in TASK_STATES:
+                raise ValueError(f"invalid task state {state}")
+            updates["state"] = state
+        if not updates:
+            raise ValueError("no task fields to update")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM person_tasks WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("unknown task")
+            if int(row["version"]) != expected_version:
+                raise VersionConflict(
+                    f"stale task version: expected {expected_version}, "
+                    f"current {row['version']}"
+                )
+            now = self._now()
+            next_version = expected_version + 1
+            if "state" in updates:
+                updates["completed_at"] = (
+                    now if updates["state"] == "completed" else None
+                )
+            assignments = [f"{key} = ?" for key in updates]
+            values: list[Any] = [updates[key] for key in updates]
+            values.extend([next_version, now, task_id, expected_version])
+            cursor = self._conn.execute(
+                f"""
+                UPDATE person_tasks
+                SET {", ".join([*assignments, "version = ?", "updated_at = ?"])}
+                WHERE task_id = ? AND version = ?
+                """,
+                values,
+            )
+            if cursor.rowcount != 1:
+                self._conn.rollback()
+                raise VersionConflict("stale task version")
+            self._receipt(
+                str(row["person_id"]),
+                kind="task",
+                summary=f"Updated task: {updates.get('title', row['title'])}",
+                payload={
+                    "task_id": task_id,
+                    "action": "update",
+                    "fields": sorted(updates),
+                    "version": next_version,
+                },
+                actor=actor,
+                session_id=session_id,
+                run_id=run_id,
+                tool="task_update",
+            )
+            self._conn.commit()
+        task = self.get_task(task_id)
+        assert task is not None
+        return task
 
     def _event_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         item = dict(row)

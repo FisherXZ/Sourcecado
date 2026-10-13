@@ -18,6 +18,12 @@ const api = vi.hoisted(() => ({
   revertPerson: vi.fn(),
   searchPersonDriveEvidence: vi.fn(),
   setPersonSequence: vi.fn(),
+  getMembers: vi.fn(),
+  getTasks: vi.fn(),
+  setPersonOwner: vi.fn(),
+  addMember: vi.fn(),
+  createTask: vi.fn(),
+  updateTask: vi.fn(),
 }));
 
 vi.mock("../src/api", () => ({
@@ -33,10 +39,19 @@ vi.mock("../src/api", () => ({
   revertPerson: api.revertPerson,
   searchPersonDriveEvidence: api.searchPersonDriveEvidence,
   setPersonSequence: api.setPersonSequence,
+  getMembers: api.getMembers,
+  getTasks: api.getTasks,
+  setPersonOwner: api.setPersonOwner,
+  addMember: api.addMember,
+  createTask: api.createTask,
+  updateTask: api.updateTask,
+  TaskConflictError: class TaskConflictError extends Error {},
 }));
 
 describe("Contacts and person-file routes", () => {
   beforeEach(() => {
+    api.getMembers.mockResolvedValue([]);
+    api.getTasks.mockResolvedValue([]);
     api.getBoard.mockResolvedValue({
       open: [
         {
