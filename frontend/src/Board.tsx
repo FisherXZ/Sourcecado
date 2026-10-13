@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react";
 
+import { DescriptionEditor, describeDescription } from "./DescriptionEditor";
 import {
+  defaultPersonDescriptions,
   getBoard,
   refreshReplies,
   type Board,
   type BoardPerson,
+  type PersonTask,
   type ReplyRefreshResult,
 } from "./api";
+import { TaskList } from "./Tasks";
 
 function personName(person: BoardPerson): string {
   return [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
@@ -62,6 +66,44 @@ const SEQUENCE_FILTERS: { value: SequenceFilter; label: string }[] = [
   { value: "done", label: "Done" },
 ];
 
+function ContactDescriptionCell({ person }: { person: BoardPerson }) {
+  const [editing, setEditing] = useState(false);
+  const general = (person.descriptions ?? defaultPersonDescriptions()).general;
+  const { text, muted } = describeDescription(general);
+  if (editing) {
+    return (
+      <div
+        className="contacts-description-edit"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        <DescriptionEditor
+          personId={person.person_id}
+          description={general}
+          rows={2}
+          onSaved={() =>
+            window.dispatchEvent(new Event("sourcecado:board-changed"))
+          }
+          onClose={() => setEditing(false)}
+        />
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={`contacts-description${muted ? " is-muted" : ""}`}
+      aria-label="Edit short description"
+      onClick={(event) => {
+        event.stopPropagation();
+        setEditing(true);
+      }}
+    >
+      {text}
+    </button>
+  );
+}
+
 function ContactRow({ person }: { person: BoardPerson }) {
   const name = personName(person);
   const sequence = SEQUENCE_LABEL[person.sequence_state ?? ""] ?? "Unknown";
@@ -75,11 +117,12 @@ function ContactRow({ person }: { person: BoardPerson }) {
       tabIndex={0}
       aria-label={`Open Person File for ${name}`}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest("a")) return;
+        if ((event.target as HTMLElement).closest("a, button, textarea")) return;
         openPersonFile();
       }}
       onKeyDown={(event) => {
         if (event.key !== "Enter") return;
+        if ((event.target as HTMLElement).closest("button, textarea")) return;
         event.preventDefault();
         openPersonFile();
       }}
@@ -102,6 +145,9 @@ function ContactRow({ person }: { person: BoardPerson }) {
       <td>
         <span className="contacts-primary">{person.title || "No title recorded"}</span>
         <span className="contacts-secondary">{person.company || "No company recorded"}</span>
+      </td>
+      <td>
+        <ContactDescriptionCell person={person} />
       </td>
       <td>
         <span className={`contacts-sequence contacts-sequence-${person.sequence_state}`}>
@@ -132,6 +178,7 @@ function ContactsTable({ people }: { people: BoardPerson[] }) {
           <tr>
             <th scope="col">Contact</th>
             <th scope="col">Role &amp; company</th>
+            <th scope="col">Description</th>
             <th scope="col">Sequence</th>
             <th scope="col">Last contact</th>
             <th scope="col">Attention</th>
@@ -183,6 +230,54 @@ function ContactsFilters({
   );
 }
 
+type BoardViewMode = "contacts" | "tasks";
+
+function ViewSwitch({
+  active,
+  onChange,
+}: {
+  active: BoardViewMode;
+  onChange: (view: BoardViewMode) => void;
+}) {
+  return (
+    <div className="contacts-view-switch" role="group" aria-label="Contacts view">
+      {(
+        [
+          { value: "contacts", label: "Contacts" },
+          { value: "tasks", label: "Tasks" },
+        ] as const
+      ).map((view) => (
+        <button
+          key={view.value}
+          type="button"
+          aria-pressed={active === view.value}
+          onClick={() => onChange(view.value)}
+        >
+          {view.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The status filter and search apply to tasks through the person they belong to. */
+function matchesTask(task: PersonTask, filter: SequenceFilter, query: string): boolean {
+  if (filter !== "all" && task.person?.sequence_state !== filter) return false;
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return true;
+  return [
+    task.title,
+    task.details,
+    task.person?.first_name,
+    task.person?.last_name,
+    task.person?.company,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLocaleLowerCase()
+    .includes(needle);
+}
+
 function matchesContact(person: BoardPerson, query: string): boolean {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return true;
@@ -221,6 +316,7 @@ export function BoardView() {
   const [replyStatusText, setReplyStatusText] = useState<string | null>(null);
   const [sequenceFilter, setSequenceFilter] = useState<SequenceFilter>("all");
   const [contactQuery, setContactQuery] = useState("");
+  const [view, setView] = useState<BoardViewMode>("contacts");
 
   useEffect(() => {
     let active = true;
@@ -277,6 +373,7 @@ export function BoardView() {
         <p className="eyebrow">Active sequences</p>
         <h1>Contacts</h1>
         <p>Keep active people moving from open outreach through completed follow-up.</p>
+        <ViewSwitch active={view} onChange={setView} />
         <div className="board-page-actions">
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
             {checking ? "Checking for replies…" : "Check for replies"}
@@ -293,14 +390,17 @@ export function BoardView() {
           </button>
         </section>
       ) : null}
-      {empty ? (
+      {empty && view === "contacts" ? (
         <section className="route-empty" role="status">
           <h2>No active contacts</h2>
           <p>Start a sequence from a Person File to add someone here.</p>
         </section>
       ) : null}
       {board && !empty ? (
-        <section className="contacts-list" aria-label="Sequence contacts">
+        <section
+          className="contacts-list"
+          aria-label={view === "tasks" ? "Tasks for contacts" : "Sequence contacts"}
+        >
           <div className="contacts-controls">
             <ContactsFilters
               active={sequenceFilter}
@@ -308,17 +408,25 @@ export function BoardView() {
               onChange={setSequenceFilter}
             />
             <label className="contacts-search">
-              <span className="contacts-visually-hidden">Search active contacts</span>
+              <span className="contacts-visually-hidden">
+                {view === "tasks" ? "Search tasks" : "Search active contacts"}
+              </span>
               <input
                 type="search"
-                aria-label="Search active contacts"
-                placeholder="Search active contacts"
+                aria-label={view === "tasks" ? "Search tasks" : "Search active contacts"}
+                placeholder={view === "tasks" ? "Search tasks" : "Search active contacts"}
                 value={contactQuery}
                 onChange={(event) => setContactQuery(event.currentTarget.value)}
               />
             </label>
           </div>
-          {visibleContacts.length > 0 ? (
+          {view === "tasks" ? (
+            <TaskList
+              people={contacts}
+              heading="Open tasks"
+              matches={(task) => matchesTask(task, sequenceFilter, contactQuery)}
+            />
+          ) : visibleContacts.length > 0 ? (
             <ContactsTable people={visibleContacts} />
           ) : (
             <p className="contacts-filter-empty" role="status">
@@ -327,6 +435,12 @@ export function BoardView() {
                 : `No contacts in ${SEQUENCE_LABEL[sequenceFilter] ?? "this status"}.`}
             </p>
           )}
+        </section>
+      ) : null}
+      {empty && view === "tasks" ? (
+        <section className="route-empty" role="status">
+          <h2>No active contacts</h2>
+          <p>Tasks appear here for people in an active sequence.</p>
         </section>
       ) : null}
     </main>

@@ -68,6 +68,17 @@ from coworker.connectors.google_oauth import (
     merge_scopes,
     save_google,
 )
+from coworker.crm_tasks import (
+    DEFAULT_TIMEZONE,
+    LIST_LIMIT_DEFAULT,
+    TASK_STATES,
+    TIMEZONE_SETTING,
+    TaskConflict,
+    TaskError,
+    TaskNotFound,
+    TaskService,
+    validate_timezone,
+)
 from coworker.context_projection import (
     ProjectionIdentity,
     prepare_context_projection,
@@ -116,7 +127,7 @@ from coworker.brief import (
     project,
     prompt_context,
 )
-from coworker.people import PersonStore
+from coworker.people import DESCRIPTION_SLOTS, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.prompt_contract import (
@@ -418,6 +429,7 @@ def create_app(
     root = state if state is not None else state_dir()
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
+    app.state.tasks = TaskService(app.state.people)
     app.state.meeting_evidence = MeetingEvidenceStore(root, people=app.state.people)
     app.state.workspace_runtime = workspace_runtime or WorkspaceRuntime(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
@@ -1375,7 +1387,20 @@ def create_app(
             },
             "apollo": {"configured": bool(app.state.apollo_key)},
             "workspace": app.state.workspace_runtime.diagnostics(),
+            "timezone": _operator_timezone(),
         }
+
+    @app.post("/v1/settings/timezone")
+    async def set_timezone(request: Request):
+        payload = await request.json()
+        try:
+            timezone = validate_timezone(
+                payload.get("timezone") if isinstance(payload, dict) else None
+            )
+        except TaskError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        app.state.store.set_setting(TIMEZONE_SETTING, timezone)
+        return {"timezone": timezone}
 
     @app.post("/v1/settings/persona")
     async def set_persona(request: Request):
@@ -1705,7 +1730,7 @@ def create_app(
             else:
                 health = {
                     "category": "setup_required",
-                    "label": "Available",
+                    "label": "Not connected",
                     "message": "This connection has not been set up yet.",
                 }
                 recovery = {
@@ -1728,6 +1753,9 @@ def create_app(
                 "missing_scopes": missing_scopes,
                 "health": health,
                 "recovery": recovery,
+                # A completed sign-in proved the grant; a saved key was never
+                # checked. Neither is a live probe of the connection today.
+                "verified": status == "connected" and not manual_configuration,
                 "supported_actions": supported_actions,
                 "available_actions": available_actions,
                 "repair_route": f"#/connections/{connector_id}",
@@ -2001,6 +2029,116 @@ def create_app(
     def board_get():
         return app.state.people.list_board()
 
+    def _operator_timezone() -> str:
+        """The director's saved IANA timezone; task dates are days in it."""
+        saved = app.state.store.get_setting(TIMEZONE_SETTING)
+        try:
+            return validate_timezone(saved)
+        except TaskError:
+            return DEFAULT_TIMEZONE
+
+    def _task_error(exc: TaskError) -> JSONResponse:
+        if isinstance(exc, TaskNotFound):
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        if isinstance(exc, TaskConflict):
+            body: dict[str, Any] = {"error": str(exc), "code": exc.code}
+            if exc.current is not None:
+                body["task"] = exc.current
+            return JSONResponse(body, status_code=409)
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.get("/v1/crm/tasks")
+    def crm_tasks(
+        person_id: str | None = None,
+        state: str = "open",
+        limit: int = LIST_LIMIT_DEFAULT,
+    ):
+        """One list of task records for Contacts and every person file.
+
+        Without `person_id` it is the global view, limited to people in an
+        active sequence so a task never moves a kept person into Contacts.
+        """
+        states = TASK_STATES if state == "all" else (state,)
+        try:
+            return app.state.tasks.list(
+                timezone=_operator_timezone(),
+                person_id=person_id or None,
+                states=states,
+                active_sequences_only=not person_id,
+                limit=limit,
+            )
+        except TaskError as exc:
+            return _task_error(exc)
+
+    @app.post("/v1/people/{person_id}/tasks", status_code=201)
+    async def people_task_create(person_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            # The author is whoever holds this local session: the director.
+            # A request cannot name a different actor.
+            result = app.state.tasks.create(
+                person_id,
+                title=payload.get("title"),
+                details=payload.get("details"),
+                due_date=payload.get("due_date"),
+                timezone=_operator_timezone(),
+                operation_id=payload.get("operation_id"),
+                actor="director",
+                reason=payload.get("reason"),
+            )
+        except TaskError as exc:
+            return _task_error(exc)
+        if result.get("replayed"):
+            return JSONResponse(result, status_code=200)
+        return result
+
+    @app.patch("/v1/people/{person_id}/tasks/{task_id}")
+    async def people_task_update(person_id: str, task_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        changes = payload.get("changes")
+        try:
+            return app.state.tasks.update(
+                person_id,
+                task_id,
+                changes=changes if isinstance(changes, dict) else {},
+                expected_version=payload.get("expected_version"),
+                timezone=_operator_timezone(),
+                operation_id=payload.get("operation_id"),
+                actor="director",
+                reason=payload.get("reason"),
+            )
+        except TaskError as exc:
+            return _task_error(exc)
+
+    @app.get("/v1/people/{person_id}/tasks/{task_id}/changes")
+    def people_task_changes(person_id: str, task_id: str):
+        """The recorded history of one task, oldest first."""
+        try:
+            app.state.tasks.get(person_id, task_id)
+        except TaskError as exc:
+            return _task_error(exc)
+        return {"changes": app.state.tasks.changes(task_id)}
+
+    @app.post("/v1/people/{person_id}/crm-changes/{change_id}/undo")
+    async def people_change_undo(person_id: str, change_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.tasks.undo(
+                person_id,
+                change_id,
+                operation_id=payload.get("operation_id"),
+                actor="director",
+                reason=payload.get("reason"),
+            )
+        except TaskError as exc:
+            return _task_error(exc)
+
     @app.post("/v1/replies/refresh")
     def replies_refresh():
         """Read inbound Gmail since the cursor and file what it can attribute.
@@ -2105,6 +2243,7 @@ def create_app(
             )
         return {
             "person": person,
+            "descriptions": app.state.people.descriptions(person_id),
             # The redacted timeline goes in, so nothing the person view hides
             # from the ledger can reappear through the brief.
             "brief": brief_payload(project(person, timeline, session_id=session_id)),
@@ -2181,6 +2320,95 @@ def create_app(
         return {
             "person": app.state.people.get(person_id, expand_sources=True),
             "brief": brief_payload(person_brief(app.state.people, person_id)),
+            "versions": app.state.people.versions(person_id),
+            "saved": True,
+            "unchanged": False,
+        }
+
+    @app.patch("/v1/people/{person_id}/descriptions/{slot}")
+    async def people_description(person_id: str, slot: str, request: Request):
+        """Save a person-description slot, or release it to the assistant.
+
+        One route covers both actions (spec §7.2). Concurrency is slot-scoped:
+        the client sends the slot's `expected_version`. A text save makes the
+        slot human-authored (an empty string is an intentional, protected
+        blank); `release: true` hands the slot back to the assistant.
+        """
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if slot not in DESCRIPTION_SLOTS:
+            return JSONResponse(
+                {"error": "unknown description slot"}, status_code=404
+            )
+        payload = await request.json()
+        expected_version = payload.get("expected_version")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            return JSONResponse(
+                {"error": "expected_version is required"}, status_code=400
+            )
+        release = bool(payload.get("release"))
+        text = payload.get("text")
+        if not release:
+            if text is None:
+                return JSONResponse(
+                    {"error": "text or release is required"}, status_code=400
+                )
+            if not isinstance(text, str):
+                return JSONResponse(
+                    {"error": "text must be a string"}, status_code=400
+                )
+
+        current = app.state.people.descriptions(person_id)[slot]
+        if int(current["version"]) != expected_version:
+            return JSONResponse(
+                {
+                    "error": (
+                        "stale record version: "
+                        f"expected {expected_version}, current {current['version']}"
+                    )
+                },
+                status_code=409,
+            )
+        if release:
+            unchanged = current["authority"] == "assistant"
+        else:
+            unchanged = (
+                current["authority"] == "human" and (current["text"] or "") == text
+            )
+        if unchanged:
+            return {
+                "descriptions": app.state.people.descriptions(person_id),
+                "description": current,
+                "person": app.state.people.get(person_id, expand_sources=True),
+                "versions": app.state.people.versions(person_id),
+                "saved": False,
+                "unchanged": True,
+            }
+        try:
+            description = app.state.people.patch_description(
+                person_id,
+                slot,
+                expected_version=expected_version,
+                text=None if release else text,
+                release=release,
+                actor="director",
+                rationale_summary=str(
+                    payload.get("rationale_summary")
+                    or (
+                        "Director let the assistant maintain the description."
+                        if release
+                        else "Director edited the description."
+                    )
+                ),
+            )
+        except ValueError as exc:
+            message = str(exc)
+            status = 422 if "exceeds" in message else 409
+            return JSONResponse({"error": message}, status_code=status)
+        return {
+            "descriptions": app.state.people.descriptions(person_id),
+            "description": description,
+            "person": app.state.people.get(person_id, expand_sources=True),
             "versions": app.state.people.versions(person_id),
             "saved": True,
             "unchanged": False,

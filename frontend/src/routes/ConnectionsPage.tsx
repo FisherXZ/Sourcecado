@@ -6,6 +6,7 @@ import {
   getConnectors,
   type Connector,
 } from "../api";
+import { connectorStatus } from "../connectorStatus";
 
 type PageState =
   | { status: "loading" }
@@ -25,16 +26,6 @@ const CONNECTOR_MARKS: Record<string, string> = {
   granola: "GR",
 };
 
-function statusLabel(status: Connector["status"]): string {
-  if (status === "connected") return "Connected";
-  if (status === "available") return "Available";
-  if (status === "authorizing") return "Authorizing";
-  if (status === "missing_scopes") return "Missing permissions";
-  if (status === "degraded") return "Degraded";
-  if (status === "reconnect_required") return "Reconnect required";
-  return "Connection failed";
-}
-
 function ConnectorMark({ connector }: { connector: Connector }) {
   return (
     <span className="connection-mark" aria-hidden="true">
@@ -44,21 +35,20 @@ function ConnectorMark({ connector }: { connector: Connector }) {
 }
 
 function ConnectorRow({ connector }: { connector: Connector }) {
+  const status = connectorStatus(connector);
   return (
     <li>
       <a
         className="connection-row"
         href={connector.repairRoute}
-        aria-label={`${connector.title}, ${statusLabel(connector.status)}`}
+        aria-label={`${connector.title}, ${status.label}`}
       >
         <ConnectorMark connector={connector} />
         <span className="connection-row-copy">
           <strong>{connector.title}</strong>
           <span>{connector.email || connector.description}</span>
         </span>
-        <span className={`connection-status status-${connector.status}`}>
-          {statusLabel(connector.status)}
-        </span>
+        <span className={`connection-status tone-${status.tone}`}>{status.label}</span>
       </a>
     </li>
   );
@@ -185,6 +175,7 @@ function ConnectorDetail({
   onCancelDisconnect: () => void;
   onConfirmGoogleDisconnect: () => void;
 }) {
+  const status = connectorStatus(connector);
   const activeInteraction = interaction?.connectorId === connector.id ? interaction : null;
   const connecting =
     connector.status === "authorizing" ||
@@ -217,9 +208,7 @@ function ConnectorDetail({
           <p className="connection-eyebrow">Connection</p>
           <h2>{connector.title}</h2>
         </div>
-        <span className={`connection-status status-${connector.status}`}>
-          {statusLabel(connector.status)}
-        </span>
+        <span className={`connection-status tone-${status.tone}`}>{status.label}</span>
       </header>
       <p className="connection-description">{connector.description}</p>
 

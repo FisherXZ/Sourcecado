@@ -17,7 +17,11 @@ const api = vi.hoisted(() => ({
   setPersonSequence: vi.fn(),
 }));
 
-vi.mock("../src/api", () => api);
+vi.mock("../src/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/api")>()),
+  ...api,
+  ...(await import("./taskApi")).taskApiMock(),
+}));
 
 function personFile(brief = livingBrief()) {
   return {

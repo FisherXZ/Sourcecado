@@ -38,6 +38,11 @@ from typing import Any
 
 from coworker.agent_run_approval import EFFECT_STATEMENTS
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
+from coworker.crm_tasks import (
+    CRM_CHANGES_COLUMNS,
+    CRM_CHANGES_INDEX_STATEMENTS,
+    CRM_TASK_STATEMENTS,
+)
 from coworker.mcp import SCHEMA_VERSION as MCP_CONFIG_VERSION
 from coworker.people import SCHEMA_VERSION as PEOPLE_DB_VERSION
 from coworker.person_identity import (
@@ -651,6 +656,51 @@ def _count_people_db(context: MigrationContext) -> int:
     return _sqlite_adoption_count(context, _PEOPLE_ADDED_COLUMNS, _PEOPLE_ADDED_TABLES)
 
 
+# Ticket #202 added per-slot person descriptions. The constructor creates the
+# table for a fresh database; this restates its DDL because the registry, not
+# the constructor, is the release contract for what version 3 means. Kept byte
+# for byte in step with the CREATE TABLE in people.py's PersonStore.__init__.
+_PEOPLE_DESCRIPTIONS_TABLE = """
+    CREATE TABLE IF NOT EXISTS person_descriptions (
+        person_id TEXT NOT NULL,
+        slot TEXT NOT NULL,
+        text TEXT,
+        authority TEXT NOT NULL DEFAULT 'assistant',
+        source_refs TEXT NOT NULL DEFAULT '[]',
+        version INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (person_id, slot)
+    )
+"""
+
+
+def _count_people_descriptions(context: MigrationContext) -> int:
+    """1 when the description table is still missing, else 0.
+
+    No person row is read or rewritten: the step only adds an empty table, so
+    there is nothing to backfill and no past summary to invent (spec §8.3).
+    """
+    conn = context.connection
+    assert conn is not None
+    return 0 if "person_descriptions" in table_names(conn) else 1
+
+
+def _add_people_descriptions(context: MigrationContext) -> int:
+    """Add the per-slot person description table to a version 2 people store.
+
+    Run as a single statement, never through executescript, which issues a
+    COMMIT that would end the transaction `_apply_store` opened and leave the
+    rollback with nothing to undo. SQLite rolls DDL back like any other
+    statement, so a failed run really does leave the store at version 2.
+    """
+    conn = context.connection
+    assert conn is not None
+    touched = _count_people_descriptions(context)
+    conn.execute(_PEOPLE_DESCRIPTIONS_TABLE)
+    return touched
+
+
 def _count_masked_people_names(context: MigrationContext) -> int:
     conn = context.connection
     assert conn is not None
@@ -750,6 +800,72 @@ def _separate_masked_people_names(context: MigrationContext) -> int:
                 (json.dumps(person, sort_keys=True), rowid),
             )
     return touched
+
+
+def _count_person_tasks(context: MigrationContext) -> int:
+    """No row is read or rewritten. The step adds empty task tables."""
+    return 0
+
+
+def _add_person_tasks(context: MigrationContext) -> int:
+    """Add person tasks, their change history and operation receipts.
+
+    Existing people, timelines, handoffs and source restrictions are not
+    touched, and no task is invented for anyone. Executed one statement at a
+    time so a failure rolls back with the step's transaction (see
+    `_add_agent_run_effects`).
+    """
+    conn = context.connection
+    assert conn is not None
+    for statement in CRM_TASK_STATEMENTS:
+        conn.execute(statement)
+    return 0
+
+
+# The people.db version that the crm_changes rebuild starts from. If another
+# step lands first, bump this and PEOPLE_DB_VERSION together.
+CRM_CHANGES_REBUILD_FROM = 4
+
+
+def _count_crm_changes(context: MigrationContext) -> int:
+    conn = context.connection
+    assert conn is not None
+    return _row_count(conn, "crm_changes")
+
+
+def _widen_crm_changes(context: MigrationContext) -> int:
+    """Rebuild crm_changes so it can record task state changes and undo.
+
+    SQLite cannot alter a CHECK, so the table is rebuilt: create the new
+    table, copy every row, drop the old one, rename, recreate the index. Each
+    is one statement inside the step's transaction. Foreign keys are off on
+    the migration connection (sqlite3's default, and a PRAGMA cannot change
+    that inside a transaction), so dropping the old table does not trip the
+    `crm_operations.change_id` reference; after the rename that reference
+    points at the rebuilt table by name again. No row changes.
+    """
+    conn = context.connection
+    assert conn is not None
+    copied = _row_count(conn, "crm_changes")
+    conn.execute(f"CREATE TABLE crm_changes_new ({CRM_CHANGES_COLUMNS})")
+    conn.execute(
+        """
+        INSERT INTO crm_changes_new (
+            change_id, person_id, entity_type, entity_id, entity_version,
+            action, before_json, after_json, actor, reason, source_refs,
+            operation_id, session_id, run_id, compensates_change_id, created_at
+        )
+        SELECT change_id, person_id, entity_type, entity_id, entity_version,
+               action, before_json, after_json, actor, reason, source_refs,
+               operation_id, session_id, run_id, compensates_change_id, created_at
+        FROM crm_changes
+        """
+    )
+    conn.execute("DROP TABLE crm_changes")
+    conn.execute("ALTER TABLE crm_changes_new RENAME TO crm_changes")
+    for statement in CRM_CHANGES_INDEX_STATEMENTS:
+        conn.execute(statement)
+    return copied
 
 
 # DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
@@ -966,7 +1082,9 @@ REGISTRY: tuple[StoreSpec, ...] = (
         relative_path="people.db",
         current_version=PEOPLE_DB_VERSION,
         version_channel=VersionChannel.SQLITE_USER_VERSION,
-        description="Person files, their ledger events, attachments, and versions.",
+        description=(
+            "Person files, their ledger events, attachments, versions, and tasks."
+        ),
         migrations=_adopt(
             "Adopt the person schema shipped before the registry existed.",
             _count_people_db,
@@ -983,12 +1101,50 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 count=_count_masked_people_names,
                 apply=_separate_masked_people_names,
             ),
+            Migration(
+                from_version=2,
+                to_version=3,
+                description=(
+                    "Add the per-slot person description table so short and "
+                    "detailed descriptions, their sources, and their human-edit "
+                    "protection persist and migrate with backup and rollback."
+                ),
+                count=_count_people_descriptions,
+                apply=_add_people_descriptions,
+            ),
+            Migration(
+                from_version=3,
+                to_version=4,
+                description=(
+                    "Add person tasks with their change history and operation "
+                    "receipts, without creating any task for existing people."
+                ),
+                count=_count_person_tasks,
+                apply=_add_person_tasks,
+            ),
+            Migration(
+                from_version=CRM_CHANGES_REBUILD_FROM,
+                to_version=CRM_CHANGES_REBUILD_FROM + 1,
+                description=(
+                    "Widen crm_changes so it can record task completion, "
+                    "reopening, cancellation and undo."
+                ),
+                count=_count_crm_changes,
+                apply=_widen_crm_changes,
+            ),
         ),
         json_columns=(
             ("events", "payload"),
             ("person_attachments", "fields_json"),
             ("person_versions", "person_json"),
             ("person_versions", "attachments_json"),
+            ("person_descriptions", "source_refs"),
+            ("person_tasks", "protected_fields"),
+            ("person_tasks", "source_refs"),
+            ("crm_changes", "before_json"),
+            ("crm_changes", "after_json"),
+            ("crm_changes", "source_refs"),
+            ("crm_operations", "response_json"),
         ),
     ),
     StoreSpec(
