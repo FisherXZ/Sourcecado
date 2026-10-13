@@ -38,7 +38,11 @@ from typing import Any
 
 from coworker.agent_run_approval import EFFECT_STATEMENTS
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
-from coworker.crm_tasks import CRM_TASK_STATEMENTS
+from coworker.crm_tasks import (
+    CRM_CHANGES_COLUMNS,
+    CRM_CHANGES_INDEX_STATEMENTS,
+    CRM_TASK_STATEMENTS,
+)
 from coworker.mcp import SCHEMA_VERSION as MCP_CONFIG_VERSION
 from coworker.people import SCHEMA_VERSION as PEOPLE_DB_VERSION
 from coworker.person_identity import (
@@ -818,6 +822,47 @@ def _add_person_tasks(context: MigrationContext) -> int:
     return 0
 
 
+def _count_crm_changes(context: MigrationContext) -> int:
+    conn = context.connection
+    assert conn is not None
+    return _row_count(conn, "crm_changes")
+
+
+def _widen_crm_changes(context: MigrationContext) -> int:
+    """Rebuild crm_changes so it can record task state changes and undo.
+
+    SQLite cannot alter a CHECK, so the table is rebuilt: create the new
+    table, copy every row, drop the old one, rename, recreate the index. Each
+    is one statement inside the step's transaction. Foreign keys are off on
+    the migration connection (sqlite3's default, and a PRAGMA cannot change
+    that inside a transaction), so dropping the old table does not trip the
+    `crm_operations.change_id` reference; after the rename that reference
+    points at the rebuilt table by name again. No row changes.
+    """
+    conn = context.connection
+    assert conn is not None
+    copied = _row_count(conn, "crm_changes")
+    conn.execute(f"CREATE TABLE crm_changes_new ({CRM_CHANGES_COLUMNS})")
+    conn.execute(
+        """
+        INSERT INTO crm_changes_new (
+            change_id, person_id, entity_type, entity_id, entity_version,
+            action, before_json, after_json, actor, reason, source_refs,
+            operation_id, session_id, run_id, compensates_change_id, created_at
+        )
+        SELECT change_id, person_id, entity_type, entity_id, entity_version,
+               action, before_json, after_json, actor, reason, source_refs,
+               operation_id, session_id, run_id, compensates_change_id, created_at
+        FROM crm_changes
+        """
+    )
+    conn.execute("DROP TABLE crm_changes")
+    conn.execute("ALTER TABLE crm_changes_new RENAME TO crm_changes")
+    for statement in CRM_CHANGES_INDEX_STATEMENTS:
+        conn.execute(statement)
+    return copied
+
+
 # DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
 # constructor still adds it with a column-existence probe; version 1 is that
 # column being present and recorded.
@@ -1071,6 +1116,16 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 ),
                 count=_count_person_tasks,
                 apply=_add_person_tasks,
+            ),
+            Migration(
+                from_version=3,
+                to_version=4,
+                description=(
+                    "Widen crm_changes so it can record task completion, "
+                    "reopening, cancellation and undo, and description changes."
+                ),
+                count=_count_crm_changes,
+                apply=_widen_crm_changes,
             ),
         ),
         json_columns=(

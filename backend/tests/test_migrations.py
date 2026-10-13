@@ -666,6 +666,7 @@ def test_a_failed_people_tasks_step_restores_the_v2_database(tmp_path, monkeypat
         migrations=(
             *original.migrations[:3],
             dataclasses.replace(original.migrations[3], apply=explode),
+            *original.migrations[4:],
         ),
     )
     monkeypatch.setattr(
@@ -699,6 +700,172 @@ def test_a_fresh_people_db_reaches_v4_with_empty_task_tables(tmp_path):
     dump = _dump_database(root / "people.db")
     assert dump["rows"]["person_tasks"] == []
     assert dump["rows"]["people"] == []
+
+
+_CRM_CHANGES_V3_DDL = """
+CREATE TABLE crm_changes (
+    change_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL REFERENCES people(person_id),
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('task')),
+    entity_id TEXT NOT NULL,
+    entity_version INTEGER NOT NULL CHECK (entity_version >= 1),
+    action TEXT NOT NULL CHECK (action IN ('create', 'update')),
+    before_json TEXT,
+    after_json TEXT NOT NULL,
+    actor TEXT NOT NULL CHECK (actor IN ('director', 'assistant')),
+    reason TEXT NOT NULL,
+    source_refs TEXT NOT NULL DEFAULT '[]',
+    operation_id TEXT NOT NULL,
+    session_id TEXT,
+    run_id TEXT,
+    compensates_change_id TEXT REFERENCES crm_changes(change_id),
+    created_at TEXT NOT NULL
+)
+"""
+
+
+def _people_v3_with_a_task(root: Path) -> tuple[str, str]:
+    """A v3 people.db: one task, its create change and its operation receipt."""
+    from coworker.crm_tasks import TaskService
+    from coworker.people import PersonStore
+
+    people = PersonStore(root)
+    person_id = people.keep_from_apollo(
+        apollo_id="nora", first_name="Nora", last_name_obfuscated="K.", title="Lead", company="Northwind"
+    )["person_id"]
+    task = TaskService(people).create(
+        person_id,
+        title="Send the proposal",
+        due_date="2026-10-16",
+        timezone="America/Los_Angeles",
+        operation_id="op-before-v4",
+        actor="director",
+    )["task"]
+    people._conn.close()
+    conn = sqlite3.connect(root / "people.db")
+    try:
+        changes = conn.execute("SELECT * FROM crm_changes").fetchall()
+        operations = conn.execute("SELECT * FROM crm_operations").fetchall()
+        ops_ddl = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'crm_operations'"
+        ).fetchone()[0]
+        conn.execute("DROP TABLE crm_operations")
+        conn.execute("DROP TABLE crm_changes")
+        conn.execute(_CRM_CHANGES_V3_DDL)
+        conn.execute(
+            "CREATE INDEX crm_changes_entity ON crm_changes(entity_type, entity_id, created_at)"
+        )
+        conn.execute(ops_ddl)
+        conn.executemany(
+            f"INSERT INTO crm_changes VALUES ({', '.join('?' * len(changes[0]))})", changes
+        )
+        conn.executemany(
+            f"INSERT INTO crm_operations VALUES ({', '.join('?' * len(operations[0]))})",
+            operations,
+        )
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+    finally:
+        conn.close()
+    return person_id, task["task_id"]
+
+
+def test_people_v4_widens_crm_changes_and_keeps_every_row(tmp_path):
+    from coworker.crm_tasks import TaskService
+    from coworker.people import PersonStore
+
+    root = tmp_path / "state"
+    person_id, task_id = _people_v3_with_a_task(root)
+    before = _dump_database(root / "people.db")
+    conn = sqlite3.connect(root / "people.db")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "UPDATE crm_changes SET action = 'complete' WHERE entity_id = ?", (task_id,)
+        )
+    conn.close()
+
+    plan = _plan_for(migrations.plan_migrations(root), "people_db")
+    assert plan.status is StoreStatus.PENDING
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [(3, 4)]
+    outcome = migrations.apply_migrations(root)
+    assert outcome.error is None
+    assert outcome.applied[-1].record_count == 1
+    assert _user_version(root / "people.db") == 4
+
+    after = _dump_database(root / "people.db")
+    assert after["integrity"] == ["ok"]
+    for table in (*_PEOPLE_V2_TABLES, "person_tasks", "crm_changes", "crm_operations"):
+        assert after["rows"][table] == before["rows"][table], table
+    conn = sqlite3.connect(root / "people.db")
+    conn.execute("PRAGMA foreign_keys = ON")
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert [row[2] for row in conn.execute("PRAGMA foreign_key_list(crm_operations)")] == [
+        "crm_changes"
+    ]
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE name = 'crm_changes_entity'"
+    ).fetchone() is not None
+    conn.close()
+
+    # The widened table takes the new actions, and the old receipt still replays.
+    people = PersonStore(root)
+    service = TaskService(people)
+    done = service.update(
+        person_id,
+        task_id,
+        changes={"state": "completed"},
+        expected_version=1,
+        timezone="America/Los_Angeles",
+        operation_id="op-after-v4",
+        actor="director",
+    )
+    assert done["change"]["action"] == "complete"
+    replay = service.create(
+        person_id,
+        title="Send the proposal",
+        due_date="2026-10-16",
+        timezone="America/Los_Angeles",
+        operation_id="op-before-v4",
+        actor="director",
+    )
+    assert replay["replayed"] is True and replay["task"]["task_id"] == task_id
+    assert _user_version(root / "people.db") == 4
+
+
+def test_a_failed_people_v4_step_restores_the_v3_database(tmp_path, monkeypatch):
+    root = tmp_path / "state"
+    _people_v3_with_a_task(root)
+    before = _dump_database(root / "people.db")
+
+    def explode(context):
+        # Fail after the rebuild has dropped the old table.
+        context.connection.execute("CREATE TABLE crm_changes_new (change_id TEXT)")
+        context.connection.execute("DROP TABLE crm_changes")
+        raise RuntimeError("rebuild failed")
+
+    original = migrations.spec_for("people_db")
+    broken = migrations.dataclasses.replace(
+        original,
+        migrations=(
+            *original.migrations[:3],
+            dataclasses.replace(original.migrations[3], apply=explode),
+        ),
+    )
+    monkeypatch.setattr(
+        migrations,
+        "REGISTRY",
+        tuple(broken if item.store_id == "people_db" else item for item in migrations.REGISTRY),
+    )
+
+    outcome = migrations.apply_migrations(root)
+    assert outcome.error is not None
+    assert "people_db" in outcome.rolled_back
+    assert _dump_database(root / "people.db") == before
+    assert _user_version(root / "people.db") == 3
+
+    monkeypatch.undo()
+    assert migrations.apply_migrations(root).error is None
+    assert _user_version(root / "people.db") == 4
 
 
 # --- failing closed ------------------------------------------------------

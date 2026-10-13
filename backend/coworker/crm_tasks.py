@@ -59,6 +59,35 @@ _OPERATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 _TASK_ID_RE = re.compile(r"^task_[0-9a-f]{32}$")
 _CHANGE_ID_RE = re.compile(r"^chg_[0-9a-f]{32}$")
 
+# The column list of crm_changes, shared by the constructor DDL and the 3->4
+# rebuild in migrations.py so a fresh install and a migrated one match.
+CRM_CHANGES_COLUMNS = """
+        change_id TEXT PRIMARY KEY,
+        person_id TEXT NOT NULL REFERENCES people(person_id),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('task', 'description')),
+        entity_id TEXT NOT NULL,
+        entity_version INTEGER NOT NULL CHECK (entity_version >= 1),
+        action TEXT NOT NULL CHECK (
+            action IN ('create', 'update', 'complete', 'reopen', 'cancel', 'undo')
+        ),
+        before_json TEXT,
+        after_json TEXT NOT NULL,
+        actor TEXT NOT NULL CHECK (actor IN ('director', 'assistant')),
+        reason TEXT NOT NULL,
+        source_refs TEXT NOT NULL DEFAULT '[]',
+        operation_id TEXT NOT NULL,
+        session_id TEXT,
+        run_id TEXT,
+        compensates_change_id TEXT REFERENCES crm_changes(change_id),
+        created_at TEXT NOT NULL
+"""
+CRM_CHANGES_INDEX_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE INDEX IF NOT EXISTS crm_changes_entity
+    ON crm_changes(entity_type, entity_id, created_at)
+    """,
+)
+
 # Executed one statement at a time, never through `executescript`, which
 # commits first: the migration step runs these inside its own transaction and
 # must be able to roll them back.
@@ -94,32 +123,8 @@ CRM_TASK_STATEMENTS: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS person_tasks_state_due
     ON person_tasks(state, due_date, task_id)
     """,
-    """
-    CREATE TABLE IF NOT EXISTS crm_changes (
-        change_id TEXT PRIMARY KEY,
-        person_id TEXT NOT NULL REFERENCES people(person_id),
-        entity_type TEXT NOT NULL CHECK (entity_type IN ('task')),
-        entity_id TEXT NOT NULL,
-        entity_version INTEGER NOT NULL CHECK (entity_version >= 1),
-        action TEXT NOT NULL CHECK (
-            action IN ('create', 'update', 'complete', 'reopen', 'cancel', 'undo')
-        ),
-        before_json TEXT,
-        after_json TEXT NOT NULL,
-        actor TEXT NOT NULL CHECK (actor IN ('director', 'assistant')),
-        reason TEXT NOT NULL,
-        source_refs TEXT NOT NULL DEFAULT '[]',
-        operation_id TEXT NOT NULL,
-        session_id TEXT,
-        run_id TEXT,
-        compensates_change_id TEXT REFERENCES crm_changes(change_id),
-        created_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS crm_changes_entity
-    ON crm_changes(entity_type, entity_id, created_at)
-    """,
+    f"CREATE TABLE IF NOT EXISTS crm_changes ({CRM_CHANGES_COLUMNS})",
+    *CRM_CHANGES_INDEX_STATEMENTS,
     """
     CREATE TABLE IF NOT EXISTS crm_operations (
         operation_id TEXT PRIMARY KEY,
