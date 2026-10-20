@@ -131,8 +131,12 @@ def crm_outcome_references(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _explicitly_undated(text: str) -> bool:
+    return re.match(r"^(?:add|create|save|make)\s+(?:an?\s+)?undated\s+task\b", text) is not None
+
+
 def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None:
-    if re.match(r"^(?:add|create|save|make)\s+(?:an?\s+)?undated\s+task\b", text):
+    if _explicitly_undated(text):
         # Explicitly undated work may contain literal calendar/clock words.
         # A model-supplied date still conflicts with the returned None below.
         return None
@@ -434,6 +438,8 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
         if value and _normalized(value) not in _normalized(quote):
             raise CRMToolError("unverified_director_request", "The requested text must occur in the director command. Ask for the exact wording; nothing was saved.")
     if name == "crm_create_task":
+        if _explicitly_undated(text) and args.get("due_date") is not None:
+            raise CRMToolError("unverified_director_request", "An explicitly undated task cannot carry a due date, including when replaying a saved operation.")
         replay = saved_operation and saved_operation["action"] == "create" and saved_operation["due_date"] == args.get("due_date")
         requested_date = _reminder_date(text, directive, timezone)
         if not replay and args.get("due_date") != requested_date:
