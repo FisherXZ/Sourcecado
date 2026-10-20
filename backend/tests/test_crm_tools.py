@@ -435,3 +435,98 @@ def test_negated_or_conditional_commands_cannot_grant_immediate_completion(tmp_p
         "expected_version": 1, "changes": {"state": "completed"}, "reason": "Requested",
         "operation_id": "op-conditional-complete"}, text)
     assert not ok and result["code"] == "unverified_director_request"
+
+
+@pytest.mark.parametrize("text, changes", [
+    ("Mark that task done", {"state": "completed", "due_date": "2027-01-01"}),
+    ("Mark task Send proposal done", {"state": "completed", "title": "proposal"}),
+    ("Change the task title to: Send proposal", {"details": "proposal"}),
+    ("Change the task details to: Discuss Friday", {"due_date": "2027-01-01"}),
+])
+def test_director_command_authorizes_only_the_requested_task_field(tmp_path, text, changes):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    service = TaskService(people)
+    task = service.create(pid, title="Send proposal", details="Human details", due_date="2026-10-23",
+        actor="director", operation_id="op-field-scope", timezone="America/Los_Angeles")["task"]
+    ok, result = invoke(people, "crm_update_task", {"task_id": task["task_id"],
+        "expected_version": 1, "changes": changes, "reason": "Requested", "operation_id": "op-piggyback-edit"}, text)
+    assert not ok and result["code"] == "unverified_director_request"
+    assert service.get(pid, task["task_id"]) == task
+
+
+@pytest.mark.parametrize("text, args", [
+    ("Change the general description to: Human text", {"slot": "detailed", "text": "Human text"}),
+    ("Change the detailed description to: Human text", {"slot": "general", "text": "Human text"}),
+    ("Change the description to: Human text", {"slot": "detailed", "text": "Human text"}),
+    ("Release the general description", {"slot": "general", "release": True, "text": "Release"}),
+    ("Change the general description to: Release assistant context", {"slot": "general", "release": True}),
+])
+def test_description_slot_and_release_cannot_piggyback_on_other_commands(tmp_path, text, args):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    ok, result = invoke(people, "crm_update_description", {**args, "expected_version": 0,
+        "operation_id": "op-slot-scope", "reason": "Requested"}, text)
+    assert not ok and result["code"] == "unverified_director_request"
+    assert all(slot["version"] == 0 for slot in people.descriptions(pid).values())
+
+
+@pytest.mark.parametrize("text, changes", [
+    ("Change the task title to: Send a proposal", {"title": "Send a proposal"}),
+    ("Change the task details to: Use spring examples", {"details": "Use spring examples"}),
+    ("Change the task due date to: 2026-10-30", {"due_date": "2026-10-30"}),
+])
+def test_explicit_task_field_edits_remain_supported(tmp_path, text, changes):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    task = TaskService(people).create(pid, title="Call", actor="director", operation_id="op-field-before",
+                                     timezone="America/Los_Angeles")["task"]
+    ok, result = invoke(people, "crm_update_task", {"task_id": task["task_id"], "expected_version": 1,
+        "changes": changes, "operation_id": "op-field-edit", "reason": "Requested"}, text)
+    assert ok, result
+    assert all(result["task"][field] == value for field, value in changes.items())
+
+
+@pytest.mark.parametrize("text", ["Remind me to discuss Friday's agenda", "Remind me to send examples by 2026-10-23"])
+def test_task_creation_cannot_add_an_unrequested_or_different_deadline(tmp_path, text):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    title = "Discuss Friday's agenda" if "agenda" in text else "Send examples"
+    ok, result = invoke(people, "crm_create_task", {"title": title, "due_date": "2027-01-01",
+        "operation_id": "op-unrequested-date", "reason": "Requested"}, text)
+    assert not ok and result["code"] == "unverified_director_request"
+    assert TaskService(people).list(timezone="America/Los_Angeles")["tasks"] == []
+
+
+@pytest.mark.parametrize("field, value", [("details", ""), ("due_date", None)])
+def test_clear_commands_authorize_only_the_named_clearable_task_field(tmp_path, field, value):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    task = TaskService(people).create(pid, title="Call", details="Human details", due_date="2026-10-23",
+        actor="director", operation_id="op-clear-before", timezone="America/Los_Angeles")["task"]
+    ok, result = invoke(people, "crm_update_task", {"task_id": task["task_id"], "expected_version": 1,
+        "changes": {field: value}, "operation_id": "op-clear-field", "reason": "Requested"},
+        f"Clear the task {'due date' if field == 'due_date' else 'details'}")
+    assert ok, result
+    assert result["task"][field] == value
+
+
+def test_explicit_detailed_description_and_separate_release_preserve_requested_text(tmp_path):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    ok, saved = invoke(people, "crm_update_description", {"slot": "detailed", "text": "Human text",
+        "expected_version": 0, "operation_id": "op-detailed-text", "reason": "Requested"},
+        "Change the detailed description to: Human text")
+    assert ok and saved["description"]["authority"] == "human"
+    ok, released = invoke(people, "crm_update_description", {"slot": "detailed", "release": True,
+        "expected_version": 1, "operation_id": "op-release-only", "reason": "Requested"},
+        "Release the detailed description")
+    assert ok and released["description"]["authority"] == "assistant"
+    assert released["description"]["text"] == "Human text"
+    assert people.descriptions(pid)["general"]["version"] == 0

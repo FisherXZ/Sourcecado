@@ -53,11 +53,11 @@ CRM_TOOL_SCHEMAS = [
         "due_date": {"type": ["string", "null"], "description": "Calendar day YYYY-MM-DD in the operator's saved timezone; omit if unspecified. Use now to resolve relative dates."},
         "source_refs": _SOURCE_REFS,
     }, ("title",), write=True),
-    _schema("crm_update_task", "Edit, complete, reopen or cancel an existing task. Read its task version first. Human-edited fields require a verified current director command.", {
+    _schema("crm_update_task", "Edit one named task field, complete, reopen or cancel an existing task. Read its task version first. Lifecycle commands change state only. For text/date edits use 'Change the task title/details/due date to: VALUE'; date edits require an explicit YYYY-MM-DD value. Compound edits require separate commands.", {
         "task_id": {"type": "string"}, "expected_version": _VERSION,
         "changes": {"type": "object", "properties": {"title": {"type": "string"}, "details": {"type": "string"}, "due_date": {"type": ["string", "null"]}, "state": {"type": "string", "enum": list(TASK_STATES)}}, "additionalProperties": False},
     }, ("task_id", "expected_version", "changes"), write=True),
-    _schema("crm_update_description", "Save a director-requested general or detailed description through the app's slot writer. Read the slot version with board_get first. Requested text is protected. Description undo awaits #205.", {
+    _schema("crm_update_description", "Save a director-requested description through the app's slot writer. An unspecified description means general; detailed requires the director to say detailed description. Read the slot version with board_get first. Releasing protection is a separate command without text. Description undo awaits #205.", {
         "slot": {"type": "string", "enum": ["general", "detailed"]},
         "text": {"type": "string"}, "release": {"type": "boolean"},
         "expected_version": {"type": "integer", "minimum": 0}, "source_refs": _SOURCE_REFS,
@@ -142,7 +142,7 @@ def _human_request(name: str, args: dict, directive: Directive | None) -> bool:
     text = re.sub(r"^(?:please )?(?:(?:can|could|would) you )?", "", text)
     patterns = {
         "crm_create_task": r"^(?:remind me\b|(?:add|create|save|make)\b.*\b(?:task|reminder)\b)",
-        "crm_update_task": r"^(?:mark|complete|finish|reopen|cancel|change|edit|update|move|reschedule)\b.*\b(?:task|reminder)\b",
+        "crm_update_task": r"^(?:mark|complete|finish|reopen|cancel|change|edit|update|clear|move|reschedule)\b.*\b(?:task|reminder)\b",
         "crm_update_description": r"^(?:change|edit|update|set|clear|release)\b.*\bdescription\b",
         "crm_undo_change": r"^undo\b",
     }
@@ -152,19 +152,68 @@ def _human_request(name: str, args: dict, directive: Directive | None) -> bool:
         raise CRMToolError("unverified_director_request", "Ask the director to state the task or description edit explicitly; this wording cannot establish human authority.")
     if re.search(r"\b(?:not|never|unless|if|when|after|before)\b|\bdon['’]t\b", text):
         raise CRMToolError("unverified_director_request", "Negated or conditional wording needs clarification before a CRM write. Ask for one explicit immediate edit.")
+    if name == "crm_update_task":
+        changes = args["changes"]
+        lifecycle = re.match(r"^(mark|complete|finish|reopen|cancel)\b", text)
+        if lifecycle:
+            # A command about completion cannot also authorize a title/date
+            # copied out of the same sentence by the model.
+            if set(changes) != {"state"}:
+                raise CRMToolError("unverified_director_request", "A completion, reopen or cancel command permits only a task state change. Ask separately for other edits.")
+            verb = lifecycle[1]
+            requested_state = {"complete": "completed", "finish": "completed", "reopen": "open", "cancel": "cancelled"}.get(verb)
+            if verb == "mark":
+                ending = re.search(r"\b(done|complete|completed|cancelled|canceled|open|reopened)[.!]?$", text)
+                requested_state = ({"done": "completed", "complete": "completed", "completed": "completed", "cancelled": "cancelled", "canceled": "cancelled", "open": "open", "reopened": "open"}.get(ending[1]) if ending else None)
+            if changes.get("state") != requested_state:
+                raise CRMToolError("unverified_director_request", "The requested task state does not match the director's command.")
+            return True
+        # Keep the supported editing grammar small and field-scoped. A
+        # coincidental word in the old title is not authority to replace it.
+        clear = re.fullmatch(r"clear\s+(?:(?:the|that)\s+)?task\s+(details|due date)[.!]?", text)
+        if clear:
+            field, empty = ("details", "") if clear[1] == "details" else ("due_date", None)
+            if changes != {field: empty}:
+                raise CRMToolError("unverified_director_request", "A clear command permits only clearing the named task field.")
+            return True
+        edit = re.fullmatch(r"(?:change|edit|update)\s+(?:(?:the|that)\s+)?task\s+(title|details|due date)\s+to:?\s+(.+)", text)
+        if not edit or len(changes) != 1:
+            raise CRMToolError("unverified_director_request", "Ask for one field explicitly: 'Change the task title/details/due date to: VALUE'. Date edits require YYYY-MM-DD.")
+        field = {"title": "title", "details": "details", "due date": "due_date"}[edit[1]]
+        if set(changes) != {field} or changes[field] is None or _normalized(changes[field]) != edit[2]:
+            raise CRMToolError("unverified_director_request", "The changed field and complete new value must match the director's field-specific command.")
+        return True
+    if name == "crm_update_description":
+        slot_command = re.match(r"^(change|edit|update|set|clear|release)\s+(?:the\s+)?(?:(general|detailed)\s+)?description\b", text)
+        if not slot_command or args["slot"] != (slot_command[2] or "general"):
+            raise CRMToolError("unverified_director_request", "The requested description slot does not match the director's command. An unspecified description means general; say 'detailed description' for that slot.")
+        if args.get("release"):
+            if slot_command[1] != "release" or "text" in args or args.get("source_refs"):
+                raise CRMToolError("unverified_director_request", "Release description protection with a separate release command, without text or sources.")
+            return True
+        if slot_command[1] == "release":
+            raise CRMToolError("unverified_director_request", "A release command cannot change description text.")
+        if args.get("text") == "":
+            if slot_command[1] != "clear":
+                raise CRMToolError("unverified_director_request", "The director must explicitly request an empty description.")
+        else:
+            replacement = re.search(r"\bto:?\s+(.+)$", text)
+            if not replacement or _normalized(args.get("text") or "") != replacement[1]:
+                raise CRMToolError("unverified_director_request", "The complete description text must match the director's explicit replacement.")
+        return True
     values = args.get("changes", {}) if name == "crm_update_task" else args
     for field in ("title", "details", "text"):
         value = values.get(field)
         if value and _normalized(value) not in _normalized(quote):
-            raise CRMToolError("unverified_director_request", "Human protection requires the requested text in the quoted director command. Ask for the exact wording, or keep the inferred edit assistant-owned.")
-    state = values.get("state")
-    state_words = {"completed": r"\b(?:done|complete|completed|finish|finished)\b", "cancelled": r"\bcancel", "open": r"\breopen"}
-    if state and not re.search(state_words[state], text):
-        raise CRMToolError("unverified_director_request", "The director command does not request this task state.")
-    if args.get("release") and not re.search(r"\b(?:release|assistant|maintain)\b", text):
-        raise CRMToolError("unverified_director_request", "The director must explicitly release description protection.")
-    if name == "crm_update_description" and not args.get("release") and args.get("text") == "" and not re.search(r"\b(?:clear|erase|blank)\b", text):
-        raise CRMToolError("unverified_director_request", "The director must explicitly request an empty description.")
+            raise CRMToolError("unverified_director_request", "The requested text must occur in the director command. Ask for the exact wording; nothing was saved.")
+    if name == "crm_create_task" and args.get("due_date"):
+        # A weekday in the task title is context. Only a separately stated
+        # reminder date or deadline authorizes storing a due date.
+        date_word = r"(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})"
+        dated = re.search(rf"^remind me\s+{date_word}\s+to\b|\b(?:by|on|due)\s+{date_word}\b", text)
+        explicit_dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text)
+        if not dated or explicit_dates and args["due_date"] not in explicit_dates:
+            raise CRMToolError("unverified_director_request", "A dated reminder requires a separately stated date. Ask for the intended due date instead of adding one.")
     return True
 
 

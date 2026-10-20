@@ -53,6 +53,23 @@ assistant lifecycle changes without a director request until task-specific
 fulfillment evidence is implemented. Its inferred text writes remain
 assistant-owned and cannot replace human-protected fields.
 
+Authority is field-scoped. Completing, reopening or cancelling permits only
+`state`; the model cannot add a title, details or date edit to that operation.
+Task text/date edits accept one field per command in the form “Change the task
+title/details/due date to: VALUE”, with the complete replacement value matching
+the command. Due-date edits require an explicit ISO date; “Clear the task
+details/due date” clears only that field. Unsupported compound requests ask for
+separate explicit commands. New dated reminders require a date separate from
+the task title; an incidental weekday in the title does not create a deadline.
+
+An unspecified “description” means the general slot. The detailed slot requires
+“detailed description”, and explicit slot wording must match the tool's slot.
+Text replacement uses the complete value after “to:”; clearing requires
+“Clear … description”. Releasing protection is a separate “Release …
+description” command that preserves the text and cannot carry replacement text
+or new sources. These limited forms fail with a clarification message instead
+of expanding the director's authority to unrelated fields.
+
 A person-bound chat cannot mutate another person's record. Outside a bound
 chat, names resolve only on exact first/full-name matches; multiple matches
 return candidates and a request for clarification. A bare id is accepted only
