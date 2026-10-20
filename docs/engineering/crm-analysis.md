@@ -33,10 +33,15 @@ legacy Gmail reader's 8,000-character cutoff is partial because that reader
 cannot prove completeness. Missing bodies, header conflicts, quoted-only
 messages, greetings, ambiguous ownership and overflow preserve existing text.
 The immutable model manifest maps opaque mail keys to validated person-owned
-source IDs, metadata/body fingerprints and direction. Current source ownership,
-identity and grants are rechecked after every body read and directly before
-model dispatch, including earlier messages and aliases for the same mail.
-A revoked or changed source produces partial state without entering the prompt.
+source IDs, metadata/body fingerprints and direction. Attribution is pinned to
+the index before connector I/O. The worker rechecks each message's current
+thread, relevant addresses and sending accounts before and after every body
+read and directly before model dispatch, including all earlier messages.
+Inbound and outbound mail share the same exact-match classifier. These narrow
+checks exclude the worker's public source-pointer bookkeeping. Current source
+ownership, identity and grants are also rechecked at the body and dispatch
+boundaries, including earlier messages and aliases for the same mail. Changed
+attribution or a revoked source produces partial state before model dispatch.
 Full bodies exist only in memory. They are sealed in the existing untrusted evidence envelope. The
 model receives no tools or target-person argument; output cannot select a
 person, mint a source or create another effect. Output is bounded and must
@@ -181,8 +186,13 @@ Real source/privacy/grant changes and changes to the person's tracked-thread
 attribution remain significant. Saved backoff, active claims and exhausted
 attempt limits are checked before connector reads.
 A request uses one configured provider; later saved attempts use configured
-failovers, without nested provider retries. The existing budget meter bounds
-model work and records usage/cost for every request. Terminal usage supersedes
+failovers, without nested provider retries. The existing budget meter includes
+collection and stale retries in one elapsed allowance. Dispatch checks that
+meter before starting a request, and the provider timeout uses only its
+remaining elapsed time. Exhaustion preserves descriptions and records
+`budget_exhausted`; a blocked request has no provider usage or cost. A request
+that starts and then times out retains unknown usage/cost when none was
+reported. The meter records usage/cost for every request. Terminal usage supersedes
 earlier streamed usage. Unknown cost and usage remain null and carry the
 meter's unpriced/unmeasured counts. A source check that blocks dispatch records
 no model request, no provider/model identity and no invented cost; its analysis

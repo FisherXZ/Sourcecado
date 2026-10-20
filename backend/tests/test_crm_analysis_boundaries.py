@@ -240,3 +240,189 @@ def test_pointer_normalization_preserves_unrelated_source_metadata_shapes(tmp_pa
     people.upsert_attachment(pid, record_type="source_ref", fields={"provider": "Drive", "message_id": ["external-metadata"]},
         idempotency_key="unrelated-source", actor="director", rationale_summary="Attach another source.")
     assert asyncio.run(worker(people).analyze(pid))["status"] == "analyzed"
+
+
+def change_attribution(people, pid, change):
+    if change == "recipient":
+        target = pid
+    else:
+        target = people.keep_from_apollo(apollo_id="other", first_name="Other",
+            last_name_obfuscated="Person", title="Lead", company="Lumen")["person_id"]
+    if change == "shared_address":
+        people.apply_enrichment(target, email="maya@lumen.test")
+    else:
+        people.record_approved_send(target, message_id="changed-send", thread_id=(
+            "other-thread" if change == "account" else "tracked-1"), draft_id="changed-draft",
+            to="other@lumen.test", subject="Another discussion", body_digest="digest",
+            account="maya@lumen.test" if change == "account" else "director@club.test",
+            approval_id="changed-approval")
+
+
+@pytest.mark.parametrize("change", ["shared_address", "thread", "recipient", "account"])
+@pytest.mark.parametrize("during_message", ["reply-1", "sent-1"])
+@pytest.mark.parametrize("boundary", ["metadata", "body"])
+def test_attribution_changed_during_mail_io_blocks_private_dispatch(
+        tmp_path, change, during_message, boundary):
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    class ChangingMail(ReadOnlyMail):
+        changed = False
+
+        def mutate(self, message_id, stage):
+            if not self.changed and message_id == during_message and stage == boundary:
+                self.changed = True
+                change_attribution(people, pid, change)
+
+        def inbound_message(self, *, message_id):
+            metadata = super().inbound_message(message_id=message_id)
+            self.mutate(message_id, "metadata")
+            return metadata
+
+        def read(self, *, message_id):
+            full = super().read(message_id=message_id)
+            self.mutate(message_id, "body")
+            return full
+
+    mail, model = ChangingMail(), DescriptionModel()
+    service = worker(people, model, mail)
+    result = asyncio.run(service.analyze(pid))
+    if boundary == "metadata":
+        assert during_message not in mail.reads
+    assert model.calls == []
+    assert result == {"status": "partial", "failure_code": "ambiguous_attribution"}
+    assert people.descriptions(pid)["general"]["text"] is None
+    assert service.state(pid)["attempts"] == 0
+
+
+@pytest.mark.parametrize("change", ["shared_address", "thread", "recipient", "account"])
+def test_dispatch_rechecks_attribution_without_charging_an_uncalled_model(tmp_path, monkeypatch, change):
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    service = worker(people)
+    claim = service._claim
+    def claim_then_change(*args, **kwargs):
+        result = claim(*args, **kwargs)
+        if result[0]:
+            change_attribution(people, pid, change)
+        return result
+    monkeypatch.setattr(service, "_claim", claim_then_change)
+    result = asyncio.run(service.analyze(pid))
+    assert service.provider.calls == []
+    assert result == {"status": "partial", "failure_code": "ambiguous_attribution"}
+    state = service.state(pid)
+    assert state["attempts"] == 1
+    assert state["provider"] is None and state["model"] is None
+    assert state["usage"] is None and state["estimated_cost_usd"] is None
+    assert state["budget"]["consumed"]["model_turns"] == 0
+    assert state["budget"]["unmeasured_requests"] == state["budget"]["unpriced_requests"] == 0
+
+
+@pytest.mark.parametrize("boundary", ["metadata", "body"])
+def test_later_read_revalidates_earlier_message_attribution(tmp_path, boundary):
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    people.record_approved_send(pid, message_id="z-sent-2", thread_id="separate-thread", draft_id="draft-2",
+        to="alternate@lumen.test", subject="Developer tools", body_digest="digest",
+        account="director@club.test", approval_id="approval-2")
+    class ChangingEarlierMail(ReadOnlyMail):
+        changed = False
+
+        def mutate(self, message_id, stage):
+            if not self.changed and message_id == "z-sent-2" and stage == boundary:
+                self.changed = True
+                change_attribution(people, pid, "shared_address")
+
+        def inbound_message(self, *, message_id):
+            metadata = super().inbound_message(message_id=message_id)
+            if message_id == "z-sent-2":
+                metadata.update(thread_id="separate-thread", **{"from": "director@club.test"},
+                    to="alternate@lumen.test", label_ids=["SENT"])
+            self.mutate(message_id, "metadata")
+            return metadata
+
+        def read(self, *, message_id):
+            full = super().read(message_id=message_id)
+            self.mutate(message_id, "body")
+            return full
+
+    mail, model = ChangingEarlierMail(), DescriptionModel()
+    result = asyncio.run(worker(people, model, mail).analyze(pid))
+    assert "reply-1" in mail.reads
+    if boundary == "metadata":
+        assert "z-sent-2" not in mail.reads
+    assert model.calls == []
+    assert result == {"status": "partial", "failure_code": "ambiguous_attribution"}
+
+
+class BudgetClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_collection_elapsed_budget_blocks_dispatch_without_inventing_usage(tmp_path, monkeypatch):
+    from coworker import crm_analysis
+    from coworker.run_budget import RunBudgetMeter, RunBudgetPolicy
+    clock = BudgetClock()
+    monkeypatch.setattr(crm_analysis, "RunBudgetMeter", lambda policy: RunBudgetMeter(policy, clock=clock))
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    class SlowCollection(ReadOnlyMail):
+        def read(self, **kwargs):
+            full = super().read(**kwargs)
+            clock.now = 2.0
+            return full
+    service = worker(people, mail=SlowCollection())
+    service.budget_policy = RunBudgetPolicy(elapsed_seconds=1)
+    result = asyncio.run(service.analyze(pid))
+    assert service.provider.calls == []
+    assert result == {"status": "failed", "failure_code": "budget_exhausted"}
+    state = service.state(pid)
+    assert state["provider"] is None and state["model"] is None
+    assert state["usage"] is None and state["estimated_cost_usd"] is None
+    assert state["budget"]["stopped_by"] == "elapsed_seconds"
+    assert state["budget"]["consumed"]["model_turns"] == 0
+    assert state["budget"]["unmeasured_requests"] == state["budget"]["unpriced_requests"] == 0
+    assert people.descriptions(pid)["general"]["text"] is None
+
+
+def test_started_request_gets_only_remaining_elapsed_timeout_and_unknown_usage(tmp_path, monkeypatch):
+    from coworker import crm_analysis
+    from coworker.run_budget import RunBudgetMeter, RunBudgetPolicy
+    clock = BudgetClock()
+    monkeypatch.setattr(crm_analysis, "RunBudgetMeter", lambda policy: RunBudgetMeter(policy, clock=clock))
+    requested_timeouts = []
+    timeout = asyncio.timeout
+    def measured_timeout(seconds):
+        requested_timeouts.append(seconds)
+        return timeout(seconds)
+    monkeypatch.setattr(crm_analysis.asyncio, "timeout", measured_timeout)
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    class SlowCollection(ReadOnlyMail):
+        def read(self, **kwargs):
+            full = super().read(**kwargs)
+            clock.now = 0.075
+            return full
+    class HangingModel(DescriptionModel):
+        async def astream(self, **kwargs):
+            self.calls.append(kwargs)
+            clock.now = 0.1
+            await asyncio.Future()  # Only the real provider timeout can finish this read.
+            yield
+    model = HangingModel()
+    service = worker(people, model, SlowCollection())
+    service.budget_policy = RunBudgetPolicy(elapsed_seconds=0.1)
+    result = asyncio.run(service.analyze(pid))
+    assert requested_timeouts == [pytest.approx(0.025)]
+    assert result == {"status": "failed", "failure_code": "budget_exhausted"}
+    assert len(model.calls) == 1
+    state = service.state(pid)
+    assert state["provider"] == model.provider_id and state["model"] == model.model_id
+    assert state["usage"] is None and state["estimated_cost_usd"] is None
+    assert state["budget"]["stopped_by"] == "elapsed_seconds"
+    assert state["budget"]["consumed"]["model_turns"] == 1
+    assert state["budget"]["unmeasured_requests"] == state["budget"]["unpriced_requests"] == 1
+    assert people.descriptions(pid)["general"]["text"] is None
