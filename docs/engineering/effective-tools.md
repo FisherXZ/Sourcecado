@@ -91,6 +91,9 @@ New dated reminders require a date separate from
 the task title; an incidental weekday in the title does not create a deadline.
 Calendar words outside supported clauses, relative periods and clock times
 require clarification instead of silently saving undated work.
+Unresolved calendar/clock unit words are conservative timing hints regardless
+of their position. Use “Add an undated task: TITLE” to keep such words as
+literal task text without inferring a date; a supplied date then conflicts.
 Replacement comparisons ignore one final sentence punctuation character while
 preserving full-value equality and the exact stored text. Literal punctuation
 and empty text remain distinct.
