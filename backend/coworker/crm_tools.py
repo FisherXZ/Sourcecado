@@ -75,7 +75,7 @@ CRM_TOOL_SCHEMAS = [
         "resolution": {"type": "string", "enum": ["accept", "accept_edited", "dismiss"]},
         "edited_value": {"type": "object"},
     }, ("proposal_id", "expected_version", "expected_target_version", "resolution"), write=True),
-    _schema("crm_undo_change", "Undo a local task edit with its change id and current task version. A later edit conflicts. Task creation must be cancelled instead. Other entity undo awaits #205. Never retracts external effects.", {
+    _schema("crm_undo_change", "Undo a local task edit or a server-eligible automatic creation using its change id and current task version. Creation Undo cancels the inferred task and suppresses unchanged inference. Human/chat-created tasks must be cancelled. A later edit conflicts. Other entity undo awaits #205. Never retracts external effects.", {
         "change_id": {"type": "string"}, "expected_version": _VERSION,
     }, ("change_id", "expected_version"), write=True),
 ]
@@ -230,11 +230,13 @@ def _verify_task_target(name: str, args: dict, people: PersonStore, person_id: s
         with people._lock:
             rows = people._conn.execute(
                 """SELECT c.change_id, c.entity_id AS task_id, c.entity_version AS version,
-                          c.action, t.title, t.source_refs FROM crm_changes c
+                          c.action, c.person_id, c.entity_id, c.entity_version, c.before_json,
+                          t.title, t.source_refs FROM crm_changes c
                    JOIN person_tasks t ON t.task_id = c.entity_id AND t.person_id = c.person_id
                    WHERE c.person_id = ? AND c.entity_type = 'task'
-                     AND c.before_json IS NOT NULL AND c.entity_version = t.version""", (person_id,),
+                     AND c.entity_version = t.version""", (person_id,),
             ).fetchall()
+            rows = [row for row in rows if TaskService(people)._can_undo(row)]
         eligible_records = [dict(row) for row in rows
                             if not re.search(r"\b(?:completion|complete|done)\b", text) or row["action"] == "complete"]
         candidates = [row for row in eligible_records
@@ -453,7 +455,7 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
             state = args.get("state", "open")
             result = tasks.list(timezone=timezone, person_id=pid,
                 states=TASK_STATES if state == "all" else (state,),
-                active_sequences_only=pid is None, limit=args.get("limit", 200))
+                active_sequences_only=pid is None, limit=args.get("limit", 200), allowed_source_ids=allowed_source_ids)
             visible = [task for task in result["tasks"] if sources_visible(people, task["person_id"], task["source_refs"], allowed_source_ids)]
             partial = result["truncated"] or len(visible) != len(result["tasks"])
             return True, {**result, "tasks": visible, "partial": partial,

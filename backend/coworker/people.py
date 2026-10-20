@@ -15,6 +15,7 @@ from typing import Any
 from coworker.crm_tasks import CRM_TASK_STATEMENTS, TaskConflict, _clean_operation_id, _fingerprint
 from coworker.crm_sources import source_ids
 from coworker.crm_analysis_schema import CRM_ANALYSIS_STATEMENTS
+from coworker.crm_email_task_schema import add_task_analysis_schema
 from coworker.person_identity import (
     apollo_surname_is_masked,
     without_apollo_name_masks,
@@ -26,9 +27,10 @@ _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # v3 adds the person_descriptions table (ticket #202); v4 adds the person_tasks,
 # crm_changes and crm_operations tables (ticket #200); v5 adds task lifecycle
 # actions (ticket #201); v6 adds durable analysis, proposals and description
-# history (#209). The constructor creates fresh tables. Existing databases use
+# history (#209); v7 adds canonical task evidence and analysis stage tracking
+# (#210). The constructor creates fresh tables. Existing databases use
 # the registered migrations with backup and rollback before the new writer runs.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -188,13 +190,17 @@ class PersonStore:
         for statement in (*CRM_TASK_STATEMENTS, *CRM_ANALYSIS_STATEMENTS):
             self._conn.execute(statement)
         if fresh_database:
+            add_task_analysis_schema(self._conn)
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()
 
     def _crm_description_history_ready(self) -> bool:
         version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
         schema = self._conn.execute("SELECT sql FROM sqlite_master WHERE name='crm_changes'").fetchone()
-        return version == SCHEMA_VERSION and schema is not None and "'description'" in schema[0]
+        stages = {row["name"] for row in self._conn.execute("PRAGMA table_info(crm_analysis_state)")}
+        evidence = self._conn.execute("SELECT 1 FROM sqlite_master WHERE name='crm_task_evidence'").fetchone()
+        return (version == SCHEMA_VERSION and schema is not None and "'description'" in schema[0]
+            and "analysis_version" in stages and evidence is not None)
 
     def require_crm_schema(self) -> None:
         with self._lock:
@@ -1976,7 +1982,7 @@ class PersonStore:
         run_id: str | None = None,
     ) -> dict[str, Any]:
         self._require_audit(actor, rationale_summary)
-        with self._lock:
+        with self._lock, self._conn:
             row = self._load_person_row(person_id)
             if int(row["version"]) != expected_version:
                 raise ValueError(
@@ -2044,10 +2050,25 @@ class PersonStore:
             if cursor.rowcount != 1:
                 self._conn.rollback()
                 raise ValueError("stale record version")
-            self._conn.execute(
-                "DELETE FROM person_attachments WHERE person_id = ?", (person_id,)
-            )
+            # Tasks and their history are independently versioned. Preserve the
+            # current source rows they depend on, including current restrictions,
+            # rather than replacing their evidence from a person snapshot.
+            task_sources = set()
+            for source_row in self._conn.execute("""SELECT source_refs FROM person_tasks WHERE person_id=?
+                UNION ALL SELECT source_refs FROM crm_changes WHERE person_id=? AND entity_type='task'
+                UNION ALL SELECT source_refs FROM crm_proposals WHERE person_id=? AND target_kind != 'description'""",
+                (person_id, person_id, person_id)):
+                task_sources.update(json.loads(source_row[0]))
+            if self._conn.execute("SELECT 1 FROM sqlite_master WHERE name='crm_task_evidence'").fetchone():
+                task_sources.update(r[0] for r in self._conn.execute("""SELECT e.source_id FROM crm_task_evidence e
+                    JOIN crm_proposals p ON p.proposal_id=e.proposal_id WHERE p.person_id=?""", (person_id,)))
+            preserved = {r[0] for r in self._conn.execute("SELECT id FROM person_attachments WHERE person_id=?", (person_id,))} & task_sources
+            placeholders = ",".join("?" for _ in preserved)
+            self._conn.execute("DELETE FROM person_attachments WHERE person_id=?" +
+                (f" AND id NOT IN ({placeholders})" if preserved else ""), (person_id, *sorted(preserved)))
             for item in attachments:
+                if item["id"] in preserved:
+                    continue
                 self._conn.execute(
                     """
                     INSERT INTO person_attachments (

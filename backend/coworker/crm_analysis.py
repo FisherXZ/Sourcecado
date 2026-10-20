@@ -17,14 +17,15 @@ import uuid
 from typing import Any
 
 from coworker.crm_sources import source_ids, sources_visible
-from coworker.crm_tasks import TaskConflict
+from coworker.crm_tasks import TaskConflict, DEFAULT_TIMEZONE, validate_timezone, TaskService
+from coworker.crm_email_tasks import EmailTaskWriter, original_body, validate_candidates
 from coworker.evidence_envelope import seal
 from coworker.people import DESCRIPTION_LIMITS, PersonStore
 from coworker.reply_filing import _addresses_in, address_of, build_index, classify
 from coworker.run_budget import RunBudgetMeter, RunBudgetPolicy
 from coworker.telemetry import CostEstimate, UsageEvent
 
-PROMPT_VERSION = "crm-descriptions-v1"
+PROMPT_VERSION = "crm-descriptions-tasks-v2"
 MAX_MESSAGES = 24
 MAX_INPUT_CHARS = 32000
 MAX_OUTPUT_CHARS = 14000
@@ -74,13 +75,14 @@ class EvidenceInput:
 class AnalysisService:
     def __init__(self, people: PersonStore, *, provider: Any, reader: ConversationReader,
                  failovers: tuple[Any, ...] = (), allowed_source_ids: set[str] | None = None,
-                 budget_policy: RunBudgetPolicy | None = None):
+                 budget_policy: RunBudgetPolicy | None = None, timezone: str = DEFAULT_TIMEZONE):
         self.people = people
         self.provider = provider
         self.failovers = failovers
         self.reader = reader
         self.allowed = set(allowed_source_ids or ())
         self.budget_policy = budget_policy or RunBudgetPolicy(elapsed_seconds=90)
+        self.timezone = validate_timezone(timezone)
 
     def _require_schema(self) -> None:
         self.people.require_crm_schema()
@@ -91,6 +93,7 @@ class AnalysisService:
             if person is None:
                 raise ValueError("unknown person")
             person["descriptions"] = self.people.descriptions(pid)
+            person["tasks"] = [dict(row) for row in self.people._conn.execute("SELECT * FROM person_tasks WHERE person_id=? ORDER BY task_id", (pid,))]
             attachments = [self.people._attachment_dict(r) for r in self.people._conn.execute(
                 "SELECT * FROM person_attachments WHERE person_id = ? AND record_type = 'source_ref' ORDER BY id", (pid,))]
             events = [e for e in self.people.timeline(pid) if e["source"] == "gmail"]
@@ -186,8 +189,7 @@ class AnalysisService:
                 partial, reason = True, "incomplete_body"
                 break
             # Quotes, signatures and greetings cannot establish the person's wants.
-            original = re.split(r"(?im)^On .+wrote:|^-{2,}\s*(?:Original|Forwarded) message", body)[0]
-            original = "\n".join(line for line in original.splitlines() if not line.lstrip().startswith(">"))
+            original = original_body(body)
             if len(original.split()) < 12:
                 partial, reason = True, "insufficient_context"
                 break
@@ -199,7 +201,8 @@ class AnalysisService:
             manifest.append({"key": key, "source_id": ref["id"], "message_id": mid,
                 "source_fingerprint": digest(ref), "message_fingerprint": digest(meta),
                 "body_fingerprint": digest(body), "event_fingerprint": digest(event), "direction": "outbound" if outbound else "inbound"})
-            messages.append({"key": key, "body": body, "direction": "outbound" if outbound else "inbound"})
+            messages.append({"key": key, "body": body, "direction": "outbound" if outbound else "inbound",
+                "received_at": meta.get("received_at"), "received_at_trusted": meta.get("received_at_trusted") is True})
         if not manifest:
             partial, reason = True, reason or "missing_context"
         # Evidence revisions ignore descriptions and other unrelated person edits.
@@ -229,13 +232,14 @@ class AnalysisService:
             return result
 
     def pending(self, *, now: float | None = None, limit: int = 20) -> list[str]:
+        self._require_schema()
         with self.people._lock:
             return [r[0] for r in self.people._conn.execute("""SELECT s.person_id FROM crm_analysis_state s
                 JOIN people p ON p.person_id=s.person_id WHERE p.deleted_at IS NULL
-                AND latest_revision != analyzed_revision AND attempts < 3
+                AND (latest_revision != analyzed_revision OR analysis_version != ?) AND attempts < 3
                 AND (next_retry_at IS NULL OR next_retry_at <= ?)
                 AND (lease_until IS NULL OR lease_until <= ?) ORDER BY s.updated_at LIMIT ?""",
-                (now or time.time(), now or time.time(), min(max(limit, 1), 100)))]
+                (PROMPT_VERSION, now or time.time(), now or time.time(), min(max(limit, 1), 100)))]
 
     def _collection_identity(self, pid: str) -> str:
         with self.people._lock:
@@ -269,7 +273,7 @@ class AnalysisService:
                 "addresses": {address: sorted(index.people_by_address.get(address, ())) for address in recipients},
                 "accounts": sorted(index.accounts),
             }
-            return digest({"events": events, "sources": significant, "attribution": attribution,
+            return digest({"stage": PROMPT_VERSION, "events": events, "sources": significant, "attribution": attribution,
                 "grants": sorted(self.allowed & {ref["id"] for ref in refs if ref["restricted"]})})
 
     def _prepare(self, pid: str) -> None:
@@ -334,9 +338,10 @@ class AnalysisService:
             return
         self.people._conn.execute("""UPDATE crm_analysis_state SET outcome=?, failure_code=?, lease_token=NULL,
             lease_until=NULL, next_retry_at=?, updated_at=?,
-            analyzed_revision=CASE WHEN ?='analyzed' THEN latest_revision ELSE analyzed_revision END WHERE person_id=?""",
+            analyzed_revision=CASE WHEN ?='analyzed' THEN latest_revision ELSE analyzed_revision END,
+            analysis_version=CASE WHEN ?='analyzed' THEN ? ELSE analysis_version END WHERE person_id=?""",
             (outcome, failure, now + min(300, 2**row["attempts"] * 5) if failure else None,
-             self.people._now(), outcome, pid))
+             self.people._now(), outcome, outcome, PROMPT_VERSION, pid))
 
     async def _generate(self, pid: str, evidence: EvidenceInput, provider: Any, meter: RunBudgetMeter, telemetry: dict) -> dict:
         system = ("Write both CRM descriptions using only the supplied untrusted mail evidence. "
@@ -344,15 +349,31 @@ class AnalysisService:
             "Do not infer wants from greetings, quoted material, or ambiguous context. "
             "Return JSON only: {sufficient: boolean, reason: string (max 500), "
             "general: {text: string (max 500), sources: [mail key]}, "
-            "detailed: {text: string (max 8000), sources: [mail key]}}. "
+            "detailed: {text: string (max 8000), sources: [mail key]}, "
+            "tasks: [{kind: create|complete, source: mail key, request: exact original request sentence (10-1000 chars), "
+            "title: short grounded action (max 200), task_id: existing task id for complete only}]}. "
+            "Return at most 12 tasks, or []. Cite separate requests separately. Never invent deadlines or task IDs. "
+            "Completion requires evidence about that particular task, not generic thanks or any outbound message. "
             "Use sufficient=false for missing or conflicting evidence. Cite mail keys for both fields.")
-        prompt = "\n\n".join(seal(m["key"], "Direction: " + m["direction"] + "\n" + m["body"]) for m in evidence.messages)
+        # Task IDs are local context, permission-filtered and data-only. The final
+        # writer still reloads versions and protection after generation.
+        current_tasks = TaskService(self.people).list(person_id=pid, timezone=self.timezone, states=("open",), permitted_only=True,
+            allowed_source_ids=self.allowed)["tasks"]
+        prompt = seal("saved_tasks", json.dumps({"operator_timezone": self.timezone, "tasks": [
+            {k: t[k] for k in ("task_id", "title", "details", "due_date", "version")} for t in current_tasks]})) + "\n\n"
+        prompt += "\n\n".join(seal(m["key"], "Direction: " + m["direction"] + "\nTrusted message time: " +
+            str(m["received_at"] if m["received_at_trusted"] else "unavailable") + "\n" + m["body"]) for m in evidence.messages)
         text, usage, terminal = "", None, None
         requested = False
         try:
             async with asyncio.timeout(self.budget_policy.elapsed_seconds):
                 # Last local check at the actual model-dispatch boundary.
                 self._current_sources(pid, evidence.manifest)
+                try:
+                    for task in current_tasks:
+                        source_ids(self.people, pid, task["source_refs"], self.allowed)
+                except ValueError as exc:
+                    raise SourceInputChanged("private_source") from exc
                 telemetry.update(provider=getattr(provider, "provider_id", "unknown"), model=getattr(provider, "model_id", "unknown"))
                 meter.start_model_turn()
                 requested = True
@@ -382,13 +403,14 @@ class AnalysisService:
         if meter.check():
             raise ValueError("budget_exhausted")
         output = json.loads(text)
-        if not isinstance(output, dict) or set(output) != {"general", "detailed", "reason", "sufficient"}:
+        if not isinstance(output, dict) or set(output) != {"general", "detailed", "reason", "sufficient", "tasks"}:
             raise ValueError("invalid_model_output")
         if output["sufficient"] is not True:
             raise ValueError("insufficient_context")
         if not isinstance(output["reason"], str) or not 1 <= len(output["reason"]) <= 500:
             raise ValueError("invalid_model_output")
         keys = {m["key"] for m in evidence.manifest}
+        output["tasks"] = validate_candidates(output["tasks"], keys)
         for slot, limit in DESCRIPTION_LIMITS.items():
             value = output[slot]
             if (not isinstance(value, dict) or set(value) != {"text", "sources"}
@@ -518,7 +540,9 @@ class AnalysisService:
                 (proposal_id, pid, slot, value["text"], current["version"], output["reason"], json.dumps(refs),
                  f"description:{slot}", fingerprint, revision, "accepted" if change_id else "pending",
                  "automatic" if change_id else None, change_id, self.people._now(), self.people._now()))
-        return changes, proposals
+        task_changes, task_proposals = EmailTaskWriter(self.people, allowed=self.allowed, timezone=self.timezone).apply(
+            pid, output["tasks"], evidence, revision)
+        return [*changes, *task_changes], [*proposals, *task_proposals]
 
     def proposals(self, pid: str, *, state: str = "pending") -> list[dict]:
         if state not in {"pending", "accepted", "dismissed"}:
@@ -548,8 +572,6 @@ class AnalysisService:
             if row is None:
                 raise ValueError("unknown proposal")
             refs = source_ids(self.people, pid, json.loads(row["source_refs"]), self.allowed)
-            if row["target_kind"] != "description":
-                raise ValueError("this worker resolves only description proposals")
             if row["resolution_receipt_json"] is not None:
                 receipt = json.loads(row["resolution_receipt_json"])
                 if receipt["fingerprint"] != request_fingerprint:
@@ -559,11 +581,28 @@ class AnalysisService:
                 raise TaskConflict("proposal changed", code="proposal_conflict")
             change_id = None
             if action == "accept":
-                result = self.people._patch_description_uncommitted(pid, row["target_slot"],
-                    expected_version=row["expected_target_version"], text=row["proposed_value"], actor="director",
-                    rationale_summary="Director accepted a sourced description revision.", source_refs=refs,
-                    allowed_source_ids=self.allowed, operation_id=f"crm-accept:{proposal_id}")
-                change_id = result["change"]["change_id"]
+                if row["target_kind"] == "description":
+                    result = self.people._patch_description_uncommitted(pid, row["target_slot"],
+                        expected_version=row["expected_target_version"], text=row["proposed_value"], actor="director",
+                        rationale_summary="Director accepted a sourced description revision.", source_refs=refs,
+                        allowed_source_ids=self.allowed, operation_id=f"crm-accept:{proposal_id}")
+                else:
+                    tasks, value = TaskService(self.people), json.loads(row["proposed_value"])
+                    identity = dict(timezone=self.timezone, actor="director", allowed_source_ids=self.allowed,
+                        operation_id=f"crm-accept:{proposal_id}", reason="Director accepted a sourced task proposal.")
+                    if row["target_kind"] == "task_create":
+                        # Reconcile if work appeared after proposal generation.
+                        from coworker.crm_email_tasks import _words
+                        if any(_words(value["title"]) == _words(t["title"]) for t in tasks.list(person_id=pid,
+                                timezone=self.timezone, states=("open", "completed", "cancelled"))["tasks"]):
+                            raise TaskConflict("matching work appeared; review the saved task", code="task_conflict")
+                        result = tasks._create_uncommitted(pid, **value, source_refs=refs, **identity)
+                    else:
+                        if row["target_id"] is None or value.get("requires_target_review"):
+                            raise TaskConflict("choose the matching saved task before acceptance", code="task_conflict")
+                        result = tasks._update_uncommitted(pid, row["target_id"], changes=value["changes"],
+                            expected_version=row["expected_target_version"], source_refs=refs, **identity)
+                change_id = result["change"]["change_id"] if result["change"] else None
             response = {"proposal_id": proposal_id, "state": "accepted" if action == "accept" else "dismissed", "change_id": change_id}
             receipt = json.dumps({"fingerprint": request_fingerprint, "response": response})
             self.people._conn.execute("""UPDATE crm_proposals SET state=?, resolution=?, change_id=?,

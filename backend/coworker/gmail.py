@@ -740,6 +740,7 @@ def inbound_message_view(data: dict[str, Any]) -> dict[str, Any]:
         "subject": headers.get("subject"),
         "snippet": str(data.get("snippet") or ""),
         "received_at": _received_at(data.get("internalDate")) or headers.get("date"),
+        "received_at_trusted": _received_at(data.get("internalDate")) is not None,
         "history_id": str(data.get("historyId") or "") or None,
     }
 

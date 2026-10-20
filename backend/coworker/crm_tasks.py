@@ -16,7 +16,9 @@ goes through the same path. Undo writes a new compensating change that
 restores the values the undone change replaced; it never deletes history,
 and it refuses when the task has moved past the version that change produced.
 
-AI suggestions and attention ranking are later work.
+Email analysis uses caller-owned no-commit primitives so task mutations can
+commit atomically with descriptions, proposals and the analysis checkpoint.
+Automatic creation Undo cancels the inferred task and suppresses its evidence.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from coworker.crm_sources import source_ids as _source_ids
+from coworker.crm_sources import source_links, sources_visible
 
 if TYPE_CHECKING:
     from coworker.people import PersonStore
@@ -260,7 +263,7 @@ _DEFAULT_REASON = {
 
 
 class TaskService:
-    """The one write path for person tasks, used by HTTP and later by tools."""
+    """The one write path for tasks, shared by HTTP, chat and email analysis."""
 
     def __init__(self, people: PersonStore) -> None:
         self._people = people
@@ -312,9 +315,33 @@ class TaskService:
             raise TaskNotFound("unknown task")
         return row
 
-    def get(self, person_id: str, task_id: str) -> dict[str, Any]:
+    def get(self, person_id: str, task_id: str, *, allowed_source_ids: set[str] | None = None) -> dict[str, Any]:
         with self._lock:
-            return self._task_dict(self._load_task(person_id, task_id))
+            return self._project_task(self._task_dict(self._load_task(person_id, task_id)), allowed_source_ids)
+
+    def _project_task(self, task: dict, allowed: set[str] | None = None) -> dict:
+        return {**task, "source_links": source_links(self._people, task["person_id"], task["source_refs"], allowed)}
+
+    def _can_undo(self, row: Any) -> bool:
+        task = self._load_task(row["person_id"], row["entity_id"])
+        if task["version"] != row["entity_version"]:
+            return False
+        if row["action"] != "create":
+            return row["before_json"] is not None
+        return self._automatic_creation(row["change_id"])
+
+    def _automatic_creation(self, change_id: str) -> bool:
+        # Only the durable analysis binding authorizes creation Undo. Merely
+        # executing as assistant (e.g. chat) is not automatic authority.
+        return self._conn.execute("""SELECT 1 FROM crm_proposals WHERE change_id=?
+            AND target_kind='task_create' AND resolution='automatic' AND state='accepted'""", (change_id,)).fetchone() is not None
+
+    def _project_response(self, response: dict, allowed: set[str] | None = None) -> dict:
+        response = {**response, "task": self._project_task(response["task"], allowed)}
+        if response.get("change"):
+            row = self._conn.execute("SELECT * FROM crm_changes WHERE change_id=?", (response["change"]["change_id"],)).fetchone()
+            response["change"] = {**response["change"], "source_links": source_links(self._people, row["person_id"], json.loads(row["source_refs"]), allowed), "can_undo": self._can_undo(row)}
+        return response
 
     def list(
         self,
@@ -325,6 +352,8 @@ class TaskService:
         active_sequences_only: bool = False,
         limit: int = LIST_LIMIT_DEFAULT,
         now: datetime | None = None,
+        allowed_source_ids: set[str] | None = None,
+        permitted_only: bool = False,
     ) -> dict[str, Any]:
         """Tasks in due order: overdue, today, upcoming, then undated.
 
@@ -371,6 +400,9 @@ class TaskService:
         tasks = []
         for row in rows[:limit]:
             task = self._task_dict(row)
+            if permitted_only and not sources_visible(self._people, task["person_id"], task["source_refs"], allowed_source_ids):
+                continue
+            task = self._project_task(task, allowed_source_ids)
             task["due_status"] = due_status(task["due_date"], today)
             task["person"] = {
                 "person_id": task["person_id"],
@@ -493,23 +525,42 @@ class TaskService:
         )
         return response
 
-    def changes(self, task_id: str) -> list[dict[str, Any]]:
+    def changes(self, task_id: str, *, allowed_source_ids: set[str] | None = None) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT change_id, entity_version, action, actor, reason,
-                       operation_id, compensates_change_id, created_at
+                SELECT *
                 FROM crm_changes
                 WHERE entity_type = 'task' AND entity_id = ?
                 ORDER BY created_at, entity_version
                 """,
                 (task_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+            result = []
+            for row in rows:
+                refs = json.loads(row["source_refs"])
+                if not sources_visible(self._people, row["person_id"], refs, allowed_source_ids):
+                    continue
+                item = {key: row[key] for key in ("change_id", "entity_version", "action", "actor", "reason", "operation_id", "compensates_change_id", "created_at")}
+                item.update(source_links=source_links(self._people, row["person_id"], refs, allowed_source_ids), can_undo=self._can_undo(row))
+                result.append(item)
+            return result
 
     # --- writes -------------------------------------------------------------
 
-    def create(
+    def create(self, person_id: str, **kwargs: Any) -> dict[str, Any]:
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            response = self._create_uncommitted(person_id, **kwargs)
+        return self._project_response(response, kwargs.get("allowed_source_ids"))
+
+    def update(self, person_id: str, task_id: str, **kwargs: Any) -> dict[str, Any]:
+        with self._lock, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            response = self._update_uncommitted(person_id, task_id, **kwargs)
+        return self._project_response(response, kwargs.get("allowed_source_ids"))
+
+    def _create_uncommitted(
         self,
         person_id: str,
         *,
@@ -550,61 +601,56 @@ class TaskService:
             if origin == "human"
             else []
         )
-        with self._lock, self._conn:
-            try:
-                if not self._conn.in_transaction:
-                    self._conn.execute("BEGIN IMMEDIATE")
-                self._live_person(person_id)
-                replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
-                if replay is not None:
-                    source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
-                    return replay
-                self._live_person(person_id)
-                now = datetime.now(UTC).isoformat()
-                task_id = "task_" + uuid.uuid4().hex
-                self._conn.execute(
-                    """
-                    INSERT INTO person_tasks (
-                        task_id, person_id, title, details, due_date,
-                        due_timezone, state, origin, protected_fields,
-                        source_refs, version, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, 1, ?, ?)
-                    """,
-                    (
-                        task_id,
-                        person_id,
-                        clean["title"],
-                        clean["details"],
-                        clean["due_date"],
-                        timezone if clean["due_date"] else None,
-                        origin,
-                        json.dumps(protected),
-                        json.dumps(refs),
-                        now,
-                        now,
-                    ),
-                )
-                task = self._task_dict(self._load_task(person_id, task_id))
-                response = self._record(
-                    operation_id=operation,
-                    fingerprint=fingerprint,
-                    person_id=person_id,
-                    task=task,
-                    action="create",
-                    before=None,
-                    actor=actor,
-                    reason=_clean_reason(reason, "Added a task"),
-                    session_id=session_id,
-                    run_id=run_id,
-                    now=now,
-                )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
+        with self._lock:
+            if not self._conn.in_transaction:
+                raise RuntimeError("task writer requires a caller-owned transaction")
+            self._live_person(person_id)
+            replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
+            if replay is not None:
+                source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
+                return replay
+            self._live_person(person_id)
+            now = datetime.now(UTC).isoformat()
+            task_id = "task_" + uuid.uuid4().hex
+            self._conn.execute(
+                """
+                INSERT INTO person_tasks (
+                    task_id, person_id, title, details, due_date,
+                    due_timezone, state, origin, protected_fields,
+                    source_refs, version, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    task_id,
+                    person_id,
+                    clean["title"],
+                    clean["details"],
+                    clean["due_date"],
+                    timezone if clean["due_date"] else None,
+                    origin,
+                    json.dumps(protected),
+                    json.dumps(refs),
+                    now,
+                    now,
+                ),
+            )
+            task = self._task_dict(self._load_task(person_id, task_id))
+            response = self._record(
+                operation_id=operation,
+                fingerprint=fingerprint,
+                person_id=person_id,
+                task=task,
+                action="create",
+                before=None,
+                actor=actor,
+                reason=_clean_reason(reason, "Added a task"),
+                session_id=session_id,
+                run_id=run_id,
+                now=now,
+            )
         return response
 
-    def update(
+    def _update_uncommitted(
         self,
         person_id: str,
         task_id: str,
@@ -619,6 +665,7 @@ class TaskService:
         run_id: str | None = None,
         human_requested: bool = False,
         allowed_source_ids: set[str] | None = None,
+        source_refs: object = None,
     ) -> dict[str, Any]:
         if actor not in ("director", "assistant"):
             raise TaskError(f"invalid actor {actor}")
@@ -648,6 +695,7 @@ class TaskService:
                 raise TaskError("state must be open, completed or cancelled")
             clean["state"] = changes["state"]
         timezone = validate_timezone(timezone)
+        refs = source_ids(self._people, person_id, source_refs, allowed_source_ids) if source_refs is not None else None
         fingerprint = _fingerprint(
             {
                 "op": "task.update",
@@ -659,86 +707,84 @@ class TaskService:
                 "reason": reason,
                 "expected_version": expected_version,
                 "changes": clean,
+                **({"source_refs": refs} if refs is not None else {}),
             }
         )
         legacy = _fingerprint({"op": "task.update", "person_id": person_id, "task_id": task_id,
                                "actor": actor, "expected_version": expected_version, "changes": clean}) if not human_requested else None
-        with self._lock, self._conn:
-            try:
-                if not self._conn.in_transaction:
-                    self._conn.execute("BEGIN IMMEDIATE")
-                self._live_person(person_id)
-                replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
-                if replay is not None:
-                    source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
-                    return replay
-                self._live_person(person_id)
-                before = self._task_dict(self._load_task(person_id, task_id))
-                source_ids(self._people, person_id, before["source_refs"], allowed_source_ids)
-                if before["version"] != expected_version:
-                    raise TaskConflict(
-                        "this task changed since you opened it",
-                        code="task_conflict",
-                        current=before,
+        with self._lock:
+            if not self._conn.in_transaction:
+                raise RuntimeError("task writer requires a caller-owned transaction")
+            self._live_person(person_id)
+            replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
+            if replay is not None:
+                source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
+                return replay
+            self._live_person(person_id)
+            before = self._task_dict(self._load_task(person_id, task_id))
+            source_ids(self._people, person_id, before["source_refs"], allowed_source_ids)
+            if before["version"] != expected_version:
+                raise TaskConflict(
+                    "this task changed since you opened it",
+                    code="task_conflict",
+                    current=self._project_task(before, allowed_source_ids),
+                )
+            changed = {
+                field: value
+                for field, value in clean.items()
+                if value != before[field]
+            }
+            if not changed:
+                # Nothing differs: no new version, no history row.
+                return {"task": before, "change": None, "replayed": False}
+            if actor == "assistant" and not human_requested and "state" in changed:
+                raise TaskConflict("assistant lifecycle changes require verified task fulfillment or a director request",
+                                   code="fulfillment_required", current=before)
+            if actor == "assistant" and not human_requested and set(changed) & set(before["protected_fields"]):
+                raise TaskConflict("human-edited task fields require a director request",
+                                   code="human_protected", current=before)
+            action = "update"
+            if "state" in changed:
+                action = TASK_TRANSITIONS.get((before["state"], changed["state"]))
+                if action is None:
+                    raise TaskError(
+                        f"a {before['state']} task cannot become {changed['state']}"
                     )
-                changed = {
-                    field: value
-                    for field, value in clean.items()
-                    if value != before[field]
-                }
-                if not changed:
-                    # Nothing differs: no new version, no history row.
-                    return {"task": before, "change": None, "replayed": False}
-                if actor == "assistant" and not human_requested and "state" in changed:
-                    raise TaskConflict("assistant lifecycle changes require verified task fulfillment or a director request",
-                                       code="fulfillment_required", current=before)
-                if actor == "assistant" and not human_requested and set(changed) & set(before["protected_fields"]):
-                    raise TaskConflict("human-edited task fields require a director request",
-                                       code="human_protected", current=before)
-                action = "update"
-                if "state" in changed:
-                    action = TASK_TRANSITIONS.get((before["state"], changed["state"]))
-                    if action is None:
-                        raise TaskError(
-                            f"a {before['state']} task cannot become {changed['state']}"
-                        )
-                # The director's own words and completion decisions are
-                # protected from later automatic rewrites.
-                protected = set(before["protected_fields"])
-                if actor == "director" or human_requested:
-                    protected |= set(changed)
-                now = datetime.now(UTC).isoformat()
-                if "due_date" in changed:
-                    changed["due_timezone"] = timezone if changed["due_date"] else None
-                if action in ("complete", "cancel"):
-                    changed["completed_at"] = now
-                elif action == "reopen":
-                    changed["completed_at"] = None
-                task = self._write(
-                    person_id,
-                    task_id,
-                    changed,
-                    protected=protected,
-                    expected_version=expected_version,
-                    now=now,
-                )
-                response = self._record(
-                    operation_id=operation,
-                    fingerprint=fingerprint,
-                    person_id=person_id,
-                    task=task,
-                    action=action,
-                    before=before,
-                    actor=actor,
-                    reason=_clean_reason(reason, _DEFAULT_REASON[action]),
-                    session_id=session_id,
-                    run_id=run_id,
-                    now=now,
-                )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
+            # The director's own words and completion decisions are
+            # protected from later automatic rewrites.
+            protected = set(before["protected_fields"])
+            if actor == "director" or human_requested:
+                protected |= set(changed)
+            now = datetime.now(UTC).isoformat()
+            if "due_date" in changed:
+                changed["due_timezone"] = timezone if changed["due_date"] else None
+            if refs is not None:
+                changed["source_refs"] = json.dumps(sorted(set(before["source_refs"]) | set(refs)))
+            if action in ("complete", "cancel"):
+                changed["completed_at"] = now
+            elif action == "reopen":
+                changed["completed_at"] = None
+            task = self._write(
+                person_id,
+                task_id,
+                changed,
+                protected=protected,
+                expected_version=expected_version,
+                now=now,
+            )
+            response = self._record(
+                operation_id=operation,
+                fingerprint=fingerprint,
+                person_id=person_id,
+                task=task,
+                action=action,
+                before=before,
+                actor=actor,
+                reason=_clean_reason(reason, _DEFAULT_REASON[action]),
+                session_id=session_id,
+                run_id=run_id,
+                now=now,
+            )
         return response
 
     def _write(
@@ -824,7 +870,7 @@ class TaskService:
                 replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
                 if replay is not None:
                     source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
-                    return replay
+                    return self._project_response(replay, allowed_source_ids)
                 self._live_person(person_id)
                 row = self._conn.execute(
                     """
@@ -836,21 +882,22 @@ class TaskService:
                 ).fetchone()
                 if row is None:
                     raise TaskNotFound("unknown change")
-                if row["before_json"] is None:
+                automatic = row["before_json"] is None and self._automatic_creation(change_id)
+                if row["before_json"] is None and not automatic:
                     raise TaskError("creating a task cannot be undone; cancel it instead")
                 task_id = str(row["entity_id"])
                 current = self._task_dict(self._load_task(person_id, task_id))
                 source_ids(self._people, person_id, current["source_refs"], allowed_source_ids)
                 if expected_version is not None and current["version"] != expected_version:
-                    raise TaskConflict("this task changed since you opened it", code="task_conflict", current=current)
+                    raise TaskConflict("this task changed since you opened it", code="task_conflict", current=self._project_task(current, allowed_source_ids))
                 if current["version"] != int(row["entity_version"]):
                     raise TaskConflict(
                         "this task changed again after that change",
                         code="task_conflict",
-                        current=current,
+                        current=self._project_task(current, allowed_source_ids),
                     )
-                restored = json.loads(str(row["before_json"]))
-                changed = {
+                restored = json.loads(str(row["before_json"])) if not automatic else None
+                changed = {"state": "cancelled", "completed_at": datetime.now(UTC).isoformat()} if automatic else {
                     field: restored[field]
                     for field in UNDO_FIELDS
                     if restored[field] != current[field]
@@ -889,8 +936,10 @@ class TaskService:
                     now=now,
                     compensates=change_id,
                 )
+                self._conn.execute("""UPDATE crm_proposals SET state='dismissed', version=version+1,
+                    updated_at=? WHERE change_id=? AND state='accepted'""", (now, change_id))
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
-        return response
+        return self._project_response(response, allowed_source_ids)
