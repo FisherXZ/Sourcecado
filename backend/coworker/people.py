@@ -74,6 +74,15 @@ def _new_event_id() -> str:
     return "evt_" + uuid.uuid4().hex
 
 
+class CrmMigrationRequired(ValueError):
+    """The declared people.db version cannot safely record current CRM writes."""
+
+    code = "crm_migration_required"
+
+    def __init__(self) -> None:
+        super().__init__("CRM migration required: stop Sourcecado and run make doctor-repair before analysis")
+
+
 class PersonStore:
     def __init__(self, base_dir: str | Path) -> None:
         self.base = Path(base_dir).expanduser()
@@ -84,6 +93,13 @@ class PersonStore:
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         os.chmod(self.db_path, 0o600)
         self._conn.row_factory = sqlite3.Row
+        # Only an empty, unversioned database is ours to initialize at the
+        # current version. Existing stores still need the backed-up registry
+        # path, even when constructor probes have added missing tables.
+        initial_version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        fresh_database = initial_version == 0 and self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone() is None
         # SQLite enforces foreign keys per connection. Task and CRM-change rows
         # reference people(person_id), so a write for a missing person fails
         # here even if a caller skips the service's own check.
@@ -171,7 +187,19 @@ class PersonStore:
         self._ensure_schema()
         for statement in (*CRM_TASK_STATEMENTS, *CRM_ANALYSIS_STATEMENTS):
             self._conn.execute(statement)
+        if fresh_database:
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()
+
+    def _crm_description_history_ready(self) -> bool:
+        version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        schema = self._conn.execute("SELECT sql FROM sqlite_master WHERE name='crm_changes'").fetchone()
+        return version == SCHEMA_VERSION and schema is not None and "'description'" in schema[0]
+
+    def require_crm_schema(self) -> None:
+        with self._lock:
+            if not self._crm_description_history_ready():
+                raise CrmMigrationRequired()
 
     def _ensure_schema(self) -> None:
         columns = {
@@ -1663,9 +1691,6 @@ class PersonStore:
         operation = _clean_operation_id(operation_id) if operation_id is not None else None
         if not self._conn.in_transaction:
             raise RuntimeError("description writer requires a transaction")
-        schema = self._conn.execute("SELECT sql FROM sqlite_master WHERE name = 'crm_changes'").fetchone()
-        if schema is None or "'description'" not in schema[0]:
-            raise ValueError("CRM migration required: stop Sourcecado and run make doctor-repair before analysis")
         self._load_person_row(person_id)
         refs = source_ids(self, person_id, source_refs, allowed_source_ids)
         fingerprint = _fingerprint({
@@ -1693,6 +1718,13 @@ class PersonStore:
                 response = payload["crm_response"]
                 source_ids(self, person_id, response["description"]["source_refs"], allowed_source_ids)
                 return {**response, "replayed": True}
+        history_enabled = self._crm_description_history_ready()
+        declared_version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        if not history_enabled and not (human and restore is None and 0 <= declared_version < SCHEMA_VERSION):
+            raise CrmMigrationRequired()
+        # Existing releases saved human descriptions in event receipts only.
+        # Keep that safe path available until the registered migration runs;
+        # it cannot add v6 rows that historical migrations cannot express.
         current = self._conn.execute(
             "SELECT * FROM person_descriptions WHERE person_id = ? AND slot = ?",
             (person_id, slot),
@@ -1755,7 +1787,7 @@ class PersonStore:
         )
         description = self._descriptions(person_id)[slot]
         event_id = _new_event_id()
-        change_id = "chg_" + uuid.uuid4().hex
+        change_id = "chg_" + uuid.uuid4().hex if history_enabled else event_id
         response = {"description": description, "change": {
             "change_id": change_id, "entity_type": "description",
             "entity_id": f"{person_id}:{slot}", "entity_version": next_slot_version,
@@ -1777,15 +1809,16 @@ class PersonStore:
              actor, session_id, run_id, f"crm-operation:{operation}" if operation else None),
         )
         before = self._description_dict(current) if current is not None else self._default_description(slot)
-        self._conn.execute(
-            """INSERT INTO crm_changes (change_id, person_id, entity_type, entity_id,
-                   entity_version, action, before_json, after_json, actor, reason,
-                   source_refs, operation_id, session_id, run_id, compensates_change_id, created_at)
-               VALUES (?, ?, 'description', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (change_id, person_id, f"{person_id}:{slot}", next_slot_version,
-             "undo" if compensates_change_id else "update", json.dumps(before), json.dumps(description), actor, rationale_summary.strip()[:500],
-             json.dumps(refs), operation or change_id, session_id, run_id, compensates_change_id, now),
-        )
+        if history_enabled:
+            self._conn.execute(
+                """INSERT INTO crm_changes (change_id, person_id, entity_type, entity_id,
+                       entity_version, action, before_json, after_json, actor, reason,
+                       source_refs, operation_id, session_id, run_id, compensates_change_id, created_at)
+                   VALUES (?, ?, 'description', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (change_id, person_id, f"{person_id}:{slot}", next_slot_version,
+                 "undo" if compensates_change_id else "update", json.dumps(before), json.dumps(description), actor, rationale_summary.strip()[:500],
+                 json.dumps(refs), operation or change_id, session_id, run_id, compensates_change_id, now),
+            )
         self._snapshot(person_id, next_person_version, now)
         return response if operation is not None else description
 

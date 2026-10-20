@@ -75,10 +75,7 @@ class AnalysisService:
         self.budget_policy = budget_policy or RunBudgetPolicy(elapsed_seconds=90)
 
     def _require_schema(self) -> None:
-        with self.people._lock:
-            ddl = self.people._conn.execute("SELECT sql FROM sqlite_master WHERE name = 'crm_changes'").fetchone()
-        if ddl is None or "'description'" not in ddl[0]:
-            raise ValueError("CRM migration required: stop Sourcecado and run make doctor-repair before analysis")
+        self.people.require_crm_schema()
 
     def _local(self, pid: str) -> tuple[dict, list[dict], list[dict]]:
         with self.people._lock:

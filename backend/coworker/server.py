@@ -127,7 +127,7 @@ from coworker.brief import (
     project,
     prompt_context,
 )
-from coworker.people import DESCRIPTION_SLOTS, PersonStore
+from coworker.people import DESCRIPTION_SLOTS, CrmMigrationRequired, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.crm_analysis import AnalysisService, ConversationReader
@@ -2362,8 +2362,10 @@ def create_app(
             return JSONResponse({"error": "expected an object with optional boolean retry"}, status_code=400)
         try:
             return await _crm_analysis().analyze(person_id, retry=payload.get("retry", False))
+        except CrmMigrationRequired as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=409)
         except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=409 if "migration" in str(exc) else 404)
+            return JSONResponse({"error": str(exc)}, status_code=404)
 
     @app.get("/v1/people/{person_id}/proposals")
     def people_proposals(person_id: str, state: str = "pending"):

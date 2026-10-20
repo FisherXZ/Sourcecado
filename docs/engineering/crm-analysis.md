@@ -98,11 +98,20 @@ to replay. Failures preserve existing descriptions.
 
 ## Upgrade and verification
 
-`people.db` v6 is registered in `migrations.py`. Stop the backend and use
-`make doctor-repair` before restarting an existing v5 installation. This path
-backs up and migrates the store; constructors alone cannot widen SQLite's old
-CRM-history constraint. An unmigrated worker returns a clear migration-required
-error before model spend. Historical v4→v5 DDL remains frozen.
+`people.db` v6 is registered in `migrations.py`. A new empty, unversioned
+database records v6 after initialization, before current-version writes.
+An existing database keeps its recorded version, including unversioned legacy
+state and unsupported future versions; constructor table probes never adopt it.
+Stop the backend and use `make doctor-repair` before restarting a legacy/v5
+installation. This path backs up and migrates the store; constructors alone
+cannot widen SQLite's old CRM-history constraint. The worker checks both the
+declared version and history shape and returns `crm_migration_required` before
+model spend. Historical v4→v5 DDL remains frozen.
+
+Until migration, safe human description saves and operation replay retain the
+pre-v6 event-receipt behavior. They do not add v6 CRM-history rows that an old
+migration cannot represent. Inferred writes and scoped undo require the current
+schema. Replaying an old receipt after migration still returns the saved result.
 
 Offline tests use read-only connector and model fixtures. They cover both
 slots, sources, protected blanks, stale generation/acceptance, private and

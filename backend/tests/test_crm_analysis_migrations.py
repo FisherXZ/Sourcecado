@@ -87,3 +87,111 @@ def test_snapshot_restore_retains_description_authority_and_sources(tmp_path):
     assert restored == saved
     # Generated prose and its authority/source metadata travel together.
     assert restored["general"]["source_refs"] and restored["general"]["authority"] == "assistant"
+
+
+def test_fresh_description_write_survives_doctor_plan_apply_and_restart(tmp_path):
+    from coworker import doctor
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    kwargs = dict(expected_version=0, text="A saved human overview.", actor="director",
+                  rationale_summary="Save the overview.", operation_id="test-fresh-edit")
+    saved = people.patch_description(pid, "general", **kwargs)
+    people._conn.close()
+    result = migrations.apply_migrations(tmp_path)
+    assert result.error is None, result.error
+    plan = next(p for p in migrations.plan_migrations(tmp_path).stores if p.store_id == "people_db")
+    assert plan.status is migrations.StoreStatus.CURRENT
+    assert plan.steps == ()
+    report = doctor.diagnose(tmp_path)
+    assert not any(f.store_id == "people_db" and "migration" in f.check for f in report.findings)
+    reopened = PersonStore(tmp_path)
+    assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert reopened.descriptions(pid)["general"]["text"] == "A saved human overview."
+    replay = reopened.patch_description(pid, "general", **kwargs)
+    assert replay["replayed"] and replay["change"]["change_id"] == saved["change"]["change_id"]
+    assert reopened._conn.execute("SELECT count(*) FROM crm_changes WHERE entity_type='description'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("precreate_empty", [False, True])
+def test_only_fresh_unversioned_empty_database_is_stamped_current(tmp_path, precreate_empty):
+    if precreate_empty:
+        sqlite3.connect(tmp_path / "people.db").close()
+    people = PersonStore(tmp_path)
+    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == 6
+
+
+@pytest.mark.parametrize("version", [0, 5, 99])
+def test_existing_version_is_preserved_and_analysis_is_gated_before_spend(tmp_path, version):
+    from coworker.people import CrmMigrationRequired
+    pid, _task = v5_database(tmp_path)
+    conn = sqlite3.connect(tmp_path / "people.db")
+    conn.execute(f"PRAGMA user_version={version}")
+    conn.commit()
+    conn.close()
+    people = PersonStore(tmp_path)
+    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == version
+    model = DescriptionModel()
+    with pytest.raises(CrmMigrationRequired) as raised:
+        asyncio.run(worker(people, model).analyze(pid))
+    assert raised.value.code == "crm_migration_required"
+    assert model.calls == []
+    with pytest.raises(CrmMigrationRequired):
+        people.patch_description(pid, "general", expected_version=0, text="Inferred", actor="assistant", rationale_summary="Infer from evidence.")
+    assert people._conn.execute("SELECT count(*) FROM crm_changes WHERE entity_type='description'").fetchone()[0] == 0
+
+
+def test_populated_unversioned_legacy_keeps_safe_manual_save_and_receipt_through_upgrade(tmp_path):
+    from tests.state_fixtures import LEGACY_PERSON_ID, build_legacy_state
+    root = build_legacy_state(tmp_path / "legacy")
+    people = PersonStore(root)
+    kwargs = dict(expected_version=0, text="", actor="director", rationale_summary="Keep an intentional blank.", operation_id="test-legacy-edit")
+    saved = people.patch_description(LEGACY_PERSON_ID, "general", **kwargs)
+    assert saved["description"]["authority"] == "human"
+    assert people.patch_description(LEGACY_PERSON_ID, "general", **kwargs)["replayed"]
+    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == 0
+    assert people._conn.execute("SELECT count(*) FROM crm_changes WHERE entity_type='description'").fetchone()[0] == 0
+    people._conn.close()
+    result = migrations.apply_migrations(root)
+    assert result.error is None, result.error
+    assert result.backup_id
+    reopened = PersonStore(root)
+    replay = reopened.patch_description(LEGACY_PERSON_ID, "general", **kwargs)
+    assert replay["replayed"] and replay["change"]["change_id"] == saved["change"]["change_id"]
+    assert reopened.descriptions(LEGACY_PERSON_ID)["general"]["text"] == ""
+    assert reopened.descriptions(LEGACY_PERSON_ID)["general"]["authority"] == "human"
+    assert reopened._conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_unversioned_current_ddl_is_not_mistaken_for_a_migrated_store(tmp_path):
+    from coworker.people import CrmMigrationRequired
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    people._conn.execute("PRAGMA user_version=0")
+    people._conn.commit()
+    people._conn.close()
+    reopened = PersonStore(tmp_path)
+    assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 0
+    assert "'description'" in reopened._conn.execute("SELECT sql FROM sqlite_master WHERE name='crm_changes'").fetchone()[0]
+    model = DescriptionModel()
+    with pytest.raises(CrmMigrationRequired):
+        asyncio.run(worker(reopened, model).analyze(pid))
+    assert model.calls == []
+    assert reopened._conn.execute("SELECT count(*) FROM crm_changes WHERE entity_type='description'").fetchone()[0] == 0
+    reopened._conn.close()
+    assert migrations.apply_migrations(tmp_path).error is None
+    migrated = PersonStore(tmp_path)
+    assert asyncio.run(worker(migrated, model).analyze(pid))["status"] == "analyzed"
+
+
+def test_app_returns_typed_migration_required_before_any_model_request(tmp_path):
+    from fastapi.testclient import TestClient
+    from coworker.server import TOKEN_HEADER, create_app
+    from test_crm_analysis import ReadOnlyMail
+    pid, _task = v5_database(tmp_path)
+    model = DescriptionModel()
+    app = create_app(token="migration-test", state=tmp_path, provider=model, gmail=ReadOnlyMail())
+    with TestClient(app) as client:
+        response = client.post(f"/v1/people/{pid}/analysis", json={}, headers={TOKEN_HEADER: "migration-test"})
+    assert response.status_code == 409
+    assert response.json()["code"] == "crm_migration_required"
+    assert model.calls == []
