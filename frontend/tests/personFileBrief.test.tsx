@@ -72,7 +72,7 @@ describe("the living brief on the person file", () => {
     expect(within(outcome).getByText("Outcome: agreed to speak")).toBeInTheDocument();
     const contact = screen.getByRole("region", { name: "Last contact" });
     expect(contact).toHaveTextContent("inbound");
-    expect(within(contact).getByText("Needs follow-up.")).toBeInTheDocument();
+    expect(within(contact).getByText("Reply to review.")).toBeInTheDocument();
     expect(
       within(screen.getByRole("region", { name: "What they want" })).getByText(
         "What they want: a date after the 15th",
@@ -195,7 +195,7 @@ describe("the living brief on the person file", () => {
     );
     render(<PersonFileView personId="person one" />);
 
-    const banner = await screen.findByRole("status");
+    const banner = await screen.findByText(/Partial brief\./);
     expect(banner).toHaveTextContent("Partial brief.");
     expect(banner).toHaveTextContent("calendar");
     // The evidence that did land is still on the page.

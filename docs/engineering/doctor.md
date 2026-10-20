@@ -106,9 +106,12 @@ Version 0 means "written before this registry existed". Every store's 0 to 1
 step adopts it: it completes the shape that store's constructor used to grow by
 hand, then records version 1.
 
-Supported prior versions depend on the store. `agent_runs_db`, `conversation_db`,
-and `people_db` are currently version 2 and have both adoption and 1 → 2 steps;
-the registry defines the other targets. Prior-state fixtures in
+Supported prior versions depend on the store. `agent_runs_db` and
+`conversation_db` are currently version 2. `people_db` is version 6, with adoption,
+1 → 2 identity cleanup, 2 → 3 descriptions, 3 → 4 tasks, 4 → 5 task lifecycle,
+and 5 → 6 tracked Gmail tables. PersonStore runs the
+registered people-only upgrade, including its backup, before constructor probes
+can modify existing data. The registry defines the other targets. Prior-state fixtures in
 `backend/tests/state_fixtures.py` use the schemas those stores shipped and
 representative rows.
 

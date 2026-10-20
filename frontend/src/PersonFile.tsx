@@ -1,14 +1,16 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { DescriptionEditor } from "./DescriptionEditor";
 import { OutreachPanel } from "./OutreachPanel";
 import { TaskList } from "./Tasks";
+import { MailActivity } from "./crm/MailActivity";
 
 import {
   attachPersonMeeting,
   attachPersonDriveEvidence,
   defaultPersonDescriptions,
   getPerson,
+  refreshReplies,
   openPersonSourcingChat,
   refreshPersonMeetings,
   rejectPersonMeeting,
@@ -20,7 +22,6 @@ import {
   type BriefSourceRef,
   type DriveEvidenceCandidate,
   type PersonFile,
-  type PersonKnowledgeGap,
 } from "./api";
 
 const STATES = [
@@ -100,48 +101,6 @@ function sourceNote(source: BriefSourceRef): string {
   return parts.join(" · ");
 }
 
-const FOLLOW_UP_LINE: Record<string, string> = {
-  reply_unanswered: "They replied and are waiting on a response.",
-  reply_needs_review: "A reply arrived that could not be tied to this person.",
-};
-
-type InboundReply = {
-  eventId: string;
-  from: string;
-  subject: string;
-  snippet: string;
-  receivedAt: string | null;
-  threadId: string | null;
-  messageId: string | null;
-  url: string | null;
-};
-
-/** The inbound replies filed on this person, newest last, from the ledger. */
-function inboundReplies(file: PersonFile): InboundReply[] {
-  return file.timeline
-    .filter((event) => event.payload?.direction === "inbound")
-    .map((event) => {
-      const source = (event.payload.source_ref ?? {}) as Record<string, unknown>;
-      return {
-        eventId: event.event_id,
-        from: String(event.payload.from ?? "Unknown sender"),
-        subject: String(event.payload.subject ?? "No subject"),
-        snippet: String(event.payload.snippet ?? ""),
-        receivedAt:
-          typeof event.payload.received_at === "string" ? event.payload.received_at : null,
-        threadId: typeof source.thread_id === "string" ? source.thread_id : null,
-        messageId: typeof source.message_id === "string" ? source.message_id : null,
-        url: typeof source.url === "string" ? source.url : null,
-      };
-    });
-}
-
-function unassignedReplyGaps(file: PersonFile): PersonKnowledgeGap[] {
-  return (file.person.knowledge_gaps ?? []).filter(
-    (gap) => gap.fields?.kind === "unassigned_reply",
-  );
-}
-
 export function PersonFileView({ personId }: { personId: string }) {
   const [file, setFile] = useState<PersonFile | null>(null);
   const [failed, setFailed] = useState(false);
@@ -160,6 +119,10 @@ export function PersonFileView({ personId }: { personId: string }) {
   const [handoff, setHandoff] = useState<HandoffDraft | null>(null);
   const [handoffBusy, setHandoffBusy] = useState(false);
   const [handoffStatus, setHandoffStatus] = useState<string | null>(null);
+  const handoffDirty = useRef(false);
+  const handoffPerson = useRef(personId);
+  const [mailBusy, setMailBusy] = useState(false);
+  const [mailStatus, setMailStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -184,6 +147,12 @@ export function PersonFileView({ personId }: { personId: string }) {
   // the director wrote one, otherwise the draft generated from the claims.
   useEffect(() => {
     if (!file) return;
+    if (handoffPerson.current !== file.person.person_id) {
+      handoffPerson.current = file.person.person_id;
+      handoffDirty.current = false;
+      setMailStatus(null);
+    }
+    if (handoffDirty.current) return;
     const stored = file.brief.handoff;
     setHandoff({
       who: stored.who,
@@ -198,6 +167,23 @@ export function PersonFileView({ personId }: { personId: string }) {
     window.addEventListener("sourcecado:board-changed", refresh);
     return () => window.removeEventListener("sourcecado:board-changed", refresh);
   }, []);
+
+  async function refreshMail() {
+    if (mailBusy) return;
+    setMailBusy(true);
+    setMailStatus(null);
+    try {
+      const { refresh } = await refreshReplies();
+      setMailStatus(refresh.status === "failed" ? "Gmail check failed. Saved activity is kept."
+        : refresh.status === "partial" ? "Collection is unfinished. Refresh again to continue."
+          : "Gmail activity refreshed.");
+      setAttempt(value => value + 1);
+    } catch {
+      setMailStatus("Couldn’t check Gmail. Saved activity is kept. Try again.");
+    } finally {
+      setMailBusy(false);
+    }
+  }
 
   async function move(state: string) {
     if (moving) return;
@@ -322,6 +308,7 @@ export function PersonFileView({ personId }: { personId: string }) {
         ...handoff,
         expectedVersion: file.brief.person_version,
       });
+      handoffDirty.current = false;
       setFile(await getPerson(personId));
       setHandoffStatus(
         result.saved
@@ -337,7 +324,7 @@ export function PersonFileView({ personId }: { personId: string }) {
     }
   }
 
-  if (failed) {
+  if (failed && !file) {
     return (
       <main className="route-page person-page">
         <h1>Person</h1>
@@ -364,8 +351,6 @@ export function PersonFileView({ personId }: { personId: string }) {
   const driveSources = (file.person.sources ?? []).filter(
     (source) => source.fields?.provider === "Google Drive",
   );
-  const replies = inboundReplies(file);
-  const replyGaps = unassignedReplyGaps(file);
 
   return (
     <main className="route-page person-page">
@@ -397,6 +382,17 @@ export function PersonFileView({ personId }: { personId: string }) {
         </div>
       </header>
 
+      <nav className="person-section-nav" aria-label="Person file sections">
+        {[["person-mail-heading", "Gmail activity"], ["person-tasks", "Tasks"],
+          ["person-description-heading", "Description"], ["person-handoff-heading", "Handoff"]].map(([id, label]) =>
+          <button key={id} type="button" onClick={() => {
+            const section = document.getElementById(id);
+            section?.scrollIntoView({ block: "start" });
+            section?.focus({ preventScroll: true });
+          }}>{label}</button>)}
+      </nav>
+
+      {failed ? <p className="task-error" role="alert">Couldn’t refresh this person file. Previously loaded work is kept.</p> : null}
       {file.brief.partial ? (
         <p className="person-partial" role="status">
           Partial brief. {file.brief.partial_sources.join(", ")} could not be
@@ -431,7 +427,7 @@ export function PersonFileView({ personId }: { personId: string }) {
       </section>
 
       <section className="person-section" aria-labelledby="person-description-heading">
-        <h2 id="person-description-heading">Description</h2>
+        <h2 id="person-description-heading" tabIndex={-1}>Description</h2>
         <p>
           Readable context about this person. Editing either field protects it
           as your own until you let the assistant maintain it again.
@@ -466,7 +462,7 @@ export function PersonFileView({ personId }: { personId: string }) {
         })()}
       </section>
 
-      <div className="person-section person-tasks">
+      <div className="person-section person-tasks" id="person-tasks" tabIndex={-1}>
         <TaskList personId={personId} heading="Tasks" />
       </div>
 
@@ -483,7 +479,8 @@ export function PersonFileView({ personId }: { personId: string }) {
               : "No outreach sent and no reply received"}
           </p>
           {file.brief.last_contact.follow_up.needed ? (
-            <p className="person-attention">Needs follow-up.</p>
+            <p className="person-attention">{file.brief.last_contact.follow_up.reason === "reply_unanswered"
+              ? "Reply to review." : "Message attribution needs review."}</p>
           ) : null}
         </section>
         <section className="person-summary-card" aria-labelledby="person-wants-heading">
@@ -503,7 +500,7 @@ export function PersonFileView({ personId }: { personId: string }) {
       </div>
 
       <section className="person-section" aria-labelledby="person-handoff-heading">
-        <h2 id="person-handoff-heading">Successor handoff</h2>
+        <h2 id="person-handoff-heading" tabIndex={-1}>Successor handoff</h2>
         <p>
           {file.brief.handoff.generated
             ? "Drafted from the claims below. Review each field, then save it as a version."
@@ -533,13 +530,14 @@ export function PersonFileView({ personId }: { personId: string }) {
                 id={`person-handoff-${field.key}`}
                 rows={2}
                 value={handoff?.[field.key] ?? ""}
-                onChange={(event) =>
+                onChange={(event) => {
+                  handoffDirty.current = true;
                   setHandoff((current) =>
                     current === null
                       ? current
                       : { ...current, [field.key]: event.target.value },
-                  )
-                }
+                  );
+                }}
               />
             </p>
           ))}
@@ -586,62 +584,10 @@ export function PersonFileView({ personId }: { personId: string }) {
         }
       />
 
-      <section className="person-section" aria-labelledby="person-replies-heading">
-        <h2 id="person-replies-heading">Replies</h2>
-        <p className="person-followup-line">
-          {file.person.follow_up?.needed
-            ? (FOLLOW_UP_LINE[file.person.follow_up.reason ?? ""] ??
-              "This person needs attention.")
-            : file.person.replied
-              ? "The last message on this thread was ours."
-              : "No reply yet."}
-        </p>
-        {replies.length === 0 ? (
-          <p className="person-empty">No inbound reply filed yet.</p>
-        ) : (
-          <div className="person-timeline">
-            {replies.map((reply) => (
-              <article key={reply.eventId} className="person-timeline-entry">
-                <p className="person-timeline-meta">
-                  Gmail · {reply.receivedAt ?? "time unknown"}
-                </p>
-                <p>
-                  {reply.from} — {reply.subject}
-                </p>
-                {reply.snippet ? <p>{reply.snippet}</p> : null}
-                <p className="person-timeline-meta">
-                  {reply.url ? (
-                    <a href={reply.url} target="_blank" rel="noreferrer">
-                      Open Gmail thread {reply.threadId}
-                    </a>
-                  ) : (
-                    `Gmail thread ${reply.threadId ?? "unknown"}`
-                  )}
-                  {reply.messageId ? ` · message ${reply.messageId}` : null}
-                </p>
-              </article>
-            ))}
-          </div>
-        )}
-        {replyGaps.length > 0 ? (
-          <div className="person-meeting-proposals">
-            <h3>Unassigned replies</h3>
-            {replyGaps.map((gap) => (
-              <article key={gap.id} className="person-timeline-entry">
-                <p className="person-timeline-meta">
-                  Gmail thread {String(gap.fields?.thread_id ?? "unknown")} ·{" "}
-                  {String(gap.fields?.received_at ?? "time unknown")}
-                </p>
-                <p>{String(gap.fields?.question ?? "Which person does this reply belong to?")}</p>
-                <p className="person-timeline-meta">
-                  Nothing was filed on this person. Reason:{" "}
-                  {String(gap.fields?.reason ?? "unknown")}.
-                </p>
-              </article>
-            ))}
-          </div>
-        ) : null}
-      </section>
+      <MailActivity events={file.timeline} gaps={file.person.knowledge_gaps ?? []}
+        sync={file.mail_sync} analysis={file.mail_analysis}
+        followUp={file.person.follow_up} onRefresh={() => void refreshMail()}
+        refreshing={mailBusy} refreshStatus={mailStatus} />
 
       <section className="person-section" aria-labelledby="person-meetings-heading">
         <div className="person-section-heading-row">

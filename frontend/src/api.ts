@@ -374,6 +374,7 @@ export type BoardPerson = {
 };
 
 export type Board = {
+  mail_sync?: MailSyncState;
   backlog: BoardPerson[];
   open: BoardPerson[];
   in_conversation: BoardPerson[];
@@ -435,13 +436,31 @@ export type PersonKnowledgeGap = {
 };
 
 export type ReplyRefreshResult = {
-  status: "ok" | "failed";
+  status: "ok" | "partial" | "failed";
   mode: string;
   scanned: number;
   filed: number;
   unassigned: number;
+  outgoing?: number;
+  remaining_threads?: number;
+  content_partial?: number;
+  mail_sync?: MailSyncState;
   cursor?: string | null;
   error?: string;
+};
+
+export type MailSyncState = {
+  status: "never" | "ok" | "partial" | "failed";
+  last_success_at: string | null;
+  last_attempt_at: string | null;
+  warning: string | null;
+  outbound_checked_at?: string | null;
+};
+
+export type MailAnalysisState = {
+  latest_evidence_revision: number;
+  analyzed_revision: number;
+  status: "not_analyzed" | "pending" | "current";
 };
 
 /** One claim in the living brief, with the sources that back it. */
@@ -517,6 +536,8 @@ export type LivingBrief = {
 };
 
 export type PersonFile = {
+  mail_sync?: MailSyncState;
+  mail_analysis?: MailAnalysisState;
   person: BoardPerson &
     Record<string, unknown> & {
       sources?: PersonSourceRef[];
@@ -529,6 +550,7 @@ export type PersonFile = {
     kind: string;
     summary: string;
     payload: Record<string, unknown>;
+    created_at?: string;
   }>;
   versions?: Array<{ version: number; created_at: string }>;
   sourcing_chat: { session_id: string; person_id: string } | null;
@@ -619,7 +641,7 @@ export type ApolloCurationResult = {
 };
 
 export async function getBoard(): Promise<Board> {
-  const res = await get("/v1/board");
+  const res = await get("/v1/board?include_mail_state=true");
   if (!res.ok) throw new Error(`board ${res.status}`);
   return res.json();
 }

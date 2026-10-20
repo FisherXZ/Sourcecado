@@ -129,7 +129,8 @@ from coworker.brief import (
 )
 from coworker.people import DESCRIPTION_SLOTS, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
-from coworker.reply_filing import InboundReader, refresh_replies
+from coworker.crm_mail import TrackedMailReader, refresh_mail
+from coworker.crm_mail_repository import MailRepository
 from coworker.prompt_contract import (
     AssembledSystemPrompt,
     PromptDefinition,
@@ -2025,9 +2026,23 @@ def create_app(
             )
         return HTMLResponse("<p>Gmail connected. You can close this tab and go back to Sourcecado.</p>")
 
+    mail_repository = MailRepository(app.state.people)
+    mail_refresh_lock = threading.Lock()
+
+    def collect_tracked_mail():
+        # #208's local loop can use this same collection boundary. Serializing
+        # writers keeps checkpoints monotonic while local reads stay immediate.
+        with mail_refresh_lock:
+            return refresh_mail(app.state.people, TrackedMailReader(app.state.gmail))
+
+    app.state.collect_tracked_mail = collect_tracked_mail
+
+    def current_board():
+        return {**app.state.people.list_board(), "mail_sync": mail_repository.public_sync_state()}
+
     @app.get("/v1/board")
-    def board_get():
-        return app.state.people.list_board()
+    def board_get(include_mail_state: bool = False):
+        return current_board() if include_mail_state else app.state.people.list_board()
 
     def _operator_timezone() -> str:
         """The director's saved IANA timezone; task dates are days in it."""
@@ -2141,13 +2156,9 @@ def create_app(
 
     @app.post("/v1/replies/refresh")
     def replies_refresh():
-        """Read inbound Gmail since the cursor and file what it can attribute.
-
-        Read and filing only. The reader handed to the refresh exposes four
-        Gmail read calls, so nothing on this path can enrich, draft, or send.
-        """
-        result = refresh_replies(app.state.people, InboundReader(app.state.gmail))
-        return {"refresh": result, "board": app.state.people.list_board()}
+        """Collect tracked incoming/outgoing mail through a read-only boundary."""
+        result = collect_tracked_mail()
+        return {"refresh": result, "board": current_board()}
 
     @app.post("/v1/apollo/curate")
     async def apollo_curate(request: Request):
@@ -2248,6 +2259,8 @@ def create_app(
             # from the ledger can reappear through the brief.
             "brief": brief_payload(project(person, timeline, session_id=session_id)),
             "timeline": timeline,
+            "mail_sync": mail_repository.public_sync_state(),
+            "mail_analysis": mail_repository.analysis_state(person_id),
             "versions": app.state.people.versions(person_id),
             "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
             "sourcing_chat": (
