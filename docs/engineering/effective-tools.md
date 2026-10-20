@@ -44,8 +44,12 @@ omitted date cannot silently drop an explicit deadline. Conflicting dates,
 “next Friday”, and other ambiguous forms ask for clarification. Possessives
 such as “on Monday's call” describe context and remain undated.
 Deadline suffixes are checked as complete clauses, including their modifiers;
-unsupported second deadlines cannot be silently ignored. Non-date delivery
-phrases such as “by email” do not add a deadline. An exact saved
+every unresolved `by` or `due` clause asks for clarification, including unknown,
+ordinal, numeric, clock-time and vague deadlines. Only the exact delivery
+methods email, e-mail, phone, text, mail, post and hand exempt a `by` clause.
+Ordinary topical `on` clauses and possessive weekdays remain context;
+calendar-, numeric- or time-looking `on` clauses must resolve or clarify.
+Unsupported second deadlines cannot be silently ignored. An exact saved
 operation can replay after restart or a day boundary without moving its date;
 the write service still checks its complete fingerprint and source access.
 

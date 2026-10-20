@@ -142,19 +142,22 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
     # Possessives ("on Monday's call") describe context rather than a deadline.
     calendar_units = r"days?|weeks?|weekends?|months?|years?"
     months = r"january|february|march|april|may|june|july|august|september|october|november|december"
-    numeric_date = r"\d{1,4}[/-]\d{1,2}(?:[/-]\d{1,4})?"
-    date_hint = rf"(?:{token}|{calendar_units}|{months}|{numeric_date})"
+    numeric_or_time = r"\d[\w:/-]*|noon|midnight"
+    date_hint = rf"(?:{token}|{calendar_units}|{months}|{numeric_or_time})"
     modifiers = r"(?:(?:the|a|an|next|this|coming|following|around|early|late|end|of|in)\s+)*"
     tokens = [prefix[1]] if prefix else []
-    for suffix in re.finditer(r"\b(?:by|on|due)\s+", text):
-        # Inspect the entire clause: a supported weekday must not hide a
-        # trailing modifier such as "next week". Clearly non-calendar clauses
-        # ("by email") and possessive weekday context remain ordinary text.
+    for suffix in re.finditer(r"\b(by|on|due)\b\s*", text):
+        # By/due establish a deadline boundary even when its value is unknown.
+        # Only named delivery methods exempt a by-clause. On also introduces
+        # ordinary topics, so its calendar/numeric/time boundary is narrower.
         clause = re.split(r"[.!?;]", text[suffix.end():], maxsplit=1)[0].strip()
-        if re.match(rf"^{token}['’]s\b", clause):
+        if suffix[1] == "by" and clause in {"email", "e-mail", "phone", "text", "mail", "post", "hand"}:
             continue
-        if not re.match(rf"^{modifiers}{date_hint}(?![\w'’])", clause):
-            continue
+        if suffix[1] == "on":
+            if re.match(rf"^{token}['’]s\b", clause):
+                continue
+            if not re.match(rf"^{modifiers}{date_hint}(?![\w'’])", clause):
+                continue
         if not re.fullmatch(token, clause):
             raise CRMToolError("unverified_director_request", "State one unambiguous deadline: today, tomorrow, a weekday, or YYYY-MM-DD. Unsupported or alternative deadline wording needs clarification.")
         tokens.append(clause)
