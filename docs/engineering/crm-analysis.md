@@ -33,8 +33,11 @@ legacy Gmail reader's 8,000-character cutoff is partial because that reader
 cannot prove completeness. Missing bodies, header conflicts, quoted-only
 messages, greetings, ambiguous ownership and overflow preserve existing text.
 The immutable model manifest maps opaque mail keys to validated person-owned
-source IDs, metadata/body fingerprints and direction. Full bodies exist only
-in memory. They are sealed in the existing untrusted evidence envelope. The
+source IDs, metadata/body fingerprints and direction. Current source ownership,
+identity and grants are rechecked after every body read and directly before
+model dispatch, including earlier messages and aliases for the same mail.
+A revoked or changed source produces partial state without entering the prompt.
+Full bodies exist only in memory. They are sealed in the existing untrusted evidence envelope. The
 model receives no tools or target-person argument; output cannot select a
 person, mint a source or create another effect. Output is bounded and must
 provide both description slots, a bounded reason, source keys, and sufficient
@@ -59,7 +62,12 @@ The backend exposes person-scoped proposal list and accept/dismiss endpoints
 for integration with #205. Acceptance checks proposal and target versions and
 keeps human protection. A stale acceptance leaves the proposal pending. This
 slice does not implement the review UI, edited acceptance, or chat proposal
-resolution. Task proposal kinds are reserved in the durable schema for #210;
+resolution. Accept/dismiss saves a canonical request fingerprint and original
+response in the proposal's nullable resolution receipt, in the same transaction
+as the target mutation and resolution. Exact retries check current source access
+and return that receipt before checking the later proposal version. Changed
+arguments conflict. Undo preserves the receipt, so an old acceptance retry
+returns its original response without accepting the dismissed proposal again. Task proposal kinds are reserved in the durable schema for #210;
 this worker resolves description proposals only.
 
 Description history is available at
@@ -83,11 +91,18 @@ revision. Interrupted provider claims consume an attempt and expire after
 
 Each revision has at most three persisted attempts with bounded exponential
 backoff. A stale retry consumes the same limit. Only explicit Retry resets it.
+The collector's unchanged public mail-pointer creation is bookkeeping, so a
+first body-read failure cannot invent a revision or reset the attempt count.
+Real source/privacy/grant changes and changes to the person's tracked-thread
+attribution remain significant. Saved backoff, active claims and exhausted
+attempt limits are checked before connector reads.
 A request uses one configured provider; later saved attempts use configured
 failovers, without nested provider retries. The existing budget meter bounds
 model work and records usage/cost for every request. Terminal usage supersedes
 earlier streamed usage. Unknown cost and usage remain null and carry the
-meter's unpriced/unmeasured counts.
+meter's unpriced/unmeasured counts. A source check that blocks dispatch records
+no model request, no provider/model identity and no invented cost; its analysis
+attempt can still have a durable partial outcome.
 
 `crm_analysis_attempts` records input revision, prompt version, evidence
 manifest, provider/model, usage, estimated cost, budget result, safe failure

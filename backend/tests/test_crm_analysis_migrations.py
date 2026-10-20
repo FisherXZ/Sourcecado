@@ -46,6 +46,9 @@ def test_real_v5_requires_registered_migration_before_model_spend_and_preserves_
     reopened = PersonStore(tmp_path)
     assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 6
     assert reopened._conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    columns = {row["name"]: row for row in reopened._conn.execute("PRAGMA table_info(crm_proposals)")}
+    assert columns["resolution_receipt_json"]["notnull"] == 0
+    assert ("crm_proposals", "resolution_receipt_json") in migrations.spec_for("people_db").json_columns
     assert TaskService(reopened).get(pid, task["task"]["task_id"])["title"] == "Preserve this task"
     assert asyncio.run(worker(reopened, model).analyze(pid))["status"] == "analyzed"
     with pytest.raises(sqlite3.IntegrityError):

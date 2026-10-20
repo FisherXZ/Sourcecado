@@ -1168,6 +1168,7 @@ REGISTRY: tuple[StoreSpec, ...] = (
             ("crm_analysis_attempts", "change_ids"),
             ("crm_analysis_attempts", "proposal_ids"),
             ("crm_proposals", "source_refs"),
+            ("crm_proposals", "resolution_receipt_json"),
         ),
     ),
     StoreSpec(

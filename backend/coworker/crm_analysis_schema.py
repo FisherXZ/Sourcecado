@@ -52,6 +52,7 @@ CRM_ANALYSIS_STATEMENTS = (
         input_revision INTEGER NOT NULL,
         state TEXT NOT NULL CHECK (state IN ('pending', 'accepted', 'dismissed')),
         resolution TEXT,
+        resolution_receipt_json TEXT,
         change_id TEXT REFERENCES crm_changes(change_id),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
