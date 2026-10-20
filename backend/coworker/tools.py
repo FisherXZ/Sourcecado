@@ -34,6 +34,7 @@ from coworker.gmail import (
     gmail_evidence,
 )
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
+from coworker.crm_tools import CRM_TOOL_NAMES, CRM_TOOL_SCHEMAS, execute_crm_tool
 from coworker.drive_ingestion import DRIVE_INDEX_QUERY_SCHEMA, DriveIngestionStore
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
@@ -438,6 +439,7 @@ OPENAI_TOOLS = [
     LOAD_SKILL_SCHEMA,
     WEB_SEARCH_SCHEMA,
     *BOARD_TOOL_SCHEMAS,
+    *CRM_TOOL_SCHEMAS,
     *WORKSPACE_TOOL_SCHEMAS,
 ]
 
@@ -614,8 +616,15 @@ def execute(
     approval_granted: bool = False,
     approval_scope: str = "once",
     approval_fingerprint: str | None = None,
+    crm_directive: Any = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
+    if name in CRM_TOOL_NAMES:
+        if people is None:
+            return False, {"status": "unavailable", "code": "people_unavailable", "error": "The local person store is unavailable."}
+        return execute_crm_tool(name, args, people=people, store=store,
+            session_id=session_id, run_id=run_id, allowed_source_ids=allowed_source_ids,
+            directive=crm_directive)
     if name in WORKSPACE_TOOL_NAMES:
         if workspace_runtime is None:
             return False, {"status": "failed", "error": "workspace runtime missing"}
