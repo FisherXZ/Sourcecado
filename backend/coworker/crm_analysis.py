@@ -592,14 +592,18 @@ class AnalysisService:
                         operation_id=f"crm-accept:{proposal_id}", reason="Director accepted a sourced task proposal.")
                     if row["target_kind"] == "task_create":
                         # Reconcile if work appeared after proposal generation.
-                        from coworker.crm_email_tasks import _words
-                        if any(_words(value["title"]) == _words(t["title"]) for t in tasks.list(person_id=pid,
-                                timezone=self.timezone, states=("open", "completed", "cancelled"))["tasks"]):
+                        writer = EmailTaskWriter(self.people, allowed=self.allowed, timezone=self.timezone)
+                        if writer.matching_tasks(pid, value["details"]):
                             raise TaskConflict("matching work appeared; review the saved task", code="task_conflict")
                         result = tasks._create_uncommitted(pid, **value, source_refs=refs, **identity)
                     else:
                         if row["target_id"] is None or value.get("requires_target_review"):
                             raise TaskConflict("choose the matching saved task before acceptance", code="task_conflict")
+                        if "due_date" in value["changes"]:
+                            target = tasks._task_dict(tasks._load_task(pid, row["target_id"]))
+                            writer = EmailTaskWriter(self.people, allowed=self.allowed, timezone=self.timezone)
+                            if not isinstance(value.get("request"), str) or writer.task_relation(target, value["request"]) != "same":
+                                raise TaskConflict("the request does not establish this saved obligation; review the target", code="task_conflict")
                         result = tasks._update_uncommitted(pid, row["target_id"], changes=value["changes"],
                             expected_version=row["expected_target_version"], source_refs=refs, **identity)
                 change_id = result["change"]["change_id"] if result["change"] else None

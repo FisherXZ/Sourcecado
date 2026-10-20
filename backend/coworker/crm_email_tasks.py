@@ -18,13 +18,18 @@ from coworker.crm_tasks import TaskService, validate_timezone
 
 MAX_CANDIDATES = 12
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-DATE_TOKEN = re.compile(r"\b(?:\d{4}-\d{2}-\d{2}|today|tomorrow|" + "|".join(WEEKDAYS) + r")\b", re.I)
+CALENDAR_TOKEN = r"(?:\d{4}-\d{2}-\d{2}|today|tomorrow|" + "|".join(WEEKDAYS) + r")"
+DATE_TOKEN = re.compile(r"\b" + CALENDAR_TOKEN + r"\b", re.I)
+DEADLINE_CLAUSE = re.compile(r"\b(?:by|on|due(?:\s+on)?)\s+(" + CALENDAR_TOKEN + r")[.!?]?\s*$", re.I)
 UNCERTAIN = re.compile(r"\b(?:if|unless|maybe|perhaps|might|sometime|eventually|whenever|not|never|don't|do not|no longer|cancel|instead|or|next|later|soon|someday|around|approximately)\b", re.I)
+CORRECTION = re.compile(r"\b(?:actually|disregard|scratch|ignore|forget|retract(?:ed)?|withdraw(?:n)?|already)\b|\bno\s+further\b", re.I)
 UNSUPPORTED_DATE = re.compile(r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december|week|month|year|weekend|tonight|yesterday|days?|weeks?|months?|\d{1,2}[/\-]\d{1,2})\b", re.I)
 UNRESOLVED_TIME = re.compile(r"\b(?:noon|midnight|fortnight|\d+(?:st|nd|rd|th)|\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm))\b", re.I)
 ACTIONS = r"send|share|provide|prepare|schedule|review|confirm|arrange"
 DIRECT = re.compile(r"^(?:please|can you|could you|would you)\s+(" + ACTIONS + r")\b", re.I)
 STOP = set("a an the our your their his her us we i you me for to of with on by in at please can could would team student students project projects this that some sometime nice it be see want like send sent share shared provide prepare schedule review confirm arrange today tomorrow".split()) | set(WEEKDAYS)
+OBJECT_FILLER = set("a an the our your their his her us we i you me for to of with please team this that".split())
+DELIVERABLE_VARIANTS = {"original", "revised", "updated", "final", "draft", "initial", "first", "second", "third"}
 
 
 def original_body(body: str) -> str:
@@ -66,10 +71,13 @@ def grounded_date(text: str, message: dict, timezone: str) -> tuple[bool, str | 
     tokens = [m[0] for m in matches]
     if not tokens:
         return True, None
-    # Closed deadline grammar: one final calendar token, optionally introduced
-    # by by/on/due. Other relations and topical tokens require review.
-    if (len(matches) != 1 or text[matches[0].end():].strip(" .!?\n\t")
-            or re.search(r"\b(?:after|before|until|within|around|for|about|from|since|during|in)\s*$", text[:matches[0].start()], re.I)):
+    # A weekday is a deadline only in a supported clause. Its position at the
+    # end cannot distinguish "by Friday" from "the file named Friday".
+    # Today/tomorrow can also be explicit final temporal adverbs.
+    explicit = DEADLINE_CLAUSE.search(text)
+    relative_adverb = re.search(r"\s+(today|tomorrow)[.!?]?\s*$", text, re.I)
+    if (len(matches) != 1 or (explicit is None and relative_adverb is None)
+            or text[matches[0].end():].strip(" .!?\n\t")):
         return False, None
     dates = set()
     day = _message_day(message, timezone)
@@ -92,6 +100,25 @@ def grounded_date(text: str, message: dict, timezone: str) -> tuple[bool, str | 
             return False, None
         dates.add(value.isoformat())
     return (True, next(iter(dates))) if len(dates) == 1 else (False, None)
+
+
+def obligation(text: str) -> tuple[str, tuple[str, ...]] | None:
+    """The supported action and object, retaining deliverable modifiers.
+
+    This is a conservative matching aid, separate from inference suppression.
+    It never treats model titles or a stripped token subset as the promise.
+    """
+    action = re.match(r"(?:(?:please|can you|could you|would you)\s+)?(" + ACTIONS + r")\b\s*(.+)", text.strip(), re.I)
+    if action is None:
+        return None
+    content = action[2]
+    deadline = DEADLINE_CLAUSE.search(content)
+    if deadline:
+        content = content[:deadline.start()]
+    else:
+        content = re.sub(r"\s+(?:today|tomorrow)[.!?]?\s*$", "", content, flags=re.I)
+    words = tuple(w.rstrip("s") for w in re.findall(r"[a-z0-9]+", content.lower()) if w not in OBJECT_FILLER)
+    return (action[1].lower(), words) if words else None
 
 
 def _request_span(original: str, citation: str, title: str) -> tuple[int, int] | None:
@@ -152,6 +179,40 @@ class EmailTaskWriter:
         self.timezone = validate_timezone(timezone)
         self.tasks = TaskService(people)
 
+    def _saved_request(self, task: dict) -> str | None:
+        row = self.people._conn.execute("""SELECT p.proposed_value FROM crm_proposals p
+            JOIN crm_changes c ON c.change_id=p.change_id WHERE c.entity_type='task'
+            AND c.entity_id=? AND p.target_kind='task_create' ORDER BY c.created_at LIMIT 1""", (task["task_id"],)).fetchone()
+        if row is None:
+            return None
+        value = json.loads(row[0])
+        return value.get("details") if isinstance(value, dict) and isinstance(value.get("details"), str) else None
+
+    def task_relation(self, task: dict, request: str) -> str:
+        """same, uncertain, or distinct; source provenance precedes model prose."""
+        saved = self._saved_request(task)
+        # A protected title correction has current human authority.
+        if "title" in task["protected_fields"] and obligation(task["title"]) != obligation(saved or task["title"]):
+            saved = None
+        incoming, existing = obligation(request), obligation(saved or task["title"])
+        if incoming is None or existing is None:
+            return "uncertain" if _words(request) & _words(saved or task["title"]) else "distinct"
+        action, objects = incoming
+        prior_action, prior_objects = existing
+        if action != prior_action:
+            return "distinct"
+        if objects == prior_objects:
+            return "same"
+        variants = set(objects) & DELIVERABLE_VARIANTS
+        prior_variants = set(prior_objects) & DELIVERABLE_VARIANTS
+        if variants != prior_variants:
+            return "distinct"
+        return "uncertain" if set(objects) & set(prior_objects) else "distinct"
+
+    def matching_tasks(self, pid: str, request: str) -> list[tuple[dict, str]]:
+        records = [self.tasks._task_dict(row) for row in self.people._conn.execute("SELECT * FROM person_tasks WHERE person_id=?", (pid,))]
+        return [(task, relation) for task in records if (relation := self.task_relation(task, request)) != "distinct"]
+
     def apply(self, pid: str, candidates: list[dict], evidence, revision: int) -> tuple[list, list]:
         """Caller owns BEGIN IMMEDIATE covering descriptions and checkpoint too."""
         manifest = {m["key"]: m for m in evidence.manifest}
@@ -180,16 +241,29 @@ class EmailTaskWriter:
             refs = source_ids(self.people, pid, [support["source_id"]], self.allowed)
             # Latest task versions/protection are loaded after model work, under
             # the same write lock. No model snapshot can overwrite a human edit.
-            rows = self.people._conn.execute("SELECT * FROM person_tasks WHERE person_id=?", (pid,)).fetchall()
-            matches = [self.tasks._task_dict(row) for row in rows
-                if _words(request) & _words(row["title"]) and
-                (_words(row["title"]) <= _words(request) or _words(item["title"]) == _words(row["title"]))]
+            matching = self.matching_tasks(pid, request)
             if item.get("task_id") is not None:
-                matches = [self.tasks._task_dict(row) for row in rows if row["task_id"] == item.get("task_id")]
-                if len(matches) != 1 or not sources_visible(self.people, pid, matches[0]["source_refs"], self.allowed):
+                row = self.people._conn.execute("SELECT * FROM person_tasks WHERE person_id=? AND task_id=?", (pid, item["task_id"])).fetchone()
+                if row is None:
                     continue
+                hinted = self.tasks._task_dict(row)
+                if not sources_visible(self.people, pid, hinted["source_refs"], self.allowed):
+                    continue
+                relation = self.task_relation(hinted, request)
+                # A human paraphrase hint remains reviewable, but it is never
+                # enough evidence to move a different obligation's deadline.
+                if item["kind"] == "complete":
+                    matching = [(hinted, "same")]
+                elif relation != "distinct":
+                    matching = [(hinted, relation)]
+                elif self._saved_request(hinted) is None:
+                    incoming, existing = obligation(request), obligation(hinted["title"])
+                    if incoming is None or existing is None or not set(incoming[1]) & set(existing[1]):
+                        matching = [(hinted, "uncertain")]
             elif item["kind"] == "complete":
                 continue
+            matches = [task for task, _relation in matching]
+            exact_target = len(matching) == 1 and matching[0][1] == "same"
             # A known finished promise is never reopened or recreated by mail.
             if matches and all(t["state"] != "open" for t in matches):
                 continue
@@ -197,6 +271,8 @@ class EmailTaskWriter:
             if matches and any(not sources_visible(self.people, pid, t["source_refs"], self.allowed) for t in matches):
                 continue
             due_clear, due = grounded_date(request, message, self.timezone)
+            context_clear = not UNCERTAIN.search(original) and not CORRECTION.search(original)
+            due_clear = due_clear and context_clear
             direct = DIRECT.search(request.strip())
             action = direct[1].lower() if direct else None
             if action is None:
@@ -217,7 +293,7 @@ class EmailTaskWriter:
                         other = other.replace(original[other_span[0]:other_span[1]], "")
             clear = (item["kind"] == "create" and support["direction"] == "inbound"
                 and action is not None
-                and not UNCERTAIN.search(original) and not DATE_TOKEN.search(other)
+                and context_clear and not DATE_TOKEN.search(other)
                 and due_clear and bool(_words(request)) and _words(item["title"]) <= _words(request))
             if clear:
                 clear = re.match(action + r"\b", item["title"].strip(), re.I) is not None
@@ -229,7 +305,8 @@ class EmailTaskWriter:
                 value = {"changes": {"state": "completed"}}
                 reason = "Possible task fulfillment; no validated task-to-send binding exists. Review the cited message."
             elif matches:
-                value = {"changes": {"due_date": due if due_clear else None}}
+                value = {"changes": {"due_date": due if due_clear else None}, "request": request,
+                    "requires_target_review": not exact_target}
                 reason = "This request may match saved work. Review the date without replacing human details or state."
             else:
                 value = {"title": item["title"], "details": request, "due_date": due if clear else None}

@@ -85,18 +85,27 @@ Automatic creation requires an exactly attributed inbound full message, sufficie
 original unquoted content, a direct actionable request, and a grounded title.
 The service reads current tasks and protection after generation; task changes also
 invalidate the generation guard. A possible match, including a model-cited permitted
-task ID, produces reconciliation review. Missing, foreign and private task hints
+task ID, produces reconciliation review. Matching retains the supported action
+and object and reads the saved source-request provenance. Reviewing, preparing,
+and sending the same object remain different obligations; explicit original and
+revised deliverables remain separate. A stripped word subset or generated title
+cannot merge them. An uncertain human paraphrase stays pending for target review;
+acceptance cannot move another obligation's date. Legacy date proposals without
+request proof also need review. Missing, foreign and private task hints
 cannot authorize a new task. Separate request sentences and explicit action clauses
 keep separate evidence spans, including two promises in one sentence.
 
-Supported deadlines are one final ISO date, today/tomorrow, or weekday, optionally
-introduced by by/on/due. Relative dates use Gmail's validated `internalDate` and
+Weekday and ISO deadlines require one final supported by/on/due clause;
+today/tomorrow also work as final temporal adverbs. Relative dates use Gmail's validated `internalDate` and
 the saved operator IANA timezone. Header date fallback, refresh time and model
 timestamps cannot establish a relative deadline. Bare same-day weekdays, next
-Friday, conditional/negated/conflicting text, unknown date clauses, unsupported
+Friday, bare/topical/past weekdays, conditional/negated/conflicting text, unknown date clauses, unsupported
 relations such as after Friday, and incidental weekdays remain undated proposals.
 Possessive weekdays do not become deadlines. This is a conservative English
 grammar; it does not claim broad natural-language date support.
+Correction, retraction and already-fulfilled wording anywhere in the original
+source blocks automatic creation and date inference, including text outside the
+model's cited request. Such interpretations stay undated review proposals.
 
 Task suppression uses stable person-owned source/message/body identity plus a
 canonical original request span. Model titles, citation punctuation, expanded
