@@ -199,9 +199,16 @@ mismatched mail, outbound attribution, injection/tool output, incomplete mail,
 retries, failover and unknown accounting, cancellation, atomic rollback,
 dismissal after prompt-key changes, field-scoped undo, real app routes,
 restart, populated v5/v6 and legacy migrations, migration rollback, foreign keys and snapshot
-restore. No live Gmail/provider call, browser review UI or native background
+restore. No live Gmail/provider call, proposal review UI or native background
 refresh demonstration is claimed. Task fixtures cover explicit/relative/vague dates,
 conditions, quoted and partial mail, wrong/shared/private attribution, corrected
 human dates, same-message promises, citation boundary variation, stale acceptance,
 runtime chat Undo, retries/restart, and rollback after task/proposal/checkpoint writes.
 Synthetic fixtures prove these boundaries, not live extraction precision or recall.
+
+A headless Chrome check used the actual frontend and an isolated FastAPI backend
+with synthetic read-only mail and model fixtures. Analysis created one sourced
+task visible in Contacts and the person file. Person-file Undo cancelled that
+same task; refreshing unchanged evidence and reloading the global list preserved
+the cancellation. Source links and change reasons rendered without page errors.
+This check does not exercise the native shell or live connectors.
