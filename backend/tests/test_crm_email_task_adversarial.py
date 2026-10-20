@@ -126,3 +126,38 @@ def test_legacy_date_reconciliation_without_request_proof_cannot_mutate_task(tmp
         service.resolve(pid, proposal["proposal_id"], action="accept", expected_version=1)
     assert TaskService(people).get(pid, existing["task_id"])["due_date"] == "2026-11-01"
     assert service.proposals(pid)[0]["state"] == "pending"
+
+
+@pytest.mark.parametrize("wording,title", [
+    ("Please send the proposal discussed on Friday.", "Send proposal"),
+    ("Please send the minutes from our meeting held on Friday.", "Send minutes"),
+    ('Please review the file titled "By Friday".', "Review file"),
+    ("Please send the project proposal on Friday.", "Send project proposal"),
+])
+def test_discussion_dates_and_object_title_literals_do_not_authorize_deadlines(tmp_path, wording, title):
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    service, result = run(people, pid, [candidate(wording, title=title)], TaskMail(wording + CONTEXT))
+    assert result["status"] == "analyzed"
+    assert saved_tasks(people, pid) == []
+    proposal = service.proposals(pid)[0]
+    assert proposal["target_kind"] == "task_create"
+    assert json.loads(proposal["proposed_value"])["due_date"] is None
+
+
+@pytest.mark.parametrize("clause,due", [
+    ("by Friday", "2026-10-23"),
+    ("by 2026-10-23", "2026-10-23"),
+    ("due Friday", "2026-10-23"),
+    ("due on Friday", "2026-10-23"),
+    ("today", "2026-10-18"),
+    ("tomorrow", "2026-10-19"),
+])
+def test_supported_explicit_deadline_clauses_remain_grounded(tmp_path, clause, due):
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    wording = f"Please send the project proposal {clause}."
+    service, result = run(people, pid, [candidate(wording)], TaskMail(wording + CONTEXT))
+    assert result["status"] == "analyzed"
+    assert saved_tasks(people, pid)[0]["due_date"] == due
+    assert service.proposals(pid) == []

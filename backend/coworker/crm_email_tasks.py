@@ -20,7 +20,7 @@ MAX_CANDIDATES = 12
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 CALENDAR_TOKEN = r"(?:\d{4}-\d{2}-\d{2}|today|tomorrow|" + "|".join(WEEKDAYS) + r")"
 DATE_TOKEN = re.compile(r"\b" + CALENDAR_TOKEN + r"\b", re.I)
-DEADLINE_CLAUSE = re.compile(r"\b(?:by|on|due(?:\s+on)?)\s+(" + CALENDAR_TOKEN + r")[.!?]?\s*$", re.I)
+DEADLINE_CLAUSE = re.compile(r"\b(?:by|due(?:\s+on)?)\s+(" + CALENDAR_TOKEN + r")[.!?]?\s*$", re.I)
 UNCERTAIN = re.compile(r"\b(?:if|unless|maybe|perhaps|might|sometime|eventually|whenever|not|never|don't|do not|no longer|cancel|instead|or|next|later|soon|someday|around|approximately)\b", re.I)
 CORRECTION = re.compile(r"\b(?:actually|disregard|scratch|ignore|forget|retract(?:ed)?|withdraw(?:n)?|already)\b|\bno\s+further\b", re.I)
 UNSUPPORTED_DATE = re.compile(r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december|week|month|year|weekend|tonight|yesterday|days?|weeks?|months?|\d{1,2}[/\-]\d{1,2})\b", re.I)
@@ -71,8 +71,8 @@ def grounded_date(text: str, message: dict, timezone: str) -> tuple[bool, str | 
     tokens = [m[0] for m in matches]
     if not tokens:
         return True, None
-    # A weekday is a deadline only in a supported clause. Its position at the
-    # end cannot distinguish "by Friday" from "the file named Friday".
+    # A weekday is a deadline only in an explicit by/due clause. Plain on DATE
+    # can modify the object's discussion or meeting, so it stays unsupported.
     # Today/tomorrow can also be explicit final temporal adverbs.
     explicit = DEADLINE_CLAUSE.search(text)
     relative_adverb = re.search(r"\s+(today|tomorrow)[.!?]?\s*$", text, re.I)

@@ -95,7 +95,9 @@ request proof also need review. Missing, foreign and private task hints
 cannot authorize a new task. Separate request sentences and explicit action clauses
 keep separate evidence spans, including two promises in one sentence.
 
-Weekday and ISO deadlines require one final supported by/on/due clause;
+Weekday and ISO deadlines require one final explicit `by DATE`, `due DATE`, or
+`due on DATE` clause. Plain `on DATE` remains unsupported because it can describe
+an object's discussion or meeting. Quoted object titles do not authorize dates;
 today/tomorrow also work as final temporal adverbs. Relative dates use Gmail's validated `internalDate` and
 the saved operator IANA timezone. Header date fallback, refresh time and model
 timestamps cannot establish a relative deadline. Bare same-day weekdays, next
