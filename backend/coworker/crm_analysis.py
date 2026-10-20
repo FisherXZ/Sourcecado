@@ -8,7 +8,7 @@ No Agent Run, connector write, or model-selected person/tool is involved.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import hashlib
 import json
 import re
@@ -20,7 +20,7 @@ from coworker.crm_sources import source_ids, sources_visible
 from coworker.crm_tasks import TaskConflict
 from coworker.evidence_envelope import seal
 from coworker.people import DESCRIPTION_LIMITS, PersonStore
-from coworker.reply_filing import _addresses_in, address_of, build_index, classify
+from coworker.reply_filing import OutboundIndex, _addresses_in, address_of, build_index, classify
 from coworker.run_budget import RunBudgetMeter, RunBudgetPolicy
 from coworker.telemetry import CostEstimate, UsageEvent
 
@@ -62,6 +62,13 @@ class ConversationReader:
 
 
 @dataclass(frozen=True)
+class AttributionInput:
+    metadata: dict[str, Any]
+    outbound: bool
+    fingerprint: str
+
+
+@dataclass(frozen=True)
 class EvidenceInput:
     fingerprint: str
     guard: str
@@ -69,6 +76,7 @@ class EvidenceInput:
     messages: list[dict[str, str]]
     partial: bool
     reason: str | None
+    attribution: list[AttributionInput] = field(default_factory=list)
 
 
 class AnalysisService:
@@ -127,13 +135,46 @@ class AnalysisService:
                 if digest(by_id[item["source_id"]]) != item["source_fingerprint"]:
                     raise SourceInputChanged("stale_source")
 
+    def _attribution(self, pid: str, meta: dict, outbound: bool, index: OutboundIndex) -> str:
+        sent = index.threads.get(meta.get("thread_id"), ())
+        judged = meta
+        if outbound:
+            recipients = {item.recipient for item in sent if item.person_id == pid}
+            sender = address_of(meta.get("from"))
+            if (sender not in index.accounts or len(recipients) != 1
+                    or set(meta.get("label_ids") or ()) & {"DRAFT", "TRASH"}
+                    or _addresses_in(meta.get("to"), meta.get("cc")) != recipients):
+                raise SourceInputChanged("ambiguous_attribution")
+            # Apply the same shared-address, multi-person and forwarding refusals.
+            judged = {**meta, "from": next(iter(recipients)), "to": sender, "label_ids": []}
+        verdict = classify(judged, index)
+        if verdict.person_id != pid or verdict.reason != "exact_thread_and_sender":
+            raise SourceInputChanged("ambiguous_attribution")
+        addresses = _addresses_in(meta.get("from"), meta.get("to"), meta.get("cc"), meta.get("delivered_to"))
+        addresses.update(item.recipient for item in sent)
+        return digest({
+            "thread": sorted((item.person_id, item.recipient) for item in sent),
+            "addresses": {address: sorted(index.people_by_address.get(address, ())) for address in addresses},
+            "accounts": sorted(index.accounts & addresses),
+        })
+
+    def _current_attribution(self, pid: str, inputs: list[AttributionInput]) -> None:
+        # Compare against the pre-I/O index, never an end-of-collection snapshot.
+        # Source pointer bookkeeping is deliberately outside this identity.
+        with self.people._lock:
+            index = build_index(self.people)
+            for item in inputs:
+                if self._attribution(pid, item.metadata, item.outbound, index) != item.fingerprint:
+                    raise SourceInputChanged("ambiguous_attribution")
+
     def _collect(self, pid: str) -> EvidenceInput:
-        person, attachments, events = self._local(pid)
-        index = build_index(self.people)
+        with self.people._lock:
+            person, attachments, events = self._local(pid)
+            index = build_index(self.people)
         candidates = {str(e["payload"].get("message_id")): e for e in events
                       if isinstance(e.get("payload"), dict) and (e["payload"].get("direction") in {"inbound", "outbound"} or e["kind"] == "send")
                       and e["payload"].get("message_id")}
-        manifest, messages = [], []
+        manifest, messages, attribution = [], [], []
         partial = len(candidates) > MAX_MESSAGES
         reason = "bounded_context" if partial else None
         total = 0
@@ -145,21 +186,14 @@ class AnalysisService:
                 break
             meta = self.reader.metadata(mid)
             outbound = event["kind"] == "send" or event["payload"].get("direction") == "outbound"
-            judged = meta
-            if outbound:
-                sent = index.threads.get(meta.get("thread_id"), ())
-                recipients = {item.recipient for item in sent if item.person_id == pid}
-                sender = address_of(meta.get("from"))
-                if (sender not in index.accounts or len(recipients) != 1
-                        or set(meta.get("label_ids") or ()) & {"DRAFT", "TRASH"}
-                        or _addresses_in(meta.get("to"), meta.get("cc")) != recipients):
-                    partial, reason = True, "ambiguous_attribution"
-                    break
-                # Reuse every shared-address, multi-person and forwarding refusal.
-                judged = {**meta, "from": next(iter(recipients)), "to": sender, "label_ids": []}
-            verdict = classify(judged, index)
-            if meta.get("id") != mid or verdict.person_id != pid or verdict.reason != "exact_thread_and_sender":
+            if meta.get("id") != mid:
                 partial, reason = True, "ambiguous_attribution"
+                break
+            try:
+                attribution.append(AttributionInput(meta, outbound, self._attribution(pid, meta, outbound, index)))
+                self._current_attribution(pid, attribution)
+            except SourceInputChanged as exc:
+                partial, reason = True, exc.code
                 break
             # A newly resolved reference is a pointer, never a second copy of mail.
             ref = next(iter(matches), None)
@@ -172,8 +206,10 @@ class AnalysisService:
             current_source = {"source_id": ref["id"], "message_id": mid, "source_fingerprint": digest(ref)}
             try:
                 self._current_sources(pid, [*manifest, current_source])
+                self._current_attribution(pid, attribution)
                 full = self.reader.body(mid)
                 self._current_sources(pid, [*manifest, current_source])
+                self._current_attribution(pid, attribution)
             except SourceInputChanged as exc:
                 partial, reason = True, exc.code
                 break
@@ -204,7 +240,7 @@ class AnalysisService:
             partial, reason = True, reason or "missing_context"
         # Evidence revisions ignore descriptions and other unrelated person edits.
         evidence = {"manifest": manifest, "mail_events": events, "partial": partial, "reason": reason}
-        return EvidenceInput(digest(evidence), self._guard(pid), manifest, messages, partial, reason)
+        return EvidenceInput(digest(evidence), self._guard(pid), manifest, messages, partial, reason, attribution)
 
     def state(self, pid: str) -> dict[str, Any]:
         with self.people._lock:
@@ -353,6 +389,7 @@ class AnalysisService:
             async with asyncio.timeout(self.budget_policy.elapsed_seconds):
                 # Last local check at the actual model-dispatch boundary.
                 self._current_sources(pid, evidence.manifest)
+                self._current_attribution(pid, evidence.attribution)
                 telemetry.update(provider=getattr(provider, "provider_id", "unknown"), model=getattr(provider, "model_id", "unknown"))
                 meter.start_model_turn()
                 requested = True

@@ -33,10 +33,15 @@ legacy Gmail reader's 8,000-character cutoff is partial because that reader
 cannot prove completeness. Missing bodies, header conflicts, quoted-only
 messages, greetings, ambiguous ownership and overflow preserve existing text.
 The immutable model manifest maps opaque mail keys to validated person-owned
-source IDs, metadata/body fingerprints and direction. Current source ownership,
-identity and grants are rechecked after every body read and directly before
-model dispatch, including earlier messages and aliases for the same mail.
-A revoked or changed source produces partial state without entering the prompt.
+source IDs, metadata/body fingerprints and direction. Attribution is pinned to
+the index before connector I/O. The worker rechecks each message's current
+thread, relevant addresses and sending accounts before and after every body
+read and directly before model dispatch, including all earlier messages.
+Inbound and outbound mail share the same exact-match classifier. These narrow
+checks exclude the worker's public source-pointer bookkeeping. Current source
+ownership, identity and grants are also rechecked at the body and dispatch
+boundaries, including earlier messages and aliases for the same mail. Changed
+attribution or a revoked source produces partial state before model dispatch.
 Full bodies exist only in memory. They are sealed in the existing untrusted evidence envelope. The
 model receives no tools or target-person argument; output cannot select a
 person, mint a source or create another effect. Output is bounded and must
