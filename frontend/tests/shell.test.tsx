@@ -153,6 +153,64 @@ describe("App shell routing", () => {
     expect(screen.getByRole("link", { name: "Contacts" })).toHaveAttribute("aria-current", "page");
   });
 
+  it("shows the new status and counts in Contacts after a person-file change via the real navigation path", async () => {
+    // Regression for #169. The director opens a person from Contacts, changes
+    // the status, then returns to Contacts. This test follows that navigation
+    // path and never dispatches sourcecado:board-changed itself — the refresh
+    // must come from the real flow (person-file move plus the Contacts remount).
+    const person = {
+      person_id: "person-1",
+      first_name: "Alyssa",
+      last_name: "Lee",
+      title: "Sourcing lead",
+      company: "Codeology",
+      sequence_state: "open",
+    };
+    // The board snapshot the backend would report, advanced by the status write.
+    let board = { open: [person], in_conversation: [], done: [] };
+    api.getBoard.mockImplementation(async () => board);
+    api.getPerson.mockImplementation(async () => ({
+      person: {
+        person_id: "person-1",
+        sequence_state: board.done.length > 0 ? "done" : "open",
+        version: 1,
+      },
+      brief: livingBrief({ who: "Alyssa", why: "Strong fit", learned: [], missing: [], sources: [] }),
+      timeline: [],
+    }));
+    api.setPersonSequence.mockImplementation(async (_id: string, state: string) => {
+      board = { open: [], in_conversation: [], done: [{ ...person, sequence_state: "done" }] };
+      return { person: { person_id: "person-1", sequence_state: state } };
+    });
+
+    window.location.hash = "#/board";
+    render(<App />);
+
+    const filtersBefore = await screen.findByRole("group", {
+      name: "Filter contacts by sequence status",
+    });
+    expect(within(filtersBefore).getByRole("button", { name: "Open 1" })).toBeInTheDocument();
+    expect(within(filtersBefore).getByRole("button", { name: "Done 0" })).toBeInTheDocument();
+
+    // Open the Person File from the Contacts row, then mark the person Done.
+    fireEvent.click(await screen.findByRole("link", { name: /Alyssa Lee/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Done" }));
+    await waitFor(() =>
+      expect(api.setPersonSequence).toHaveBeenCalledWith("person-1", "done"),
+    );
+
+    // Return to Contacts through the rail, as the director would.
+    fireEvent.click(screen.getByRole("link", { name: "Contacts" }));
+
+    const filtersAfter = await screen.findByRole("group", {
+      name: "Filter contacts by sequence status",
+    });
+    await waitFor(() =>
+      expect(within(filtersAfter).getByRole("button", { name: "Done 1" })).toBeInTheDocument(),
+    );
+    expect(within(filtersAfter).getByRole("button", { name: "Open 0" })).toBeInTheDocument();
+  });
+
   it("opens a newly created person chat before the cached session list refreshes", async () => {
     window.location.hash = "#/people/person-1";
     api.getPerson.mockResolvedValue({

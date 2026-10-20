@@ -427,11 +427,48 @@ describe("Contacts and person-file routes", () => {
     expect(container.querySelector(".tool-card")).not.toBeInTheDocument();
   });
 
-  it("refreshes Contacts after a person-file write", async () => {
-    render(<BoardView />);
+  it("refreshes Contacts when a person-file status change fires its own event", async () => {
+    // Regression for #169: the refresh must originate from the person-file move,
+    // not from the test. Contacts stays mounted alongside the person file so the
+    // real sourcecado:board-changed dispatch inside move() is what drives it.
+    render(
+      <>
+        <BoardView />
+        <PersonFileView personId="person one" />
+      </>,
+    );
     await screen.findByRole("link", { name: /Alyssa Lee/ });
-    window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
+    await waitFor(() => expect(api.getBoard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "In conversation" }));
+    await waitFor(() =>
+      expect(api.setPersonSequence).toHaveBeenCalledWith("person one", "in_conversation"),
+    );
     await waitFor(() => expect(api.getBoard).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps the previous status and reports an error when a status change fails", async () => {
+    api.setPersonSequence.mockRejectedValueOnce(new Error("sequence 500"));
+    render(
+      <>
+        <BoardView />
+        <PersonFileView personId="person one" />
+      </>,
+    );
+    await screen.findByRole("link", { name: /Alyssa Lee/ });
+    await waitFor(() => expect(api.getBoard).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "In conversation" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn’t update the sequence state. Try again.",
+    );
+    // A failed change keeps Open pressed and fires no refresh, so Contacts is untouched.
+    expect(screen.getByRole("button", { name: "Open" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(api.getBoard).toHaveBeenCalledTimes(1);
   });
 
   it("can inspect and revert a prior person-file version", async () => {

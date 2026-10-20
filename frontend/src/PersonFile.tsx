@@ -206,6 +206,9 @@ export function PersonFileView({ personId }: { personId: string }) {
     try {
       await setPersonSequence(personId, state);
       setFile(await getPerson(personId));
+      // Tell any other sequence-aware surface (Contacts, Tasks) to refetch,
+      // matching the dispatch ChatPage already makes after a status change.
+      window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
     } catch {
       setMoveFailed(true);
     } finally {
