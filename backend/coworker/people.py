@@ -14,6 +14,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
+from coworker.crm_tasks import CRM_TASK_STATEMENTS
 from coworker.person_identity import (
     apollo_surname_is_masked,
     without_apollo_name_masks,
@@ -22,11 +23,21 @@ from coworker.person_identity import (
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
-SCHEMA_VERSION = 4
+# v3 adds the person_descriptions table (ticket #202); v4 adds the person_tasks,
+# crm_changes and crm_operations tables (ticket #200); v5 rebuilds crm_changes
+# with the task lifecycle actions (ticket #201). The constructor creates them for
+# a fresh database, and the registered 2->3, 3->4 and 4->5 migrations adopt an
+# existing one with backup and rollback. v6 adds tracked Gmail evidence and
+# independent collection checkpoints; it preserves descriptions and tasks.
+SCHEMA_VERSION = 6
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
 ACTORS = ("director", "assistant")
+DESCRIPTION_SLOTS = ("general", "detailed")
+# Character ceilings from the Contacts spec (§6). The general slot is the
+# concise Contacts overview; the detailed slot is the readable person-file prose.
+DESCRIPTION_LIMITS = {"general": 500, "detailed": 8000}
 ATTACHMENT_TYPES = frozenset({"artifact", "knowledge_gap", "source_ref"})
 PERSON_PATCH_FIELDS = frozenset(
     {
@@ -80,9 +91,12 @@ class PersonStore:
                 raise RuntimeError("Person database upgrade failed; run Sourcecado Doctor. " + (outcome.error or ""))
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self._conn.execute("PRAGMA foreign_keys = ON")
         os.chmod(self.db_path, 0o600)
         self._conn.row_factory = sqlite3.Row
+        # SQLite enforces foreign keys per connection. Task and CRM-change rows
+        # reference people(person_id), so a write for a missing person fails
+        # here even if a caller skips the service's own check.
+        self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS people (
@@ -150,15 +164,25 @@ class PersonStore:
                 history_id TEXT,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS person_descriptions (
+                person_id TEXT NOT NULL,
+                slot TEXT NOT NULL,
+                text TEXT,
+                authority TEXT NOT NULL DEFAULT 'assistant',
+                source_refs TEXT NOT NULL DEFAULT '[]',
+                version INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (person_id, slot)
+            );
             """
         )
         self._ensure_schema()
-        if is_new:
-            from coworker.crm_repository import TASK_SCHEMA
-            from coworker.crm_mail_repository import MAIL_SCHEMA
+        from coworker.crm_mail_repository import MAIL_SCHEMA
 
-            for statement in (*TASK_SCHEMA, *MAIL_SCHEMA):
-                self._conn.execute(statement)
+        for statement in (*CRM_TASK_STATEMENTS, *MAIL_SCHEMA):
+            self._conn.execute(statement)
+        if is_new:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()
 
@@ -253,6 +277,47 @@ class PersonStore:
             "updated_at": str(row["updated_at"]),
         }
 
+    def _default_description(self, slot: str) -> dict[str, Any]:
+        # A person with no row for this slot reads as assistant-owned and
+        # unsummarized: version 0, no text. The first human save lazily
+        # creates the row and flips authority to "human".
+        return {
+            "slot": slot,
+            "text": None,
+            "authority": "assistant",
+            "source_refs": [],
+            "version": 0,
+        }
+
+    def _description_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "slot": str(row["slot"]),
+            "text": row["text"],
+            "authority": str(row["authority"]),
+            "source_refs": json.loads(str(row["source_refs"] or "[]")),
+            "version": int(row["version"] or 0),
+        }
+
+    def _descriptions(self, person_id: str) -> dict[str, dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM person_descriptions WHERE person_id = ?",
+            (person_id,),
+        ).fetchall()
+        found = {str(row["slot"]): self._description_dict(row) for row in rows}
+        return {
+            slot: found.get(slot, self._default_description(slot))
+            for slot in DESCRIPTION_SLOTS
+        }
+
+    def descriptions(self, person_id: str) -> dict[str, dict[str, Any]]:
+        """Both description slots for a person, defaulting missing slots.
+
+        Always returns every slot in `DESCRIPTION_SLOTS` so callers never have
+        to distinguish "no row" from "slot does not exist".
+        """
+        with self._lock:
+            return self._descriptions(person_id)
+
     def _require_audit(self, actor: str, rationale_summary: str) -> None:
         if actor not in ACTORS:
             raise ValueError(f"invalid actor {actor}")
@@ -301,6 +366,12 @@ class PersonStore:
                 "SELECT * FROM people WHERE person_id = ?", (person_id,)
             ).fetchone()
         )
+        if person is not None:
+            # Carry the description rows (text + per-slot authority) into the
+            # snapshot so a person revert has them available. Restoring them is
+            # a deferred slice (ticket #202 §8.2 follow-up); capturing them now
+            # keeps the snapshot from silently losing description state.
+            person["descriptions"] = self._descriptions(person_id)
         attachments = [
             self._attachment_dict(row)
             for row in self._conn.execute(
@@ -322,6 +393,49 @@ class PersonStore:
                 created_at,
             ),
         )
+
+    def _restore_descriptions(
+        self, person_id: str, captured: dict[str, Any], now: str
+    ) -> None:
+        """Put a snapshot's description rows back during a person revert.
+
+        Restores each slot's text together with its per-slot authority and
+        source references (spec §8.2), so a revert can never silently
+        un-protect a human edit or drop a description's sources. A slot the
+        snapshot held in its untouched default (assistant-owned, no text,
+        version 0) is left with no row, which reads back as that same default.
+        """
+        self._conn.execute(
+            "DELETE FROM person_descriptions WHERE person_id = ?", (person_id,)
+        )
+        for slot in DESCRIPTION_SLOTS:
+            entry = captured.get(slot)
+            if not isinstance(entry, dict):
+                continue
+            text = entry.get("text")
+            authority = str(entry.get("authority") or "assistant")
+            slot_version = int(entry.get("version") or 0)
+            if text is None and authority == "assistant" and slot_version == 0:
+                continue  # the untouched default carries no row
+            source_refs = entry.get("source_refs") or []
+            self._conn.execute(
+                """
+                INSERT INTO person_descriptions (
+                    person_id, slot, text, authority, source_refs, version,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    person_id,
+                    slot,
+                    text,
+                    authority if authority in ("human", "assistant") else "assistant",
+                    json.dumps(source_refs),
+                    slot_version,
+                    now,
+                    now,
+                ),
+            )
 
     def _receipt(
         self,
@@ -924,29 +1038,47 @@ class PersonStore:
         """
         if not message_id.strip():
             raise ValueError("message_id is required")
+        self._require_audit(actor, "Gmail message could not be tied to one person.")
         idempotency_key = f"gmail:reply:{message_id}"
-        already_recorded = self._has_attachment(
-            person_id, "knowledge_gap", idempotency_key
-        )
-        gap = self.upsert_attachment(
-            person_id,
-            record_type="knowledge_gap",
-            fields={
-                "kind": "unassigned_reply",
-                "provider": "Gmail",
-                "evidence": "ambiguous",
-                "message_id": message_id,
-                "thread_id": thread_id,
-                "reason": reason,
-                "question": question,
-                "candidate_count": int(candidate_count),
-                "received_at": received_at,
-            },
-            idempotency_key=idempotency_key,
-            actor=actor,
-            rationale_summary="Inbound reply could not be tied to one person.",
-        )
-        return {"gap": gap, "already_recorded": already_recorded}
+        fields = {
+            "kind": "unassigned_reply",
+            "provider": "Gmail",
+            "evidence": "ambiguous",
+            "message_id": message_id,
+            "thread_id": thread_id,
+            "reason": reason,
+            "question": question,
+            "candidate_count": int(candidate_count),
+            "received_at": received_at,
+        }
+        # Mail classification can change as identity evidence changes. This
+        # message-specific lifecycle must not relax generic attachment upserts.
+        with self.crm_transaction() as conn:
+            row = self._load_person_row(person_id)
+            prior = conn.execute("""SELECT * FROM person_attachments
+                WHERE person_id = ? AND record_type = 'knowledge_gap' AND idempotency_key = ?""",
+                (person_id, idempotency_key)).fetchone()
+            if prior and json.loads(prior["fields_json"]) == fields:
+                return {"gap": self._attachment_dict(prior), "already_recorded": True}
+            now = self._now()
+            record_id = prior["id"] if prior else self._new_attachment_id("knowledge_gap")
+            if prior:
+                conn.execute("UPDATE person_attachments SET fields_json = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(fields, sort_keys=True), now, record_id))
+            else:
+                conn.execute("""INSERT INTO person_attachments
+                    (id, person_id, record_type, idempotency_key, fields_json, restricted, created_at, updated_at)
+                    VALUES (?, ?, 'knowledge_gap', ?, ?, 0, ?, ?)""",
+                    (record_id, person_id, idempotency_key, json.dumps(fields, sort_keys=True), now, now))
+            version = int(row["version"]) + 1
+            conn.execute("UPDATE people SET version = ?, updated_at = ? WHERE person_id = ?", (version, now, person_id))
+            self._receipt(person_id, kind="reply_gap_updated" if prior else "knowledge_gap",
+                summary="Gmail message could not be tied to one person.",
+                payload={"id": record_id, "message_id": message_id, "reason": reason, "version": version},
+                actor=actor, session_id=None, run_id=None)
+            self._snapshot(person_id, version, now)
+            stored = conn.execute("SELECT * FROM person_attachments WHERE id = ?", (record_id,)).fetchone()
+            return {"gap": self._attachment_dict(stored), "already_recorded": False}
 
     def mail_state(self, person_id: str) -> dict[str, Any]:
         """Last contact, replied state, and whether the person needs attention.
@@ -1015,28 +1147,28 @@ class PersonStore:
             "unanswered_message_ids": unanswered,
         }
 
-    def resolve_reply_gap(self, person_id: str, *, message_id: str) -> None:
-        """Resolve only this message's ambiguity, retaining the explanation/audit."""
+    def resolve_reply_gaps(self, *, message_id: str) -> None:
+        """Resolve this message's warnings on all earlier candidates, retaining audit."""
         with self.crm_transaction() as conn:
-            gap = conn.execute("""SELECT * FROM person_attachments
-                WHERE person_id = ? AND record_type = 'knowledge_gap' AND idempotency_key = ?""",
-                (person_id, f"gmail:reply:{message_id}")).fetchone()
-            if not gap:
-                return
-            fields = json.loads(gap["fields_json"])
-            if fields.get("resolved"):
-                return
-            now = self._now()
-            fields.update({"resolved": True, "resolved_at": now})
-            conn.execute("UPDATE person_attachments SET fields_json = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(fields, sort_keys=True), now, gap["id"]))
-            row = self._load_person_row(person_id)
-            version = int(row["version"]) + 1
-            conn.execute("UPDATE people SET version = ?, updated_at = ? WHERE person_id = ?", (version, now, person_id))
-            self._receipt(person_id, kind="reply_gap_resolved", summary="Matched previously unassigned Gmail message.",
-                payload={"id": gap["id"], "message_id": message_id, "version": version}, actor="assistant",
-                session_id=None, run_id=None)
-            self._snapshot(person_id, version, now)
+            gaps = conn.execute("""SELECT a.* FROM person_attachments a JOIN people p ON p.person_id = a.person_id
+                WHERE a.record_type = 'knowledge_gap' AND a.idempotency_key = ? AND p.deleted_at IS NULL""",
+                (f"gmail:reply:{message_id}",)).fetchall()
+            for gap in gaps:
+                fields = json.loads(gap["fields_json"])
+                if fields.get("resolved") or fields.get("kind") != "unassigned_reply":
+                    continue
+                person_id = gap["person_id"]
+                now = self._now()
+                fields.update({"resolved": True, "resolved_at": now})
+                conn.execute("UPDATE person_attachments SET fields_json = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(fields, sort_keys=True), now, gap["id"]))
+                row = self._load_person_row(person_id)
+                version = int(row["version"]) + 1
+                conn.execute("UPDATE people SET version = ?, updated_at = ? WHERE person_id = ?", (version, now, person_id))
+                self._receipt(person_id, kind="reply_gap_resolved", summary="Matched previously unassigned Gmail message.",
+                    payload={"id": gap["id"], "message_id": message_id, "version": version}, actor="assistant",
+                    session_id=None, run_id=None)
+                self._snapshot(person_id, version, now)
 
     def get(
         self,
@@ -1157,9 +1289,25 @@ class PersonStore:
                 ORDER BY updated_at DESC, person_id
                 """
             ).fetchall()
+            description_rows = self._conn.execute(
+                "SELECT * FROM person_descriptions"
+            ).fetchall()
+        descriptions_by_person: dict[str, dict[str, dict[str, Any]]] = {}
+        for description_row in description_rows:
+            person_descriptions = descriptions_by_person.setdefault(
+                str(description_row["person_id"]), {}
+            )
+            person_descriptions[str(description_row["slot"])] = self._description_dict(
+                description_row
+            )
         for row in rows:
             person = self._person_dict(row)
             assert person is not None
+            found = descriptions_by_person.get(person["person_id"], {})
+            person["descriptions"] = {
+                slot: found.get(slot, self._default_description(slot))
+                for slot in DESCRIPTION_SLOTS
+            }
             person.update(self.mail_state(person["person_id"]))
             lane = (
                 person["sequence_state"]
@@ -1531,6 +1679,116 @@ class PersonStore:
         assert person is not None
         return person
 
+    def patch_description(
+        self,
+        person_id: str,
+        slot: str,
+        *,
+        expected_version: int,
+        text: str | None = None,
+        release: bool = False,
+        actor: str,
+        rationale_summary: str,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Save a description slot's text, or release it back to the assistant.
+
+        Concurrency is slot-scoped: `expected_version` is checked against the
+        slot's own version, so an edit to `general` never false-conflicts with
+        an edit to `detailed` or the handoff. A text save flips authority to
+        "human" (an empty string is an intentional, protected blank); `release`
+        flips it back to "assistant" and leaves the text in place for a later
+        assistant writer. Either way the write takes a person snapshot and
+        leaves a receipt, so audit and revert stay person-scoped.
+        """
+        if slot not in DESCRIPTION_SLOTS:
+            raise ValueError(f"unknown description slot {slot}")
+        self._require_audit(actor, rationale_summary)
+        if not release:
+            if text is None:
+                raise ValueError("a description save needs text or release")
+            limit = DESCRIPTION_LIMITS[slot]
+            if len(text) > limit:
+                raise ValueError(
+                    f"{slot} description exceeds {limit} characters"
+                )
+        with self._lock:
+            self._load_person_row(person_id)
+            current = self._conn.execute(
+                "SELECT * FROM person_descriptions WHERE person_id = ? AND slot = ?",
+                (person_id, slot),
+            ).fetchone()
+            current_version = int(current["version"]) if current is not None else 0
+            if current_version != expected_version:
+                raise ValueError(
+                    "stale record version: "
+                    f"expected {expected_version}, current {current_version}"
+                )
+            now = self._now()
+            next_slot_version = expected_version + 1
+            if release:
+                new_authority = "assistant"
+                new_text = current["text"] if current is not None else None
+                new_source_refs = (
+                    str(current["source_refs"]) if current is not None else "[]"
+                )
+            else:
+                new_authority = "human"
+                new_text = text
+                # A human edit carries no source references.
+                new_source_refs = "[]"
+            created_at = (
+                str(current["created_at"]) if current is not None else now
+            )
+            self._conn.execute(
+                """
+                INSERT INTO person_descriptions (
+                    person_id, slot, text, authority, source_refs, version,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(person_id, slot) DO UPDATE SET
+                    text = excluded.text,
+                    authority = excluded.authority,
+                    source_refs = excluded.source_refs,
+                    version = excluded.version,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    person_id,
+                    slot,
+                    new_text,
+                    new_authority,
+                    new_source_refs,
+                    next_slot_version,
+                    created_at,
+                    now,
+                ),
+            )
+            person_row = self._load_person_row(person_id)
+            next_person_version = int(person_row["version"] or 1) + 1
+            self._conn.execute(
+                "UPDATE people SET version = ?, updated_at = ? WHERE person_id = ?",
+                (next_person_version, now, person_id),
+            )
+            self._receipt(
+                person_id,
+                kind="description",
+                summary=rationale_summary.strip(),
+                payload={
+                    "slot": slot,
+                    "authority": new_authority,
+                    "released": bool(release),
+                    "version": next_slot_version,
+                },
+                actor=actor,
+                session_id=session_id,
+                run_id=run_id,
+            )
+            self._snapshot(person_id, next_person_version, now)
+            self._conn.commit()
+        return self.descriptions(person_id)[slot]
+
     def upsert_attachment(
         self,
         person_id: str,
@@ -1707,6 +1965,17 @@ class PersonStore:
                 target_hidden_last_name = target_last_name
                 target_last_name = None
             attachments = json.loads(str(snapshot["attachments_json"]))
+            # Snapshots carry description rows under person_json["descriptions"]
+            # (text + per-slot authority + sources). Restore them below so a
+            # revert never silently un-protects a human edit or drops a
+            # description's sources (spec §8.2). A snapshot taken before #202
+            # has no such key; those predate descriptions, so there is nothing
+            # to restore and the live rows are left untouched.
+            restored_descriptions = (
+                target.get("descriptions")
+                if isinstance(target.get("descriptions"), dict)
+                else None
+            )
             now = self._now()
             next_version = expected_version + 1
             cursor = self._conn.execute(
@@ -1764,6 +2033,8 @@ class PersonStore:
                         now,
                     ),
                 )
+            if restored_descriptions is not None:
+                self._restore_descriptions(person_id, restored_descriptions, now)
             self._receipt(
                 person_id,
                 kind="revert",

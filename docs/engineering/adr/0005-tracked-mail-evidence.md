@@ -12,7 +12,8 @@ Automatic collection and later analysis need independent progress boundaries.
 ## Decision
 
 Keep account/message evidence, collection progress and per-person analysis
-revisions in `people.db` under the registered schema 3 → 4 migration. Commit each
+revisions in `people.db` under the registered schema 5 → 6 migration, after the
+task and description migrations on main. Commit each
 message's evidence, timeline projection and revision in one PersonStore
 transaction. Advance collection checkpoints only after a completed bounded pass;
 failed passes preserve prior progress and safely replay committed messages.

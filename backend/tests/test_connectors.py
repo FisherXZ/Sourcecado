@@ -73,6 +73,7 @@ def test_connectors_normalize_safe_health_scope_and_recovery_metadata(tmp_path):
         "missing_scopes",
         "health",
         "recovery",
+        "verified",
         "supported_actions",
         "available_actions",
         "repair_route",
@@ -95,6 +96,7 @@ def test_connectors_normalize_safe_health_scope_and_recovery_metadata(tmp_path):
     assert drive["missing_scopes"] == []
     assert drive["email"] == "fisher@example.com"
     assert drive["supported_actions"] == ["Search files", "List folders", "Read files"]
+    assert drive["verified"] is True
 
     calendar = by_id["calendar"]
     assert calendar["status"] == "missing_scopes"
@@ -104,6 +106,10 @@ def test_connectors_normalize_safe_health_scope_and_recovery_metadata(tmp_path):
     assert by_id["apollo"]["health"]["label"] == "Configured"
     assert by_id["apollo"]["available_actions"] == ["view_guidance"]
     assert by_id["granola"]["status"] == "connected"
+    assert by_id["granola"]["verified"] is True
+    # A saved key is configuration, not a verified connection.
+    assert by_id["apollo"]["verified"] is False
+    assert gmail["verified"] is False
 
     serialized = str(body).lower()
     for secret in (
@@ -181,5 +187,6 @@ def test_available_google_connectors_mark_every_required_scope_missing(tmp_path)
     for connector_id in ("gmail", "drive", "calendar"):
         connector = by_id[connector_id]
         assert connector["status"] == "available"
+        assert connector["verified"] is False
         assert connector["required_scopes"]
         assert connector["missing_scopes"] == connector["required_scopes"]

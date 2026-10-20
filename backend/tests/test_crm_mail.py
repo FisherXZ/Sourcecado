@@ -143,8 +143,7 @@ def deliver(gmail, *, mid="incoming", sender=ADDRESS, to=ACCOUNT, labels=("INBOX
 
 
 def test_collects_gmail_reply_once_and_preserves_done_tasks_and_approval(tmp_path):
-    from coworker.crm_service import CrmService
-    from coworker.store import ConversationStore
+    from coworker.crm_tasks import TaskService
     people = PersonStore(tmp_path)
     pid = tracked_person(people)
     gmail = mailbox()
@@ -152,8 +151,9 @@ def test_collects_gmail_reply_once_and_preserves_done_tasks_and_approval(tmp_pat
     first = refresh_mail(people, TrackedMailReader(gmail))
     assert first["filed"] == 1
     people.set_sequence(pid, "done", actor="director")
-    tasks = CrmService(people, ConversationStore(tmp_path))
-    task = tasks.save_task(pid, {"title": "Unrelated promise", "operation_id": "manual-task"})
+    tasks = TaskService(people)
+    task = tasks.create(pid, title="Unrelated promise", operation_id="manual-task",
+        timezone="America/Los_Angeles", actor="director")
     deliver(gmail, mid="external-reply", sender=ACCOUNT, to=ADDRESS, labels=("SENT",))
     result = refresh_mail(people, TrackedMailReader(gmail))
     assert result["outgoing"] == 1
@@ -355,3 +355,79 @@ def test_later_approved_receipt_preserves_collected_mail_and_attaches_authority(
     assert events[0]["kind"] == "send"
     assert events[0]["payload"]["approval_id"] == "settled-approval"
     assert events[0]["payload"]["source_ref"]["message_id"] == "settled-send"
+
+
+def test_expired_history_restarts_partial_outgoing_pass_and_keeps_recovery_boundary(tmp_path):
+    people = PersonStore(tmp_path)
+    tracked_person(people)
+    tracked_person(people, apollo_id="second", address="second@example.com", thread="thread-z")
+    gmail = mailbox()
+    refresh_mail(people, TrackedMailReader(gmail))
+    assert refresh_mail(people, TrackedMailReader(gmail), max_threads=1)["status"] == "partial"
+    assert MailRepository(people).sync_state()["outbound_after"] == "thread-ada"
+    gmail.history_floor = gmail.history_id + 1
+    deliver(gmail, mid="archived-before-expiry", labels=())
+    boundary = gmail.profile_history_id()
+    recovering = refresh_mail(people, TrackedMailReader(gmail), max_threads=1)
+    assert recovering["mode"] == "cursor_reset"
+    assert recovering["status"] == "partial"
+    assert MailRepository(people).message(ACCOUNT, "archived-before-expiry")
+    deliver(gmail, mid="between-recovery-batches")
+    people._conn.close()
+    restarted = PersonStore(tmp_path)
+    assert refresh_mail(restarted, TrackedMailReader(gmail), max_threads=1)["status"] == "ok"
+    assert restarted.reply_cursor() == boundary
+    assert refresh_mail(restarted, TrackedMailReader(gmail))["filed"] == 1
+
+
+def test_changed_ambiguity_updates_one_warning_without_stalling_later_mail(tmp_path):
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    gmail = mailbox()
+    deliver(gmail, sender="colleague@example.com")
+    refresh_mail(people, TrackedMailReader(gmail))
+    tracked_person(people, apollo_id="second", address="second@example.com", thread="thread-ada")
+    refresh = refresh_mail(people, TrackedMailReader(gmail))
+    assert refresh["status"] == "ok"
+    gaps = people.get(pid, expand_sources=True)["knowledge_gaps"]
+    assert len(gaps) == 1
+    assert gaps[0]["fields"]["reason"] == "thread_serves_several_people"
+    assert gaps[0]["fields"]["candidate_count"] == 2
+    version = people.get(pid)["version"]
+    assert refresh_mail(people, TrackedMailReader(gmail))["status"] == "ok"
+    assert people.get(pid)["version"] == version
+
+
+def test_matching_resolves_every_candidate_and_later_ambiguity_reopens_same_gap(tmp_path):
+    people = PersonStore(tmp_path)
+    winner = tracked_person(people)
+    other = tracked_person(people, apollo_id="second", address="second@example.com", thread="thread-z")
+    gmail = mailbox()
+    message = deliver(gmail, to=f"{ACCOUNT}, second@example.com")
+    assert refresh_mail(people, TrackedMailReader(gmail))["status"] == "ok"
+    assert all(people.mail_state(pid)["follow_up"]["reason"] == "reply_needs_review" for pid in (winner, other))
+    next(h for h in message["payload"]["headers"] if h["name"] == "To")["value"] = ACCOUNT
+    assert refresh_mail(people, TrackedMailReader(gmail))["filed"] == 1
+    assert not people.mail_state(other)["follow_up"]["needed"]
+    for pid in (winner, other):
+        gap = people.get(pid, expand_sources=True)["knowledge_gaps"][0]
+        assert gap["fields"]["resolved"] is True
+    next(h for h in message["payload"]["headers"] if h["name"] == "To")["value"] = f"{ACCOUNT}, second@example.com"
+    assert refresh_mail(people, TrackedMailReader(gmail))["status"] == "ok"
+    for pid in (winner, other):
+        gaps = people.get(pid, expand_sources=True)["knowledge_gaps"]
+        assert len(gaps) == 1
+        assert not gaps[0]["fields"].get("resolved")
+
+
+def test_body_with_changed_bcc_is_not_saved_under_attributed_metadata(tmp_path):
+    people = PersonStore(tmp_path)
+    tracked_person(people)
+    gmail = mailbox()
+    deliver(gmail, sender=ACCOUNT, to=ADDRESS, labels=("SENT",), body="Sensitive body")
+    original = gmail.read
+    gmail.read = lambda **kwargs: {**original(**kwargs), "bcc": "other@example.com"}
+    assert refresh_mail(people, TrackedMailReader(gmail))["status"] == "ok"
+    saved = MailRepository(people).message(ACCOUNT, "incoming")
+    assert saved["body"] == ""
+    assert saved["body_state"] == "missing"

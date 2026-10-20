@@ -20,9 +20,9 @@ const api = vi.hoisted(() => ({
   setPersonSequence: vi.fn(),
 }));
 
-vi.mock("../src/api", () => ({
-  getTasks: vi.fn(async () => ({ tasks: [], next_offset: null })),
-  getTaskPreferences: vi.fn(async () => ({ timezone: "America/Los_Angeles" })),
+vi.mock("../src/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/api")>()),
+  ...(await import("./taskApi")).taskApiMock(),
   attachPersonMeeting: api.attachPersonMeeting,
   attachPersonDriveEvidence: api.attachPersonDriveEvidence,
   getBoard: api.getBoard,

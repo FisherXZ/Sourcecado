@@ -57,4 +57,11 @@ describe("tracked Gmail activity", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Gmail check failed");
     expect(screen.getByText(/Analysis pending/)).toBeInTheDocument();
   });
+
+  it("calls an incoming message a reply to review without promising that a response is required", () => {
+    render(<MailActivity events={[mail("inbound", "thanks", "2026-10-11T12:00:00Z")]}
+      gaps={[]} followUp={{ needed: true, reason: "reply_unanswered" }} />);
+    expect(screen.getByText("Reply to review.")).toBeInTheDocument();
+    expect(screen.queryByText(/waiting on a response/)).not.toBeInTheDocument();
+  });
 });

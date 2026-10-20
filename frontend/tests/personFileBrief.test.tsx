@@ -5,8 +5,6 @@ import { PersonFileView } from "../src/PersonFile";
 import { claim, livingBrief } from "./livingBrief";
 
 const api = vi.hoisted(() => ({
-  getTasks: vi.fn(async () => ({ tasks: [], next_offset: null })),
-  getTaskPreferences: vi.fn(async () => ({ timezone: "America/Los_Angeles" })),
   attachPersonMeeting: vi.fn(),
   attachPersonDriveEvidence: vi.fn(),
   getPerson: vi.fn(),
@@ -19,7 +17,11 @@ const api = vi.hoisted(() => ({
   setPersonSequence: vi.fn(),
 }));
 
-vi.mock("../src/api", () => api);
+vi.mock("../src/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/api")>()),
+  ...api,
+  ...(await import("./taskApi")).taskApiMock(),
+}));
 
 function personFile(brief = livingBrief()) {
   return {
@@ -70,7 +72,7 @@ describe("the living brief on the person file", () => {
     expect(within(outcome).getByText("Outcome: agreed to speak")).toBeInTheDocument();
     const contact = screen.getByRole("region", { name: "Last contact" });
     expect(contact).toHaveTextContent("inbound");
-    expect(within(contact).getByText("Needs follow-up.")).toBeInTheDocument();
+    expect(within(contact).getByText("Reply to review.")).toBeInTheDocument();
     expect(
       within(screen.getByRole("region", { name: "What they want" })).getByText(
         "What they want: a date after the 15th",

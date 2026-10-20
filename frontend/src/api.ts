@@ -182,70 +182,6 @@ export async function getHealth(): Promise<Health> {
   return res.json();
 }
 
-export type PersonTask = {
-  task_id: string;
-  person_id: string;
-  person_name: string;
-  person_company: string | null;
-  title: string;
-  details: string;
-  due_date: string | null;
-  due_timezone: string;
-  state: "open" | "completed" | "cancelled";
-  origin: "human" | "assistant";
-  version: number;
-  created_at: string;
-  updated_at: string;
-};
-export type TaskFields = { title: string; details: string; due_date: string | null };
-export type TaskIntent = TaskFields & { operation_id: string; expected_version?: number };
-export type TaskSave = { task: PersonTask; receipt: {
-  change_id: string; operation_id: string; task_id: string; version: number;
-  actor: "director"; reason: string; created_at: string;
-} };
-export type TaskPerson = { person_id: string; first_name?: string | null; last_name?: string | null; company?: string | null };
-
-export class CrmTaskError extends Error {
-  constructor(message: string, readonly status: number, readonly current: PersonTask | null = null) {
-    super(message);
-  }
-}
-
-async function crmRequest<T>(path: string, method = "GET", body?: unknown): Promise<T> {
-  const response = await fetch(`${httpBase()}${path}`, {
-    method,
-    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  if (!response.ok) {
-    const failure = await response.json().catch(() => ({}));
-    throw new CrmTaskError(typeof failure.error === "string" ? failure.error : "Couldn’t save task.",
-      response.status, failure.current ?? null);
-  }
-  return response.json();
-}
-
-export function getTasks(personId?: string, offset = 0): Promise<{ tasks: PersonTask[]; next_offset: number | null }> {
-  const params = new URLSearchParams({ offset: String(offset), limit: "50" });
-  if (personId) params.set("person_id", personId);
-  return crmRequest(`/v1/crm/tasks?${params}`);
-}
-export function getTaskPeople(query = "", offset = 0): Promise<{ people: TaskPerson[]; next_offset: number | null }> {
-  return crmRequest(`/v1/crm/people?${new URLSearchParams({ query, offset: String(offset), limit: "50" })}`);
-}
-export function getTaskPreferences(): Promise<{ timezone: string }> {
-  return crmRequest("/v1/crm/preferences");
-}
-export function saveTaskTimezone(timezone: string): Promise<{ timezone: string }> {
-  return crmRequest("/v1/crm/preferences", "PUT", { timezone });
-}
-export function createPersonTask(personId: string, intent: TaskIntent): Promise<TaskSave> {
-  return crmRequest(`/v1/people/${encodeURIComponent(personId)}/tasks`, "POST", intent);
-}
-export function updatePersonTask(personId: string, taskId: string, intent: TaskIntent): Promise<TaskSave> {
-  return crmRequest(`/v1/people/${encodeURIComponent(personId)}/tasks/${encodeURIComponent(taskId)}`, "PATCH", intent);
-}
-
 export async function getHello(): Promise<Hello> {
   const res = await get("/v1/hello");
   if (!res.ok) throw new Error(`hello ${res.status}`);
@@ -434,6 +370,7 @@ export type BoardPerson = {
   replied?: boolean;
   replied_at?: string | null;
   follow_up?: FollowUp;
+  descriptions?: PersonDescriptions;
 };
 
 export type Board = {
@@ -443,6 +380,42 @@ export type Board = {
   in_conversation: BoardPerson[];
   done: BoardPerson[];
 };
+
+export type DescriptionSlot = "general" | "detailed";
+export type DescriptionAuthority = "assistant" | "human";
+
+/** One description slot: its text, who owns it, and its own version. */
+export type PersonDescription = {
+  slot: DescriptionSlot;
+  text: string | null;
+  authority: DescriptionAuthority;
+  source_refs: string[];
+  version: number;
+};
+
+export type PersonDescriptions = Record<DescriptionSlot, PersonDescription>;
+
+export const DESCRIPTION_SLOTS: DescriptionSlot[] = ["general", "detailed"];
+
+/** Both slots at their never-touched default: assistant-owned, unsummarized. */
+export function defaultPersonDescriptions(): PersonDescriptions {
+  return {
+    general: {
+      slot: "general",
+      text: null,
+      authority: "assistant",
+      source_refs: [],
+      version: 0,
+    },
+    detailed: {
+      slot: "detailed",
+      text: null,
+      authority: "assistant",
+      source_refs: [],
+      version: 0,
+    },
+  };
+}
 
 export type PersonSourceRef = {
   id: string;
@@ -582,6 +555,7 @@ export type PersonFile = {
   versions?: Array<{ version: number; created_at: string }>;
   sourcing_chat: { session_id: string; person_id: string } | null;
   meeting_evidence?: MeetingEvidenceView;
+  descriptions?: PersonDescriptions;
 };
 
 export type MeetingEvidence = {
@@ -688,6 +662,184 @@ export async function getPerson(id: string): Promise<PersonFile> {
   const res = await get(`/v1/people/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`person ${res.status}`);
   return res.json();
+}
+
+export type TaskDueStatus = "overdue" | "today" | "upcoming" | "none";
+
+export type PersonTask = {
+  task_id: string;
+  person_id: string;
+  title: string;
+  details: string;
+  due_date: string | null;
+  due_timezone: string | null;
+  state: "open" | "completed" | "cancelled";
+  origin: "human" | "assistant";
+  protected_fields: string[];
+  version: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  due_status?: TaskDueStatus;
+  person?: {
+    person_id: string;
+    first_name: string | null;
+    last_name: string | null;
+    company: string | null;
+    sequence_state: string | null;
+  };
+};
+
+export type TaskListing = {
+  tasks: PersonTask[];
+  truncated: boolean;
+  timezone: string;
+  today: string;
+};
+
+export type TaskSaveResult = {
+  task: PersonTask;
+  change: { change_id: string } | null;
+  replayed: boolean;
+};
+
+export type TaskChangeAction = "create" | "update" | "complete" | "reopen" | "cancel" | "undo";
+
+/** One recorded change to a task. `compensates_change_id` marks an undo. */
+export type TaskChange = {
+  change_id: string;
+  entity_version: number;
+  action: TaskChangeAction;
+  actor: "director" | "assistant";
+  reason: string;
+  operation_id: string;
+  compensates_change_id: string | null;
+  created_at: string;
+};
+
+export type TaskFields = {
+  title: string;
+  details: string;
+  due_date: string | null;
+};
+
+/** A task save the server refused. A stale edit carries the newer saved task. */
+export class TaskSaveError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly current: PersonTask | null;
+
+  constructor(message: string, status: number, code: string | null, current: PersonTask | null) {
+    super(message);
+    this.name = "TaskSaveError";
+    this.status = status;
+    this.code = code;
+    this.current = current;
+  }
+}
+
+/** One id per intended change, so a retried save is recognised, not repeated. */
+export function newOperationId(): string {
+  const random =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `ui-${random}`;
+}
+
+export async function listTasks(
+  options: { personId?: string; state?: "open" | "all" } = {},
+): Promise<TaskListing> {
+  const params = new URLSearchParams();
+  if (options.personId) params.set("person_id", options.personId);
+  if (options.state) params.set("state", options.state);
+  const query = params.toString();
+  const res = await get(`/v1/crm/tasks${query ? `?${query}` : ""}`);
+  if (!res.ok) throw new Error(`tasks ${res.status}`);
+  return res.json();
+}
+
+export async function listTaskChanges(
+  personId: string,
+  taskId: string,
+): Promise<TaskChange[]> {
+  const res = await get(
+    `/v1/people/${encodeURIComponent(personId)}/tasks/${encodeURIComponent(taskId)}/changes`,
+  );
+  if (!res.ok) throw new Error(`task changes ${res.status}`);
+  return ((await res.json()) as { changes: TaskChange[] }).changes;
+}
+
+async function taskWrite(
+  method: "POST" | "PATCH",
+  path: string,
+  payload: Record<string, unknown>,
+): Promise<TaskSaveResult> {
+  const res = await fetch(`${httpBase()}${path}`, {
+    method,
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let body: Record<string, unknown> = {};
+  try {
+    body = await res.json();
+  } catch {
+    body = {};
+  }
+  if (!res.ok) {
+    throw new TaskSaveError(
+      typeof body.error === "string" ? body.error : `task ${res.status}`,
+      res.status,
+      typeof body.code === "string" ? body.code : null,
+      (body.task as PersonTask | undefined) ?? null,
+    );
+  }
+  return body as TaskSaveResult;
+}
+
+export function createTask(
+  personId: string,
+  input: TaskFields & { operationId: string },
+): Promise<TaskSaveResult> {
+  return taskWrite("POST", `/v1/people/${encodeURIComponent(personId)}/tasks`, {
+    title: input.title,
+    details: input.details,
+    due_date: input.due_date,
+    operation_id: input.operationId,
+  });
+}
+
+export function updateTask(
+  personId: string,
+  taskId: string,
+  input: {
+    changes: Partial<TaskFields> & { state?: PersonTask["state"] };
+    expectedVersion: number;
+    operationId: string;
+  },
+): Promise<TaskSaveResult> {
+  return taskWrite(
+    "PATCH",
+    `/v1/people/${encodeURIComponent(personId)}/tasks/${encodeURIComponent(taskId)}`,
+    {
+      changes: input.changes,
+      expected_version: input.expectedVersion,
+      operation_id: input.operationId,
+    },
+  );
+}
+
+/** Undo one recorded change as a new compensating change; 409 if the task moved on. */
+export function undoTaskChange(
+  personId: string,
+  changeId: string,
+  input: { operationId: string },
+): Promise<TaskSaveResult> {
+  return taskWrite(
+    "POST",
+    `/v1/people/${encodeURIComponent(personId)}/crm-changes/${encodeURIComponent(changeId)}/undo`,
+    { operation_id: input.operationId },
+  );
 }
 
 export async function refreshPersonMeetings(id: string): Promise<MeetingRefreshResult> {
@@ -1103,6 +1255,47 @@ export async function savePersonHandoff(
   const payload = await res.json();
   if (!res.ok) throw new Error(payload.error || `handoff ${res.status}`);
   return payload;
+}
+
+/** A failed description save, carrying the HTTP status so the editor can tell
+ * a stale-version conflict (409) from an over-limit rejection (422). */
+export class DescriptionSaveError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "DescriptionSaveError";
+    this.status = status;
+  }
+}
+
+export async function patchPersonDescription(
+  id: string,
+  slot: DescriptionSlot,
+  body:
+    | { text: string; expectedVersion: number }
+    | { release: true; expectedVersion: number },
+): Promise<{
+  descriptions: PersonDescriptions;
+  description: PersonDescription;
+  saved: boolean;
+  unchanged?: boolean;
+}> {
+  const payload: Record<string, unknown> = { expected_version: body.expectedVersion };
+  if ("release" in body) payload.release = true;
+  else payload.text = body.text;
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(id)}/descriptions/${slot}`,
+    {
+      method: "PATCH",
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  const data = await res.json();
+  if (!res.ok) {
+    throw new DescriptionSaveError(res.status, data.error || `description ${res.status}`);
+  }
+  return data;
 }
 
 export async function pinSession(
@@ -1719,6 +1912,7 @@ export type Connector = {
   missingScopes: string[];
   health: { category: string; label: string; message: string };
   recovery: { category: string; actionLabel: string; message: string } | null;
+  verified: boolean;
   supportedActions: string[];
   availableActions: ConnectorAction[];
   repairRoute: string;
@@ -1798,6 +1992,7 @@ function normalizeConnector(value: unknown): Connector | null {
             actionLabel: text(rawRecovery.action_label, "Try again"),
             message: text(rawRecovery.message, "Try the connection again."),
           },
+    verified: raw.verified === true,
     supportedActions: textList(raw.supported_actions),
     availableActions: textList(raw.available_actions).filter(
       (action): action is ConnectorAction => CONNECTOR_ACTIONS.has(action as ConnectorAction),

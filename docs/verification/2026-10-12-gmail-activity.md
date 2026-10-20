@@ -1,5 +1,8 @@
 # Gmail activity verification — 2026-10-12
 
+Historical implementation record. The [October 19 review](2026-10-19-gmail-pr-readiness.md)
+supersedes its schema numbers, test totals and PR-readiness conclusions.
+
 Status: execution record for #207 on `codex/gmail-activity`. This records checks
 performed on Windows, Python 3.14.7 and Node 24.21.0. It is not a native macOS
 release qualification. The attached September 28 engineering spec supplied
@@ -42,7 +45,8 @@ after the correction. React continues escaping preview text rather than treating
 it as markup.
 
 The broad backend run before the preview correction reported **1,759 passed, 256 failed, 2 errors and
-3 skipped**. A separate original-code baseline reported **1,738 passed,
+3 skipped**. A separate early-feature baseline (already containing the first
+outgoing-classifier tests, not pristine pre-ticket code) reported **1,738 passed,
 258 failed, 2 errors and 3 skipped**. Comparing JUnit failure identities found
 **no new failures** in that comparison. Two baseline failures were
 absent in the final run; this does not establish a fix for those untouched paths.

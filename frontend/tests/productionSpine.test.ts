@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const app = readFileSync("src/App.tsx", "utf8");
+const app = readFileSync("src/App.tsx", "utf8").replace(/\r\n/g, "\n");
 const chatPage = readFileSync("src/routes/ChatPage.tsx", "utf8");
 const main = readFileSync("src/main.tsx", "utf8");
 const styles = readFileSync("src/styles.css", "utf8");

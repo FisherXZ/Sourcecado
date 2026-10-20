@@ -20,6 +20,9 @@ __pycache__/
 
 # Environment files
 .env
+client_secret_*.json
+secrets.json
+*.token
 .env.local
 .env.*.local
 

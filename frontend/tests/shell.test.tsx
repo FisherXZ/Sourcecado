@@ -31,7 +31,6 @@ const api = vi.hoisted(() => ({
   getSession: vi.fn(),
   getSessions: vi.fn(),
   getSettings: vi.fn(),
-  getTasks: vi.fn(),
   getSkills: vi.fn(),
   hasToken: vi.fn(),
   openChat: vi.fn(),
@@ -42,9 +41,9 @@ const api = vi.hoisted(() => ({
   setPersonSequence: vi.fn(),
 }));
 
-vi.mock("../src/api", () => ({
-  getTasks: api.getTasks,
-  getTaskPreferences: vi.fn(async () => ({ timezone: "America/Los_Angeles" })),
+vi.mock("../src/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/api")>()),
+  ...(await import("./taskApi")).taskApiMock(),
   connectCalendar: vi.fn(),
   connectDrive: vi.fn(),
   connectGmail: vi.fn(),
@@ -91,7 +90,6 @@ describe("App shell routing", () => {
       current_run: null,
     });
     api.getBoard.mockResolvedValue({ open: [], in_conversation: [], done: [] });
-    api.getTasks.mockResolvedValue({ tasks: [], next_offset: null });
     api.getGmail.mockResolvedValue({ connected: false, email: null });
     api.getHealth.mockResolvedValue({ status: "ok", piece: "test", slice: 1, model: "test" });
     api.getInbox.mockResolvedValue({ items: [] });
@@ -134,36 +132,6 @@ describe("App shell routing", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Skills" })).toBeInTheDocument();
   });
 
-  it("opens Tasks inside Contacts and preserves its hash across restart", async () => {
-    window.location.hash = "#/board/tasks";
-    const { unmount } = render(<App />);
-    expect(await screen.findByRole("heading", { name: "Tasks", level: 2 })).toBeInTheDocument();
-    await waitFor(() => expect(api.setLastDestination).toHaveBeenCalledWith("#/board/tasks"));
-    expect(api.getBoard).not.toHaveBeenCalled();
-    unmount();
-    api.getSessions.mockResolvedValue({ sessions: [], open_id: null, last_destination: "#/board/tasks" });
-    window.location.hash = "#/";
-    render(<App />);
-    expect(await screen.findByRole("heading", { name: "Tasks", level: 2 })).toBeInTheDocument();
-  });
-
-  it("keeps a task draft during browser hash navigation until explicitly discarded", async () => {
-    window.location.hash = "#/people/person-1";
-    render(<App />);
-    await screen.findByRole("heading", { name: "Tasks", level: 2 });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Add task" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "My unsaved promise" } });
-    window.location.hash = "#/board/tasks";
-    fireEvent(window, new Event("hashchange"));
-    await screen.findByRole("alertdialog");
-    expect(window.location.hash).toBe("#/people/person-1");
-    expect(screen.getByLabelText("Title")).toHaveValue("My unsaved promise");
-    fireEvent.click(screen.getByRole("button", { name: "Discard and leave" }));
-    await waitFor(() => expect(screen.queryByLabelText("Title")).not.toBeInTheDocument());
-    expect(window.location.hash).toBe("#/board/tasks");
-  });
-
   it("renders Contacts as a direct durable rail destination", async () => {
     window.location.hash = "#/board";
 
@@ -171,7 +139,7 @@ describe("App shell routing", () => {
 
     expect(await screen.findByRole("heading", { level: 1, name: "Contacts" })).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    expect(within(screen.getByRole("navigation", { name: "Sourcecado" })).getByRole("link", { name: "Contacts" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Contacts" })).toHaveAttribute("aria-current", "page");
   });
 
   it("renders a decoded person file under the active Contacts destination", async () => {

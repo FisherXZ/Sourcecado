@@ -1,13 +1,16 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { DescriptionEditor } from "./DescriptionEditor";
 import { OutreachPanel } from "./OutreachPanel";
-import { TaskPanel } from "./crm/TaskPanel";
+import { TaskList } from "./Tasks";
 import { MailActivity } from "./crm/MailActivity";
 
 import {
   attachPersonMeeting,
   attachPersonDriveEvidence,
+  defaultPersonDescriptions,
   getPerson,
+  refreshReplies,
   openPersonSourcingChat,
   refreshPersonMeetings,
   rejectPersonMeeting,
@@ -116,11 +119,17 @@ export function PersonFileView({ personId }: { personId: string }) {
   const [handoff, setHandoff] = useState<HandoffDraft | null>(null);
   const [handoffBusy, setHandoffBusy] = useState(false);
   const [handoffStatus, setHandoffStatus] = useState<string | null>(null);
+  const handoffDirty = useRef(false);
+  const handoffPerson = useRef(personId);
+  const [mailBusy, setMailBusy] = useState(false);
+  const [mailStatus, setMailStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setFailed(false);
-    setFile(current => current?.person.person_id === personId ? current : null);
+    // A refresh of the same person keeps the page mounted, so an open task
+    // editor keeps its unsaved text. Switching person starts clean.
+    setFile((current) => (current?.person.person_id === personId ? current : null));
     getPerson(personId).then(
       (next) => {
         if (active) setFile(next);
@@ -138,6 +147,12 @@ export function PersonFileView({ personId }: { personId: string }) {
   // the director wrote one, otherwise the draft generated from the claims.
   useEffect(() => {
     if (!file) return;
+    if (handoffPerson.current !== file.person.person_id) {
+      handoffPerson.current = file.person.person_id;
+      handoffDirty.current = false;
+      setMailStatus(null);
+    }
+    if (handoffDirty.current) return;
     const stored = file.brief.handoff;
     setHandoff({
       who: stored.who,
@@ -152,6 +167,23 @@ export function PersonFileView({ personId }: { personId: string }) {
     window.addEventListener("sourcecado:board-changed", refresh);
     return () => window.removeEventListener("sourcecado:board-changed", refresh);
   }, []);
+
+  async function refreshMail() {
+    if (mailBusy) return;
+    setMailBusy(true);
+    setMailStatus(null);
+    try {
+      const { refresh } = await refreshReplies();
+      setMailStatus(refresh.status === "failed" ? "Gmail check failed. Saved activity is kept."
+        : refresh.status === "partial" ? "Collection is unfinished. Refresh again to continue."
+          : "Gmail activity refreshed.");
+      setAttempt(value => value + 1);
+    } catch {
+      setMailStatus("Couldn’t check Gmail. Saved activity is kept. Try again.");
+    } finally {
+      setMailBusy(false);
+    }
+  }
 
   async function move(state: string) {
     if (moving) return;
@@ -276,6 +308,7 @@ export function PersonFileView({ personId }: { personId: string }) {
         ...handoff,
         expectedVersion: file.brief.person_version,
       });
+      handoffDirty.current = false;
       setFile(await getPerson(personId));
       setHandoffStatus(
         result.saved
@@ -349,6 +382,16 @@ export function PersonFileView({ personId }: { personId: string }) {
         </div>
       </header>
 
+      <nav className="person-section-nav" aria-label="Person file sections">
+        {[["person-mail-heading", "Gmail activity"], ["person-tasks", "Tasks"],
+          ["person-description-heading", "Description"], ["person-handoff-heading", "Handoff"]].map(([id, label]) =>
+          <button key={id} type="button" onClick={() => {
+            const section = document.getElementById(id);
+            section?.scrollIntoView({ block: "start" });
+            section?.focus({ preventScroll: true });
+          }}>{label}</button>)}
+      </nav>
+
       {failed ? <p className="task-error" role="alert">Couldn’t refresh this person file. Previously loaded work is kept.</p> : null}
       {file.brief.partial ? (
         <p className="person-partial" role="status">
@@ -383,7 +426,45 @@ export function PersonFileView({ personId }: { personId: string }) {
         ) : null}
       </section>
 
-      <TaskPanel key={personId} personId={personId} />
+      <section className="person-section" aria-labelledby="person-description-heading">
+        <h2 id="person-description-heading" tabIndex={-1}>Description</h2>
+        <p>
+          Readable context about this person. Editing either field protects it
+          as your own until you let the assistant maintain it again.
+        </p>
+        {(() => {
+          const descriptions = file.descriptions ?? defaultPersonDescriptions();
+          const reload = () => {
+            void getPerson(personId).then(setFile);
+          };
+          return (
+            <div className="person-descriptions">
+              <div className="person-description-slot">
+                <h3>Short description</h3>
+                <DescriptionEditor
+                  personId={personId}
+                  description={descriptions.general}
+                  onSaved={reload}
+                  rows={2}
+                />
+              </div>
+              <div className="person-description-slot">
+                <h3>Detailed description</h3>
+                <DescriptionEditor
+                  personId={personId}
+                  description={descriptions.detailed}
+                  onSaved={reload}
+                  rows={6}
+                />
+              </div>
+            </div>
+          );
+        })()}
+      </section>
+
+      <div className="person-section person-tasks" id="person-tasks" tabIndex={-1}>
+        <TaskList personId={personId} heading="Tasks" />
+      </div>
 
       <div className="person-summary-grid">
         <section className="person-summary-card" aria-labelledby="person-outcome-heading">
@@ -398,7 +479,8 @@ export function PersonFileView({ personId }: { personId: string }) {
               : "No outreach sent and no reply received"}
           </p>
           {file.brief.last_contact.follow_up.needed ? (
-            <p className="person-attention">Needs follow-up.</p>
+            <p className="person-attention">{file.brief.last_contact.follow_up.reason === "reply_unanswered"
+              ? "Reply to review." : "Message attribution needs review."}</p>
           ) : null}
         </section>
         <section className="person-summary-card" aria-labelledby="person-wants-heading">
@@ -418,7 +500,7 @@ export function PersonFileView({ personId }: { personId: string }) {
       </div>
 
       <section className="person-section" aria-labelledby="person-handoff-heading">
-        <h2 id="person-handoff-heading">Successor handoff</h2>
+        <h2 id="person-handoff-heading" tabIndex={-1}>Successor handoff</h2>
         <p>
           {file.brief.handoff.generated
             ? "Drafted from the claims below. Review each field, then save it as a version."
@@ -448,13 +530,14 @@ export function PersonFileView({ personId }: { personId: string }) {
                 id={`person-handoff-${field.key}`}
                 rows={2}
                 value={handoff?.[field.key] ?? ""}
-                onChange={(event) =>
+                onChange={(event) => {
+                  handoffDirty.current = true;
                   setHandoff((current) =>
                     current === null
                       ? current
                       : { ...current, [field.key]: event.target.value },
-                  )
-                }
+                  );
+                }}
               />
             </p>
           ))}
@@ -503,7 +586,8 @@ export function PersonFileView({ personId }: { personId: string }) {
 
       <MailActivity events={file.timeline} gaps={file.person.knowledge_gaps ?? []}
         sync={file.mail_sync} analysis={file.mail_analysis}
-        followUp={file.person.follow_up} replied={file.person.replied} />
+        followUp={file.person.follow_up} onRefresh={() => void refreshMail()}
+        refreshing={mailBusy} refreshStatus={mailStatus} />
 
       <section className="person-section" aria-labelledby="person-meetings-heading">
         <div className="person-section-heading-row">

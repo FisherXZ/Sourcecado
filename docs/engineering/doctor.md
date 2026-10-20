@@ -107,8 +107,9 @@ step adopts it: it completes the shape that store's constructor used to grow by
 hand, then records version 1.
 
 Supported prior versions depend on the store. `agent_runs_db` and
-`conversation_db` are currently version 2. `people_db` is version 3, with adoption,
-1 → 2 identity cleanup and 2 → 3 person-task tables. PersonStore runs the
+`conversation_db` are currently version 2. `people_db` is version 6, with adoption,
+1 → 2 identity cleanup, 2 → 3 descriptions, 3 → 4 tasks, 4 → 5 task lifecycle,
+and 5 → 6 tracked Gmail tables. PersonStore runs the
 registered people-only upgrade, including its backup, before constructor probes
 can modify existing data. The registry defines the other targets. Prior-state fixtures in
 `backend/tests/state_fixtures.py` use the schemas those stores shipped and

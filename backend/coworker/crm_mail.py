@@ -69,7 +69,7 @@ def _content(reader: TrackedMailReader, message: dict[str, Any]) -> dict[str, An
         full = reader.read(message_id=str(message["id"]))
         # A body is only evidence for the metadata we actually attributed.
         if full.get("id") != message["id"] or full.get("thread_id") != message["thread_id"] or any(
-            full.get(key) != message.get(key) for key in ("from", "to", "cc", "subject")):
+            full.get(key) != message.get(key) for key in ("from", "to", "cc", "bcc", "subject")):
             return {"body": "", "body_state": "missing"}
         full_body = str(full.get("body") or "")
         body = full_body[:8000]
@@ -128,7 +128,7 @@ def refresh_mail(people: PersonStore, reader: TrackedMailReader, *, max_threads:
         if outbound and not existing:
             result["outgoing"] += 1
         result["content_partial"] += int(content["body_state"] != "present")
-        people.resolve_reply_gap(pid, message_id=mid)
+        people.resolve_reply_gaps(message_id=mid)
 
     try:
         account = address_of(reader.account())
@@ -138,6 +138,7 @@ def refresh_mail(people: PersonStore, reader: TrackedMailReader, *, max_threads:
         if (prior["account"] and prior["account"] != account) or prior.get("resync_history_id"):
             cursor = None
         resync_cursor = prior.get("resync_history_id") if prior["account"] == account else None
+        after = prior["outbound_after"] if prior["account"] == account else None
         next_cursor = cursor
         page_token = prior["inbound_page_token"] if cursor else None
         target_cursor = prior["inbound_target_history_id"] if cursor else None
@@ -157,11 +158,14 @@ def refresh_mail(people: PersonStore, reader: TrackedMailReader, *, max_threads:
                 result["mode"] = "cursor_reset"
                 cursor = None
                 page_token = target_cursor = None
+                # An ordinary outgoing pass may already have passed the thread
+                # containing the missed incoming reply. A new recovery must
+                # start at the first tracked thread, then persist its own place.
+                after = None
         if not cursor:
             # Read the boundary first, so mail arriving during rereads is replayed.
             resync_cursor = resync_cursor or reader.profile_history_id()
             next_cursor = resync_cursor
-        after = prior["outbound_after"] if prior["account"] == account else None
         threads = [thread for thread in sorted(index.threads) if not after or thread > after]
         batch = threads[:max_threads]
         for thread in batch:

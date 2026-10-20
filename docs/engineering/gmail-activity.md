@@ -24,7 +24,7 @@ failure leaves the matched activity visible and reports incomplete evidence.
 
 ## Persistence and replay
 
-Schema 4 adds three tables through the existing backup/rollback migration path:
+Schema 6 adds three tables after main's task/description migrations through the existing backup/rollback path:
 
 - `gmail_messages`: account/message identity, person ownership and bounded body.
 - `gmail_collection_state`: collection status, timestamps and independent inbound
@@ -40,7 +40,7 @@ without adding a second event. See [the storage decision](adr/0005-tracked-mail-
 The collector uses a read-only `TrackedMailReader`, exposing the legacy reader's
 four metadata calls plus account identity and body reads. Each pass reads at
 most five history pages, fifty tracked threads and one hundred bodies. Gmail
-history pages contain at most one hundred messages. Stored bodies are reused;
+history requests ask for at most one hundred history records per page. Stored bodies are reused;
 missing bodies are retried on subsequent tracked-thread reads.
 
 Inbound history progress and outgoing thread progress are independent. Tracked
@@ -52,9 +52,11 @@ Failed passes retain both prior checkpoints and the previous successful check;
 already committed messages replay safely. Partial passes report unfinished work
 without claiming a new successful check. Missing bodies have a separate warning.
 
-When previously uncertain evidence matches the same person/message, only that
-message's gap is marked resolved with an audit receipt. The old explanation
-remains durable. Resolved gaps no longer appear as open attention or brief gaps.
+When uncertain evidence becomes attributable, that message's warnings on all
+earlier candidate people are resolved with audit receipts. Changing or reopening
+ambiguity updates the same warning; identical replay changes nothing. Version
+snapshots retain the earlier explanation. Resolved gaps no longer appear as open
+attention or brief gaps. Generic attachment upserts remain strict.
 
 ## Reminders and relationship state
 
@@ -73,7 +75,9 @@ filing retains the existing once-per-message Open-to-In-conversation transition.
   response retains the previous four-list shape for existing callers.
 - `GET /v1/people/{id}` includes collection freshness and separate `mail_analysis`.
 
-The person file shows All, Incoming and Outgoing filters and Gmail thread links.
+The person file offers section shortcuts, a local Refresh Gmail button,
+All/Incoming/Outgoing filters, local timestamps and Gmail thread links. Raw source
+identifiers sit in expandable details. Refresh preserves unsaved handoff text.
 Collection failure, unfinished work, incomplete body evidence and pending
 analysis are distinct states. Last successful collection survives navigation
 and restart. No model analysis is performed by this collector.
@@ -88,4 +92,4 @@ refresh, protected by a collection lock. An async scheduler should call it with
 calls; it does not itself share one result between callers. Analysis revisions
 provide the later worker's boundary without treating collection as analysis.
 
-See [verification and limitations](../verification/2026-10-12-gmail-activity.md).
+See [current verification and limitations](../verification/2026-10-19-gmail-pr-readiness.md).

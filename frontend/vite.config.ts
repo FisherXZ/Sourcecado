@@ -25,6 +25,9 @@ function loadDevToken(): string {
 
 export default defineConfig(({ command }) => ({
   plugins: [react()],
+  // Preserve Vite 5's browser floor, including the macOS 12 WebView, while
+  // taking patched development tooling. Vite 7's newer default raises it.
+  build: { target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"] },
   server: {
     port: 5180,
     strictPort: true,
