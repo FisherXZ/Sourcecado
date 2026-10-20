@@ -102,8 +102,13 @@ Real source/privacy/grant changes and changes to the person's tracked-thread
 attribution remain significant. Saved backoff, active claims and exhausted
 attempt limits are checked before connector reads.
 A request uses one configured provider; later saved attempts use configured
-failovers, without nested provider retries. The existing budget meter bounds
-model work and records usage/cost for every request. Terminal usage supersedes
+failovers, without nested provider retries. The existing budget meter includes
+collection and stale retries in one elapsed allowance. Dispatch checks that
+meter before starting a request, and the provider timeout uses only its
+remaining elapsed time. Exhaustion preserves descriptions and records
+`budget_exhausted`; a blocked request has no provider usage or cost. A request
+that starts and then times out retains unknown usage/cost when none was
+reported. The meter records usage/cost for every request. Terminal usage supersedes
 earlier streamed usage. Unknown cost and usage remain null and carry the
 meter's unpriced/unmeasured counts. A source check that blocks dispatch records
 no model request, no provider/model identity and no invented cost; its analysis

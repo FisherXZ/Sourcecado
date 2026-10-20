@@ -352,3 +352,77 @@ def test_later_read_revalidates_earlier_message_attribution(tmp_path, boundary):
         assert "z-sent-2" not in mail.reads
     assert model.calls == []
     assert result == {"status": "partial", "failure_code": "ambiguous_attribution"}
+
+
+class BudgetClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_collection_elapsed_budget_blocks_dispatch_without_inventing_usage(tmp_path, monkeypatch):
+    from coworker import crm_analysis
+    from coworker.run_budget import RunBudgetMeter, RunBudgetPolicy
+    clock = BudgetClock()
+    monkeypatch.setattr(crm_analysis, "RunBudgetMeter", lambda policy: RunBudgetMeter(policy, clock=clock))
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    class SlowCollection(ReadOnlyMail):
+        def read(self, **kwargs):
+            full = super().read(**kwargs)
+            clock.now = 2.0
+            return full
+    service = worker(people, mail=SlowCollection())
+    service.budget_policy = RunBudgetPolicy(elapsed_seconds=1)
+    result = asyncio.run(service.analyze(pid))
+    assert service.provider.calls == []
+    assert result == {"status": "failed", "failure_code": "budget_exhausted"}
+    state = service.state(pid)
+    assert state["provider"] is None and state["model"] is None
+    assert state["usage"] is None and state["estimated_cost_usd"] is None
+    assert state["budget"]["stopped_by"] == "elapsed_seconds"
+    assert state["budget"]["consumed"]["model_turns"] == 0
+    assert state["budget"]["unmeasured_requests"] == state["budget"]["unpriced_requests"] == 0
+    assert people.descriptions(pid)["general"]["text"] is None
+
+
+def test_started_request_gets_only_remaining_elapsed_timeout_and_unknown_usage(tmp_path, monkeypatch):
+    from coworker import crm_analysis
+    from coworker.run_budget import RunBudgetMeter, RunBudgetPolicy
+    clock = BudgetClock()
+    monkeypatch.setattr(crm_analysis, "RunBudgetMeter", lambda policy: RunBudgetMeter(policy, clock=clock))
+    requested_timeouts = []
+    timeout = asyncio.timeout
+    def measured_timeout(seconds):
+        requested_timeouts.append(seconds)
+        return timeout(seconds)
+    monkeypatch.setattr(crm_analysis.asyncio, "timeout", measured_timeout)
+    people = PersonStore(tmp_path)
+    pid = tracked_person(people)
+    class SlowCollection(ReadOnlyMail):
+        def read(self, **kwargs):
+            full = super().read(**kwargs)
+            clock.now = 0.075
+            return full
+    class HangingModel(DescriptionModel):
+        async def astream(self, **kwargs):
+            self.calls.append(kwargs)
+            clock.now = 0.1
+            await asyncio.Future()  # Only the real provider timeout can finish this read.
+            yield
+    model = HangingModel()
+    service = worker(people, model, SlowCollection())
+    service.budget_policy = RunBudgetPolicy(elapsed_seconds=0.1)
+    result = asyncio.run(service.analyze(pid))
+    assert requested_timeouts == [pytest.approx(0.025)]
+    assert result == {"status": "failed", "failure_code": "budget_exhausted"}
+    assert len(model.calls) == 1
+    state = service.state(pid)
+    assert state["provider"] == model.provider_id and state["model"] == model.model_id
+    assert state["usage"] is None and state["estimated_cost_usd"] is None
+    assert state["budget"]["stopped_by"] == "elapsed_seconds"
+    assert state["budget"]["consumed"]["model_turns"] == 1
+    assert state["budget"]["unmeasured_requests"] == state["budget"]["unpriced_requests"] == 1
+    assert people.descriptions(pid)["general"]["text"] is None

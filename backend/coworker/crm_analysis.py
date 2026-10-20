@@ -385,11 +385,19 @@ class AnalysisService:
         prompt = "\n\n".join(seal(m["key"], "Direction: " + m["direction"] + "\n" + m["body"]) for m in evidence.messages)
         text, usage, terminal = "", None, None
         requested = False
+        request_timeout = None
         try:
-            async with asyncio.timeout(self.budget_policy.elapsed_seconds):
-                # Last local check at the actual model-dispatch boundary.
-                self._current_sources(pid, evidence.manifest)
-                self._current_attribution(pid, evidence.attribution)
+            # Last local checks at the actual model-dispatch boundary. Collection
+            # and prior stale attempts consume this same meter's elapsed budget.
+            self._current_sources(pid, evidence.manifest)
+            self._current_attribution(pid, evidence.attribution)
+            if meter.check():
+                raise ValueError("budget_exhausted")
+            remaining = meter.policy.elapsed_seconds - meter.elapsed_seconds
+            if remaining <= 0:
+                raise ValueError("budget_exhausted")
+            request_timeout = asyncio.timeout(remaining)
+            async with request_timeout:
                 telemetry.update(provider=getattr(provider, "provider_id", "unknown"), model=getattr(provider, "model_id", "unknown"))
                 meter.start_model_turn()
                 requested = True
@@ -409,6 +417,10 @@ class AnalysisService:
                             usage = terminal.usage
                 if terminal is None or terminal.stop_reason != "stop":
                     raise ValueError("incomplete_model_response")
+        except TimeoutError as exc:
+            if request_timeout is not None and request_timeout.expired():
+                raise ValueError("budget_exhausted") from exc
+            raise
         finally:
             cost = terminal.estimated_cost_usd if terminal else None
             telemetry.update(usage=asdict(usage) if usage else None, estimated_cost_usd=cost)
