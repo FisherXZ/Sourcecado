@@ -63,7 +63,7 @@ _CHANGE_ID_RE = re.compile(r"^chg_[0-9a-f]{32}$")
 
 # The column list of crm_changes, shared by the constructor DDL and the 3->4
 # rebuild in migrations.py so a fresh install and a migrated one match.
-CRM_CHANGES_COLUMNS = """
+CRM_CHANGES_V5_COLUMNS = """
         change_id TEXT PRIMARY KEY,
         person_id TEXT NOT NULL REFERENCES people(person_id),
         entity_type TEXT NOT NULL CHECK (entity_type IN ('task')),
@@ -83,6 +83,7 @@ CRM_CHANGES_COLUMNS = """
         compensates_change_id TEXT REFERENCES crm_changes(change_id),
         created_at TEXT NOT NULL
 """
+CRM_CHANGES_COLUMNS = CRM_CHANGES_V5_COLUMNS.replace("IN ('task')", "IN ('task', 'description')")
 CRM_CHANGES_INDEX_STATEMENTS: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS crm_changes_entity

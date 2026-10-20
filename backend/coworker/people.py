@@ -14,6 +14,7 @@ from typing import Any
 
 from coworker.crm_tasks import CRM_TASK_STATEMENTS, TaskConflict, _clean_operation_id, _fingerprint
 from coworker.crm_sources import source_ids
+from coworker.crm_analysis_schema import CRM_ANALYSIS_STATEMENTS
 from coworker.person_identity import (
     apollo_surname_is_masked,
     without_apollo_name_masks,
@@ -23,11 +24,11 @@ _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # Declared schema version for people.db, read by coworker.migrations.
 # v3 adds the person_descriptions table (ticket #202); v4 adds the person_tasks,
-# crm_changes and crm_operations tables (ticket #200); v5 rebuilds crm_changes
-# with the task lifecycle actions (ticket #201). The constructor creates them for
-# a fresh database, and the registered 2->3, 3->4 and 4->5 migrations adopt an
-# existing one with backup and rollback.
-SCHEMA_VERSION = 5
+# crm_changes and crm_operations tables (ticket #200); v5 adds task lifecycle
+# actions (ticket #201); v6 adds durable analysis, proposals and description
+# history (#209). The constructor creates fresh tables. Existing databases use
+# the registered migrations with backup and rollback before the new writer runs.
+SCHEMA_VERSION = 6
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -168,7 +169,7 @@ class PersonStore:
             """
         )
         self._ensure_schema()
-        for statement in CRM_TASK_STATEMENTS:
+        for statement in (*CRM_TASK_STATEMENTS, *CRM_ANALYSIS_STATEMENTS):
             self._conn.execute(statement)
         self._conn.commit()
 
@@ -1598,6 +1599,37 @@ class PersonStore:
         source_refs: object = None,
         allowed_source_ids: set[str] | None = None,
     ) -> dict[str, Any]:
+        """Save a slot through the same atomic writer used by CRM analysis."""
+        with self._lock, self._conn:
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
+            return self._patch_description_uncommitted(
+                person_id, slot, expected_version=expected_version, text=text,
+                release=release, actor=actor, rationale_summary=rationale_summary,
+                session_id=session_id, run_id=run_id, operation_id=operation_id,
+                human_requested=human_requested, source_refs=source_refs,
+                allowed_source_ids=allowed_source_ids,
+            )
+
+    def _patch_description_uncommitted(
+        self,
+        person_id: str,
+        slot: str,
+        *,
+        expected_version: int,
+        text: str | None = None,
+        release: bool = False,
+        actor: str,
+        rationale_summary: str,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        operation_id: str | None = None,
+        human_requested: bool = False,
+        source_refs: object = None,
+        allowed_source_ids: set[str] | None = None,
+        restore: dict[str, Any] | None = None,
+        compensates_change_id: str | None = None,
+    ) -> dict[str, Any]:
         """Save a description slot's text, or release it back to the assistant.
 
         Concurrency is slot-scoped: `expected_version` is checked against the
@@ -1616,127 +1648,145 @@ class PersonStore:
         human = actor == "director" or human_requested
         if release and not human:
             raise TaskConflict("only the director can release a human description", code="human_protected")
+        if restore is not None:
+            if restore.get("authority") not in {"human", "assistant"} or (restore.get("text") is not None and not isinstance(restore["text"], str)):
+                raise ValueError("invalid description restore")
+            text = restore.get("text")
         if not release:
-            if not isinstance(text, str):
+            if not isinstance(text, str) and not (restore is not None and text is None):
                 raise ValueError("a description save needs text or release")
             limit = DESCRIPTION_LIMITS[slot]
-            if len(text) > limit:
+            if text is not None and len(text) > limit:
                 raise ValueError(
                     f"{slot} description exceeds {limit} characters"
                 )
         operation = _clean_operation_id(operation_id) if operation_id is not None else None
-        with self._lock, self._conn:
-            if not self._conn.in_transaction:
-                self._conn.execute("BEGIN IMMEDIATE")
-            self._load_person_row(person_id)
-            refs = source_ids(self, person_id, source_refs, allowed_source_ids)
-            fingerprint = _fingerprint({
-                "op": "description.update", "person_id": person_id, "slot": slot,
-                "expected_version": expected_version, "text": text, "release": release,
-                "actor": actor, "human_requested": human_requested,
-                "source_refs": refs, "reason": rationale_summary,
-            })
-            if operation is not None:
-                prior = self._conn.execute(
-                    "SELECT payload FROM events WHERE external_key = ?",
-                    (f"crm-operation:{operation}",),
-                ).fetchone()
-                task_operation = self._conn.execute(
-                    "SELECT 1 FROM crm_operations WHERE operation_id = ?", (operation,)
-                ).fetchone()
-                if task_operation:
-                    raise TaskConflict("operation id already belongs to a task change", code="operation_conflict")
-                if prior:
-                    payload = json.loads(prior["payload"])
-                    if payload.get("fingerprint") != fingerprint:
-                        raise TaskConflict("operation id already belongs to a different change", code="operation_conflict")
-                    response = payload["crm_response"]
-                    source_ids(self, person_id, response["description"]["source_refs"], allowed_source_ids)
-                    return {**response, "replayed": True}
-            current = self._conn.execute(
-                "SELECT * FROM person_descriptions WHERE person_id = ? AND slot = ?",
-                (person_id, slot),
+        if not self._conn.in_transaction:
+            raise RuntimeError("description writer requires a transaction")
+        schema = self._conn.execute("SELECT sql FROM sqlite_master WHERE name = 'crm_changes'").fetchone()
+        if schema is None or "'description'" not in schema[0]:
+            raise ValueError("CRM migration required: stop Sourcecado and run make doctor-repair before analysis")
+        self._load_person_row(person_id)
+        refs = source_ids(self, person_id, source_refs, allowed_source_ids)
+        fingerprint = _fingerprint({
+            "op": "description.update", "person_id": person_id, "slot": slot,
+            "expected_version": expected_version, "text": text, "release": release,
+            "actor": actor, "human_requested": human_requested,
+            "source_refs": refs, "reason": rationale_summary,
+        })
+        if restore is not None:
+            fingerprint = _fingerprint({"base": fingerprint, "restore": restore, "compensates": compensates_change_id})
+        if operation is not None:
+            prior = self._conn.execute(
+                "SELECT payload FROM events WHERE external_key = ?",
+                (f"crm-operation:{operation}",),
             ).fetchone()
-            current_version = int(current["version"]) if current is not None else 0
-            if current_version != expected_version:
-                raise TaskConflict(
-                    "stale record version: "
-                    f"expected {expected_version}, current {current_version}",
-                    code="description_conflict",
-                )
-            if current is not None:
-                source_ids(self, person_id, json.loads(current["source_refs"]), allowed_source_ids)
-                if not human and current["authority"] == "human":
-                    raise TaskConflict("human-edited description requires a director request", code="human_protected")
-            now = self._now()
-            next_slot_version = expected_version + 1
-            if release:
-                new_authority = "assistant"
-                new_text = current["text"] if current is not None else None
-                new_source_refs = (
-                    str(current["source_refs"]) if current is not None else "[]"
-                )
-            else:
-                new_authority = "human" if human else "assistant"
-                new_text = text
-                new_source_refs = json.dumps(refs)
-            created_at = (
-                str(current["created_at"]) if current is not None else now
+            task_operation = self._conn.execute(
+                "SELECT 1 FROM crm_operations WHERE operation_id = ?", (operation,)
+            ).fetchone()
+            if task_operation:
+                raise TaskConflict("operation id already belongs to a task change", code="operation_conflict")
+            if prior:
+                payload = json.loads(prior["payload"])
+                if payload.get("fingerprint") != fingerprint:
+                    raise TaskConflict("operation id already belongs to a different change", code="operation_conflict")
+                response = payload["crm_response"]
+                source_ids(self, person_id, response["description"]["source_refs"], allowed_source_ids)
+                return {**response, "replayed": True}
+        current = self._conn.execute(
+            "SELECT * FROM person_descriptions WHERE person_id = ? AND slot = ?",
+            (person_id, slot),
+        ).fetchone()
+        current_version = int(current["version"]) if current is not None else 0
+        if current_version != expected_version:
+            raise TaskConflict(
+                "stale record version: "
+                f"expected {expected_version}, current {current_version}",
+                code="description_conflict",
             )
-            self._conn.execute(
-                """
-                INSERT INTO person_descriptions (
-                    person_id, slot, text, authority, source_refs, version,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(person_id, slot) DO UPDATE SET
-                    text = excluded.text,
-                    authority = excluded.authority,
-                    source_refs = excluded.source_refs,
-                    version = excluded.version,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    person_id,
-                    slot,
-                    new_text,
-                    new_authority,
-                    new_source_refs,
-                    next_slot_version,
-                    created_at,
-                    now,
-                ),
+        if current is not None:
+            source_ids(self, person_id, json.loads(current["source_refs"]), allowed_source_ids)
+            if not human and current["authority"] == "human":
+                raise TaskConflict("human-edited description requires a director request", code="human_protected")
+        now = self._now()
+        next_slot_version = expected_version + 1
+        if release:
+            new_authority = "assistant"
+            new_text = current["text"] if current is not None else None
+            new_source_refs = (
+                str(current["source_refs"]) if current is not None else "[]"
             )
-            person_row = self._load_person_row(person_id)
-            next_person_version = int(person_row["version"] or 1) + 1
-            self._conn.execute(
-                "UPDATE people SET version = ?, updated_at = ? WHERE person_id = ?",
-                (next_person_version, now, person_id),
-            )
-            description = self._descriptions(person_id)[slot]
-            event_id = _new_event_id()
-            response = {"description": description, "change": {
-                "change_id": event_id, "entity_type": "description",
-                "entity_id": f"{person_id}:{slot}", "entity_version": next_slot_version,
-                "actor": actor, "operation_id": operation,
-            }, "replayed": False}
-            payload = {
-                    "slot": slot,
-                    "authority": new_authority,
-                    "released": bool(release),
-                    "version": next_slot_version,
-                }
-            if operation is not None:
-                payload.update(fingerprint=fingerprint, crm_response=response)
-            self._conn.execute(
-                """INSERT INTO events (event_id, person_id, source, kind, summary,
-                       payload, actor, session_id, run_id, external_key)
-                   VALUES (?, ?, 'sourcecado', 'description', ?, ?, ?, ?, ?, ?)""",
-                (event_id, person_id, rationale_summary.strip(), json.dumps(payload),
-                 actor, session_id, run_id, f"crm-operation:{operation}" if operation else None),
-            )
-            self._snapshot(person_id, next_person_version, now)
-            self._conn.commit()
+        else:
+            new_authority = restore["authority"] if restore is not None else "human" if human else "assistant"
+            new_text = text
+            new_source_refs = json.dumps(refs)
+        created_at = (
+            str(current["created_at"]) if current is not None else now
+        )
+        self._conn.execute(
+            """
+            INSERT INTO person_descriptions (
+                person_id, slot, text, authority, source_refs, version,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(person_id, slot) DO UPDATE SET
+                text = excluded.text,
+                authority = excluded.authority,
+                source_refs = excluded.source_refs,
+                version = excluded.version,
+                updated_at = excluded.updated_at
+            """,
+            (
+                person_id,
+                slot,
+                new_text,
+                new_authority,
+                new_source_refs,
+                next_slot_version,
+                created_at,
+                now,
+            ),
+        )
+        person_row = self._load_person_row(person_id)
+        next_person_version = int(person_row["version"] or 1) + 1
+        self._conn.execute(
+            "UPDATE people SET version = ?, updated_at = ? WHERE person_id = ?",
+            (next_person_version, now, person_id),
+        )
+        description = self._descriptions(person_id)[slot]
+        event_id = _new_event_id()
+        change_id = "chg_" + uuid.uuid4().hex
+        response = {"description": description, "change": {
+            "change_id": change_id, "entity_type": "description",
+            "entity_id": f"{person_id}:{slot}", "entity_version": next_slot_version,
+            "actor": actor, "operation_id": operation,
+        }, "replayed": False}
+        payload = {
+                "slot": slot,
+                "authority": new_authority,
+                "released": bool(release),
+                "version": next_slot_version,
+            }
+        if operation is not None:
+            payload.update(fingerprint=fingerprint, crm_response=response)
+        self._conn.execute(
+            """INSERT INTO events (event_id, person_id, source, kind, summary,
+                   payload, actor, session_id, run_id, external_key)
+               VALUES (?, ?, 'sourcecado', 'description', ?, ?, ?, ?, ?, ?)""",
+            (event_id, person_id, rationale_summary.strip(), json.dumps(payload),
+             actor, session_id, run_id, f"crm-operation:{operation}" if operation else None),
+        )
+        before = self._description_dict(current) if current is not None else self._default_description(slot)
+        self._conn.execute(
+            """INSERT INTO crm_changes (change_id, person_id, entity_type, entity_id,
+                   entity_version, action, before_json, after_json, actor, reason,
+                   source_refs, operation_id, session_id, run_id, compensates_change_id, created_at)
+               VALUES (?, ?, 'description', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (change_id, person_id, f"{person_id}:{slot}", next_slot_version,
+             "undo" if compensates_change_id else "update", json.dumps(before), json.dumps(description), actor, rationale_summary.strip()[:500],
+             json.dumps(refs), operation or change_id, session_id, run_id, compensates_change_id, now),
+        )
+        self._snapshot(person_id, next_person_version, now)
         return response if operation is not None else description
 
     def upsert_attachment(
