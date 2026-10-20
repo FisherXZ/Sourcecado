@@ -42,7 +42,10 @@ today, tomorrow, a weekday (today when it is that weekday, otherwise its next
 occurrence), and an ISO date. The supplied date must match this result; an
 omitted date cannot silently drop an explicit deadline. Conflicting dates,
 “next Friday”, and other ambiguous forms ask for clarification. Possessives
-such as “on Monday's call” describe context and remain undated. An exact saved
+such as “on Monday's call” describe context and remain undated.
+Deadline suffixes are checked as complete clauses, including their modifiers;
+unsupported second deadlines cannot be silently ignored. Non-date delivery
+phrases such as “by email” do not add a deadline. An exact saved
 operation can replay after restart or a day boundary without moving its date;
 the write service still checks its complete fingerprint and source access.
 
@@ -100,8 +103,11 @@ Task and undo targets also require an explicit id, an exact task title after
 “task”, or a unique eligible saved record. A person binding alone does not pick
 between multiple tasks or changes. A named missing target cannot fall back to
 another record. Private or incomplete work prevents guessing a generic target;
-clarification responses do not reveal private titles. Exact operation replay
-uses its existing receipt before checking post-write eligibility, then passes
+clarification responses do not reveal private titles.
+Shared titles must be unique across eligible work, including source-restricted
+records. A hidden duplicate produces a content-free clarification; an explicit
+permitted task or change id can still select its public record. Exact operation
+replay uses its existing receipt before checking post-write eligibility, then passes
 through the writer's version/fingerprint/source checks.
 
 Source references must be existing attachments on that person. Runtime source

@@ -581,6 +581,14 @@ def test_sentence_punctuation_does_not_change_full_replacement_authority(tmp_pat
     (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples on Monday's call", "2026-10-26", False),
     (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples on Monday's call", None, True),
     (DIRECTIVE_AT, "America/Los_Angeles", "Remind me Friday to send examples by Saturday", "2026-10-23", False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples by next Friday", None, False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me Friday to send examples by next Saturday", "2026-10-23", False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples by Friday next week", "2026-10-23", False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples by the following Friday", None, False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples by 10/23", None, False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples by Friday or Saturday", "2026-10-23", False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples by email", None, True),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me Friday to send examples by email", "2026-10-23", True),
     (DIRECTIVE_AT, "America/Los_Angeles", "Remind me next Friday to send examples", "2026-10-23", False),
     (DIRECTIVE_AT, "America/Los_Angeles", "Remind me 2026-10-23 to send examples", "2026-10-23", True),
     ("2026-10-23T06:30:00+00:00", "America/Los_Angeles", "Remind me today to send examples", "2026-10-22", True),
@@ -815,3 +823,38 @@ def test_an_explicit_task_or_change_id_selects_the_director_named_record(tmp_pat
         arguments={**args, "operation_id": "op-explicit-target", "reason": "Requested"})])
     assert results[0]["ok"], results
     assert results[0]["result"]["task"]["task_id"] == saved["task"]["task_id"]
+
+
+@pytest.mark.parametrize("undo", [False, True])
+def test_a_shared_title_cannot_select_the_public_copy_of_private_work(tmp_path, undo):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    public = app.state.tasks.create(pid, title="Send proposal", actor="director", timezone="America/Los_Angeles", operation_id="op-title-public")
+    ref = app.state.people.upsert_attachment(pid, record_type="source_ref", fields={"id": "gmail:private", "sensitivity": "restricted"},
+        idempotency_key="private-title", actor="director", rationale_summary="Attach")
+    private = app.state.tasks.create(pid, title="Send proposal", actor="assistant", timezone="America/Los_Angeles", operation_id="op-title-private",
+        source_refs=[ref["id"]], allowed_source_ids={ref["id"]})
+    if undo:
+        for index, saved in enumerate((public, private)):
+            completed = app.state.tasks.update(pid, saved["task"]["task_id"], changes={"state": "completed"}, expected_version=1,
+                actor="director", timezone="America/Los_Angeles", operation_id=f"op-title-complete-{index}", allowed_source_ids={ref["id"]})
+            if index == 0:
+                public = completed
+        name, text = "crm_undo_change", "Undo task Send proposal completion"
+        args = {"change_id": public["change"]["change_id"], "expected_version": 2}
+        explicit_text = f"Undo {public['change']['change_id']}"
+    else:
+        name, text = "crm_update_task", "Mark task Send proposal done"
+        args = {"task_id": public["task"]["task_id"], "expected_version": 1, "changes": {"state": "completed"}}
+        explicit_text = f"Mark task {public['task']['task_id']} done"
+    args.update(operation_id="op-title-target", reason="Requested")
+    results = scripted_chat(app, pid, text, [ToolCall(id="shared-title", name=name, arguments=args)])
+    assert not results[0]["ok"] and results[0]["result"]["code"] == ("ambiguous_crm_change" if undo else "ambiguous_task")
+    assert "Send proposal" not in json.dumps(results[0]["result"])
+    assert "candidates" not in results[0]["result"]
+    # An explicit permitted id establishes a target without exposing its twin.
+    direct_args = {**args, "operation_id": "op-title-explicit"}
+    ok, explicit = execute(name, direct_args, people=app.state.people,
+        session_id=app.state.people.session_for_person(pid),
+        crm_directive=replace(director_directive(explicit_text), at=DIRECTIVE_AT))
+    assert ok and explicit["task"]["task_id"] == public["task"]["task_id"]

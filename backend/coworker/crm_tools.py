@@ -140,7 +140,24 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
     token = r"(?:today|tomorrow|" + "|".join(weekdays) + r"|\d{4}-\d{2}-\d{2})"
     prefix = re.match(rf"^remind me\s+({token})\s+to\b", text)
     # Possessives ("on Monday's call") describe context rather than a deadline.
-    tokens = ([prefix[1]] if prefix else []) + re.findall(rf"\b(?:by|on|due)\s+({token})(?![\w'’])", text)
+    calendar_units = r"days?|weeks?|weekends?|months?|years?"
+    months = r"january|february|march|april|may|june|july|august|september|october|november|december"
+    numeric_date = r"\d{1,4}[/-]\d{1,2}(?:[/-]\d{1,4})?"
+    date_hint = rf"(?:{token}|{calendar_units}|{months}|{numeric_date})"
+    modifiers = r"(?:(?:the|a|an|next|this|coming|following|around|early|late|end|of|in)\s+)*"
+    tokens = [prefix[1]] if prefix else []
+    for suffix in re.finditer(r"\b(?:by|on|due)\s+", text):
+        # Inspect the entire clause: a supported weekday must not hide a
+        # trailing modifier such as "next week". Clearly non-calendar clauses
+        # ("by email") and possessive weekday context remain ordinary text.
+        clause = re.split(r"[.!?;]", text[suffix.end():], maxsplit=1)[0].strip()
+        if re.match(rf"^{token}['’]s\b", clause):
+            continue
+        if not re.match(rf"^{modifiers}{date_hint}(?![\w'’])", clause):
+            continue
+        if not re.fullmatch(token, clause):
+            raise CRMToolError("unverified_director_request", "State one unambiguous deadline: today, tomorrow, a weekday, or YYYY-MM-DD. Unsupported or alternative deadline wording needs clarification.")
+        tokens.append(clause)
     if not prefix and re.match(r"^remind me\s+(?!to\b)", text):
         raise CRMToolError("unverified_director_request", "State one unambiguous date: today, tomorrow, a weekday, or YYYY-MM-DD.")
     dates = set()
@@ -238,6 +255,8 @@ def _verify_task_target(name: str, args: dict, people: PersonStore, person_id: s
         else:
             title = ""  # Field-edit wording names a field, not an old task title.
         explicit = [row for row in candidates if title and _normalized(row["title"]) == title]
+        if title and any(_normalized(row["title"]) == title for row in eligible_records if row not in candidates):
+            raise CRMToolError(code, "The title does not identify a unique permitted target. Ask for an explicit permitted task or change id.")
     if not explicit and len(candidates) != len(eligible_records):
         raise CRMToolError(code, "Some eligible work is unavailable to this run. Ask for an explicit permitted task or change id; do not guess a target.")
     eligible = explicit if explicit or title else candidates
@@ -365,7 +384,8 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
             raise CRMToolError("unverified_director_request", "The requested text must occur in the director command. Ask for the exact wording; nothing was saved.")
     if name == "crm_create_task":
         replay = saved_operation and saved_operation["action"] == "create" and saved_operation["due_date"] == args.get("due_date")
-        if not replay and args.get("due_date") != _reminder_date(text, directive, timezone):
+        requested_date = _reminder_date(text, directive, timezone)
+        if not replay and args.get("due_date") != requested_date:
             raise CRMToolError("unverified_director_request", "The due date must match the director's date in the saved operator timezone. Ask for clarification instead of choosing another date.")
     return True
 
