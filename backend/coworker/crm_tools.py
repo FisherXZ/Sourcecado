@@ -132,6 +132,10 @@ def crm_outcome_references(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None:
+    if re.match(r"^(?:add|create|save|make)\s+(?:an?\s+)?undated\s+task\b", text):
+        # Explicitly undated work may contain literal calendar/clock words.
+        # A model-supplied date still conflicts with the returned None below.
+        return None
     moment = datetime.fromisoformat(directive.at.replace("Z", "+00:00"))
     if moment.tzinfo is None:
         raise CRMToolError("unverified_director_request", "The director request needs a timezone-aware timestamp before resolving a date.")
@@ -172,10 +176,10 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
     # A calendar word outside a supported clause still carries date intent.
     # Asking is safer than silently turning that request into undated work.
     dayparts = r"morning|afternoon|evening|night|dawn|dusk|midday|sunrise|sunset"
-    temporal_words = rf"(?:{token}|{months}|{dayparts}|tonight|yesterday|someday|sometime|soon|later)"
+    temporal_words = rf"(?:{token}|{months}|{calendar_units}|{dayparts}|tonight|yesterday|someday|sometime|soon|later|now)"
     for mention in re.finditer(rf"\b{temporal_words}\b(?!['’]s\b)", text):
         if not any(start <= mention.start() < end for start, end in handled):
-            raise CRMToolError("unverified_director_request", "The date is outside the supported deadline grammar. Ask for an explicit by/on/due date or 'Remind me DATE to …'.")
+            raise CRMToolError("unverified_director_request", "The timing is outside the supported deadline grammar. Ask for an explicit by/on/due date, 'Remind me DATE to …', or 'Add an undated task: TITLE' when the time words are literal task text.")
     clock_words = r"zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|half|quarter|morning|afternoon|evening|night|dawn|dusk|midday|sunrise|sunset"
     if (re.search(rf"\b(?:this|next|last|coming|following|every|in|within|at)\s+[^.!?;\n]*\b(?:{calendar_units}|{dayparts})\b", text)
             or re.search(rf"\bat\s+(?:(?:a|the)\s+)?(?:{numeric_or_time}|{clock_words})\b", text)):

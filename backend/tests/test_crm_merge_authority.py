@@ -38,6 +38,8 @@ def test_non_task_or_unscoped_undo_never_falls_back_to_unique_task(tmp_path, tex
     "Remind me to send examples tonight", "Remind me to send examples at five",
     "Remind me to send examples this evening", "Remind me to send examples in the morning",
     "Remind me to send examples next business day",
+    "Remind me to send examples two days from now", "Remind me to send examples a week from now",
+    "Remind me to send examples 24 hours from now",
 ])
 def test_unhandled_deadline_does_not_become_undated_work(tmp_path, text):
     people = PersonStore(tmp_path)
@@ -117,6 +119,17 @@ def test_explicit_task_id_supports_field_edit_when_other_tasks_exist(tmp_path):
     assert ok, result
     assert tasks.get(pid, first["task_id"])["details"] == "Use the final deck"
     assert tasks.get(pid, other["task_id"])["details"] == ""
+
+
+def test_explicit_undated_task_keeps_time_words_as_literal_task_text(tmp_path):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    ok, result = invoke(people, "crm_create_task", {
+        "title": "Send meeting minutes", "operation_id": "merge-explicit-undated", "reason": "Director request",
+    }, "Add an undated task: Send meeting minutes")
+    assert ok, result
+    assert result["task"]["due_date"] is None and result["task"]["title"] == "Send meeting minutes"
 
 
 def test_replacement_task_id_is_data_not_a_target_selector(tmp_path):
