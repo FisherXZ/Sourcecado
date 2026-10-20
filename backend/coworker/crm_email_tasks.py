@@ -22,11 +22,25 @@ CALENDAR_TOKEN = r"(?:\d{4}-\d{2}-\d{2}|today|tomorrow|" + "|".join(WEEKDAYS) + 
 DATE_TOKEN = re.compile(r"\b" + CALENDAR_TOKEN + r"\b", re.I)
 DEADLINE_CLAUSE = re.compile(r"\b(?:by|due(?:\s+on)?)\s+(" + CALENDAR_TOKEN + r")[.!?]?\s*$", re.I)
 UNCERTAIN = re.compile(r"\b(?:if|unless|maybe|perhaps|might|sometime|eventually|whenever|not|never|don't|do not|no longer|cancel|instead|or|next|later|soon|someday|around|approximately)\b", re.I)
-CORRECTION = re.compile(r"\b(?:actually|disregard|scratch|ignore|forget|retract(?:ed)?|withdraw(?:n)?|already)\b|\bno\s+further\b", re.I)
 UNSUPPORTED_DATE = re.compile(r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december|week|month|year|weekend|tonight|yesterday|days?|weeks?|months?|\d{1,2}[/\-]\d{1,2})\b", re.I)
 UNRESOLVED_TIME = re.compile(r"\b(?:noon|midnight|fortnight|\d+(?:st|nd|rd|th)|\d{1,2}:\d{2}|\d{1,2}\s*(?:am|pm))\b", re.I)
 ACTIONS = r"send|share|provide|prepare|schedule|review|confirm|arrange"
 DIRECT = re.compile(r"^(?:please|can you|could you|would you)\s+(" + ACTIONS + r")\b", re.I)
+# Authorization uses positive productions, not an unrestricted middle between a
+# request prefix and date suffix. Unknown nouns/modifiers stay reviewable. A
+# capitalized project label requires a positive determiner and "project"; an
+# initial capital alone cannot turn a negative quantifier into an object name.
+NOMINAL_MODIFIER = r"(?:original|revised|updated|final|draft|initial|first|second|third|student|engineering|infrastructure|project)"
+NOMINAL_HEAD = r"(?:proposals?|examples?|files?|documents?|materials?|decks?|meetings?|minutes|projects?|tools?|feedback|discussion|team)"
+NOMINAL = (r"(?:(?:(?:a|an|the|our|your|these|those)\s+)?|(?:the|our|your)\s+(?-i:[A-Z][A-Za-z0-9-]*)\s+project\s+)"
+    + r"(?:" + NOMINAL_MODIFIER + r"\s+){0,4}" + NOMINAL_HEAD)
+SUPPORTED_REQUEST = re.compile(r"(?:(?:please|can you|could you|would you)\s+)?(?P<action>" + ACTIONS
+    + r")\s+(?:(?:us|me|our team|your team|the team)\s+)?" + NOMINAL
+    + r"(?:\s+(?:(?:by|due(?:\s+on)?)\s+(?P<date>" + CALENDAR_TOKEN
+    + r")|(?P<adverb>today|tomorrow)))?[.!?]?", re.I)
+DISCUSSION_CONTEXT = re.compile(r"we\s+(?:want|would like)\s+to\s+discuss\s+" + NOMINAL
+    + r"(?:\s+with\s+" + NOMINAL + r")?[.!?]?", re.I)
+ACTION_SEPARATOR = re.compile(r";\s*|\s+and\s+(?=(?:(?:please|can you|could you|would you)\s+)?(?:" + ACTIONS + r")\b)", re.I)
 STOP = set("a an the our your their his her us we i you me for to of with on by in at please can could would team student students project projects this that some sometime nice it be see want like send sent share shared provide prepare schedule review confirm arrange today tomorrow".split()) | set(WEEKDAYS)
 OBJECT_FILLER = set("a an the our your their his her us we i you me for to of with please team this that".split())
 DELIVERABLE_VARIANTS = {"original", "revised", "updated", "final", "draft", "initial", "first", "second", "third"}
@@ -58,48 +72,61 @@ def _message_day(message: dict, timezone: str) -> date | None:
 
 
 def grounded_date(text: str, message: dict, timezone: str) -> tuple[bool, str | None]:
-    """One date meaning, grounded in Gmail internalDate and saved IANA zone."""
+    """A supported requested action's date, using internalDate and saved zone."""
+    parsed = SUPPORTED_REQUEST.fullmatch(text.strip())
+    if parsed is None:
+        return False, None
     if (UNCERTAIN.search(text) or UNSUPPORTED_DATE.search(DATE_TOKEN.sub("", text))
             or UNRESOLVED_TIME.search(text)):
         return False, None
-    # Possessive weekdays describe the work's subject, not a deadline.
-    text = re.sub(r"\b(?:" + "|".join(WEEKDAYS) + r")[’']s\b", "", text, flags=re.I)
-    for clause in re.finditer(r"\b(?:by|on|at|before|after|due|deadline|until|within)\b([^.!?]*)", text, re.I):
-        if not DATE_TOKEN.search(clause[1]):
-            return False, None
-    matches = list(DATE_TOKEN.finditer(text))
-    tokens = [m[0] for m in matches]
-    if not tokens:
-        return True, None
-    # A weekday is a deadline only in an explicit by/due clause. Plain on DATE
-    # can modify the object's discussion or meeting, so it stays unsupported.
-    # Today/tomorrow can also be explicit final temporal adverbs.
-    explicit = DEADLINE_CLAUSE.search(text)
-    relative_adverb = re.search(r"\s+(today|tomorrow)[.!?]?\s*$", text, re.I)
-    if (len(matches) != 1 or (explicit is None and relative_adverb is None)
-            or text[matches[0].end():].strip(" .!?\n\t")):
+    token = parsed["date"] or parsed["adverb"]
+    # Even a supported project label must not introduce a second date meaning.
+    if len(DATE_TOKEN.findall(text)) != (1 if token else 0):
         return False, None
-    dates = set()
+    if token is None:
+        return True, None
+    token = token.lower()
     day = _message_day(message, timezone)
-    for token in tokens:
-        token = token.lower()
-        try:
-            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", token):
-                value = date.fromisoformat(token)
-            elif day is None:
-                return False, None
-            elif token in {"today", "tomorrow"}:
-                value = day + timedelta(days=token == "tomorrow")
-            else:
-                offset = (WEEKDAYS.index(token) - day.weekday()) % 7
-                # Bare same-day weekday could mean today or the next week.
-                if offset == 0:
-                    return False, None
-                value = day + timedelta(days=offset)
-        except ValueError:
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", token):
+            value = date.fromisoformat(token)
+        elif day is None:
             return False, None
-        dates.add(value.isoformat())
-    return (True, next(iter(dates))) if len(dates) == 1 else (False, None)
+        elif token in {"today", "tomorrow"}:
+            value = day + timedelta(days=token == "tomorrow")
+        else:
+            offset = (WEEKDAYS.index(token) - day.weekday()) % 7
+            # Bare same-day weekday could mean today or the next week.
+            if offset == 0:
+                return False, None
+            value = day + timedelta(days=offset)
+    except ValueError:
+        return False, None
+    return True, value.isoformat()
+
+
+def supported_context(original: str) -> bool:
+    """Every original clause must fit a positive request or discussion purpose.
+
+    We cannot classify arbitrary surrounding prose as harmless. In particular,
+    a short model citation must not hide a cancellation, condition or polarity
+    change. Unsupported context therefore needs review, regardless of wording.
+    """
+    for sentence in re.split(r"[.!?](?=\s|$)|\n", original):
+        if not sentence.strip():
+            continue
+        inherited_subject = False
+        for clause in ACTION_SEPARATOR.split(sentence):
+            clause = clause.strip()
+            if SUPPORTED_REQUEST.fullmatch(clause):
+                if not DIRECT.match(clause) and not inherited_subject:
+                    return False
+                inherited_subject = True
+            elif DISCUSSION_CONTEXT.fullmatch(clause):
+                inherited_subject = False
+            else:
+                return False
+    return True
 
 
 def obligation(text: str) -> tuple[str, tuple[str, ...]] | None:
@@ -149,7 +176,7 @@ def _request_span(original: str, citation: str, title: str) -> tuple[int, int] |
     clauses = []
     for start, end in spans:
         cursor = start
-        for separator in re.finditer(r";\s*|\s+and\s+(?=(?:(?:please|can you|could you|would you)\s+)?(?:" + ACTIONS + r")\b)", original[start:end], re.I):
+        for separator in ACTION_SEPARATOR.finditer(original[start:end]):
             clause_end = start + separator.start()
             if cursor < finish and clause_end > begin:
                 clauses.append((cursor, clause_end))
@@ -263,15 +290,15 @@ class EmailTaskWriter:
             elif item["kind"] == "complete":
                 continue
             matches = [task for task, _relation in matching]
-            exact_target = len(matching) == 1 and matching[0][1] == "same"
-            # A known finished promise is never reopened or recreated by mail.
-            if matches and all(t["state"] != "open" for t in matches):
-                continue
+            # Stable unchanged support was suppressed above. New evidence that
+            # resembles finished work must remain visible, and cannot authorize
+            # a target mutation or silently reopen/recreate a human decision.
+            exact_target = len(matching) == 1 and matching[0][1] == "same" and matching[0][0]["state"] == "open"
             target = matches[0] if len(matches) == 1 else None
             if matches and any(not sources_visible(self.people, pid, t["source_refs"], self.allowed) for t in matches):
                 continue
             due_clear, due = grounded_date(request, message, self.timezone)
-            context_clear = not UNCERTAIN.search(original) and not CORRECTION.search(original)
+            context_clear = supported_context(original)
             due_clear = due_clear and context_clear
             direct = DIRECT.search(request.strip())
             action = direct[1].lower() if direct else None

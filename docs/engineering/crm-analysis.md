@@ -82,7 +82,26 @@ Multiple possible targets require a later review choice rather than creating wor
 ## Email tasks and completion
 
 Automatic creation requires an exactly attributed inbound full message, sufficient
-original unquoted content, a direct actionable request, and a grounded title.
+original unquoted content, a supported positive request, and a grounded title.
+The entire request must parse as `please` / `can you` / `could you` / `would you`,
+one supported action, an optional recipient, a supported nominal object, and an
+optional final deadline. Supported actions are send, share, provide, prepare,
+schedule, review, confirm and arrange. The object vocabulary covers proposals,
+examples, files, documents, materials, decks, meetings, minutes, projects, tools,
+feedback, discussion and teams, with a bounded set of domain/deliverable modifiers.
+A capitalized project label requires a positive determiner and `project`, such as
+`the Alpha project proposal`. Quotes and embedded, subordinate or past-action
+clauses are outside this grammar; a final date alone cannot authorize a deadline.
+
+Every other original clause must also parse as a supported positive request, or
+the narrow discussion-purpose form `we want/would like to discuss OBJECT [with
+TEAM]`. Explicit same-sentence action conjunctions can inherit the request subject.
+Unsupported surrounding prose leaves the interpretation as an undated sourced
+proposal, including cancellations, negation, conditions and retractions outside
+the model citation. This deliberately limits automatic creation recall: otherwise
+clear requests with ordinary greetings, explanations, unknown object words or
+other unsupported context can require review. It is a bounded authorization
+grammar, not general natural-language understanding or a measured precision claim.
 The service reads current tasks and protection after generation; task changes also
 invalidate the generation guard. A possible match, including a model-cited permitted
 task ID, produces reconciliation review. Matching retains the supported action
@@ -105,9 +124,8 @@ Friday, bare/topical/past weekdays, conditional/negated/conflicting text, unknow
 relations such as after Friday, and incidental weekdays remain undated proposals.
 Possessive weekdays do not become deadlines. This is a conservative English
 grammar; it does not claim broad natural-language date support.
-Correction, retraction and already-fulfilled wording anywhere in the original
-source blocks automatic creation and date inference, including text outside the
-model's cited request. Such interpretations stay undated review proposals.
+The whole-source positive grammar also applies before date reconciliation;
+neither a model confidence claim nor a shortened citation bypasses it.
 
 Task suppression uses stable person-owned source/message/body identity plus a
 canonical original request span. Model titles, citation punctuation, expanded
@@ -117,6 +135,11 @@ undo cancels the unchanged inferred task as a compensating version and dismisses
 its interpretation. History remains intact. Restart and unrelated new mail cannot
 recreate unchanged dismissed, undone or completed work. Human/chat-created tasks
 keep their existing Cancel behavior.
+New source, body or request-span evidence is not suppressed merely because its
+words resemble completed or cancelled work. It remains a reconciliation proposal
+requiring explicit target review, even if the wording matches that finished task.
+Acceptance cannot reopen the old task or move its date through this proposal;
+the later review flow must distinguish a new obligation from the finished one.
 
 Every completion candidate remains a sourced review proposal. Current approved-send
 receipts have no validated task-to-draft binding; a thank-you, an outgoing message,
@@ -202,7 +225,9 @@ restart, populated v5/v6 and legacy migrations, migration rollback, foreign keys
 restore. No live Gmail/provider call, proposal review UI or native background
 refresh demonstration is claimed. Task fixtures cover explicit/relative/vague dates,
 conditions, quoted and partial mail, wrong/shared/private attribution, corrected
-human dates, same-message promises, citation boundary variation, stale acceptance,
+human dates, same-message promises, embedded/past-action deadlines, varied
+surrounding cancellation and condition clauses, new source/body evidence after
+completion/cancellation/Undo/dismissal, citation boundary variation, stale acceptance,
 runtime chat Undo, retries/restart, and rollback after task/proposal/checkpoint writes.
 Synthetic fixtures prove these boundaries, not live extraction precision or recall.
 

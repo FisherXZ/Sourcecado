@@ -177,7 +177,7 @@ def add_unrelated_mail(people, pid):
     people.file_inbound_reply(pid, message_id="aaa-unrelated", thread_id="tracked-1", sender="maya@lumen.test", subject="Developer tools", snippet="another", received_at="2026-10-19T12:00:00Z")
 
 
-@pytest.mark.parametrize("resolution", ["undo", "complete", "dismiss"])
+@pytest.mark.parametrize("resolution", ["undo", "complete", "cancel", "dismiss"])
 def test_unchanged_request_never_resurrects_after_restart_and_unrelated_mail(tmp_path, resolution):
     people = PersonStore(tmp_path)
     pid = tracked_person(people)
@@ -197,7 +197,7 @@ def test_unchanged_request_never_resurrects_after_restart_and_unrelated_mail(tmp
             undone = TaskService(people).undo(pid, change["change_id"], operation_id="undo-inferred-task", actor="director", expected_version=1)
             assert undone["task"]["state"] == "cancelled"
         else:
-            TaskService(people).update(pid, task["task_id"], changes={"state": "completed"}, expected_version=1, timezone="America/Los_Angeles", operation_id="complete-inferred-task", actor="director")
+            TaskService(people).update(pid, task["task_id"], changes={"state": "completed" if resolution == "complete" else "cancelled"}, expected_version=1, timezone="America/Los_Angeles", operation_id="finish-inferred-task", actor="director")
     add_unrelated_mail(people, pid)
     # The new alphabetically earlier message shifts reply-1 from mail_1 to mail_2.
     tasks = [{**tasks[0], "source": "mail_2", "title": "A changed model paraphrase"}]
