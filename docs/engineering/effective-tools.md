@@ -84,8 +84,13 @@ Task text/date edits accept one field per command in the form “Change the task
 title/details/due date to: VALUE”, with the complete replacement value matching
 the command. Due-date edits require an explicit ISO date; “Clear the task
 details/due date” clears only that field. Unsupported compound requests ask for
-separate explicit commands. New dated reminders require a date separate from
+separate explicit commands. When several tasks exist, include the exact task id:
+“Change task task_<id> details to: VALUE” or “Clear task task_<id> due date”.
+The named id must match the selected task; replacement text cannot select it.
+New dated reminders require a date separate from
 the task title; an incidental weekday in the title does not create a deadline.
+Calendar words outside supported clauses, relative periods and clock times
+require clarification instead of silently saving undated work.
 Replacement comparisons ignore one final sentence punctuation character while
 preserving full-value equality and the exact stored text. Literal punctuation
 and empty text remain distinct.
@@ -113,6 +118,10 @@ records. A hidden duplicate produces a content-free clarification; an explicit
 permitted task or change id can still select its public record. Exact operation
 replay uses its existing receipt before checking post-write eligibility, then passes
 through the writer's version/fingerprint/source checks.
+Undo authority must first identify a task, or an exact task/change id. Generic
+“Undo” and requests about descriptions, person status, attention, suggestions or
+external actions cannot select the only eligible task. The current entity/id
+checks also run before receipt replay.
 
 Source references must be existing attachments on that person. Runtime source
 grants govern private access; the model cannot
@@ -120,8 +129,10 @@ grant itself access. Sourced tasks and description reads are hidden when any
 source is inaccessible, and partial reads are labelled. Invalid arguments and
 stale writes produce structured failures without a success notification.
 
-Task changes and operation receipts commit together in `people.db`. Existing
-pre-upgrade task fingerprints remain replayable. Description saves can also
+Task changes and operation receipts commit together in `people.db`. Source
+access is checked inside that write transaction, so a concurrent person
+revert cannot remove an attachment between validation and the new task receipt.
+Existing pre-upgrade task fingerprints remain replayable. Description saves can also
 carry an operation id: their durable receipt is stored atomically in the
 existing person timeline under `crm-operation:<id>`, with a request fingerprint
 and saved response. Same-id retries return that response; different arguments
