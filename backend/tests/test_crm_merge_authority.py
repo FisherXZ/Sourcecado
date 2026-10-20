@@ -36,6 +36,8 @@ def test_non_task_or_unscoped_undo_never_falls_back_to_unique_task(tmp_path, tex
     "Remind me to send examples in eleven days", "Remind me to send examples within two days",
     "Remind me to send examples in a couple of days", "Remind me to send examples October 23",
     "Remind me to send examples tonight", "Remind me to send examples at five",
+    "Remind me to send examples this evening", "Remind me to send examples in the morning",
+    "Remind me to send examples next business day",
 ])
 def test_unhandled_deadline_does_not_become_undated_work(tmp_path, text):
     people = PersonStore(tmp_path)
@@ -81,6 +83,22 @@ def test_explicit_missing_or_other_person_task_id_never_falls_back(tmp_path, for
         "change_id": done["change"]["change_id"], "expected_version": 2,
         "operation_id": "merge-missing-undo", "reason": "Director request",
     }, f"Undo {requested}")
+    assert not ok, result
+    assert tasks.get(pid, task["task_id"])["state"] == "completed"
+
+
+def test_actual_change_id_cannot_mask_a_contradictory_task_id(tmp_path):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    tasks = TaskService(people)
+    task = tasks.create(pid, title="Call", actor="director", operation_id="merge-mixed-call", timezone="America/Los_Angeles")["task"]
+    done = tasks.update(pid, task["task_id"], changes={"state": "completed"}, expected_version=1,
+                        actor="director", operation_id="merge-mixed-complete", timezone="America/Los_Angeles")
+    ok, result = invoke(people, "crm_undo_change", {
+        "change_id": done["change"]["change_id"], "expected_version": 2,
+        "operation_id": "merge-mixed-undo", "reason": "Director request",
+    }, f"Undo task task_{'0' * 32} change {done['change']['change_id']}")
     assert not ok, result
     assert tasks.get(pid, task["task_id"])["state"] == "completed"
 

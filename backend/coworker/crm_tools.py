@@ -171,13 +171,13 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
         raise CRMToolError("unverified_director_request", "State one unambiguous date: today, tomorrow, a weekday, or YYYY-MM-DD.")
     # A calendar word outside a supported clause still carries date intent.
     # Asking is safer than silently turning that request into undated work.
-    temporal_words = rf"(?:{token}|{months}|tonight|yesterday|someday|sometime|soon|later)"
+    dayparts = r"morning|afternoon|evening|night|dawn|dusk|midday|sunrise|sunset"
+    temporal_words = rf"(?:{token}|{months}|{dayparts}|tonight|yesterday|someday|sometime|soon|later)"
     for mention in re.finditer(rf"\b{temporal_words}\b(?!['’]s\b)", text):
         if not any(start <= mention.start() < end for start, end in handled):
             raise CRMToolError("unverified_director_request", "The date is outside the supported deadline grammar. Ask for an explicit by/on/due date or 'Remind me DATE to …'.")
     clock_words = r"zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|half|quarter|morning|afternoon|evening|night|dawn|dusk|midday|sunrise|sunset"
-    if (re.search(rf"\b(?:this|next|last|coming|following|every)\s+(?:{calendar_units}|{months})\b", text)
-            or re.search(rf"\b(?:in|within)\s+[^.!?;\n]*\b(?:{calendar_units})\b", text)
+    if (re.search(rf"\b(?:this|next|last|coming|following|every|in|within|at)\s+[^.!?;\n]*\b(?:{calendar_units}|{dayparts})\b", text)
             or re.search(rf"\bat\s+(?:(?:a|the)\s+)?(?:{numeric_or_time}|{clock_words})\b", text)):
         raise CRMToolError("unverified_director_request", "Relative periods and clock times need clarification. State one supported calendar deadline.")
     dates = set()
@@ -229,6 +229,9 @@ def _verify_task_target(name: str, args: dict, people: PersonStore, person_id: s
         # the task selection missing from the command itself.
         text = re.split(r"\bto:?\s+", text, maxsplit=1)[0]
     if name == "crm_update_task" and args["task_id"] in text:
+        named_ids = set(re.findall(r"\btask_[0-9a-f]{32}\b", text))
+        if named_ids != {args["task_id"]}:
+            raise CRMToolError("ambiguous_task", "Name one task id matching the requested task. Conflicting task ids require clarification.")
         task = TaskService(people).get(person_id, args["task_id"])
         if sources_visible(people, person_id, task["source_refs"], allowed_sources):
             return
@@ -262,7 +265,8 @@ def _verify_task_target(name: str, args: dict, people: PersonStore, person_id: s
         field, selected, code = "change_id", args["change_id"], "ambiguous_crm_change"
     explicit = [row for row in candidates if row[field] in text or row["task_id"] in text]
     named_task_ids = set(re.findall(r"\btask_[0-9a-f]{32}\b", text))
-    if named_task_ids and (len(named_task_ids) != 1 or not explicit):
+    selected_task_ids = {row["task_id"] for row in candidates if row[field] == selected}
+    if named_task_ids and (len(named_task_ids) != 1 or named_task_ids != selected_task_ids):
         raise CRMToolError(code, "The explicit task id does not identify this permitted change. Do not fall back to another task.")
     title = ""
     if not explicit:
