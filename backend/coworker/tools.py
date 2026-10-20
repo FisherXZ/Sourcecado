@@ -617,6 +617,7 @@ def execute(
     approval_scope: str = "once",
     approval_fingerprint: str | None = None,
     crm_directive: Any = None,
+    crm_mutation_budget: Any = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
     if name in CRM_TOOL_NAMES:
@@ -624,7 +625,7 @@ def execute(
             return False, {"status": "unavailable", "code": "people_unavailable", "error": "The local person store is unavailable."}
         return execute_crm_tool(name, args, people=people, store=store,
             session_id=session_id, run_id=run_id, allowed_source_ids=allowed_source_ids,
-            directive=crm_directive)
+            directive=crm_directive, mutation_budget=crm_mutation_budget)
     if name in WORKSPACE_TOOL_NAMES:
         if workspace_runtime is None:
             return False, {"status": "failed", "error": "workspace runtime missing"}

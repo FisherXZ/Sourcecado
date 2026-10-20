@@ -1,6 +1,7 @@
 """Chat CRM operations share the app's records and authority boundaries."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,13 @@ CRM_NAMES = {
     "crm_list_attention", "crm_list_tasks", "crm_create_task", "crm_update_task",
     "crm_update_description", "crm_set_attention", "crm_resolve_proposal", "crm_undo_change",
 }
+DIRECTIVE_AT = "2026-10-19T18:00:00+00:00"
+
+
+@pytest.fixture(autouse=True)
+def freeze_chat_directive_time(monkeypatch):
+    monkeypatch.setattr("coworker.turn.director_directive", lambda *args, **kwargs:
+        replace(director_directive(*args, **kwargs), at=DIRECTIVE_AT))
 
 
 def keep(people, key="maya", first="Maya", last="Patel"):
@@ -29,9 +37,10 @@ def keep(people, key="maya", first="Maya", last="Patel"):
 
 
 def invoke(people, name, args, text="", **kwargs):
+    at = kwargs.pop("directive_at", DIRECTIVE_AT)
     return execute(
         name, args, people=people, session_id="chat-crm", run_id="run-crm",
-        crm_directive=director_directive(text, session_id="chat-crm", turn="run-crm")
+        crm_directive=replace(director_directive(text, session_id="chat-crm", turn="run-crm"), at=at)
         if text else None, **kwargs,
     )
 
@@ -204,6 +213,12 @@ def test_real_chat_create_edit_undo_and_ui_lists_share_records_and_safe_run_refs
     assert result["change"]["change_id"] in serialized
     assert "Send project examples" not in serialized and "Private reminder explanation" not in serialized
     assert "Use crm_list_tasks" in fake.calls[0][0]["content"]
+    run_id = finished["run_id"]
+    checkpoints = [cp for cp in app.state.agent_runs.list_checkpoints(run_id)
+                   if cp["payload"].get("tool_call_id") == "create-task"]
+    assert [cp["kind"] for cp in checkpoints] == ["tool_pending", "tool_completed"]
+    effects = app.state.agent_runs.list_effects(run_id)
+    assert len(effects) == 1 and effects[0]["outcome_ref"] == result["change"]["change_id"]
 
     # A UI edit uses the exact same task version, and chat can undo just it.
     edit = client.patch(f"/v1/people/{pid}/tasks/{result['task']['task_id']}", headers=HEADERS,
@@ -326,7 +341,7 @@ def test_real_chat_task_completion_and_stale_edit_do_not_invoke_connector_writes
         events = drain(ws)
     results = [e for e in events if e["type"] == "tool_finished"]
     assert len(results) == 2 and results[0]["ok"] and not results[1]["ok"]
-    assert results[1]["result"]["code"] == "task_conflict"
+    assert results[1]["result"]["code"] == "crm_authority_consumed"
     assert not results[1]["result"].get("board_changed")
     assert app.state.tasks.get(pid, saved["task"]["task_id"])["version"] == 2
     assert client.get("/v1/crm/tasks", headers=HEADERS).json()["tasks"] == []
@@ -530,3 +545,273 @@ def test_explicit_detailed_description_and_separate_release_preserve_requested_t
     assert ok and released["description"]["authority"] == "assistant"
     assert released["description"]["text"] == "Human text"
     assert people.descriptions(pid)["general"]["version"] == 0
+
+
+@pytest.mark.parametrize("tool, text, value, succeeds", [
+    ("task", "Change the task title to: Send examples.", "Send examples", True),
+    ("task", "Change the task title to: Send examples!", "Send examples", True),
+    ("description", "Change the description to: Alumni contact.", "Alumni contact", True),
+    ("description", "Change the description to: Alumni contact!", "Alumni contact", True),
+    ("description", "Change the description to: Alumni contact", "Alumni contact!", True),
+    ("task", "Change the task title to: Send examples!!", "Send examples", False),
+    ("task", "Change the task title to: C++", "C", False),
+    ("description", "Change the description to: !", "", False),
+    ("task", "Change the task title to: .", ".", True),
+    ("task", "Change the task title to: !!", "!", False),
+])
+def test_sentence_punctuation_does_not_change_full_replacement_authority(tmp_path, tool, text, value, succeeds):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    args = {"operation_id": "op-punctuation", "reason": "Requested"}
+    if tool == "task":
+        task = TaskService(people).create(pid, title="Call", actor="director", operation_id="op-punctuation-before", timezone="America/Los_Angeles")["task"]
+        args.update(task_id=task["task_id"], expected_version=1, changes={"title": value})
+    else:
+        args.update(slot="general", text=value, expected_version=0)
+    ok, result = invoke(people, "crm_update_task" if tool == "task" else "crm_update_description", args, text)
+    assert ok is succeeds, result
+    if ok:
+        assert (result["task"]["title"] if tool == "task" else result["description"]["text"]) == value
+
+
+@pytest.mark.parametrize("at, timezone, text, due, succeeds", [
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me Friday to send examples", "2027-01-01", False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me Friday to send examples", None, False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples on Monday's call", "2026-10-26", False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me to send examples on Monday's call", None, True),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me Friday to send examples by Saturday", "2026-10-23", False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me next Friday to send examples", "2026-10-23", False),
+    (DIRECTIVE_AT, "America/Los_Angeles", "Remind me 2026-10-23 to send examples", "2026-10-23", True),
+    ("2026-10-23T06:30:00+00:00", "America/Los_Angeles", "Remind me today to send examples", "2026-10-22", True),
+    ("2026-10-23T06:30:00+00:00", "America/Los_Angeles", "Remind me today to send examples", "2026-10-23", False),
+    ("2026-10-23T06:30:00+00:00", "Asia/Tokyo", "Remind me today to send examples", "2026-10-23", True),
+    ("2026-03-08T07:30:00+00:00", "America/Los_Angeles", "Remind me tomorrow to send examples", "2026-03-08", True),
+    ("2026-03-08T07:30:00+00:00", "America/Los_Angeles", "Remind me tomorrow to send examples", "2026-03-09", False),
+    ("2026-11-01T08:30:00+00:00", "America/Los_Angeles", "Remind me tomorrow to send examples", "2026-11-02", True),
+    ("2026-10-23T19:00:00+00:00", "America/Los_Angeles", "Remind me Friday to send examples", "2026-10-23", True),
+])
+def test_due_dates_resolve_from_directive_time_in_the_saved_timezone(tmp_path, at, timezone, text, due, succeeds):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    app.state.store.set_setting("operator_timezone", timezone)
+    pid = keep(app.state.people)["person_id"]
+    app.state.people.bind_session("chat-crm", pid)
+    ok, result = invoke(app.state.people, "crm_create_task", {"title": "Send examples", "due_date": due,
+        "operation_id": "op-resolved-date", "reason": "Requested"}, text, directive_at=at, store=app.state.store)
+    assert ok is succeeds, result
+    if ok:
+        assert result["task"]["due_date"] == due
+        assert result["task"]["due_timezone"] == (timezone if due else None)
+
+
+def test_reminder_replay_after_restart_and_day_boundary_uses_the_saved_operation(tmp_path):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    args = {"title": "Send examples", "due_date": "2026-10-23", "reason": "Requested", "operation_id": "op-day-replay"}
+    ok, first = invoke(people, "crm_create_task", args, "Remind me Friday to send examples")
+    assert ok
+    ok, replay = invoke(PersonStore(tmp_path), "crm_create_task", args, "Remind me Friday to send examples",
+                        directive_at="2026-10-26T18:00:00+00:00")
+    assert ok and replay["replayed"] and replay["task"]["task_id"] == first["task"]["task_id"]
+    ok, conflict = invoke(people, "crm_create_task", {**args, "title": "Examples"}, "Remind me Friday to send examples",
+                         directive_at="2026-10-26T18:00:00+00:00")
+    assert not ok and conflict["code"] == "operation_conflict"
+
+
+def scripted_chat(app, pid, text, calls):
+    app.state.provider = FakeProvider(steps=[{"tool_calls": [call]} for call in calls] + [{"deltas": ("Finished.",)}])
+    sid = app.state.store.open_session_id()
+    app.state.people.bind_session(sid, pid)
+    with TestClient(app).websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
+        ws.send_json({"type": "chat", "session_id": sid, "text": text})
+        events = drain(ws)
+    return [event for event in events if event["type"] == "tool_finished"]
+
+
+@pytest.mark.parametrize("action", ["create", "complete", "undo", "no_op"])
+def test_one_chat_command_cannot_authorize_a_second_mutation_across_steps(tmp_path, action):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    calls = []
+    if action == "create":
+        text = "Remind me to send examples"
+        for index in range(2):
+            calls.append(ToolCall(id=f"create-{index}", name="crm_create_task", arguments={
+                "title": "Send examples", "operation_id": f"op-step-create-{index}", "reason": "Requested"}))
+    else:
+        for index, title in enumerate(("First", "Second")):
+            saved = app.state.tasks.create(pid, title=title, actor="director", timezone="America/Los_Angeles",
+                                            operation_id=f"op-step-before-{index}")
+            task = saved["task"]
+            if action in {"undo", "no_op"}:
+                completed = app.state.tasks.update(pid, task["task_id"], changes={"state": "completed"},
+                    expected_version=1, actor="director", timezone="America/Los_Angeles", operation_id=f"op-step-complete-{index}")
+                task = completed["task"]
+            if action == "undo":
+                name = "crm_undo_change"
+                args = {"change_id": completed["change"]["change_id"], "expected_version": task["version"]}
+            else:
+                name = "crm_update_task"
+                args = {"task_id": task["task_id"], "expected_version": task["version"], "changes": {"state": "completed"}}
+            calls.append(ToolCall(id=f"step-{index}", name=name, arguments={**args, "operation_id": f"op-step-mutate-{index}", "reason": "Requested"}))
+        text = "Undo task First completion" if action == "undo" else "Mark task First done"
+    results = scripted_chat(app, pid, text, calls)
+    assert len(results) == 2 and results[0]["ok"], results
+    assert not results[1]["ok"] and results[1]["result"]["code"] == "crm_authority_consumed"
+    if action == "create":
+        assert len(app.state.tasks.list(timezone="America/Los_Angeles", person_id=pid)["tasks"]) == 1
+    elif action == "no_op":
+        assert results[0]["result"]["change"] is None
+
+
+@pytest.mark.parametrize("undo", [False, True])
+def test_generic_first_task_or_undo_target_requires_clarification_when_ambiguous(tmp_path, undo):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    for index, title in enumerate(("First", "Second")):
+        saved = app.state.tasks.create(pid, title=title, actor="director", timezone="America/Los_Angeles", operation_id=f"op-ambiguous-{index}")
+        if undo:
+            saved = app.state.tasks.update(pid, saved["task"]["task_id"], changes={"state": "completed"},
+                expected_version=1, actor="director", timezone="America/Los_Angeles", operation_id=f"op-ambiguous-done-{index}")
+    args = {"operation_id": "op-ambiguous-target", "reason": "Requested", "expected_version": saved["task"]["version"]}
+    if undo:
+        args["change_id"] = saved["change"]["change_id"]
+    else:
+        args.update(task_id=saved["task"]["task_id"], changes={"state": "completed"})
+    results = scripted_chat(app, pid, "Undo that task completion" if undo else "Mark that task done",
+        [ToolCall(id="ambiguous-target", name="crm_undo_change" if undo else "crm_update_task", arguments=args)])
+    assert not results[0]["ok"] and results[0]["result"]["code"] == ("ambiguous_crm_change" if undo else "ambiguous_task")
+    assert not app.state.people._conn.execute("SELECT 1 FROM crm_operations WHERE operation_id = 'op-ambiguous-target'").fetchone()
+
+
+def test_reads_exact_replay_and_corrected_validation_do_not_spend_extra_authority(tmp_path):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    args = {"title": "Send examples", "due_date": "2026-10-23", "operation_id": "op-once-replay", "reason": "Requested"}
+    results = scripted_chat(app, pid, "Remind me Friday to send examples", [
+        ToolCall(id="read-before", name="crm_list_tasks", arguments={}),
+        ToolCall(id="invalid-date", name="crm_create_task", arguments={**args, "due_date": "2027-01-01"}),
+        ToolCall(id="create-once", name="crm_create_task", arguments=args),
+        ToolCall(id="replay-once", name="crm_create_task", arguments=args),
+        ToolCall(id="read-after", name="crm_list_tasks", arguments={}),
+    ])
+    assert [r["ok"] for r in results] == [True, False, True, True, True]
+    assert results[3]["result"]["replayed"]
+    assert len(results[4]["result"]["tasks"]) == 1
+    run = app.state.agent_runs.get_run(results[2]["run_id"])
+    assert [ref["id"] for ref in run["artifact_refs"]] == [results[2]["result"]["change"]["change_id"]]
+    for call_id in ("create-once", "replay-once"):
+        assert [cp["kind"] for cp in app.state.agent_runs.list_checkpoints(run["run_id"])
+                if cp["payload"].get("tool_call_id") == call_id] == ["tool_pending", "tool_completed"]
+
+
+@pytest.mark.parametrize("undo", [False, True])
+def test_task_and_change_replay_survive_the_first_operation_changing_eligibility(tmp_path, undo):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    task = app.state.tasks.create(pid, title="Send examples", actor="director", timezone="America/Los_Angeles", operation_id="op-eligibility-before")["task"]
+    if undo:
+        completed = app.state.tasks.update(pid, task["task_id"], changes={"state": "completed"}, expected_version=1,
+            actor="director", timezone="America/Los_Angeles", operation_id="op-eligibility-complete")
+        args = {"change_id": completed["change"]["change_id"], "expected_version": 2}
+        text, name = "Undo that task completion", "crm_undo_change"
+    else:
+        args = {"task_id": task["task_id"], "changes": {"state": "completed"}, "expected_version": 1}
+        text, name = "Mark that task done", "crm_update_task"
+    args.update(operation_id="op-eligibility-replay", reason="Requested")
+    results = scripted_chat(app, pid, text, [ToolCall(id="first", name=name, arguments=args), ToolCall(id="replay", name=name, arguments=args)])
+    assert all(result["ok"] for result in results), results
+    assert results[1]["result"]["replayed"]
+    assert results[0]["result"]["change"]["change_id"] == results[1]["result"]["change"]["change_id"]
+
+
+@pytest.mark.parametrize("title", ["Done", "Task"])
+def test_generic_task_words_cannot_select_a_coincidentally_named_task(tmp_path, title):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    task = app.state.tasks.create(pid, title=title, actor="director", timezone="America/Los_Angeles", operation_id="op-name-word")["task"]
+    app.state.tasks.create(pid, title="Another", actor="director", timezone="America/Los_Angeles", operation_id="op-name-other")
+    results = scripted_chat(app, pid, "Mark that task done", [ToolCall(id="word-target", name="crm_update_task", arguments={
+        "task_id": task["task_id"], "expected_version": 1, "changes": {"state": "completed"}, "reason": "Requested", "operation_id": "op-name-target"})])
+    assert not results[0]["ok"] and results[0]["result"]["code"] == "ambiguous_task"
+
+
+@pytest.mark.parametrize("trigger", ["queued_chat", "scheduled"])
+def test_queued_turns_get_independent_budgets_and_scheduled_text_gets_no_directive(tmp_path, trigger):
+    import asyncio
+    from coworker.turn import run_turn
+    from coworker.server import system_prompt
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    sid = app.state.store.open_session_id()
+    app.state.people.bind_session(sid, pid)
+    for turn in range(2):
+        calls = [ToolCall(id=f"queued-{turn}-{index}", name="crm_create_task", arguments={"title": "Send examples",
+            "operation_id": f"op-queued-{turn}-{index}", "reason": "Requested"}) for index in range(2)]
+        provider = FakeProvider(steps=[{"tool_calls": [call]} for call in calls] + [{"deltas": ("Finished.",)}])
+        events = []
+        async def emit(event):
+            events.append(event)
+        asyncio.run(run_turn(text="Remind me to send examples", sid=sid, store=app.state.store, provider=provider,
+            persona=app.state.persona, skills=app.state.skills, inbox=app.state.inbox,
+            openai_tools=list(app.state.effective_tool_catalog().schemas), execute_kwargs={"store": app.state.store, "people": app.state.people},
+            emit=emit, system_prompt_fn=system_prompt, agent_runs=app.state.agent_runs, run_owner=app.state.run_owner, run_trigger=trigger))
+        finished = [event for event in events if event["type"] == "tool_finished"]
+        assert [event["ok"] for event in finished] == ([True, False] if trigger == "queued_chat" else [False, False])
+    assert len(app.state.tasks.list(timezone="America/Los_Angeles", person_id=pid)["tasks"]) == (2 if trigger == "queued_chat" else 0)
+
+
+@pytest.mark.parametrize("undo", [False, True])
+def test_a_named_missing_target_does_not_fall_back_to_the_only_other_record(tmp_path, undo):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    saved = app.state.tasks.create(pid, title="Existing", actor="director", timezone="America/Los_Angeles", operation_id="op-existing-target")
+    if undo:
+        saved = app.state.tasks.update(pid, saved["task"]["task_id"], changes={"state": "completed"}, expected_version=1,
+            actor="director", timezone="America/Los_Angeles", operation_id="op-existing-complete")
+        name, text = "crm_undo_change", "Undo task Missing completion"
+        args = {"change_id": saved["change"]["change_id"], "expected_version": 2}
+    else:
+        name, text = "crm_update_task", "Mark task Missing done"
+        args = {"task_id": saved["task"]["task_id"], "expected_version": 1, "changes": {"state": "completed"}}
+    results = scripted_chat(app, pid, text, [ToolCall(id="missing-target", name=name,
+        arguments={**args, "reason": "Requested", "operation_id": "op-missing-target"})])
+    assert not results[0]["ok"]
+    assert app.state.tasks.get(pid, saved["task"]["task_id"])["version"] == saved["task"]["version"]
+
+
+def test_a_private_eligible_task_prevents_guessing_the_only_visible_target(tmp_path):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    visible = app.state.tasks.create(pid, title="Visible", actor="director", timezone="America/Los_Angeles", operation_id="op-visible-target")["task"]
+    ref = app.state.people.upsert_attachment(pid, record_type="source_ref", fields={"id": "gmail:private", "sensitivity": "restricted"},
+        idempotency_key="private-target", actor="director", rationale_summary="Attach")
+    app.state.tasks.create(pid, title="PRIVATE TASK", actor="assistant", timezone="America/Los_Angeles", operation_id="op-hidden-target",
+        source_refs=[ref["id"]], allowed_source_ids={ref["id"]})
+    results = scripted_chat(app, pid, "Mark that task done", [ToolCall(id="private-target", name="crm_update_task", arguments={
+        "task_id": visible["task_id"], "expected_version": 1, "changes": {"state": "completed"},
+        "operation_id": "op-guess-visible", "reason": "Requested"})])
+    assert not results[0]["ok"] and results[0]["result"]["code"] == "ambiguous_task"
+    assert "PRIVATE TASK" not in json.dumps(results)
+
+
+@pytest.mark.parametrize("undo", [False, True])
+def test_an_explicit_task_or_change_id_selects_the_director_named_record(tmp_path, undo):
+    app = create_app(token=TOKEN, state=tmp_path, provider=FakeProvider())
+    pid = keep(app.state.people)["person_id"]
+    for index in range(2):
+        saved = app.state.tasks.create(pid, title=f"Task {index}", actor="director", timezone="America/Los_Angeles", operation_id=f"op-id-target-{index}")
+        if undo:
+            saved = app.state.tasks.update(pid, saved["task"]["task_id"], changes={"state": "completed"}, expected_version=1,
+                actor="director", timezone="America/Los_Angeles", operation_id=f"op-id-complete-{index}")
+    if undo:
+        name, text = "crm_undo_change", f"Undo {saved['change']['change_id']}"
+        args = {"change_id": saved["change"]["change_id"], "expected_version": 2}
+    else:
+        name, text = "crm_update_task", f"Mark task {saved['task']['task_id']} done"
+        args = {"task_id": saved["task"]["task_id"], "expected_version": 1, "changes": {"state": "completed"}}
+    results = scripted_chat(app, pid, text, [ToolCall(id="explicit-target", name=name,
+        arguments={**args, "operation_id": "op-explicit-target", "reason": "Requested"})])
+    assert results[0]["ok"], results
+    assert results[0]["result"]["task"]["task_id"] == saved["task"]["task_id"]

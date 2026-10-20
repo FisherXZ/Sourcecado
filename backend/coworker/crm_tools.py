@@ -11,11 +11,15 @@ named unavailable result instead of a fabricated operating picture.
 from __future__ import annotations
 
 import re
+import json
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from coworker.crm_sources import sources_visible
 from coworker.crm_tasks import (
-    DEFAULT_TIMEZONE, TIMEZONE_SETTING, TASK_STATES, TaskConflict, TaskNotFound,
+    DEFAULT_TIMEZONE, TIMEZONE_SETTING, TASK_STATES, TASK_TRANSITIONS, TaskConflict, TaskNotFound,
     TaskService, validate_timezone,
 )
 from coworker.evidence_envelope import Directive
@@ -86,8 +90,160 @@ class CRMToolError(ValueError):
         self.code, self.details = code, details
 
 
+@dataclass
+class CRMMutationBudget:
+    """One director request permits one successful mutation, plus exact replay."""
+
+    consumed_request: str | None = None
+
+    def check(self, request: str) -> bool:
+        if self.consumed_request is None:
+            return False
+        if request != self.consumed_request:
+            raise CRMToolError("crm_authority_consumed", "This director request already saved a CRM operation. Ask for another explicit command before changing another record or using another operation id.")
+        return True
+
+    def consume(self, request: str) -> None:
+        self.consumed_request = request
+
+
 def _normalized(value: str) -> str:
     return " ".join(value.split()).casefold()
+
+
+def _replacement(value: str) -> str:
+    """Ignore one sentence terminator while keeping literal/empty values distinct."""
+    text = _normalized(value)
+    return text[:-1] if text and text[-1] in ".!?" and any(char.isalnum() for char in text[:-1]) else text
+
+
+def crm_outcome_references(result: dict[str, Any]) -> dict[str, Any]:
+    """Runtime-authored pointers only; source and entity content stay in people.db."""
+    change = result.get("change")
+    if not isinstance(change, dict) or not change.get("change_id"):
+        return {}
+    entity = result.get("task") or result.get("description") or {}
+    return {
+        "outcome_ref": change["change_id"], "person_id": result.get("person_id"),
+        "artifact_refs": [{"id": change["change_id"], "artifact_type": "crm_change", "title": "CRM change"}],
+        "source_refs": [{"id": ref, "provider": "sourcecado", "title": "CRM source reference"}
+                        for ref in entity.get("source_refs", [])[:50]],
+    }
+
+
+def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None:
+    moment = datetime.fromisoformat(directive.at.replace("Z", "+00:00"))
+    if moment.tzinfo is None:
+        raise CRMToolError("unverified_director_request", "The director request needs a timezone-aware timestamp before resolving a date.")
+    today = moment.astimezone(ZoneInfo(timezone)).date()
+    weekdays = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    token = r"(?:today|tomorrow|" + "|".join(weekdays) + r"|\d{4}-\d{2}-\d{2})"
+    prefix = re.match(rf"^remind me\s+({token})\s+to\b", text)
+    # Possessives ("on Monday's call") describe context rather than a deadline.
+    tokens = ([prefix[1]] if prefix else []) + re.findall(rf"\b(?:by|on|due)\s+({token})(?![\w'’])", text)
+    if not prefix and re.match(r"^remind me\s+(?!to\b)", text):
+        raise CRMToolError("unverified_director_request", "State one unambiguous date: today, tomorrow, a weekday, or YYYY-MM-DD.")
+    dates = set()
+    for value in tokens:
+        if value == "today":
+            resolved = today
+        elif value == "tomorrow":
+            resolved = today + timedelta(days=1)
+        elif value in weekdays:
+            resolved = today + timedelta(days=(weekdays.index(value) - today.weekday()) % 7)
+        else:
+            resolved = date.fromisoformat(value)
+        dates.add(resolved.isoformat())
+    if len(dates) > 1:
+        raise CRMToolError("unverified_director_request", "The command contains conflicting dates. Ask for one intended due date.")
+    return next(iter(dates), None)
+
+
+def _saved_task_operation(people: PersonStore, person_id: str, operation_id: str) -> dict | None:
+    """Only target/date metadata; the writer still verifies fingerprint and access."""
+    with people._lock:
+        row = people._conn.execute(
+            """SELECT c.entity_id, c.action, c.after_json, c.compensates_change_id FROM crm_operations o
+               JOIN crm_changes c ON c.change_id = o.change_id
+               WHERE o.operation_id = ? AND c.person_id = ? AND c.entity_type = 'task'""",
+            (operation_id, person_id),
+        ).fetchone()
+    return ({"task_id": row["entity_id"], "action": row["action"],
+             "compensates_change_id": row["compensates_change_id"],
+             "due_date": json.loads(row["after_json"]).get("due_date")} if row else None)
+
+
+def _verify_task_target(name: str, args: dict, people: PersonStore, person_id: str,
+                        directive: Directive, allowed_sources: set[str] | None,
+                        saved_operation: dict | None) -> None:
+    if name not in {"crm_update_task", "crm_undo_change"}:
+        return
+    # Receipt recovery must survive the first write changing state/version.
+    # This only bypasses selection; the service still checks the entire saved
+    # request fingerprint and current source permissions before returning it.
+    if saved_operation:
+        if name == "crm_update_task" and args["task_id"] == saved_operation["task_id"]:
+            return
+        if name == "crm_undo_change" and args["change_id"] == saved_operation["compensates_change_id"]:
+            return
+    text = _normalized(directive.text)
+    if name == "crm_update_task" and args["task_id"] in text:
+        task = TaskService(people).get(person_id, args["task_id"])
+        if sources_visible(people, person_id, task["source_refs"], allowed_sources):
+            return
+    if name == "crm_update_task":
+        listing = TaskService(people).list(timezone=DEFAULT_TIMEZONE, person_id=person_id, states=TASK_STATES, limit=500)
+        if listing["truncated"]:
+            raise CRMToolError("ambiguous_task", "The task list is incomplete. Ask for an explicit task id.")
+        state = args["changes"].get("state")
+        eligible_records = [task for task in listing["tasks"]
+                            if state is None or task["state"] == state or (task["state"], state) in TASK_TRANSITIONS]
+        candidates = [task for task in eligible_records
+                      if sources_visible(people, person_id, task["source_refs"], allowed_sources)]
+        field, selected, code = "task_id", args["task_id"], "ambiguous_task"
+        # Replacement text names the new value, not the old task's identity.
+        if state is None:
+            text = re.split(r"\bto:?\s+", text, maxsplit=1)[0]
+    else:
+        if not str(args["change_id"]).startswith("chg_"):
+            return  # The adapter reports the pending non-task undo capability.
+        with people._lock:
+            rows = people._conn.execute(
+                """SELECT c.change_id, c.entity_id AS task_id, c.entity_version AS version,
+                          c.action, t.title, t.source_refs FROM crm_changes c
+                   JOIN person_tasks t ON t.task_id = c.entity_id AND t.person_id = c.person_id
+                   WHERE c.person_id = ? AND c.entity_type = 'task'
+                     AND c.before_json IS NOT NULL AND c.entity_version = t.version""", (person_id,),
+            ).fetchall()
+        eligible_records = [dict(row) for row in rows
+                            if not re.search(r"\b(?:completion|complete|done)\b", text) or row["action"] == "complete"]
+        candidates = [row for row in eligible_records
+                      if sources_visible(people, person_id, json.loads(row["source_refs"]), allowed_sources)]
+        field, selected, code = "change_id", args["change_id"], "ambiguous_crm_change"
+    explicit = [row for row in candidates if row[field] in text or row["task_id"] in text]
+    title = ""
+    if not explicit:
+        # Match the complete name after "task", excluding the lifecycle verb.
+        # Generic words like "that task done" do not name a task titled Done.
+        named = re.search(r"\btask\s+(.+)$", text)
+        title = named[1].rstrip(".!?") if named else ""
+        if name == "crm_undo_change":
+            title = re.sub(r"\s+(?:completion|change|edit|update|cancellation|reopening)$", "", title)
+            if title in {"completion", "change", "edit", "update", "cancellation", "reopening"}:
+                title = ""
+        elif args["changes"].get("state"):
+            title = re.sub(r"\s+(?:done|complete|completed|cancelled|canceled|open|reopened)$", "", title)
+            if title in {"done", "complete", "completed", "cancelled", "canceled", "open", "reopened"}:
+                title = ""
+        else:
+            title = ""  # Field-edit wording names a field, not an old task title.
+        explicit = [row for row in candidates if title and _normalized(row["title"]) == title]
+    if not explicit and len(candidates) != len(eligible_records):
+        raise CRMToolError(code, "Some eligible work is unavailable to this run. Ask for an explicit permitted task or change id; do not guess a target.")
+    eligible = explicit if explicit or title else candidates
+    if len(eligible) != 1 or eligible[0][field] != selected:
+        raise CRMToolError(code, "Which saved task or change did you mean? Give its exact title or id; a person-bound chat alone does not identify it.",
+                           candidates=[{key: row[key] for key in (field, "title", "version")} for row in eligible[:20]])
 
 
 def _validate(value: Any, schema: dict, path: str = "arguments") -> None:
@@ -126,7 +282,8 @@ def _validate(value: Any, schema: dict, path: str = "arguments") -> None:
             raise CRMToolError("invalid_arguments", f"{path} is out of range")
 
 
-def _human_request(name: str, args: dict, directive: Directive | None) -> bool:
+def _human_request(name: str, args: dict, directive: Directive | None, *, timezone: str = DEFAULT_TIMEZONE,
+                   saved_operation: dict | None = None) -> bool:
     supplied_quote = args.get("request_quote")
     if not isinstance(directive, Directive):
         if supplied_quote:
@@ -180,7 +337,7 @@ def _human_request(name: str, args: dict, directive: Directive | None) -> bool:
         if not edit or len(changes) != 1:
             raise CRMToolError("unverified_director_request", "Ask for one field explicitly: 'Change the task title/details/due date to: VALUE'. Date edits require YYYY-MM-DD.")
         field = {"title": "title", "details": "details", "due date": "due_date"}[edit[1]]
-        if set(changes) != {field} or changes[field] is None or _normalized(changes[field]) != edit[2]:
+        if set(changes) != {field} or changes[field] is None or _replacement(changes[field]) != _replacement(edit[2]):
             raise CRMToolError("unverified_director_request", "The changed field and complete new value must match the director's field-specific command.")
         return True
     if name == "crm_update_description":
@@ -198,7 +355,7 @@ def _human_request(name: str, args: dict, directive: Directive | None) -> bool:
                 raise CRMToolError("unverified_director_request", "The director must explicitly request an empty description.")
         else:
             replacement = re.search(r"\bto:?\s+(.+)$", text)
-            if not replacement or _normalized(args.get("text") or "") != replacement[1]:
+            if not replacement or _replacement(args.get("text") or "") != _replacement(replacement[1]):
                 raise CRMToolError("unverified_director_request", "The complete description text must match the director's explicit replacement.")
         return True
     values = args.get("changes", {}) if name == "crm_update_task" else args
@@ -206,14 +363,10 @@ def _human_request(name: str, args: dict, directive: Directive | None) -> bool:
         value = values.get(field)
         if value and _normalized(value) not in _normalized(quote):
             raise CRMToolError("unverified_director_request", "The requested text must occur in the director command. Ask for the exact wording; nothing was saved.")
-    if name == "crm_create_task" and args.get("due_date"):
-        # A weekday in the task title is context. Only a separately stated
-        # reminder date or deadline authorizes storing a due date.
-        date_word = r"(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})"
-        dated = re.search(rf"^remind me\s+{date_word}\s+to\b|\b(?:by|on|due)\s+{date_word}\b", text)
-        explicit_dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b", text)
-        if not dated or explicit_dates and args["due_date"] not in explicit_dates:
-            raise CRMToolError("unverified_director_request", "A dated reminder requires a separately stated date. Ask for the intended due date instead of adding one.")
+    if name == "crm_create_task":
+        replay = saved_operation and saved_operation["action"] == "create" and saved_operation["due_date"] == args.get("due_date")
+        if not replay and args.get("due_date") != _reminder_date(text, directive, timezone):
+            raise CRMToolError("unverified_director_request", "The due date must match the director's date in the saved operator timezone. Ask for clarification instead of choosing another date.")
     return True
 
 
@@ -253,7 +406,8 @@ def _person(people: PersonStore, args: dict, sid: str | None, directive: Directi
 def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: Any = None,
                      session_id: str | None = None, run_id: str | None = None,
                      allowed_source_ids: set[str] | None = None,
-                     directive: Directive | None = None) -> tuple[bool, dict]:
+                     directive: Directive | None = None,
+                     mutation_budget: CRMMutationBudget | None = None) -> tuple[bool, dict]:
     pending = {"crm_list_attention": 204, "crm_set_attention": 204, "crm_resolve_proposal": 205}
     if name in pending:
         issue = pending[name]
@@ -281,9 +435,16 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
             partial = result["truncated"] or len(visible) != len(result["tasks"])
             return True, {**result, "tasks": visible, "partial": partial,
                           "status": "partial" if partial else "complete"}
-        human = _human_request(name, args, directive)
+        saved_operation = _saved_task_operation(people, pid, args["operation_id"])
+        request = json.dumps({"tool": name, "person_id": pid,
+            "arguments": {key: value for key, value in args.items() if key not in {"person_id", "person_name", "request_quote"}}},
+            sort_keys=True, separators=(",", ":"))
+        replay_authority = mutation_budget.check(request) if mutation_budget is not None else False
+        human = _human_request(name, args, directive, timezone=timezone, saved_operation=saved_operation)
         if not human:
             raise CRMToolError("unverified_director_request", "Chat CRM writes require an explicit current director command. Ask for wording such as 'Remind me to send examples', 'Mark that task done', or 'Change the description to: …'. Nothing was saved.")
+        if not replay_authority:
+            _verify_task_target(name, args, people, pid, directive, allowed_source_ids, saved_operation)
         identity = dict(actor="assistant", human_requested=human, session_id=session_id,
                         run_id=run_id, allowed_source_ids=allowed_source_ids,
                         operation_id=args.get("operation_id"))
@@ -310,6 +471,8 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
             result = tasks.undo(pid, change_id, expected_version=version, reason=args["reason"], **identity)
         else:
             raise CRMToolError("unknown_crm_tool", "Unknown CRM operation")
+        if mutation_budget is not None:
+            mutation_budget.consume(request)
         return True, {**result, "person_id": pid, "board_changed": bool(result.get("change")), "status": "complete"}
     except CRMToolError as exc:
         return False, {"status": "failed", "code": exc.code, "error": str(exc), **exc.details}

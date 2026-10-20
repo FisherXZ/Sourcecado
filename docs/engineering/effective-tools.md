@@ -36,6 +36,16 @@ edits and undo require the current task version; descriptions require the slot
 version, available through `board_get` (initially zero). The operator's saved
 timezone controls task calendar dates, just as it does for the app.
 
+Relative reminder dates use the trusted director request timestamp in that
+IANA timezone, rather than a later tool-call clock. The supported forms are
+today, tomorrow, a weekday (today when it is that weekday, otherwise its next
+occurrence), and an ISO date. The supplied date must match this result; an
+omitted date cannot silently drop an explicit deadline. Conflicting dates,
+“next Friday”, and other ambiguous forms ask for clarification. Possessives
+such as “on Monday's call” describe context and remain undated. An exact saved
+operation can replay after restart or a day boundary without moving its date;
+the write service still checks its complete fingerprint and source access.
+
 The actor saved by chat is always `assistant`. A separate human-protection
 decision comes from the current authenticated director-channel `Directive`,
 never a model-supplied actor, authority flag, source reference or reason.
@@ -53,6 +63,14 @@ assistant lifecycle changes without a director request until task-specific
 fulfillment evidence is implemented. Its inferred text writes remain
 assistant-owned and cannot replace human-protected fields.
 
+Each chat turn permits one successful CRM operation, including a successful
+no-op. The runtime binds that authority to the tool, operation id, canonical
+request and resolved person/target. An exact replay may return its receipt;
+another operation id, tool, target or changed request needs a new director
+command. Failed validation can be corrected before the first success. Reads
+remain available throughout. Each queued message gets a fresh turn budget;
+scheduled prompts cannot create a director chat directive.
+
 Authority is field-scoped. Completing, reopening or cancelling permits only
 `state`; the model cannot add a title, details or date edit to that operation.
 Task text/date edits accept one field per command in the form “Change the task
@@ -61,6 +79,9 @@ the command. Due-date edits require an explicit ISO date; “Clear the task
 details/due date” clears only that field. Unsupported compound requests ask for
 separate explicit commands. New dated reminders require a date separate from
 the task title; an incidental weekday in the title does not create a deadline.
+Replacement comparisons ignore one final sentence punctuation character while
+preserving full-value equality and the exact stored text. Literal punctuation
+and empty text remain distinct.
 
 An unspecified “description” means the general slot. The detailed slot requires
 “detailed description”, and explicit slot wording must match the tool's slot.
@@ -73,8 +94,18 @@ of expanding the director's authority to unrelated fields.
 A person-bound chat cannot mutate another person's record. Outside a bound
 chat, names resolve only on exact first/full-name matches; multiple matches
 return candidates and a request for clarification. A bare id is accepted only
-when the director supplied it. Source references must be existing attachments
-on that person. Runtime source grants govern private access; the model cannot
+when the director supplied it.
+
+Task and undo targets also require an explicit id, an exact task title after
+“task”, or a unique eligible saved record. A person binding alone does not pick
+between multiple tasks or changes. A named missing target cannot fall back to
+another record. Private or incomplete work prevents guessing a generic target;
+clarification responses do not reveal private titles. Exact operation replay
+uses its existing receipt before checking post-write eligibility, then passes
+through the writer's version/fingerprint/source checks.
+
+Source references must be existing attachments on that person. Runtime source
+grants govern private access; the model cannot
 grant itself access. Sourced tasks and description reads are hidden when any
 source is inaccessible, and partial reads are labelled. Invalid arguments and
 stale writes produce structured failures without a success notification.
@@ -87,6 +118,11 @@ and saved response. Same-id retries return that response; different arguments
 conflict. Operation ids cannot be reused across task and description writes.
 The run ledger records only generic change pointers and permitted source ids;
 it does not copy task text, description text, source bodies, or request reasons.
+These pointers merge into the existing effect-completion transaction. Each
+fenced call has one pending checkpoint and one completion checkpoint, including
+replay; pointer writes do not append a second completion. If effect settlement
+rolls back, the pointers and checkpoint roll back with it. External-effect
+quarantine and approval fencing retain their existing behavior.
 
 This is a partial integration for #206 while prerequisites are pending:
 

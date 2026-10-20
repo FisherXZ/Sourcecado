@@ -69,7 +69,7 @@ from coworker.telemetry import (
     UsageEvent,
 )
 from coworker.tools import evidence_for, execute
-from coworker.crm_tools import CRM_TOOL_NAMES
+from coworker.crm_tools import CRM_TOOL_NAMES, CRMMutationBudget, crm_outcome_references
 
 INTERRUPTED_TOOL = '{"error": "tool call interrupted"}'
 _APOLLO_TOOLS = frozenset({"apollo_search_people", "apollo_enrich_contact"})
@@ -779,6 +779,7 @@ async def run_turn(
     # the same authority. The ledger is per turn: evidence read now cannot
     # justify an effect later.
     authority = ContextAuthority()
+    crm_mutation_budget = CRMMutationBudget()
     authority.admit_directive(
         director_directive(text, session_id=sid, turn=events.identity.run_id)
     )
@@ -864,18 +865,6 @@ async def run_turn(
             ok=ok,
         )
         _record_person_file(sid, call, ok, result, execute_kwargs)
-        if ok and call.name in CRM_TOOL_NAMES and run_context is not None and result.get("change"):
-            # The people DB owns content and the atomic operation receipt.
-            # The run ledger carries only pointers, including on replay.
-            change = result["change"]
-            entity = result.get("task") or result.get("description") or {}
-            refs = entity.get("source_refs") or []
-            run_context.note("tool_completed", state="running", payload={
-                "tool_name": call.name, "tool_call_id": call.id, "status": "succeeded",
-                "artifact_ref_ids": [change["change_id"]], "source_ref_ids": refs,
-            }, person_id=result.get("person_id"),
-                artifact_refs=[{"id": change["change_id"], "artifact_type": "crm_change", "title": "CRM change"}],
-                source_refs=[{"id": ref, "provider": "sourcecado", "title": "CRM source reference"} for ref in refs])
 
     def _end_run(state: str, text_so_far: str) -> None:
         """Close the durable run in the same shape the operator was told.
@@ -1665,6 +1654,7 @@ async def run_turn(
                         # This object is minted from the director channel at
                         # turn entry. A model cannot supply it in arguments.
                         kw["crm_directive"] = authority.directives[0] if run_trigger in {"chat", "queued_chat"} else None
+                        kw["crm_mutation_budget"] = crm_mutation_budget
                     kw["approval_granted"] = approval_claimant is not None
                     kw["approval_scope"] = approval_scope
                     kw["approval_fingerprint"] = approval_fingerprint
@@ -1691,6 +1681,7 @@ async def run_turn(
                             call.id if approval_claimant is not None else None
                         ),
                         step=model_step,
+                        **({"outcome_references": crm_outcome_references} if call.name in CRM_TOOL_NAMES else {}),
                     )
                 except AgentRunEffectQuarantined:
                     # The call may have reached a real person. The turn ends
