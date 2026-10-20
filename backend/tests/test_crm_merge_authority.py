@@ -132,6 +132,18 @@ def test_explicit_undated_task_keeps_time_words_as_literal_task_text(tmp_path):
     assert result["task"]["due_date"] is None and result["task"]["title"] == "Send meeting minutes"
 
 
+def test_explicit_undated_directive_cannot_replay_a_dated_operation(tmp_path):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    args = {"title": "Send examples", "due_date": "2026-10-23",
+            "operation_id": "merge-undated-replay", "reason": "Director request"}
+    assert invoke(people, "crm_create_task", args, "Remind me Friday to send examples")[0]
+    ok, result = invoke(people, "crm_create_task", args, "Add an undated task: Send examples")
+    assert not ok, result
+    assert len(TaskService(people).list(person_id=pid, timezone="America/Los_Angeles")["tasks"]) == 1
+
+
 def test_replacement_task_id_is_data_not_a_target_selector(tmp_path):
     people = PersonStore(tmp_path)
     pid = keep(people)["person_id"]
