@@ -146,6 +146,7 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
     date_hint = rf"(?:{token}|{calendar_units}|{months}|{numeric_or_time})"
     modifiers = r"(?:(?:the|a|an|next|this|coming|following|around|early|late|end|of|in)\s+)*"
     tokens = [prefix[1]] if prefix else []
+    handled = [prefix.span(1)] if prefix else []
     for suffix in re.finditer(r"\b(by|on|due)\b\s*", text):
         # By/due establish a deadline boundary even when its value is unknown.
         # Only named delivery methods exempt a by-clause. On also introduces
@@ -157,12 +158,26 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
             if re.match(rf"^{token}['’]s\b", clause):
                 continue
             if not re.match(rf"^{modifiers}{date_hint}(?![\w'’])", clause):
-                continue
+                # Retain ordinary topic wording, but an unknown event/date
+                # without an explicit topic cannot silently lose its date.
+                if re.match(r"^(?:the|our|your|their)\s+(?:project|work|proposal|research|roadmap|product|company|plan)\b", clause):
+                    continue
+                raise CRMToolError("unverified_director_request", "The on-clause does not establish a supported date or topic. Ask for one explicit calendar deadline.")
         if not re.fullmatch(token, clause):
             raise CRMToolError("unverified_director_request", "State one unambiguous deadline: today, tomorrow, a weekday, or YYYY-MM-DD. Unsupported or alternative deadline wording needs clarification.")
         tokens.append(clause)
+        handled.append((suffix.end(), suffix.end() + len(clause)))
     if not prefix and re.match(r"^remind me\s+(?!to\b)", text):
         raise CRMToolError("unverified_director_request", "State one unambiguous date: today, tomorrow, a weekday, or YYYY-MM-DD.")
+    # A calendar word outside a supported clause still carries date intent.
+    # Asking is safer than silently turning that request into undated work.
+    for mention in re.finditer(rf"\b{token}\b(?!['’]s\b)", text):
+        if not any(start <= mention.start() < end for start, end in handled):
+            raise CRMToolError("unverified_director_request", "The date is outside the supported deadline grammar. Ask for an explicit by/on/due date or 'Remind me DATE to …'.")
+    if (re.search(rf"\b(?:this|next|last|coming|following|every)\s+(?:{calendar_units}|{months})\b", text)
+            or re.search(rf"\bin\s+(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a|an|the|next|following)\s+)+(?:{calendar_units})\b", text)
+            or re.search(rf"\bat\s+(?:{numeric_or_time})\b", text)):
+        raise CRMToolError("unverified_director_request", "Relative periods and clock times need clarification. State one supported calendar deadline.")
     dates = set()
     for value in tokens:
         if value == "today":
@@ -331,6 +346,18 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
         raise CRMToolError("unverified_director_request", "Ask the director to state the task or description edit explicitly; this wording cannot establish human authority.")
     if re.search(r"\b(?:not|never|unless|if|when|after|before)\b|\bdon['’]t\b", text):
         raise CRMToolError("unverified_director_request", "Negated or conditional wording needs clarification before a CRM write. Ask for one explicit immediate edit.")
+    if name == "crm_undo_change":
+        task_command = re.match(r"^undo\s+(?:(?:the|that|last|latest)\s+)?task\b", text)
+        explicit_command = re.fullmatch(r"undo\s+(?:(?:the|that)\s+)?(?:(?:task|change)\s+)?(?:task|chg)_[0-9a-f]{32}[.!?]?", text)
+        if not task_command and not explicit_command:
+            raise CRMToolError("unverified_director_request", "Say which task change to undo, using task wording or its exact task/change id. Description, status, attention, suggestion and external-action undo cannot select a task.")
+        # Check the current request before receipt selection can bypass target
+        # lookup. Replaying a task receipt cannot authorize another entity/id.
+        for identifier in re.findall(r"\b(?:task|chg)_[0-9a-f]{32}\b", text):
+            selected = args["change_id"] if identifier.startswith("chg_") else (saved_operation or {}).get("task_id")
+            if selected is not None and identifier != selected:
+                raise CRMToolError("unverified_director_request", "The task/change id must match the director's current undo command.")
+        return True
     if name == "crm_update_task":
         changes = args["changes"]
         lifecycle = re.match(r"^(mark|complete|finish|reopen|cancel)\b", text)
@@ -349,17 +376,22 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
             return True
         # Keep the supported editing grammar small and field-scoped. A
         # coincidental word in the old title is not authority to replace it.
-        clear = re.fullmatch(r"clear\s+(?:(?:the|that)\s+)?task\s+(details|due date)[.!]?", text)
+        selector = r"(?:\s+(?P<task_id>task_[0-9a-f]{32}))?"
+        clear = re.fullmatch(r"clear\s+(?:(?:the|that)\s+)?task" + selector + r"\s+(?P<field>details|due date)[.!]?", text)
         if clear:
-            field, empty = ("details", "") if clear[1] == "details" else ("due_date", None)
+            if clear["task_id"] and clear["task_id"] != args["task_id"]:
+                raise CRMToolError("unverified_director_request", "The task id must match the director's command.")
+            field, empty = ("details", "") if clear["field"] == "details" else ("due_date", None)
             if changes != {field: empty}:
                 raise CRMToolError("unverified_director_request", "A clear command permits only clearing the named task field.")
             return True
-        edit = re.fullmatch(r"(?:change|edit|update)\s+(?:(?:the|that)\s+)?task\s+(title|details|due date)\s+to:?\s+(.+)", text)
+        edit = re.fullmatch(r"(?:change|edit|update)\s+(?:(?:the|that)\s+)?task" + selector + r"\s+(?P<field>title|details|due date)\s+to:?\s+(?P<value>.+)", text)
         if not edit or len(changes) != 1:
-            raise CRMToolError("unverified_director_request", "Ask for one field explicitly: 'Change the task title/details/due date to: VALUE'. Date edits require YYYY-MM-DD.")
-        field = {"title": "title", "details": "details", "due date": "due_date"}[edit[1]]
-        if set(changes) != {field} or changes[field] is None or _replacement(changes[field]) != _replacement(edit[2]):
+            raise CRMToolError("unverified_director_request", "Ask for one field explicitly: 'Change task [task_id] title/details/due date to: VALUE'. Date edits require YYYY-MM-DD.")
+        if edit["task_id"] and edit["task_id"] != args["task_id"]:
+            raise CRMToolError("unverified_director_request", "The task id must match the director's command.")
+        field = {"title": "title", "details": "details", "due date": "due_date"}[edit["field"]]
+        if set(changes) != {field} or changes[field] is None or _replacement(changes[field]) != _replacement(edit["value"]):
             raise CRMToolError("unverified_director_request", "The changed field and complete new value must match the director's field-specific command.")
         return True
     if name == "crm_update_description":

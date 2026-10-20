@@ -534,14 +534,6 @@ class TaskService:
             "due_date": _clean_due_date(due_date),
         }
         timezone = validate_timezone(timezone)
-        with self._lock:
-            refs = source_ids(self._people, person_id, source_refs, allowed_source_ids)
-        fingerprint = _fingerprint(
-            {"op": "task.create", "person_id": person_id, "actor": actor,
-             "human_requested": human_requested, "source_refs": refs,
-             "timezone": timezone, "reason": reason, **clean}
-        )
-        legacy = _fingerprint({"op": "task.create", "person_id": person_id, "actor": actor, **clean}) if not human_requested and not refs else None
         origin = "human" if actor == "director" or human_requested else "assistant"
         # A director's own words are protected from later automatic rewrites.
         protected = (
@@ -554,6 +546,13 @@ class TaskService:
                 if not self._conn.in_transaction:
                     self._conn.execute("BEGIN IMMEDIATE")
                 self._live_person(person_id)
+                refs = source_ids(self._people, person_id, source_refs, allowed_source_ids)
+                fingerprint = _fingerprint(
+                    {"op": "task.create", "person_id": person_id, "actor": actor,
+                     "human_requested": human_requested, "source_refs": refs,
+                     "timezone": timezone, "reason": reason, **clean}
+                )
+                legacy = _fingerprint({"op": "task.create", "person_id": person_id, "actor": actor, **clean}) if not human_requested and not refs else None
                 replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
                 if replay is not None:
                     source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
