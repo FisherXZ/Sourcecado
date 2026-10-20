@@ -644,6 +644,13 @@ export async function getPerson(id: string): Promise<PersonFile> {
 
 export type TaskDueStatus = "overdue" | "today" | "upcoming" | "none";
 
+/** A currently permitted source pointer supplied by the server. */
+export type TaskSourceLink = {
+  id: string;
+  label: string;
+  url: string | null;
+};
+
 export type PersonTask = {
   task_id: string;
   person_id: string;
@@ -658,6 +665,8 @@ export type PersonTask = {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  source_refs?: string[];
+  source_links?: TaskSourceLink[];
   due_status?: TaskDueStatus;
   person?: {
     person_id: string;
@@ -693,6 +702,9 @@ export type TaskChange = {
   operation_id: string;
   compensates_change_id: string | null;
   created_at: string;
+  source_links?: TaskSourceLink[];
+  /** Server checks the current version and the automatic inference binding. */
+  can_undo?: boolean;
 };
 
 export type TaskFields = {
