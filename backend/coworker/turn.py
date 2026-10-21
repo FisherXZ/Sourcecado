@@ -69,6 +69,7 @@ from coworker.telemetry import (
     UsageEvent,
 )
 from coworker.tools import evidence_for, execute
+from coworker.crm_tools import CRM_TOOL_NAMES, CRMMutationBudget, crm_outcome_references
 
 INTERRUPTED_TOOL = '{"error": "tool call interrupted"}'
 _APOLLO_TOOLS = frozenset({"apollo_search_people", "apollo_enrich_contact"})
@@ -778,6 +779,7 @@ async def run_turn(
     # the same authority. The ledger is per turn: evidence read now cannot
     # justify an effect later.
     authority = ContextAuthority()
+    crm_mutation_budget = CRMMutationBudget()
     authority.admit_directive(
         director_directive(text, session_id=sid, turn=events.identity.run_id)
     )
@@ -1648,6 +1650,11 @@ async def run_turn(
                     }
                     kw["session_id"] = sid
                     kw["run_id"] = events.identity.run_id
+                    if call.name in CRM_TOOL_NAMES:
+                        # This object is minted from the director channel at
+                        # turn entry. A model cannot supply it in arguments.
+                        kw["crm_directive"] = authority.directives[0] if run_trigger in {"chat", "queued_chat"} else None
+                        kw["crm_mutation_budget"] = crm_mutation_budget
                     kw["approval_granted"] = approval_claimant is not None
                     kw["approval_scope"] = approval_scope
                     kw["approval_fingerprint"] = approval_fingerprint
@@ -1674,6 +1681,7 @@ async def run_turn(
                             call.id if approval_claimant is not None else None
                         ),
                         step=model_step,
+                        **({"outcome_references": crm_outcome_references} if call.name in CRM_TOOL_NAMES else {}),
                     )
                 except AgentRunEffectQuarantined:
                     # The call may have reached a real person. The turn ends

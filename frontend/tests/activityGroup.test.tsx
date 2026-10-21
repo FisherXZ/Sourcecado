@@ -78,6 +78,22 @@ describe("ActivityGroup", () => {
   });
 
   it.each([
+    ["crm_list_tasks", "Read saved tasks"],
+    ["crm_create_task", "Created task"],
+    ["crm_update_task", "Updated task"],
+    ["crm_update_description", "Updated description"],
+    ["crm_undo_change", "Undid CRM change"],
+  ])("names the %s operation in its visible chat receipt", (toolName, label) => {
+    render(
+      <ActivityGroup
+        tools={[tool({ toolName, result: { status: "complete" } })]}
+        messageState="complete"
+      />,
+    );
+    expect(screen.getByRole("button", { name: `${label} · Completed` })).toBeInTheDocument();
+  });
+
+  it.each([
     ["fs_write", "created", "Created workspace file"],
     ["fs_write", "updated", "Updated workspace file"],
     ["fs_move", "moved", "Moved workspace item"],

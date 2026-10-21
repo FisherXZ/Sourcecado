@@ -309,6 +309,9 @@ class AgentRunContext:
         error_class: str | None = None,
         error_summary: str | None = None,
         duration_ms: int | None = None,
+        person_id: str | None = None,
+        source_refs: tuple[dict[str, Any], ...] | list[dict[str, Any]] = (),
+        artifact_refs: tuple[dict[str, Any], ...] | list[dict[str, Any]] = (),
     ) -> bool:
         """Close the window on an effect this process dispatched."""
         if self.lease is None:
@@ -324,6 +327,9 @@ class AgentRunContext:
                     _summary(error_summary) if error_summary is not None else None
                 ),
                 duration_ms=duration_ms,
+                person_id=person_id,
+                source_refs=source_refs,
+                artifact_refs=artifact_refs,
             )
         except Exception as exc:
             self.close(f"{type(exc).__name__}: {_summary(exc)}")
@@ -356,6 +362,7 @@ async def guarded_call(
     tool_call_id: str | None = None,
     approval_id: str | None = None,
     step: int | None = None,
+    outcome_references: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     """Make one tool call with the ordering contract around it.
 
@@ -388,6 +395,7 @@ async def guarded_call(
     )
     try:
         ok, result = await call()
+        references = outcome_references(result) if ok and outcome_references else {}
     except BaseException as exc:
         # Nothing observed the outcome. Do not guess it in either direction.
         context.quarantine(
@@ -404,5 +412,6 @@ async def guarded_call(
         ok=ok,
         error_class=None if ok else str(result.get("code") or "tool_error"),
         error_summary=None if ok else str(result.get("error") or ""),
+        **references,
     )
     return ok, result
