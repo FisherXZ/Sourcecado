@@ -190,9 +190,18 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
         if mention[0] in {"may", "march"}:
             # Modal may and the verb march are ordinary prose. Calendar
             # prepositions/modifiers and adjacent day numbers disambiguate.
+            # A boundary word also catches compound days: twenty-first after
+            # the month, or the final first in thirty first before the month.
+            written_day = (r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|"
+                           r"fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|first|second|third|fourth|"
+                           r"fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|"
+                           r"fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth)")
             calendar_context = re.search(
                 r"\b(?:on|by|due|in|within|during|this|next|last|coming|following|every|around|early|late|of)\s+$|"
                 r"\b\d{1,2}(?:st|nd|rd|th)?\s+$", before)
+            calendar_context = (calendar_context
+                                or re.search(rf"\b{written_day}\s+$", before)
+                                or re.match(rf"\s+(?:the\s+)?(?:\d|{written_day}\b)", after))
             prose_context = re.match(r"\s+[a-z]+\b", after) or (mention[0] == "march" and re.search(r"\bto\s+$", before))
             if not calendar_context and prose_context:
                 continue
