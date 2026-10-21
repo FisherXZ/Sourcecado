@@ -59,6 +59,7 @@ class DescriptionModel:
             "detailed": {"text": "Maya leads Lumen's infrastructure team. She wants student feedback on developer tools and project examples before an engineering discussion.", "sources": [source]},
             "reason": "The attributed full reply explains her role and the next discussion.",
             "sufficient": True,
+            "tasks": [],
         }))
         yield StreamChunk(terminal=ProviderTerminal("stop", ModelUsage(100, 30, 130, 0, 100, 0), 1, .002))
 

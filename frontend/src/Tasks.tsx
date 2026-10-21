@@ -15,6 +15,7 @@ import {
   type TaskDueStatus,
   type TaskFields,
   type TaskListing,
+  type TaskSourceLink,
 } from "./api";
 
 /** Fired after any task save so every mounted list reloads the same records. */
@@ -76,6 +77,29 @@ function taskPersonName(task: PersonTask): string {
   return (
     [person?.first_name, person?.last_name].filter(Boolean).join(" ") || "Unknown person"
   );
+}
+
+function sourceUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function TaskSources({ links }: { links?: TaskSourceLink[] }) {
+  const sources = (links ?? []).slice(0, 3).flatMap((source) => {
+    const href = source.url ? sourceUrl(source.url) : null;
+    if (source.url && !href) return [];
+    const label = `Source: ${source.label}`;
+    return [href ? (
+      <a key={source.id} href={href} target="_blank" rel="noreferrer">{label}</a>
+    ) : (
+      <span key={source.id}>{label}</span>
+    )];
+  });
+  return sources.length ? <span className="task-meta">{sources}</span> : null;
 }
 
 function saveFailure(error: unknown): string {
@@ -409,8 +433,9 @@ function TaskHistory({ task, onClose }: { task: PersonTask; onClose: () => void 
                     <span>{change.reason}</span>
                   ) : null}
                 </span>
+                <TaskSources links={change.source_links} />
               </span>
-              {change.action !== "create" ? (
+              {(change.can_undo ?? change.action !== "create") ? (
                 <button
                   type="button"
                   className="task-row-action"
@@ -504,6 +529,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
               </span>
               <span>{task.origin === "assistant" ? "Added by assistant" : "Added by you"}</span>
             </span>
+            <TaskSources links={task.source_links} />
             {notice ? <p className="task-row-notice" role="alert">{notice}</p> : null}
           </div>
           <div className="task-row-actions">

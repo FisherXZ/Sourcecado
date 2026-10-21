@@ -47,6 +47,7 @@ from coworker.crm_tasks import (
 from coworker.mcp import SCHEMA_VERSION as MCP_CONFIG_VERSION
 from coworker.people import SCHEMA_VERSION as PEOPLE_DB_VERSION
 from coworker.crm_analysis_schema import CRM_ANALYSIS_STATEMENTS
+from coworker.crm_email_task_schema import add_task_analysis_schema
 from coworker.person_identity import (
     apollo_surname_is_masked,
     without_apollo_name_masks,
@@ -877,6 +878,11 @@ def _add_crm_analysis(context: MigrationContext) -> int:
     return copied
 
 
+def _add_crm_email_tasks(context: MigrationContext) -> int:
+    assert context.connection is not None
+    add_task_analysis_schema(context.connection)
+    return 0
+
 
 # DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
 # constructor still adds it with a column-existence probe; version 1 is that
@@ -1148,6 +1154,13 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 description="Add durable CRM analysis and proposals, and description change history.",
                 count=_count_crm_changes,
                 apply=_add_crm_analysis,
+            ),
+            Migration(
+                from_version=6,
+                to_version=7,
+                description="Add task request evidence spans and a versioned analysis checkpoint without AI backfill.",
+                count=lambda context: 0,
+                apply=_add_crm_email_tasks,
             ),
         ),
         json_columns=(
