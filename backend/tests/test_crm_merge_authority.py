@@ -48,6 +48,21 @@ def test_contextual_time_words_still_require_a_supported_deadline(tmp_path, timi
     assert TaskService(people).list(person_id=pid, timezone="America/Los_Angeles")["tasks"] == []
 
 
+@pytest.mark.parametrize("month", ["May", "March"])
+@pytest.mark.parametrize("day", ["one", "first", "ten", "tenth", "twenty-first", "thirty first", "the first", "the 23rd"])
+@pytest.mark.parametrize("day_first", [False, True])
+def test_written_calendar_days_do_not_disambiguate_months_as_prose(tmp_path, month, day, day_first):
+    people = PersonStore(tmp_path)
+    pid = keep(people)["person_id"]
+    people.bind_session("chat-crm", pid)
+    timing = f"{day} {month}" if day_first else f"{month} {day}"
+    ok, result = invoke(people, "crm_create_task", {
+        "title": "Send examples", "operation_id": "merge-written-month-day", "reason": "Director request",
+    }, f"Remind me to send examples {timing} per the plan")
+    assert not ok and result["code"] == "unverified_director_request", result
+    assert TaskService(people).list(person_id=pid, timezone="America/Los_Angeles")["tasks"] == []
+
+
 @pytest.mark.parametrize("text", [
     "Remind me to work on Halloween", "Remind me to follow up on Christmas",
     "Remind me to work on the launch day", "Remind me to work on next Friday",

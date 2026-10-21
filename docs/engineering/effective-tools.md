@@ -105,7 +105,8 @@ require clarification instead of silently saving undated work.
 Calendar/clock units remain conservative timing hints, including durations in
 seconds. Ordinary ordinal artifacts (“the second draft”), conversation minutes,
 modal `may` and the verb `march` remain task text; calendar modifiers and nearby
-day numbers still identify month references. Other unresolved time words ask
+numeric or written day numbers still identify month references, including
+spaced and hyphenated compound days. Other unresolved time words ask
 for clarification. Use “Add an undated task: TITLE” to keep time words as
 literal task text without inferring a date; a supplied date then conflicts.
 Replacement comparisons ignore one final sentence punctuation character while
