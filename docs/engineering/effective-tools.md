@@ -49,6 +49,11 @@ ordinal, numeric, clock-time and vague deadlines. Only the exact delivery
 methods email, e-mail, phone, text, mail, post and hand exempt a `by` clause.
 Ordinary topical `on` clauses and possessive weekdays remain context;
 calendar-, numeric- or time-looking `on` clauses must resolve or clarify.
+Topic verbs such as “follow up on pricing” and “work on the deck” identify
+context without restricting the topic to a noun list. Known holidays and event
+forms still ask for a date. An unknown `on` clause without a recognized topical
+relationship also asks for clarification; this is a bounded English grammar,
+not a complete holiday or event recognizer.
 Unsupported second deadlines cannot be silently ignored. An exact saved
 operation can replay after restart or a day boundary without moving its date;
 the write service still checks its complete fingerprint and source access.
@@ -63,7 +68,13 @@ also occur in it. Every chat mutation requires a verified command, including
 when the model omits the quote. This deliberately narrow English matcher asks
 for explicit wording when a request cannot be verified and saves nothing. It
 does not establish general natural-language intent understanding; negated and
-conditional wording also requires clarification. Scheduled
+conditional commands also require clarification. An explicit `to:` after a
+supported task title/details or description replacement command marks literal
+text: “Call before lunch” and “Not interested until Q3” can be saved with their
+human protection. The entire replacement must still match; conditions before
+that boundary and ambiguous conditions after a colon-free `to` require
+clarification. Lifecycle, clear and release commands keep their existing
+checks. Scheduled
 work cannot mint a director chat directive. Background inference belongs to
 the separately gated analysis services (#209–#210); the task service rejects
 assistant lifecycle changes without a director request until task-specific
@@ -91,8 +102,11 @@ New dated reminders require a date separate from
 the task title; an incidental weekday in the title does not create a deadline.
 Calendar words outside supported clauses, relative periods and clock times
 require clarification instead of silently saving undated work.
-Unresolved calendar/clock unit words are conservative timing hints regardless
-of their position. Use “Add an undated task: TITLE” to keep such words as
+Calendar/clock units remain conservative timing hints, including durations in
+seconds. Ordinary ordinal artifacts (“the second draft”), conversation minutes,
+modal `may` and the verb `march` remain task text; calendar modifiers and nearby
+day numbers still identify month references. Other unresolved time words ask
+for clarification. Use “Add an undated task: TITLE” to keep time words as
 literal task text without inferring a date; a supplied date then conflicts.
 Replacement comparisons ignore one final sentence punctuation character while
 preserving full-value equality and the exact stored text. Literal punctuation
