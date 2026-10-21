@@ -153,6 +153,11 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
     numeric_or_time = r"\d[\w:/-]*|noon|midnight"
     date_hint = rf"(?:{token}|{calendar_units}|{months}|{numeric_or_time})"
     modifiers = r"(?:(?:the|a|an|next|this|coming|following|around|early|late|end|of|in)\s+)*"
+    # Topic verbs identify the relationship, rather than requiring a closed
+    # list of things a director may work on. Known event forms remain timing.
+    topic_verb = r"\b(?:follow up|work|focus|collaborate|check in|read up|comment|report)\s+$"
+    event_hint = (r"\b(?:halloween|christmas|thanksgiving|easter|hanukkah|ramadan|holiday|birthday|anniversary|"
+                  r"deadline|launch|conference|retreat|event|new year['’]?s?|independence day|labor day|memorial day)\b")
     tokens = [prefix[1]] if prefix else []
     handled = [prefix.span(1)] if prefix else []
     for suffix in re.finditer(r"\b(by|on|due)\b\s*", text):
@@ -166,9 +171,8 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
             if re.match(rf"^{token}['’]s\b", clause):
                 continue
             if not re.match(rf"^{modifiers}{date_hint}(?![\w'’])", clause):
-                # Retain ordinary topic wording, but an unknown event/date
-                # without an explicit topic cannot silently lose its date.
-                if re.match(r"^(?:the|our|your|their)\s+(?:project|work|proposal|research|roadmap|product|company|plan)\b", clause):
+                if not re.search(event_hint, clause) and (re.search(topic_verb, text[:suffix.start()])
+                        or re.match(r"^(?:the|our|your|their)\s+(?:project|work|proposal|research|roadmap|product|company|plan)\b", clause)):
                     continue
                 raise CRMToolError("unverified_director_request", "The on-clause does not establish a supported date or topic. Ask for one explicit calendar deadline.")
         if not re.fullmatch(token, clause):
@@ -182,11 +186,27 @@ def _reminder_date(text: str, directive: Directive, timezone: str) -> str | None
     dayparts = r"morning|afternoon|evening|night|dawn|dusk|midday|sunrise|sunset"
     temporal_words = rf"(?:{token}|{months}|{calendar_units}|{dayparts}|tonight|yesterday|someday|sometime|soon|later|now)"
     for mention in re.finditer(rf"\b{temporal_words}\b(?!['’]s\b)", text):
+        before, after = text[:mention.start()], text[mention.end():]
+        if mention[0] in {"may", "march"}:
+            # Modal may and the verb march are ordinary prose. Calendar
+            # prepositions/modifiers and adjacent day numbers disambiguate.
+            calendar_context = re.search(
+                r"\b(?:on|by|due|in|within|during|this|next|last|coming|following|every|around|early|late|of)\s+$|"
+                r"\b\d{1,2}(?:st|nd|rd|th)?\s+$", before)
+            prose_context = re.match(r"\s+[a-z]+\b", after) or (mention[0] == "march" and re.search(r"\bto\s+$", before))
+            if not calendar_context and prose_context:
+                continue
+        if (mention[0] == "second" and re.search(r"\b(?:the|a|our|your|their|his|her)\s+$", before)
+                and re.match(r"\s+(?!(?:from|later|ago)\b)[a-z]+\b", after)):
+            continue  # An ordinal artifact, such as the second draft.
+        if mention[0] == "minutes" and re.search(r"\b(?:meeting|call)\s+$", before):
+            continue  # A record of the conversation, rather than a duration.
         if not any(start <= mention.start() < end for start, end in handled):
             raise CRMToolError("unverified_director_request", "The timing is outside the supported deadline grammar. Ask for an explicit by/on/due date, 'Remind me DATE to …', or 'Add an undated task: TITLE' when the time words are literal task text.")
     clock_words = r"zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|half|quarter|morning|afternoon|evening|night|dawn|dusk|midday|sunrise|sunset"
     if (re.search(rf"\b(?:this|next|last|coming|following|every|in|within|at)\s+[^.!?;\n]*\b(?:{calendar_units}|{dayparts})\b", text)
-            or re.search(rf"\bat\s+(?:(?:a|the)\s+)?(?:{numeric_or_time}|{clock_words})\b", text)):
+            or re.search(rf"\bat\s+(?:(?:a|the)\s+)?(?:{numeric_or_time}|{clock_words})\b", text)
+            or re.search(rf"\b(?:{months})\d", text)):
         raise CRMToolError("unverified_director_request", "Relative periods and clock times need clarification. State one supported calendar deadline.")
     dates = set()
     for value in tokens:
@@ -362,7 +382,17 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
         if not supplied_quote:
             return False
         raise CRMToolError("unverified_director_request", "Ask the director to state the task or description edit explicitly; this wording cannot establish human authority.")
-    if re.search(r"\b(?:not|never|unless|if|when|after|before)\b|\bdon['’]t\b", text):
+    # Only an explicit colon after a supported replacement command creates a
+    # literal-data boundary. Without it, trailing conditions stay commands.
+    literal_prefix = None
+    if name == "crm_update_task":
+        literal_prefix = re.match(r"^(?:change|edit|update)\s+(?:(?:the|that)\s+)?task"
+                                  r"(?:\s+task_[0-9a-f]{32})?\s+(?:title|details)\s+to:\s+", text)
+    elif name == "crm_update_description":
+        literal_prefix = re.match(r"^(?:change|edit|update|set)\s+(?:the\s+)?"
+                                  r"(?:(?:general|detailed)\s+)?description\s+to:\s+", text)
+    command = text[:literal_prefix.end()] if literal_prefix else text
+    if re.search(r"\b(?:not|never|unless|if|when|after|before)\b|\bdon['’]t\b", command):
         raise CRMToolError("unverified_director_request", "Negated or conditional wording needs clarification before a CRM write. Ask for one explicit immediate edit.")
     if name == "crm_undo_change":
         task_command = re.match(r"^undo\s+(?:(?:the|that|last|latest)\s+)?task\b", text)
