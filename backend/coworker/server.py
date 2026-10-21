@@ -127,9 +127,11 @@ from coworker.brief import (
     project,
     prompt_context,
 )
-from coworker.people import DESCRIPTION_SLOTS, PersonStore
+from coworker.people import DESCRIPTION_SLOTS, CrmMigrationRequired, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
+from coworker.crm_analysis import AnalysisService, ConversationReader
+from coworker.crm_descriptions import DescriptionService
 from coworker.prompt_contract import (
     AssembledSystemPrompt,
     PromptDefinition,
@@ -2129,6 +2131,14 @@ def create_app(
         if not isinstance(payload, dict):
             return JSONResponse({"error": "expected a JSON object"}, status_code=400)
         try:
+            with app.state.people._lock:
+                entity = app.state.people._conn.execute(
+                    "SELECT entity_type FROM crm_changes WHERE person_id=? AND change_id=?",
+                    (person_id, change_id),
+                ).fetchone()
+            if entity and entity[0] == "description":
+                return DescriptionService(app.state.people).undo(person_id, change_id,
+                    operation_id=payload.get("operation_id"), reason=payload.get("reason") or "Director undid a description change.")
             return app.state.tasks.undo(
                 person_id,
                 change_id,
@@ -2324,6 +2334,57 @@ def create_app(
             "saved": True,
             "unchanged": False,
         }
+
+    def _crm_analysis() -> AnalysisService:
+        return AnalysisService(app.state.people, provider=app.state.provider,
+            failovers=app.state.provider_failovers, reader=ConversationReader(app.state.gmail))
+
+    @app.get("/v1/people/{person_id}/descriptions/{slot}/changes")
+    def people_description_changes(person_id: str, slot: str):
+        if slot not in DESCRIPTION_SLOTS:
+            return JSONResponse({"error": "unknown description slot"}, status_code=404)
+        try:
+            return {"changes": DescriptionService(app.state.people).changes(person_id, slot)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/v1/people/{person_id}/analysis")
+    def people_analysis_state(person_id: str):
+        try:
+            return _crm_analysis().state(person_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/v1/people/{person_id}/analysis")
+    async def people_analyze(person_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) - {"retry"} or ("retry" in payload and type(payload["retry"]) is not bool):
+            return JSONResponse({"error": "expected an object with optional boolean retry"}, status_code=400)
+        try:
+            return await _crm_analysis().analyze(person_id, retry=payload.get("retry", False))
+        except CrmMigrationRequired as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/v1/people/{person_id}/proposals")
+    def people_proposals(person_id: str, state: str = "pending"):
+        try:
+            return {"proposals": _crm_analysis().proposals(person_id, state=state)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/v1/people/{person_id}/proposals/{proposal_id}/resolve")
+    async def people_resolve_proposal(person_id: str, proposal_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) != {"action", "expected_version"} or type(payload.get("expected_version")) is not int:
+            return JSONResponse({"error": "action and expected_version are required"}, status_code=400)
+        try:
+            return _crm_analysis().resolve(person_id, proposal_id, action=payload["action"], expected_version=payload["expected_version"])
+        except TaskConflict as exc:
+            return _task_error(exc)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     @app.patch("/v1/people/{person_id}/descriptions/{slot}")
     async def people_description(person_id: str, slot: str, request: Request):

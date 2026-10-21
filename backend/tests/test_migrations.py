@@ -404,7 +404,9 @@ def test_people_v3_adds_the_description_table_to_an_existing_v2_database(tmp_pat
     )
     # Rewind to the real v2 shape: drop the table a v2 install never had and
     # stamp the version back to 2.
-    store._conn.execute("DROP TABLE person_descriptions")
+    for name in ("crm_proposals", "crm_analysis_attempts", "crm_analysis_state",
+                 "crm_operations", "crm_changes", "person_tasks", "person_descriptions"):
+        store._conn.execute(f"DROP TABLE {name}")
     store._conn.execute("PRAGMA user_version = 2")
     store._conn.commit()
     store._conn.close()
@@ -589,7 +591,8 @@ def _people_v2_with_handoff_and_restricted_source(root: Path) -> str:
     people._conn.close()
     conn = sqlite3.connect(root / "people.db")
     try:
-        for name in ("crm_operations", "crm_changes", "person_tasks", "person_descriptions"):
+        for name in ("crm_proposals", "crm_analysis_attempts", "crm_analysis_state",
+                     "crm_operations", "crm_changes", "person_tasks", "person_descriptions"):
             conn.execute(f"DROP TABLE {name}")
         conn.execute("PRAGMA user_version = 2")
         conn.commit()
@@ -618,7 +621,7 @@ def test_people_v3_adds_tasks_and_leaves_existing_people_intact(tmp_path):
 
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
-    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4), (REBUILD_FROM, REBUILD_FROM + 1)]
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4), (REBUILD_FROM, REBUILD_FROM + 1), (5, 6)]
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
@@ -752,6 +755,8 @@ def _people_before_crm_rebuild(root: Path) -> tuple[str, str]:
         ops_ddl = conn.execute(
             "SELECT sql FROM sqlite_master WHERE name = 'crm_operations'"
         ).fetchone()[0]
+        for name in ("crm_proposals", "crm_analysis_attempts", "crm_analysis_state"):
+            conn.execute(f"DROP TABLE {name}")
         conn.execute("DROP TABLE crm_operations")
         conn.execute("DROP TABLE crm_changes")
         conn.execute(_CRM_CHANGES_V3_DDL)
@@ -790,7 +795,7 @@ def test_the_crm_changes_rebuild_keeps_every_row(tmp_path):
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert [(step.from_version, step.to_version) for step in plan.steps] == [
-        (REBUILD_FROM, REBUILD_FROM + 1)
+        (REBUILD_FROM, REBUILD_FROM + 1), (5, 6)
     ]
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
