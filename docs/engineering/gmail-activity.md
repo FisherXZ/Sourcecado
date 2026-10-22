@@ -84,12 +84,13 @@ and restart. No model analysis is performed by this collector.
 
 ## Automatic refresh coordination
 
-[#208](https://github.com/FisherXZ/Sourcecado/issues/208) owns timing, overlapping
+The [Contacts attention worker](contacts-attention.md) now owns timing, overlapping
 request coalescing, startup resume and bounded analysis retries. The app exposes
 `app.state.collect_tracked_mail`, the same synchronous function used by manual
 refresh, protected by a collection lock. An async scheduler should call it with
-`asyncio.to_thread` and coalesce concurrent triggers around it. The lock serializes
-calls; it does not itself share one result between callers. Analysis revisions
-provide the later worker's boundary without treating collection as analysis.
+`asyncio.to_thread` and shares concurrent triggers through `RefreshCoordinator`.
+The collection lock serializes legacy refresh calls; the coordinator shares
+maintenance requests. Analysis revisions provide the worker's boundary without
+treating collection as analysis.
 
 See [current verification and limitations](../verification/2026-10-19-gmail-pr-readiness.md).
