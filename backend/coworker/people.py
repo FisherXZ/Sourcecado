@@ -29,7 +29,7 @@ _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # a fresh database, and the registered 2->3, 3->4 and 4->5 migrations adopt an
 # existing one with backup and rollback. v6 adds tracked Gmail evidence and
 # independent collection checkpoints; it preserves descriptions and tasks.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -182,6 +182,11 @@ class PersonStore:
 
         for statement in (*CRM_TASK_STATEMENTS, *MAIL_SCHEMA):
             self._conn.execute(statement)
+        from coworker.crm_schema import CRM_SCHEMA, extend_columns
+
+        for statement in CRM_SCHEMA:
+            self._conn.execute(statement)
+        extend_columns(self._conn)
         if is_new:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()
@@ -190,6 +195,9 @@ class PersonStore:
     def crm_transaction(self):
         """CRM reads/writes share the person lock; exceptions never leak writes."""
         with self._lock:
+            if self._conn.in_transaction:
+                yield self._conn
+                return
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 yield self._conn
@@ -296,6 +304,7 @@ class PersonStore:
             "authority": str(row["authority"]),
             "source_refs": json.loads(str(row["source_refs"] or "[]")),
             "version": int(row["version"] or 0),
+            "analyzed_input_revision": int(row["analyzed_revision"]) if "analyzed_revision" in row.keys() else 0,
         }
 
     def _descriptions(self, person_id: str) -> dict[str, dict[str, Any]]:
@@ -403,8 +412,11 @@ class PersonStore:
         source references (spec §8.2), so a revert can never silently
         un-protect a human edit or drop a description's sources. A slot the
         snapshot held in its untouched default (assistant-owned, no text,
-        version 0) is left with no row, which reads back as that same default.
+        version 0) stays absent only when it was never edited. Restored slots
+        get a new monotonic version so a pre-revert editor cannot match again.
         """
+        previous = {row["slot"]: int(row["version"]) for row in self._conn.execute(
+            "SELECT slot,version FROM person_descriptions WHERE person_id=?", (person_id,))}
         self._conn.execute(
             "DELETE FROM person_descriptions WHERE person_id = ?", (person_id,)
         )
@@ -415,7 +427,7 @@ class PersonStore:
             text = entry.get("text")
             authority = str(entry.get("authority") or "assistant")
             slot_version = int(entry.get("version") or 0)
-            if text is None and authority == "assistant" and slot_version == 0:
+            if text is None and authority == "assistant" and slot_version == 0 and not previous.get(slot):
                 continue  # the untouched default carries no row
             source_refs = entry.get("source_refs") or []
             self._conn.execute(
@@ -431,11 +443,13 @@ class PersonStore:
                     text,
                     authority if authority in ("human", "assistant") else "assistant",
                     json.dumps(source_refs),
-                    slot_version,
+                    max(slot_version, previous.get(slot, 0)) + 1,
                     now,
                     now,
                 ),
             )
+            self._conn.execute("UPDATE person_descriptions SET analyzed_revision=? WHERE person_id=? AND slot=?",
+                (entry.get("analyzed_input_revision", 0), person_id, slot))
 
     def _receipt(
         self,
@@ -1986,7 +2000,7 @@ class PersonStore:
                     title = ?, company = ?, target = ?,
                     sequence_state = ?, outcome = ?,
                     handoff_who = ?, handoff_wanted = ?, handoff_happened = ?,
-                    handoff_they_want = ?, version = ?, updated_at = ?
+                    handoff_they_want = ?, attention_reason = ?, attention_until = ?, version = ?, updated_at = ?
                 WHERE person_id = ? AND version = ?
                 """,
                 (
@@ -2002,6 +2016,8 @@ class PersonStore:
                     without_apollo_name_masks(target.get("handoff_wanted")) or None,
                     without_apollo_name_masks(target.get("handoff_happened")) or None,
                     without_apollo_name_masks(target.get("handoff_they_want")) or None,
+                    target.get("attention_reason"),
+                    target.get("attention_until"),
                     next_version,
                     now,
                     person_id,

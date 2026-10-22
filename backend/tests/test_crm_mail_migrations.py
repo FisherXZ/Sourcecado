@@ -25,11 +25,11 @@ def test_mail_migration_is_registered_and_preserves_populated_v5(tmp_path):
     people._conn.commit()
     people._conn.close()
     upgraded = PersonStore(tmp_path)
-    assert SCHEMA_VERSION == 6
+    assert SCHEMA_VERSION == 7
     assert upgraded.get(pid) == before
     for table, rows in rows_before.items():
         assert upgraded._conn.execute(f"SELECT * FROM {table}").fetchall() == rows
-    assert upgraded._conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert upgraded._conn.execute("PRAGMA user_version").fetchone()[0] == 7
     assert upgraded._conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert migrations.list_backups(tmp_path)
 
@@ -45,5 +45,20 @@ def test_failed_mail_migration_rolls_back(tmp_path, monkeypatch):
     outcome = migrations.apply_migrations(tmp_path, plan=migrations.plan_migrations(tmp_path, store_ids=("people_db",)))
     assert outcome.error
     assert outcome.rolled_back == ("people_db",)
+    with sqlite3.connect(tmp_path / "people.db") as conn:
+        assert list(conn.iterdump()) == before
+
+
+def test_failed_attention_migration_rolls_back_receipts_and_schema(tmp_path, monkeypatch):
+    people = PersonStore(tmp_path)
+    people.keep_from_apollo(apollo_id="kept", first_name="Kept", last_name_obfuscated=None, title=None, company=None)
+    people._conn.execute("PRAGMA user_version=6")
+    people._conn.commit()
+    people._conn.close()
+    with sqlite3.connect(tmp_path / "people.db") as conn:
+        before = list(conn.iterdump())
+    monkeypatch.setattr(migrations, "CRM_SCHEMA", (*migrations.CRM_SCHEMA, "INVALID ATTENTION SQL"))
+    outcome = migrations.apply_migrations(tmp_path, plan=migrations.plan_migrations(tmp_path, store_ids=("people_db",)))
+    assert outcome.error and outcome.rolled_back == ("people_db",)
     with sqlite3.connect(tmp_path / "people.db") as conn:
         assert list(conn.iterdump()) == before

@@ -59,10 +59,17 @@ class MailRepository:
     def analysis_state(self, person_id: str) -> dict[str, Any]:
         with self.people._lock:
             row = self.people._conn.execute(
-                "SELECT latest_evidence_revision, analyzed_revision FROM crm_analysis_state WHERE person_id = ?",
+                "SELECT * FROM crm_analysis_state WHERE person_id = ?",
                 (person_id,)).fetchone()
+        return self.analysis_projection(dict(row) if row else None)
+
+    @staticmethod
+    def analysis_projection(row: dict[str, Any] | None) -> dict[str, Any]:
         result = dict(row) if row else {"latest_evidence_revision": 0, "analyzed_revision": 0}
         result["status"] = "pending" if result["latest_evidence_revision"] != result["analyzed_revision"] else "current" if result["latest_evidence_revision"] else "not_analyzed"
+        if result.get("failure") and result["status"] == "pending":
+            result["status"] = "failed" if result.get("attempts", 0) >= 3 else "retrying"
+        result.pop("usage_json", None)
         return result
 
     def incomplete_body_count(self, account: str) -> int:
@@ -153,5 +160,6 @@ class MailRepository:
                     (_new_event_id(), person_id, f"gmail:message:{mid}",
                      f"{'Received from' if direction == 'inbound' else 'Sent to'} {message.get('from' if direction == 'inbound' else 'to')}: {headline}", json.dumps(payload)))
             conn.execute("""INSERT INTO crm_analysis_state(person_id, latest_evidence_revision) VALUES (?, 1)
-                ON CONFLICT(person_id) DO UPDATE SET latest_evidence_revision=latest_evidence_revision+1""", (person_id,))
+                ON CONFLICT(person_id) DO UPDATE SET latest_evidence_revision=latest_evidence_revision+1,
+                attempts=0,attempted_revision=0,failure=NULL,next_attempt_at=NULL""", (person_id,))
         return True

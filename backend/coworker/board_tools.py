@@ -192,6 +192,10 @@ def execute_board_tool(
                         "The Board person file is unavailable.",
                     )
                 timeline = people.timeline(person_id)
+                from coworker.crm_service import CrmService
+                crm = CrmService(people)
+                person["tasks"] = crm.tasks.list(timezone="America/Los_Angeles", person_id=person_id)["tasks"]
+                person["crm_proposals"] = crm.proposals(person_id)
             except Exception:
                 return _partial_board_read(
                     "board_read_failed",

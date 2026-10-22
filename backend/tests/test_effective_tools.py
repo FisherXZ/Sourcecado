@@ -281,5 +281,5 @@ def test_diagnostics_expose_only_names_and_approval_classes(tmp_path, monkeypatc
     assert set(diagnostics[0]) == {"name", "approval_class"}
     encoded = json.dumps(diagnostics)
     assert "parameters" not in encoded
-    assert "description" not in encoded
+    assert '"description":' not in encoded  # A tool name may contain the word.
     assert "PLANTED-SECRET" not in encoded

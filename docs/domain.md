@@ -66,7 +66,7 @@ The accumulated person files, outcomes, source-backed notes, and handoffs that p
 The home surface where the director gives targets, asks questions, reviews work, and tells the assistant what to do next.
 
 **Contacts**
-The assistant's compact operating picture of active sequences. It presents Open, In conversation, and Done as table filters and keeps each row attached to its durable Person File. Kept people without a sequence remain stored in the internal Board projection but do not appear in Contacts yet. A Tasks view inside Contacts lists the open tasks of people in active sequences, grouped Overdue, Today, Upcoming, and No date. Contacts reports the work; it is not a CRM the director must constantly maintain.
+The assistant's compact operating picture of active sequences. It presents Open, In conversation, and Done as table filters and keeps each row attached to its durable Person File. Kept people without a sequence remain stored in the internal Board projection but do not appear in the Contacts people table yet. The Tasks view includes all live saved people, grouped Overdue, Today, Upcoming, and No date. Saving a task does not change sequence membership. Contacts reports the work; it is not a CRM the director must constantly maintain.
 
 **Person View**
 The full person file and handoff record. A compact version of the living brief may appear beside work in other surfaces.
