@@ -210,6 +210,46 @@
   overflow-x: auto;
 }
 
+.contacts-workspace { min-width: 0; }
+.board-page.has-preview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 42%); gap: 16px; align-items: start; }
+.person-preview { position: sticky; top: 0; max-height: calc(100vh - 48px); overflow-y: auto; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.preview-header, .preview-actions, .preview-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.person-preview a { color: var(--accent); }
+.contacts-controls > button { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted); white-space: nowrap; cursor: pointer; }
+.contacts-controls > button[aria-pressed="true"] { background: var(--accent-tint); color: var(--accent-deep); }
+.has-preview .contacts-table { min-width: 660px; }
+.person-preview h2 { margin: 16px 0 4px; font-size: 18px; }
+.preview-subtitle { color: var(--muted); margin: 0 0 16px; }
+.preview-section { margin: 16px 0; padding-top: 16px; border-top: 1px solid var(--border); }
+.preview-section h3 { font-size: 14px; margin: 0 0 8px; }
+.preview-section summary { cursor: pointer; font-weight: 500; }
+.preview-flag { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; margin-top: 16px; }
+.person-preview label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.person-preview input, .person-preview select, .person-preview textarea { max-width: 100%; box-sizing: border-box; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.person-preview button { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); cursor: pointer; }
+.person-preview button:disabled { cursor: default; opacity: .6; }
+.person-preview button:focus-visible, .person-preview a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preview-unsaved { position: sticky; top: 0; z-index: 1; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); }
+.preview-suggestion { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.preview-suggestion strong { display: block; white-space: pre-wrap; font-size: 13px; }
+.preview-suggestion .preview-actions { justify-content: start; margin-top: 8px; }
+.preview-changes { padding-left: 16px; font-size: 12px; }
+.preview-changes li { margin-bottom: 12px; }
+.contacts-attention-reasons summary { cursor: pointer; list-style: none; }
+.contacts-attention-reasons p { white-space: normal; }
+.contacts-next-action { display: block; overflow: hidden; text-overflow: ellipsis; }
+.task-draft { flex-basis: 100%; min-width: 0; }
+.task-prepared { display: grid; gap: 8px; margin-top: 8px; padding: 12px; background: var(--raised); border: 1px solid var(--border); border-radius: 6px; }
+.task-prepared textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); resize: vertical; }
+.contacts-table button.contacts-avatar { padding: 0; border: 0; cursor: pointer; flex-shrink: 0; }
+
+@media (max-width: 1023px) {
+  .board-page.has-preview { display: block; }
+  .board-page.has-preview > .contacts-workspace { display: none; }
+  .person-preview { position: static; max-height: none; }
+  .person-preview button, .person-preview input, .person-preview select { min-height: 44px; }
+}
+
 .contacts-table {
   width: 100%;
   min-width: 820px;
@@ -232,7 +272,7 @@
 }
 
 .contacts-table tbody tr {
-  height: 56px;
+  height: 38px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -256,18 +296,19 @@
 .contacts-table td {
   min-width: 0;
   overflow: hidden;
-  padding: 9px 14px;
+  padding: 4px 8px;
   color: var(--muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.contacts-table th:nth-child(1) { width: 25%; }
-.contacts-table th:nth-child(2) { width: 28%; }
-.contacts-table th:nth-child(3) { width: 17%; }
-.contacts-table th:nth-child(4) { width: 18%; }
-.contacts-table th:nth-child(5) { width: 12%; }
+.contacts-table th:nth-child(1) { width: 19%; }
+.contacts-table th:nth-child(2) { width: 17%; }
+.contacts-table th:nth-child(3) { width: 20%; }
+.contacts-table th:nth-child(4) { width: 13%; }
+.contacts-table th:nth-child(5) { width: 18%; }
+.contacts-table th:nth-child(6) { width: 13%; }
 
 .contacts-table td:first-child a {
   color: var(--text);

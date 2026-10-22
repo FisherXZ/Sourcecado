@@ -8,6 +8,7 @@ export function taskApiMock() {
     current = null;
   }
   return {
+    getCrmProposals: vi.fn(async () => ({ proposals: [], truncated: false })),
     listTasks: vi.fn(async () => ({
       tasks: [],
       truncated: false,

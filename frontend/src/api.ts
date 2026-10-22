@@ -371,6 +371,12 @@ export type BoardPerson = {
   replied_at?: string | null;
   follow_up?: FollowUp;
   descriptions?: PersonDescriptions;
+  version?: number;
+  attention_rank?: number;
+  attention_reason?: string | null;
+  attention_until?: string | null;
+  attention_reasons?: Array<{ code: string; label: string; count?: number }>;
+  next_action?: PersonTask | null;
 };
 
 export type Board = {
@@ -389,7 +395,8 @@ export type PersonDescription = {
   slot: DescriptionSlot;
   text: string | null;
   authority: DescriptionAuthority;
-  source_refs: string[];
+  source_refs: Array<string | { url?: string; message_id?: string }>;
+  analyzed_input_revision?: number;
   version: number;
 };
 
@@ -460,7 +467,8 @@ export type MailSyncState = {
 export type MailAnalysisState = {
   latest_evidence_revision: number;
   analyzed_revision: number;
-  status: "not_analyzed" | "pending" | "current";
+  status: "not_analyzed" | "pending" | "current" | "retrying" | "failed";
+  attempts?: number;
 };
 
 /** One claim in the living brief, with the sources that back it. */
@@ -536,6 +544,8 @@ export type LivingBrief = {
 };
 
 export type PersonFile = {
+  crm_proposals?: CrmProposal[];
+  crm_changes?: CrmChange[];
   mail_sync?: MailSyncState;
   mail_analysis?: MailAnalysisState;
   person: BoardPerson &
@@ -646,6 +656,49 @@ export async function getBoard(): Promise<Board> {
   return res.json();
 }
 
+export type CrmProposal = {
+  person_id: string;
+  person?: Pick<BoardPerson, "first_name" | "last_name" | "company" | "sequence_state">;
+  proposal_id: string;
+  kind: "task_create" | "task_update" | "description" | "status";
+  value: Record<string, unknown>;
+  reason: string;
+  source_refs: Array<{ url?: string; message_id?: string }>;
+};
+
+export type CrmChange = {
+  change_id: string;
+  entity_type: string;
+  action: string;
+  reason: string;
+  actor: string;
+  created_at: string;
+  source_refs: string;
+};
+
+export async function crmRequest(path: string, body: Record<string, unknown>, method = "POST"): Promise<Record<string, unknown>> {
+  const response = await fetch(`${httpBase()}${path}`, {
+    method,
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(response.status === 409
+    ? "This record changed. Your text is kept; review the current version and try again."
+    : "Couldn’t save this change. Your work is kept; try again.");
+  return result;
+}
+
+export function startCrmRefresh(force = false) {
+  return crmRequest(`/v1/crm/refresh?force=${force}`, {});
+}
+
+export async function getCrmProposals(): Promise<{ proposals: CrmProposal[]; truncated: boolean }> {
+  const response = await get("/v1/crm/proposals");
+  if (!response.ok) throw new Error("Couldn’t load suggestions.");
+  return response.json();
+}
+
 export async function refreshReplies(): Promise<{
   refresh: ReplyRefreshResult;
   board: Board;
@@ -748,11 +801,13 @@ export function newOperationId(): string {
 }
 
 export async function listTasks(
-  options: { personId?: string; state?: "open" | "all" } = {},
+  options: { personId?: string; state?: "open" | "all"; offset?: number; limit?: number } = {},
 ): Promise<TaskListing> {
   const params = new URLSearchParams();
   if (options.personId) params.set("person_id", options.personId);
   if (options.state) params.set("state", options.state);
+  if (options.offset) params.set("offset", String(options.offset));
+  if (options.limit) params.set("limit", String(options.limit));
   const query = params.toString();
   const res = await get(`/v1/crm/tasks${query ? `?${query}` : ""}`);
   if (!res.ok) throw new Error(`tasks ${res.status}`);
@@ -1196,12 +1251,13 @@ export async function decideApproval(
 export async function setPersonSequence(
   id: string,
   state: string,
-  actor = "director"
+  actor = "director",
+  expectedVersion?: number,
 ): Promise<{ person: BoardPerson }> {
   const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}/sequence`, {
     method: "POST",
     headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
-    body: JSON.stringify({ state, actor }),
+    body: JSON.stringify({ state, actor, expected_version: expectedVersion }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || `sequence ${res.status}`);
@@ -1268,6 +1324,8 @@ export class DescriptionSaveError extends Error {
   }
 }
 
+const pendingDescriptionOperations = new Map<string, string>();
+
 export async function patchPersonDescription(
   id: string,
   slot: DescriptionSlot,
@@ -1283,6 +1341,10 @@ export async function patchPersonDescription(
   const payload: Record<string, unknown> = { expected_version: body.expectedVersion };
   if ("release" in body) payload.release = true;
   else payload.text = body.text;
+  const intent = JSON.stringify({ id, slot, ...payload });
+  const operation = pendingDescriptionOperations.get(intent) ?? newOperationId();
+  pendingDescriptionOperations.set(intent, operation);
+  payload.operation_id = operation;
   const res = await fetch(
     `${httpBase()}/v1/people/${encodeURIComponent(id)}/descriptions/${slot}`,
     {
@@ -1295,6 +1357,7 @@ export async function patchPersonDescription(
   if (!res.ok) {
     throw new DescriptionSaveError(res.status, data.error || `description ${res.status}`);
   }
+  pendingDescriptionOperations.delete(intent);
   return data;
 }
 
