@@ -117,3 +117,30 @@ Windows `PermissionError: eval child failed`. The earlier full-backend Windows
 comparison and native/real-email verification limits above still apply. Required
 Linux CI and macOS checks must be assessed on the submitted PR; no check was
 disabled or weakened.
+
+### CI follow-up and patched dependencies
+
+The first PR run passed the complete GUI job and macOS Python/GUI tests, Rust
+checks, native Tauri build and packaged-backend smoke test. Linux reported one
+chat-queue test failure after 2,082 passes: it asserted provider call count after
+an 80ms sleep while not consuming websocket frames. The same exact call-count,
+queue and terminal-event assertions now run after observing both completed
+turns, avoiding the timing assumption. The focused check passes locally.
+
+The inherited dependency audit also required security patches. Updated only
+MCP 1.29.1 → 1.30.0, certifi 2026.7.22 → 2026.10.19, and pypdf 6.20.1 → 6.21.2.
+The generated lock now uses `--universal`, preserving Linux/macOS dependencies
+and adding marked Windows dependencies rather than replacing the native set.
+Unrelated package versions, including uvloop, remain pinned.
+
+Primary references: [MCP advisory](https://github.com/modelcontextprotocol/python-sdk/security/advisories/GHSA-84m7-p3x7-pcfv),
+[certifi advisory](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2),
+and [pypdf release](https://github.com/py-pdf/pypdf/releases/tag/6.21.2).
+MCP's changed redirect policy remains inside the existing client boundary; no
+authentication, CORS or approval policy was relaxed.
+
+Hash-verified installation and the full `pip-audit -r backend/requirements.lock`
+pass with **no known vulnerabilities found**. The expanded compatibility run
+has 254 passes and one unchanged Windows POSIX-mode assertion failure in Drive
+ingestion; the earlier focused MCP/meeting set has 15 passes. Linux/macOS CI
+must confirm the final dependency state.
