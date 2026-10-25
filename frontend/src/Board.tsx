@@ -1,33 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { DescriptionEditor, describeDescription } from "./DescriptionEditor";
 import {
   defaultPersonDescriptions,
   getBoard,
   refreshReplies,
+  startCrmRefresh,
   type Board,
   type BoardPerson,
   type PersonTask,
   type ReplyRefreshResult,
 } from "./api";
-import { TaskList } from "./Tasks";
+import { TaskList, TASKS_CHANGED } from "./Tasks";
 import { MailFreshness } from "./crm/MailFreshness";
+import { PersonPreview, type PreviewHandle } from "./crm/PersonPreview";
+import { GlobalSuggestions } from "./crm/GlobalSuggestions";
 
 function personName(person: BoardPerson): string {
   return [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
-}
-
-function day(stamp: string | null | undefined): string | null {
-  if (typeof stamp !== "string" || !stamp.trim()) return null;
-  return stamp.slice(0, 10);
-}
-
-/** Last contact and replied state, in the operator's words. */
-function contactLine(person: BoardPerson): string {
-  const when = day(person.last_contact_at);
-  if (!when) return "No contact yet";
-  const who = person.last_contact_direction === "inbound" ? "They replied" : "We wrote";
-  return `${who} · ${when}`;
 }
 
 const FOLLOW_UP_LABEL: Record<string, string> = {
@@ -105,36 +95,36 @@ function ContactDescriptionCell({ person }: { person: BoardPerson }) {
   );
 }
 
-function ContactRow({ person }: { person: BoardPerson }) {
+function ContactRow({ person, onOpen }: { person: BoardPerson; onOpen: (id: string) => void }) {
   const name = personName(person);
   const sequence = SEQUENCE_LABEL[person.sequence_state ?? ""] ?? "Unknown";
   const href = `#/people/${encodeURIComponent(person.person_id)}`;
   const openPersonFile = () => {
-    window.location.hash = href;
+    onOpen(person.person_id);
   };
   return (
     <tr
       className="contacts-row"
       tabIndex={0}
-      aria-label={`Open Person File for ${name}`}
+      aria-label={`Preview person ${name}`}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest("a, button, textarea")) return;
+        if ((event.target as HTMLElement).closest("a, button, textarea, input, select, summary")) return;
         openPersonFile();
       }}
       onKeyDown={(event) => {
-        if (event.key !== "Enter") return;
-        if ((event.target as HTMLElement).closest("button, textarea")) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        if ((event.target as HTMLElement).closest("a, button, textarea, input, select, summary")) return;
         event.preventDefault();
         openPersonFile();
       }}
     >
       <td>
         <div className="contacts-identity">
-          <span className="contacts-avatar" aria-hidden="true">
+          <button type="button" id={`preview-${person.person_id}`} className="contacts-avatar" aria-label={`Preview ${name}`} onClick={openPersonFile}>
             {initials(person)}
-          </span>
+          </button>
           <span className="contacts-cell-copy">
-            <a href={href} tabIndex={-1}>
+            <a href={href} onClick={event => { event.preventDefault(); openPersonFile(); }}>
               <strong>{name}</strong>
             </a>
             {person.last_name_status === "hidden_by_apollo" ? (
@@ -156,10 +146,16 @@ function ContactRow({ person }: { person: BoardPerson }) {
         </span>
       </td>
       <td>
-        <span className="contacts-last-contact">{contactLine(person)}</span>
+        <span className="contacts-next-action" title={person.next_action?.title ?? undefined}>
+          {person.next_action ? <>{person.next_action.title}<span className="contacts-secondary">{person.next_action.due_date ?? "No date"}</span></> : "No open task"}
+        </span>
       </td>
       <td>
-        {person.follow_up?.needed ? (
+        {person.attention_reasons?.length ? (
+          <details className="contacts-attention-reasons"><summary><span className="board-row-flag">{person.attention_reasons[0].label}</span>
+            {person.attention_reasons.length > 1 ? ` +${person.attention_reasons.length - 1}` : null}</summary>
+            {person.attention_reasons.slice(1).map(reason => <p key={reason.code}>{reason.label}{reason.count ? ` (${reason.count})` : ""}</p>)}</details>
+        ) : person.attention_reasons === undefined && person.follow_up?.needed ? (
           <FollowUpChip person={person} />
         ) : (
           <span className="contacts-attention-empty" aria-label="No attention needed">
@@ -171,7 +167,7 @@ function ContactRow({ person }: { person: BoardPerson }) {
   );
 }
 
-function ContactsTable({ people }: { people: BoardPerson[] }) {
+function ContactsTable({ people, onOpen }: { people: BoardPerson[]; onOpen: (id: string) => void }) {
   return (
     <div className="contacts-table-scroll">
       <table className="contacts-table" aria-label="Active sourcing contacts">
@@ -181,13 +177,13 @@ function ContactsTable({ people }: { people: BoardPerson[] }) {
             <th scope="col">Role &amp; company</th>
             <th scope="col">Description</th>
             <th scope="col">Sequence</th>
-            <th scope="col">Last contact</th>
+            <th scope="col">Next action</th>
             <th scope="col">Attention</th>
           </tr>
         </thead>
         <tbody>
           {people.map((person) => (
-            <ContactRow key={person.person_id} person={person} />
+            <ContactRow key={person.person_id} person={person} onOpen={onOpen} />
           ))}
         </tbody>
       </table>
@@ -320,6 +316,24 @@ export function BoardView() {
   const [sequenceFilter, setSequenceFilter] = useState<SequenceFilter>("all");
   const [contactQuery, setContactQuery] = useState("");
   const [view, setView] = useState<BoardViewMode>("contacts");
+  const [needsAttention, setNeedsAttention] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const preview = useRef<PreviewHandle>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
+
+  function openPreview(id: string) {
+    const next = () => {
+      returnFocus.current = document.getElementById(`preview-${id}`);
+      setSelected(id);
+    };
+    if (selected) preview.current?.navigate(next);
+    else next();
+  }
+
+  function closePreview() {
+    setSelected(null);
+    returnFocus.current?.focus();
+  }
 
   useEffect(() => {
     let active = true;
@@ -340,7 +354,14 @@ export function BoardView() {
   useEffect(() => {
     const refresh = () => setAttempt((value) => value + 1);
     window.addEventListener("sourcecado:board-changed", refresh);
-    return () => window.removeEventListener("sourcecado:board-changed", refresh);
+    window.addEventListener(TASKS_CHANGED, refresh);
+    const timer = window.setInterval(refresh, 15000);
+    void startCrmRefresh(false).catch(() => {});
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("sourcecado:board-changed", refresh);
+      window.removeEventListener(TASKS_CHANGED, refresh);
+    };
   }, []);
 
   async function checkReplies() {
@@ -365,13 +386,17 @@ export function BoardView() {
     (sequenceFilter === "all"
       ? contacts
       : contacts.filter((person) => person.sequence_state === sequenceFilter)
-    ).filter((person) => matchesContact(person, contactQuery));
+    ).filter((person) => matchesContact(person, contactQuery))
+    .filter(person => !needsAttention || (person.attention_reasons !== undefined
+      ? person.attention_reasons.length > 0 : Boolean(person.follow_up?.needed)))
+    .sort((a, b) => (a.attention_rank ?? 9999) - (b.attention_rank ?? 9999));
   const empty =
     board !== null &&
     contacts.length === 0;
 
   return (
-    <main className="route-page board-page">
+    <main className={`route-page board-page${selected ? " has-preview" : ""}`}>
+      <div className="contacts-workspace">
       <header className="board-page-header">
         <p className="eyebrow">Active sequences</p>
         <h1>Contacts</h1>
@@ -400,7 +425,7 @@ export function BoardView() {
           <p>Start a sequence from a Person File to add someone here.</p>
         </section>
       ) : null}
-      {board && !empty ? (
+      {board && (!empty || view === "tasks") ? (
         <section
           className="contacts-list"
           aria-label={view === "tasks" ? "Tasks for contacts" : "Sequence contacts"}
@@ -411,6 +436,7 @@ export function BoardView() {
               board={board}
               onChange={setSequenceFilter}
             />
+            <button type="button" aria-pressed={needsAttention} onClick={() => setNeedsAttention(value => !value)}>Needs attention</button>
             <label className="contacts-search">
               <span className="contacts-visually-hidden">
                 {view === "tasks" ? "Search tasks" : "Search active contacts"}
@@ -425,28 +451,29 @@ export function BoardView() {
             </label>
           </div>
           {view === "tasks" ? (
+            <>
             <TaskList
-              people={contacts}
+              people={[...(board.backlog ?? []), ...contacts]}
               heading="Open tasks"
-              matches={(task) => matchesTask(task, sequenceFilter, contactQuery)}
+              matches={(task) => matchesTask(task, sequenceFilter, contactQuery)
+                && (!needsAttention || [...(board.backlog ?? []), ...contacts].some(p => p.person_id === task.person_id && Boolean(p.attention_reasons?.length))
+                  || task.due_status === "overdue" || task.due_status === "today")}
             />
-          ) : visibleContacts.length > 0 ? (
-            <ContactsTable people={visibleContacts} />
-          ) : (
+            <GlobalSuggestions query={contactQuery} status={sequenceFilter} onOpen={openPreview} />
+            </>
+          ) : <><ContactsTable people={visibleContacts} onOpen={openPreview} />{visibleContacts.length === 0 ? (
             <p className="contacts-filter-empty" role="status">
               {contactQuery.trim()
                 ? `No contacts match “${contactQuery.trim()}”.`
+                : needsAttention ? "No known work needs attention. Check Gmail freshness above."
                 : `No contacts in ${SEQUENCE_LABEL[sequenceFilter] ?? "this status"}.`}
             </p>
-          )}
+          ) : null}</>}
         </section>
       ) : null}
-      {empty && view === "tasks" ? (
-        <section className="route-empty" role="status">
-          <h2>No active contacts</h2>
-          <p>Tasks appear here for people in an active sequence.</p>
-        </section>
-      ) : null}
+      {empty && view === "contacts" ? <ContactsTable people={[]} onOpen={openPreview} /> : null}
+      </div>
+      {selected ? <PersonPreview key={selected} ref={preview} personId={selected} onClose={closePreview} /> : null}
     </main>
   );
 }

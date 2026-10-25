@@ -46,6 +46,7 @@ The [engineering index](engineering/README.md) maps the active backend and front
 - [Approved send](engineering/approved-send.md)
 - [Reply filing](engineering/reply-filing.md)
 - [Tracked Gmail activity](engineering/gmail-activity.md)
+- [Contacts attention and shared tasks](engineering/contacts-attention.md)
 - [Living brief](engineering/living-brief.md)
 - [Meeting evidence](engineering/meeting-evidence.md)
 - [Legal artifacts](engineering/legal-artifacts.md)

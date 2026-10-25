@@ -7,9 +7,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES
+from coworker.crm_tools import CRM_TOOL_NAMES
 
 AUTO = frozenset(
     {
+        *CRM_TOOL_NAMES,
         "now",
         "remember",
         "memory_update",
@@ -46,6 +48,8 @@ ASK = frozenset(
 # retry that skips a fresh approval can never cover an ASK tool.
 RETRY_SAFE = frozenset(
     {
+        "crm_list_attention",
+        "crm_list_tasks",
         "now",
         "load_skill",
         "gmail_search",

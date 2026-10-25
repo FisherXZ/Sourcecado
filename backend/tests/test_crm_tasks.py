@@ -155,7 +155,7 @@ def test_today_follows_the_directors_saved_timezone(tmp_path):
     ][0]["due_status"] == "today"
     assert service.list(timezone="Asia/Tokyo", person_id=pid, now=late)["tasks"][0][
         "due_status"
-    ] == "overdue"
+    ] == "today"  # Existing tasks retain their saved timezone after a settings change.
 
     assert client.post(
         "/v1/settings/timezone", headers=HEADERS, json={"timezone": "Mars/Olympus"}
@@ -452,7 +452,8 @@ def test_a_task_does_not_start_outreach_or_add_a_kept_person_to_contacts(tmp_pat
     board = client.get("/v1/board", headers=HEADERS).json()
     assert [item["person_id"] for item in board["backlog"]] == [pid]
     assert board["open"] == board["in_conversation"] == board["done"] == []
-    assert client.get("/v1/crm/tasks", headers=HEADERS).json()["tasks"] == []
+    global_tasks = client.get("/v1/crm/tasks", headers=HEADERS).json()["tasks"]
+    assert [task["person_id"] for task in global_tasks] == [pid]
     assert (
         len(
             client.get("/v1/crm/tasks", headers=HEADERS, params={"person_id": pid}).json()[
@@ -465,6 +466,21 @@ def test_a_task_does_not_start_outreach_or_add_a_kept_person_to_contacts(tmp_pat
 
 
 # --- complete, reopen, cancel and undo -----------------------------------
+
+
+def test_receipts_created_before_attention_keep_their_retry_identity(tmp_path):
+    from coworker.crm_tasks import _fingerprint
+    people = PersonStore(tmp_path)
+    pid = _keep(people)["person_id"]
+    service = TaskService(people)
+    args = dict(title="Legacy promise", timezone="UTC", actor="director", operation_id="legacy-operation-retry")
+    created = service.create(pid, **args)
+    legacy = _fingerprint({"op": "task.create", "person_id": pid, "actor": "director", "title": "Legacy promise", "details": "", "due_date": None})
+    people._conn.execute("UPDATE crm_operations SET fingerprint=? WHERE operation_id=?", (legacy, args["operation_id"]))
+    people._conn.commit()
+    replay = service.create(pid, **args)
+    assert replay["replayed"]
+    assert replay["task"]["task_id"] == created["task"]["task_id"]
 
 
 def _set_state(client, pid, task, state, operation_id, **extra):

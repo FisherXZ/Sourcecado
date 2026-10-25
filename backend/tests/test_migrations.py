@@ -618,7 +618,7 @@ def test_people_v3_adds_tasks_and_leaves_existing_people_intact(tmp_path):
 
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
-    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4), (REBUILD_FROM, REBUILD_FROM + 1), (5, 6)]
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4), (REBUILD_FROM, REBUILD_FROM + 1), (5, 6), (6, 7)]
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
@@ -790,7 +790,7 @@ def test_the_crm_changes_rebuild_keeps_every_row(tmp_path):
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert [(step.from_version, step.to_version) for step in plan.steps] == [
-        (REBUILD_FROM, REBUILD_FROM + 1), (5, 6)
+        (REBUILD_FROM, REBUILD_FROM + 1), (5, 6), (6, 7)
     ]
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None

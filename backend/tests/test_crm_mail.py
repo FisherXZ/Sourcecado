@@ -86,7 +86,10 @@ def test_evidence_and_pending_analysis_survive_restart_without_duplicates(tmp_pa
     people._conn.close()
     restarted = MailRepository(PersonStore(tmp_path))
     assert restarted.message(ACCOUNT, "gmail-response")["body"] == "A real response"
-    assert restarted.analysis_state(pid) == {"latest_evidence_revision": 1, "analyzed_revision": 0, "status": "pending"}
+    analysis = restarted.analysis_state(pid)
+    assert {key: analysis[key] for key in ("latest_evidence_revision", "analyzed_revision", "status")} == {"latest_evidence_revision": 1, "analyzed_revision": 0, "status": "pending"}
+    assert analysis["attempts"] == 0
+    assert analysis["next_attempt_at"] is None
 
 
 def test_gmail_preview_entities_are_readable_untrusted_text(tmp_path):

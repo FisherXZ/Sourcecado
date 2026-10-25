@@ -202,6 +202,19 @@ describe("shared person tasks", () => {
     api.getBoard.mockResolvedValue({ backlog: [], open: [MAYA], in_conversation: [LEO], done: [] });
   });
 
+  it("offers tasks for saved people before any sequence starts", async () => {
+    fakeServer();
+    api.getBoard.mockResolvedValue({ backlog: [{ ...MAYA, sequence_state: null }], open: [], in_conversation: [], done: [] });
+    render(<BoardView />);
+    fireEvent.click(await screen.findByRole("button", { name: "Tasks" }));
+    const tasks = await screen.findByRole("region", { name: "Open tasks" });
+    expect(within(tasks).getByRole("button", { name: "Add task" }).hasAttribute("disabled")).toBe(false);
+    await addTask(tasks, { title: "Research before outreach", person: "per_maya" });
+    await within(tasks).findByText("Research before outreach");
+    fireEvent.click(screen.getByRole("button", { name: "Contacts" }));
+    expect(screen.queryByRole("row", { name: /Maya/ })).toBeNull();
+  });
+
   it("shows the same saved tasks in Contacts and in the person's list, and edits in either", async () => {
     fakeServer();
     render(
@@ -434,7 +447,7 @@ describe("shared person tasks", () => {
     render(<PersonFileView personId="per_maya" />);
     const section = await screen.findByRole("region", { name: "Tasks" });
     await within(section).findByText("No open tasks for this person.");
-    expect(api.listTasks).toHaveBeenCalledWith({ personId: "per_maya", state: "all" });
+    expect(api.listTasks).toHaveBeenCalledWith({ personId: "per_maya", state: "all", limit: 200, offset: 0 });
   });
 
   it("completes, cancels and reopens from either list, keeping finished tasks in History", async () => {

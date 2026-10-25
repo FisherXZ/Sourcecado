@@ -34,6 +34,7 @@ from coworker.gmail import (
     gmail_evidence,
 )
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
+from coworker.crm_tools import CRM_TOOL_NAMES, CRM_TOOL_SCHEMAS, execute_crm_tool
 from coworker.drive_ingestion import DRIVE_INDEX_QUERY_SCHEMA, DriveIngestionStore
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
@@ -438,6 +439,7 @@ OPENAI_TOOLS = [
     LOAD_SKILL_SCHEMA,
     WEB_SEARCH_SCHEMA,
     *BOARD_TOOL_SCHEMAS,
+    *CRM_TOOL_SCHEMAS,
     *WORKSPACE_TOOL_SCHEMAS,
 ]
 
@@ -448,6 +450,7 @@ OPENAI_TOOLS = [
 # `evidence_for` proves nothing - it classifies, and unknown means external.
 SOURCECADO_OWNED = frozenset(
     {
+        *CRM_TOOL_NAMES,
         "now",
         "load_skill",
         "remember",
@@ -616,6 +619,11 @@ def execute(
     approval_fingerprint: str | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
+    if name in CRM_TOOL_NAMES:
+        if people is None:
+            return False, {"status": "failed", "error": "people store missing"}
+        return execute_crm_tool(name, args, people=people, store=store, actor=actor,
+            session_id=session_id, run_id=run_id)
     if name in WORKSPACE_TOOL_NAMES:
         if workspace_runtime is None:
             return False, {"status": "failed", "error": "workspace runtime missing"}

@@ -211,7 +211,7 @@ describe("Contacts and person-file routes", () => {
     expect(within(table).getByRole("columnheader", { name: "Contact" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Role & company" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Sequence" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "Last contact" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Next action" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Attention" })).toBeInTheDocument();
     expect(within(table).getByRole("link", { name: /Alyssa Lee/ })).toHaveAttribute(
       "href",
@@ -220,20 +220,23 @@ describe("Contacts and person-file routes", () => {
     expect(screen.queryByRole("region", { name: "Open" })).not.toBeInTheDocument();
   });
 
-  it("opens the Person File from pointer or keyboard interaction anywhere in a row", async () => {
+  it("opens the person preview from pointer or keyboard interaction anywhere in a row", async () => {
     window.location.hash = "#/board";
     render(<BoardView />);
 
-    const row = await screen.findByRole("row", { name: "Open Person File for Alyssa Lee" });
+    const row = await screen.findByRole("row", { name: "Preview person Alyssa Lee" });
     expect(row).toHaveAttribute("tabindex", "0");
 
     fireEvent.click(within(row).getByText("Codeology"));
-    expect(window.location.hash).toBe("#/people/person%20one");
+    expect(await screen.findByRole("region", { name: "Person preview" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/board");
+    fireEvent.click(screen.getByRole("button", { name: "Back to Contacts" }));
 
     window.location.hash = "#/board";
     row.focus();
     fireEvent.keyDown(row, { key: "Enter" });
-    expect(window.location.hash).toBe("#/people/person%20one");
+    expect(await screen.findByRole("region", { name: "Person preview" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/board");
   });
 
   it("filters Contacts by the three sequence states", async () => {
@@ -407,7 +410,8 @@ describe("Contacts and person-file routes", () => {
 
     expect(await screen.findByRole("heading", { name: "No active contacts" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Hudson Liao/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("table", { name: "Active sourcing contacts" })).not.toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "Active sourcing contacts" })).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(1);
   });
 
   it("updates a person sequence through labeled pressed-state controls", async () => {

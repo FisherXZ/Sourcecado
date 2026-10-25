@@ -64,11 +64,11 @@ _CHANGE_ID_RE = re.compile(r"^chg_[0-9a-f]{32}$")
 CRM_CHANGES_COLUMNS = """
         change_id TEXT PRIMARY KEY,
         person_id TEXT NOT NULL REFERENCES people(person_id),
-        entity_type TEXT NOT NULL CHECK (entity_type IN ('task')),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('task', 'description', 'attention', 'proposal', 'review', 'status', 'artifact')),
         entity_id TEXT NOT NULL,
         entity_version INTEGER NOT NULL CHECK (entity_version >= 1),
         action TEXT NOT NULL CHECK (
-            action IN ('create', 'update', 'complete', 'reopen', 'cancel', 'undo')
+            action IN ('create', 'update', 'complete', 'reopen', 'cancel', 'undo', 'accept', 'dismiss')
         ),
         before_json TEXT,
         after_json TEXT NOT NULL,
@@ -314,19 +314,20 @@ class TaskService:
         states: tuple[str, ...] = ("open",),
         active_sequences_only: bool = False,
         limit: int = LIST_LIMIT_DEFAULT,
+        offset: int = 0,
         now: datetime | None = None,
     ) -> dict[str, Any]:
         """Tasks in due order: overdue, today, upcoming, then undated.
 
         Dated work sorts by date, then creation time and id; undated work by
-        creation time and id. The global view passes
-        `active_sequences_only` so a kept person who has not started a
-        sequence does not appear in Contacts through a task.
+        creation time and id. Callers may explicitly restrict sequence scope;
+        the global Tasks view includes all live saved people.
         """
         unknown = set(states) - set(TASK_STATES)
         if not states or unknown:
             raise TaskError("state must be open, completed or cancelled")
         limit = max(1, min(int(limit), LIST_LIMIT_MAX))
+        offset = max(0, int(offset))
         clauses = ["people.deleted_at IS NULL"]
         params: list[Any] = []
         clauses.append(f"person_tasks.state IN ({', '.join('?' for _ in states)})")
@@ -353,15 +354,15 @@ class TaskService:
                          person_tasks.due_date,
                          person_tasks.created_at,
                          person_tasks.task_id
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (*params, limit + 1),
+                (*params, limit + 1, offset),
             ).fetchall()
         today = today_in(timezone, now=now)
         tasks = []
         for row in rows[:limit]:
             task = self._task_dict(row)
-            task["due_status"] = due_status(task["due_date"], today)
+            task["due_status"] = due_status(task["due_date"], today_in(task["due_timezone"] or timezone, now=now))
             task["person"] = {
                 "person_id": task["person_id"],
                 "first_name": row["person_first_name"],
@@ -506,6 +507,8 @@ class TaskService:
         timezone: str,
         operation_id: object,
         actor: str,
+        human_directed: bool = False,
+        source_refs: tuple[dict[str, Any], ...] = (),
         reason: object = None,
         session_id: str | None = None,
         run_id: str | None = None,
@@ -520,9 +523,11 @@ class TaskService:
         }
         timezone = validate_timezone(timezone)
         fingerprint = _fingerprint(
-            {"op": "task.create", "person_id": person_id, "actor": actor, **clean}
+            {"op": "task.create", "person_id": person_id, "actor": actor, **clean,
+                **({"human_directed": True} if human_directed else {}),
+                **({"sources": source_refs} if source_refs else {})}
         )
-        origin = "human" if actor == "director" else "assistant"
+        origin = "human" if actor == "director" or human_directed else "assistant"
         # A director's own words are protected from later automatic rewrites.
         protected = (
             sorted(field for field in TASK_EDIT_FIELDS if clean[field])
@@ -530,9 +535,14 @@ class TaskService:
             else []
         )
         with self._lock:
+            owns_transaction = not self._conn.in_transaction
+            if owns_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
             try:
                 replay = self._replay(operation, fingerprint)
                 if replay is not None:
+                    if owns_transaction:
+                        self._conn.commit()
                     return replay
                 self._live_person(person_id)
                 now = datetime.now(UTC).isoformat()
@@ -543,7 +553,7 @@ class TaskService:
                         task_id, person_id, title, details, due_date,
                         due_timezone, state, origin, protected_fields,
                         source_refs, version, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, '[]', 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         task_id,
@@ -554,6 +564,7 @@ class TaskService:
                         timezone if clean["due_date"] else None,
                         origin,
                         json.dumps(protected),
+                        json.dumps(source_refs),
                         now,
                         now,
                     ),
@@ -572,9 +583,11 @@ class TaskService:
                     run_id=run_id,
                     now=now,
                 )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
+                if owns_transaction:
+                    self._conn.commit()
+            except BaseException:
+                if owns_transaction:
+                    self._conn.rollback()
                 raise
         return response
 
@@ -588,6 +601,8 @@ class TaskService:
         timezone: str,
         operation_id: object,
         actor: str,
+        human_directed: bool = False,
+        source_refs: tuple[dict[str, Any], ...] = (),
         reason: object = None,
         session_id: str | None = None,
         run_id: str | None = None,
@@ -626,14 +641,21 @@ class TaskService:
                 "person_id": person_id,
                 "task_id": task_id,
                 "actor": actor,
+                **({"human_directed": True} if human_directed else {}),
                 "expected_version": expected_version,
                 "changes": clean,
+                **({"sources": source_refs} if source_refs else {}),
             }
         )
         with self._lock:
+            owns_transaction = not self._conn.in_transaction
+            if owns_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
             try:
                 replay = self._replay(operation, fingerprint)
                 if replay is not None:
+                    if owns_transaction:
+                        self._conn.commit()
                     return replay
                 self._live_person(person_id)
                 before = self._task_dict(self._load_task(person_id, task_id))
@@ -648,8 +670,12 @@ class TaskService:
                     for field, value in clean.items()
                     if value != before[field]
                 }
+                if actor == "assistant" and not human_directed and set(changed) & set(before["protected_fields"]):
+                    raise TaskConflict("Human task values are protected", code="human_protected", current=before)
                 if not changed:
                     # Nothing differs: no new version, no history row.
+                    if owns_transaction:
+                        self._conn.commit()
                     return {"task": before, "change": None, "replayed": False}
                 action = "update"
                 if "state" in changed:
@@ -661,7 +687,7 @@ class TaskService:
                 # The director's own words and completion decisions are
                 # protected from later automatic rewrites.
                 protected = set(before["protected_fields"])
-                if actor == "director":
+                if actor == "director" or human_directed:
                     protected |= set(changed)
                 now = datetime.now(UTC).isoformat()
                 if "due_date" in changed:
@@ -670,6 +696,8 @@ class TaskService:
                     changed["completed_at"] = now
                 elif action == "reopen":
                     changed["completed_at"] = None
+                if source_refs:
+                    changed["source_refs"] = json.dumps([*before["source_refs"], *[ref for ref in source_refs if ref not in before["source_refs"]]])
                 task = self._write(
                     person_id,
                     task_id,
@@ -691,9 +719,11 @@ class TaskService:
                     run_id=run_id,
                     now=now,
                 )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
+                if owns_transaction:
+                    self._conn.commit()
+            except BaseException:
+                if owns_transaction:
+                    self._conn.rollback()
                 raise
         return response
 
@@ -765,9 +795,14 @@ class TaskService:
             }
         )
         with self._lock:
+            owns_transaction = not self._conn.in_transaction
+            if owns_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
             try:
                 replay = self._replay(operation, fingerprint)
                 if replay is not None:
+                    if owns_transaction:
+                        self._conn.commit()
                     return replay
                 self._live_person(person_id)
                 row = self._conn.execute(
@@ -797,6 +832,8 @@ class TaskService:
                     if restored[field] != current[field]
                 }
                 if not changed:
+                    if owns_transaction:
+                        self._conn.commit()
                     return {"task": current, "change": None, "replayed": False}
                 protected = set(current["protected_fields"])
                 if actor == "director":
@@ -824,8 +861,10 @@ class TaskService:
                     now=now,
                     compensates=change_id,
                 )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
+                if owns_transaction:
+                    self._conn.commit()
+            except BaseException:
+                if owns_transaction:
+                    self._conn.rollback()
                 raise
         return response

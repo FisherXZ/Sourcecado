@@ -38,6 +38,7 @@ from typing import Any
 
 from coworker.agent_run_approval import EFFECT_STATEMENTS
 from coworker.crm_mail_repository import MAIL_SCHEMA
+from coworker.crm_schema import CRM_SCHEMA, extend_columns
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
 from coworker.crm_tasks import (
     CRM_CHANGES_COLUMNS,
@@ -828,6 +829,16 @@ def _add_person_tasks(context: MigrationContext) -> int:
 CRM_CHANGES_REBUILD_FROM = 4
 
 
+def _add_crm_attention(context: MigrationContext) -> int:
+    conn = context.connection
+    assert conn is not None
+    _widen_crm_changes(context)
+    for statement in CRM_SCHEMA:
+        conn.execute(statement)
+    extend_columns(conn)
+    return 0
+
+
 def _count_crm_changes(context: MigrationContext) -> int:
     conn = context.connection
     assert conn is not None
@@ -1147,6 +1158,13 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 count=lambda context: 0,
                 apply=_add_tracked_mail,
             ),
+            Migration(
+                from_version=6,
+                to_version=7,
+                description="Add Contacts attention, proposals and durable analysis outcomes without AI backfill.",
+                count=lambda context: 0,
+                apply=_add_crm_attention,
+            ),
         ),
         json_columns=(
             ("events", "payload"),
@@ -1160,6 +1178,10 @@ REGISTRY: tuple[StoreSpec, ...] = (
             ("crm_changes", "after_json"),
             ("crm_changes", "source_refs"),
             ("crm_operations", "response_json"),
+            ("crm_proposals", "value_json"),
+            ("crm_proposals", "source_refs"),
+            ("crm_analysis_state", "usage_json"),
+            ("crm_analysis_attempts", "usage_json"),
         ),
     ),
     StoreSpec(

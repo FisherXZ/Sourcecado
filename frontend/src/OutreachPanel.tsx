@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { PreparedText } from "./crm/SavedTaskDrafts";
 
 import {
   createOutreachDraft,
@@ -21,10 +22,12 @@ export function OutreachPanel({
   personId,
   sessionId,
   recipient,
+  prepared,
 }: {
   readonly personId: string;
   readonly sessionId: string | null;
   readonly recipient: string | null;
+  readonly prepared?: PreparedText;
 }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -105,6 +108,8 @@ export function OutreachPanel({
       ) : null}
 
       {!draft && !sent ? (
+        <>
+        {prepared && !prepared.thread_id && !prepared.thread_review_required ? <button type="button" onClick={() => { setSubject(prepared.subject); setBody(prepared.body); }}>Use prepared follow-up text</button> : null}
         <form
           className="person-outreach-compose"
           onSubmit={(event) => {
@@ -142,6 +147,7 @@ export function OutreachPanel({
             {busy === "draft" ? "Creating draft…" : "Create Gmail draft"}
           </button>
         </form>
+        </>
       ) : null}
 
       {draft && !sent ? (

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { TaskDraft } from "./crm/TaskDraft";
 
 import {
   createTask,
@@ -255,7 +256,7 @@ function TaskEditor({ task, onClose }: { task: PersonTask; onClose: () => void }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const operation = useOperationId();
-  const idPrefix = `task-edit-${task.task_id}`;
+  const idPrefix = useId();
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -563,6 +564,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
         </>
       )}
       {history ? <TaskHistory task={task} onClose={() => setHistory(false)} /> : null}
+      {!finished && !editing ? <TaskDraft task={task} /> : null}
     </li>
   );
 }
@@ -593,6 +595,7 @@ export function TaskList({
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [pages, setPages] = useState(1);
   const addButton = useRef<HTMLButtonElement>(null);
   const Heading = `h${headingLevel}` as "h2" | "h3";
   const GroupHeading = `h${headingLevel + 1}` as "h3" | "h4";
@@ -601,9 +604,12 @@ export function TaskList({
   useEffect(() => {
     let active = true;
     setLoading(true);
-    listTasks({ ...(personId ? { personId } : {}), state: "all" }).then(
-      (next) => {
+    Promise.all(Array.from({ length: pages }, (_, page) =>
+      listTasks({ ...(personId ? { personId } : {}), state: "all", offset: page * 200, limit: 200 }),
+    )).then(
+      (results) => {
         if (!active) return;
+        const next = { ...results[0], tasks: [...new Map(results.flatMap(r => r.tasks).map(task => [task.task_id, task])).values()], truncated: results[results.length - 1].truncated };
         setListing(next);
         setFailed(false);
         setLoading(false);
@@ -618,15 +624,17 @@ export function TaskList({
     return () => {
       active = false;
     };
-  }, [attempt, personId]);
+  }, [attempt, personId, pages]);
 
   useEffect(() => {
     const reload = () => setAttempt((value) => value + 1);
     window.addEventListener(TASKS_CHANGED, reload);
     window.addEventListener("sourcecado:board-changed", reload);
+    const timer = window.setInterval(reload, 15000);
     return () => {
       window.removeEventListener(TASKS_CHANGED, reload);
       window.removeEventListener("sourcecado:board-changed", reload);
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -689,7 +697,7 @@ export function TaskList({
         <p className="task-list-status" role="status">
           {personId
             ? "No open tasks for this person."
-            : "No open tasks for people in Contacts."}
+            : "No open tasks for saved people."}
         </p>
       ) : null}
       {filteredOut ? (
@@ -729,10 +737,10 @@ export function TaskList({
         </details>
       ) : null}
       {listing?.truncated ? (
-        <p className="task-list-status">Showing the first {listing.tasks.length} tasks.</p>
+        <p className="task-list-status">Showing the first {listing.tasks.length} tasks. <button type="button" disabled={loading} onClick={() => setPages(n => n + 1)}>Load more tasks</button></p>
       ) : null}
       {listing ? (
-        <p className="task-list-timezone">Dates use {listing.timezone}.</p>
+        <p className="task-list-timezone">New task dates use {listing.timezone}. Existing tasks keep their saved timezone.</p>
       ) : null}
     </section>
   );
