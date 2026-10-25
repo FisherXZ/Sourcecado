@@ -144,3 +144,10 @@ pass with **no known vulnerabilities found**. The expanded compatibility run
 has 254 passes and one unchanged Windows POSIX-mode assertion failure in Drive
 ingestion; the earlier focused MCP/meeting set has 15 passes. Linux/macOS CI
 must confirm the final dependency state.
+
+The final frontend audit also reported
+[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5), updated
+October 23. Updated only transitive Zod 4.4.3 → 4.6.7 within assistant-ui's
+existing `^4.4.3` range, with installation scripts disabled. The frontend audit
+then reports **zero vulnerabilities**; package.json and unrelated dependencies
+are unchanged.
