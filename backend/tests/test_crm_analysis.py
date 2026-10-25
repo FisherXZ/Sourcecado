@@ -2,6 +2,8 @@
 import asyncio
 import json
 
+import pytest
+
 from coworker.crm_analysis import ConversationAnalysis
 from coworker.crm_mail_repository import MailRepository
 from coworker.crm_service import CrmService
@@ -150,3 +152,62 @@ def test_explicit_fulfillment_is_tied_to_the_task_and_matching_thread(tmp_path):
     saved = TaskService(people).get(pid, task["task_id"])
     assert saved["state"] == "completed"
     assert saved["source_refs"][-1]["message_id"] == "msg2"
+
+
+@pytest.mark.parametrize("direction,body,committed", [
+    ("outbound", "Please send me project examples by 2026-10-23.", False),
+    ("inbound", "I will send project examples by 2026-10-23.", False),
+    ("inbound", "Please send project examples by 2026-10-23.", True),
+    ("outbound", "I will send project examples by 2026-10-23.", True),
+    ("inbound", "I will send project examples by 2026-10-23. Please let me know if that works.", False),
+    ("outbound", "Please send project examples by 2026-10-23. I'll review them later.", False),
+])
+def test_automatic_task_belongs_to_director(tmp_path, direction, body, committed):
+    people, pid, action = example(tmp_path, body=body)
+    people._conn.execute("UPDATE gmail_messages SET direction=?", (direction,))
+    people._conn.commit()
+    run(people, [action])
+    assert bool(TaskService(people).list(timezone="UTC")["tasks"]) is committed
+    assert bool(CrmService(people).proposals(pid)) is not committed
+
+
+def test_undo_does_not_suppress_other_obligations_in_same_message(tmp_path):
+    body = "Please send project examples by 2026-10-23. Please book a meeting by 2026-10-23."
+    people, pid, action = example(tmp_path, body=body)
+    run(people, [action])
+    change = people._conn.execute("SELECT change_id FROM crm_changes WHERE entity_type='task'").fetchone()[0]
+    crm = CrmService(people)
+    crm.undo(pid, change, operation_id="undo-first-obligation")
+    MailRepository(people).save_message(pid, {"id": "msg2", "thread_id": "thread1"}, direction="inbound",
+        account="director@example.com", content={"body": "Both requests still stand.", "body_state": "present"})
+    second = {**action, "title": "Book a meeting"}
+    reworded = {**action, "title": "Email the project examples"}
+    undated = {**action, "due_date": None, "date_text": None}
+    run(people, [reworded, undated, second])
+    assert [t["title"] for t in crm.tasks.list(timezone="UTC")["tasks"]] == ["Book a meeting"]
+    assert crm.proposals(pid) == []
+
+
+def test_manual_collection_shares_refresh_without_waiting_for_analysis():
+    from coworker.crm_analysis import RefreshCoordinator
+    calls = []
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        class SlowAnalysis:
+            async def run_pending(self):
+                started.set()
+                await release.wait()
+        def collect():
+            calls.append("collection")
+            return {"status": "ok", "filed": 2}
+        coordinator = RefreshCoordinator(collect, SlowAnalysis())
+        full = coordinator.request()
+        result = await asyncio.wait_for(coordinator.collection_result(), timeout=2)
+        await started.wait()
+        assert result == {"status": "ok", "filed": 2}
+        assert not full.done()
+        assert coordinator.request() is full
+        release.set()
+        await full
+    asyncio.run(scenario())
+    assert calls == ["collection"]

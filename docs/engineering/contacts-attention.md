@@ -76,7 +76,12 @@ Automatic changes require owned, complete evidence and unquoted supporting
 text. Explicit ISO or named-month dates with a year can be resolved; ambiguous
 dates remain suggestions. Task fulfillment must match the actual task and its
 tracked conversation. Human-protected fields remain protected. Dismissed or
-undone interpretations cannot reappear from unchanged evidence.
+undone interpretations cannot reappear from unchanged evidence. Task ownership
+uses message direction: inbound requests and outbound director commitments can
+qualify; mixed request/promise cues stay suggestions. Task identity combines the
+source fingerprint with the normalized obligation, independently of an extracted
+date, so removing a deadline cannot resurrect undone work. Other obligations in
+the same message remain eligible.
 
 ## Draft preparation and sending
 
@@ -93,6 +98,10 @@ An email address is not required. New-message text can be copied into the
 existing outreach review panel. The current connector cannot preserve a reply
 thread through this preparation path, so replies stay local with a visible copy
 fallback. Preparation never marks a task complete or sends anything.
+Context comes from the task's owned source conversation, rather than the person's
+newest unrelated messages. Missing or ambiguous source threads retain local text
+and an explicit review warning; they cannot prefill a new outreach message.
+Provider failures return a bounded error while preserving the task.
 
 ## Learning map: reuse these ideas in another project
 

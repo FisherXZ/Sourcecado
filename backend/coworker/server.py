@@ -2276,9 +2276,9 @@ def create_app(
             return _task_error(exc)
 
     @app.post("/v1/replies/refresh")
-    def replies_refresh():
-        """Collect tracked incoming/outgoing mail through a read-only boundary."""
-        result = collect_tracked_mail()
+    async def replies_refresh():
+        """Share collection with maintenance; model analysis continues separately."""
+        result = await app.state.crm_refresh.collection_result()
         return {"refresh": result, "board": current_board()}
 
     @app.post("/v1/apollo/curate")

@@ -82,3 +82,38 @@ Reply-thread-preserving draft creation is not supported by the existing connecto
 path. The implementation deliberately uses the specified Sourcecado-local text
 fallback for replies, with a visible limitation. New-message prepared text can
 enter the existing outreach review panel; sending retains its explicit approval.
+
+## Pull request review — October 25, 2026
+
+Two independent read-only reviews checked project standards and the supplied
+Contacts specification, with current AGENTS.md taking precedence on global Tasks
+membership. Regression tests first reproduced, then verified corrections for:
+
+- Dismissed reply reviews incorrectly reappearing in Contacts filters/chips.
+- A contact's promise or director's request becoming the director's obligation,
+  including mixed request/promise sentences.
+- Undo suppressing other obligations from the same email, or recreating the same
+  obligation under a reworded title or removed deadline.
+- Follow-up preparation choosing a newer unrelated conversation instead of the
+  task's owned source thread; ambiguous context stays local with a review warning.
+- Provider preparation failures escaping as raw server exceptions.
+- Manual Refresh collecting twice and bypassing background request coalescing.
+  Concurrent API requests now share collection; a blocked model does not delay
+  the legacy collection response.
+
+Final review reports: **Standards: zero remaining actionable blockers; Spec: zero
+remaining actionable blockers in the corrections.** Reviews do not constitute
+independent human Peer Approval.
+
+Final focused backend set: **201 passed**. Complete frontend suite: **631 passed**.
+After the refresh adjustment, the 26 affected reply/Contacts/outreach tests and
+production TypeScript/Vite build also passed. The isolated browser demo again
+verified Refresh, preview, saved tasks and local draft preparation, with no
+observed console errors. It uses only fictional contacts and fake provider/Gmail
+boundaries.
+
+The sourcing evaluation command was rerun and still stops with the documented
+Windows `PermissionError: eval child failed`. The earlier full-backend Windows
+comparison and native/real-email verification limits above still apply. Required
+Linux CI and macOS checks must be assessed on the submitted PR; no check was
+disabled or weakened.

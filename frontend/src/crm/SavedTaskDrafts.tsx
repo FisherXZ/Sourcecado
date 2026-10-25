@@ -1,6 +1,6 @@
 import type { PersonFile } from "../api";
 
-export type PreparedText = { subject: string; body: string; thread_id: string | null };
+export type PreparedText = { subject: string; body: string; thread_id: string | null; thread_review_required?: boolean };
 
 export function savedTaskDrafts(file: PersonFile): PreparedText[] {
   const artifacts = file.person.artifacts;
@@ -8,7 +8,8 @@ export function savedTaskDrafts(file: PersonFile): PreparedText[] {
   return artifacts.flatMap(item => {
     const value = item?.fields;
     if (!value || value.artifact_type !== "follow_up_draft" || typeof value.subject !== "string" || typeof value.body !== "string") return [];
-    return [{ subject: value.subject, body: value.body, thread_id: typeof value.thread_id === "string" ? value.thread_id : null }];
+    return [{ subject: value.subject, body: value.body, thread_id: typeof value.thread_id === "string" ? value.thread_id : null,
+      thread_review_required: value.thread_review_required === true }];
   }).slice(-5).reverse();
 }
 
@@ -22,6 +23,7 @@ export function SavedTaskDrafts({ file }: { file: PersonFile }) {
       <textarea readOnly rows={6} aria-label={`Saved draft ${draft.subject}`} value={draft.body} />
       <p>Saved locally for review. Nothing has been sent.</p>
       {draft.thread_id ? <p>Threaded draft creation is unavailable here. Review and copy the text into the original conversation.</p> : null}
+      {draft.thread_review_required ? <p>The relevant conversation is unclear. Choose the correct conversation before using this text.</p> : null}
     </details>)}
   </section>;
 }

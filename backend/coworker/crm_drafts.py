@@ -29,8 +29,22 @@ async def prepare_task_draft(*, people, provider, person_id, task_id, expected_v
         person = people.get(person_id)
         task = current_task()
         crm._version(task["version"], expected_version)
-        messages = [dict(row) for row in people._conn.execute(
-            "SELECT thread_id,direction,body,body_state FROM gmail_messages WHERE person_id=? ORDER BY updated_at DESC LIMIT 5", (person_id,))]
+        # Resolve source ownership before selecting context. Recency alone can
+        # select an unrelated conversation with the same person.
+        threads = set()
+        for source in task["source_refs"]:
+            if not isinstance(source, dict):
+                continue
+            rows = people._conn.execute("""SELECT account,thread_id FROM gmail_messages
+                WHERE person_id=? AND message_id=? AND thread_id=? AND (? IS NULL OR account=?)""",
+                (person_id, source.get("message_id"), source.get("thread_id"), source.get("account"), source.get("account")))
+            threads.update((row["account"], row["thread_id"]) for row in rows)
+        messages = []
+        thread = next(iter(threads)) if len(threads) == 1 else None
+        if thread:
+            messages = [dict(row) for row in people._conn.execute("""SELECT thread_id,direction,body,body_state
+                FROM gmail_messages WHERE person_id=? AND account=? AND thread_id=? ORDER BY updated_at DESC LIMIT 5""",
+                (person_id, *thread))]
         context = {"person": {k: person.get(k) for k in ("first_name", "last_name", "company", "target")},
             "task": task, "descriptions": people.descriptions(person_id), "untrusted_messages": messages}
     if provider is None:
@@ -52,8 +66,10 @@ async def prepare_task_draft(*, people, provider, person_id, task_id, expected_v
             raise ValueError("invalid draft")
         if not 1 <= len(value["subject"]) <= 200 or not 1 <= len(value["body"]) <= 10000:
             raise ValueError("invalid draft")
-    except (ValueError, TimeoutError) as exc:
-        raise TaskError("Couldn’t prepare draft text. Your task is kept; try again.") from exc
+    except Exception:
+        # Provider errors can contain response bodies or credentials. Keep them
+        # out of HTTP errors and server tracebacks. Cancellation still escapes.
+        raise TaskError("Couldn’t prepare draft text. Your task is kept; try again.") from None
     with people.crm_transaction() as conn:
         replay = crm.tasks._replay(operation, fingerprint)
         if replay:
@@ -62,7 +78,8 @@ async def prepare_task_draft(*, people, provider, person_id, task_id, expected_v
         crm._version(current_task()["version"], expected_version)
         artifact_id, now = "artifact_" + uuid.uuid4().hex, people._now()
         value = {**value, "artifact_type": "follow_up_draft", "task_id": None if proposal else task_id, "proposal_id": task_id if proposal else None,
-            "local_only": True, "sent": False, "thread_id": messages[0]["thread_id"] if messages else None,
+            "local_only": True, "sent": False, "thread_id": thread[1] if thread else None,
+            "thread_review_required": bool(task["source_refs"]) and thread is None,
             "source_refs": task["source_refs"], "title": value["subject"]}
         conn.execute("""INSERT INTO person_attachments(id,person_id,record_type,idempotency_key,fields_json,restricted,created_at,updated_at)
             VALUES(?,?,'artifact',?,?,0,?,?)""", (artifact_id, person_id, operation, json.dumps(value), now, now))

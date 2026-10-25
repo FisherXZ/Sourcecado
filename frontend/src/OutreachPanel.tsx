@@ -109,7 +109,7 @@ export function OutreachPanel({
 
       {!draft && !sent ? (
         <>
-        {prepared && !prepared.thread_id ? <button type="button" onClick={() => { setSubject(prepared.subject); setBody(prepared.body); }}>Use prepared follow-up text</button> : null}
+        {prepared && !prepared.thread_id && !prepared.thread_review_required ? <button type="button" onClick={() => { setSubject(prepared.subject); setBody(prepared.body); }}>Use prepared follow-up text</button> : null}
         <form
           className="person-outreach-compose"
           onSubmit={(event) => {

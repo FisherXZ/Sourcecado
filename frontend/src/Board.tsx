@@ -155,7 +155,7 @@ function ContactRow({ person, onOpen }: { person: BoardPerson; onOpen: (id: stri
           <details className="contacts-attention-reasons"><summary><span className="board-row-flag">{person.attention_reasons[0].label}</span>
             {person.attention_reasons.length > 1 ? ` +${person.attention_reasons.length - 1}` : null}</summary>
             {person.attention_reasons.slice(1).map(reason => <p key={reason.code}>{reason.label}{reason.count ? ` (${reason.count})` : ""}</p>)}</details>
-        ) : person.follow_up?.needed ? (
+        ) : person.attention_reasons === undefined && person.follow_up?.needed ? (
           <FollowUpChip person={person} />
         ) : (
           <span className="contacts-attention-empty" aria-label="No attention needed">
@@ -370,7 +370,6 @@ export function BoardView() {
     setReplyStatusText(null);
     try {
       const result = await refreshReplies();
-      void startCrmRefresh(true).catch(() => {});
       setReplyStatusText(replyStatus(result.refresh));
       setBoard(result.board);
     } catch {
@@ -388,7 +387,8 @@ export function BoardView() {
       ? contacts
       : contacts.filter((person) => person.sequence_state === sequenceFilter)
     ).filter((person) => matchesContact(person, contactQuery))
-    .filter(person => !needsAttention || Boolean(person.attention_reasons?.length || person.follow_up?.needed))
+    .filter(person => !needsAttention || (person.attention_reasons !== undefined
+      ? person.attention_reasons.length > 0 : Boolean(person.follow_up?.needed)))
     .sort((a, b) => (a.attention_rank ?? 9999) - (b.attention_rank ?? 9999));
   const empty =
     board !== null &&

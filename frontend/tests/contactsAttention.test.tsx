@@ -48,6 +48,15 @@ describe("Contacts attention and preview", () => {
     expect(screen.queryByRole("region", { name: "Person preview" })).toBeNull();
   });
 
+  it("honors an empty saved attention list after dismissing a reply review", async () => {
+    api.getBoard.mockResolvedValue({ backlog: [], open: [{ ...leo, follow_up: { needed: true, reason: "reply_unanswered" } }], in_conversation: [], done: [] });
+    render(<BoardView />);
+    await screen.findByText("Leo Chen");
+    expect(screen.queryByText("Reply to review")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Needs attention" }));
+    expect(screen.queryByText("Leo Chen")).toBeNull();
+  });
+
   it("keeps unsaved description text when closing until the user discards it", async () => {
     const close = vi.fn();
     render(<PersonPreview personId="per_maya" onClose={close} />);

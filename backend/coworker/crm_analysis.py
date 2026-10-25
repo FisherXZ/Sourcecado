@@ -50,6 +50,13 @@ def date_supported(text, quote, due):
     return False
 
 
+def task_intent(title):
+    # Ignore superficial delivery verbs/articles, but keep the obligation's
+    # object. Undoing “Send examples” must not suppress “Book a meeting”.
+    return sorted(set(re.findall(r"[a-z0-9]+", str(title).casefold())) -
+        {"send", "share", "email", "provide", "the", "a", "an", "to", "for", "please", "me", "us"})
+
+
 class ConversationAnalysis:
     def __init__(self, people, provider, *, timezone="America/Los_Angeles"):
         self.people, self.provider, self.timezone = people, provider, timezone
@@ -181,12 +188,6 @@ class ConversationAnalysis:
             return  # Foreign/unknown message IDs cannot create even a sourced proposal.
         source = {**source_ref(message["message_id"], message["thread_id"], message["account"]),
             "account": message["account"], "evidence_fingerprint": message["fingerprint"]}
-        suppressed_sources = self.people._conn.execute("""SELECT p.source_refs FROM crm_proposals p
-            WHERE p.person_id=? AND p.kind=? AND p.state='dismissed'
-            UNION ALL SELECT c.source_refs FROM crm_interpretations i JOIN crm_changes c ON c.change_id=i.change_id
-            WHERE i.person_id=? AND i.suppressed=1""", (pid, kind, pid)).fetchall()
-        if kind != "description" and any(any(ref.get("evidence_fingerprint") == message["fingerprint"] for ref in json.loads(row[0])) for row in suppressed_sources):
-            return
         quote = action.get("quote")
         complete = all(m["body_state"] == "present" for m in messages if m["thread_id"] == message["thread_id"])
         quote_matches = isinstance(quote, str) and len(quote.strip()) >= 12 and quote.strip() in unquoted(message["body"])
@@ -200,7 +201,11 @@ class ConversationAnalysis:
                 complete = False
             date_text = action.get("date_text")
             date_clear = date_supported(date_text, quote, value["due_date"])
-            explicit = bool(re.search(r"\b(please|could you|can you|would you|send me|send us|I will|I'll)\b", str(quote), re.I))
+            # A contact's promise and a director's request are not obligations
+            # owed by the director. Ambiguous ownership stays reviewable.
+            request = bool(re.search(r"\b(please|could you|can you|would you|send me|send us)\b", str(quote), re.I))
+            commitment = bool(re.search(r"\b(I will|I'll|we will|we'll)\b", str(quote), re.I))
+            explicit = (request and not commitment) if message["direction"] == "inbound" else (commitment and not request)
             automatic = complete and quote_matches and date_clear and explicit
             existing = self.crm.tasks.list(timezone=self.timezone, person_id=pid)["tasks"]
             words = set(str(value["title"]).casefold().split())
@@ -237,7 +242,7 @@ class ConversationAnalysis:
             value = {"state": action.get("state")}
             expected = self.crm._person(pid)["version"]
             automatic = False
-        identity = ({"title": str(value.get("title", "")).casefold(), "date": value.get("due_date")} if kind == "task_create"
+        identity = ({"intent": task_intent(value.get("title", ""))} if kind == "task_create"
             else {"slot": value["slot"]} if kind == "description" else value)
         evidence = sorted(m["fingerprint"] for m in messages) if kind == "description" else message["fingerprint"]
         fp = _fingerprint({"kind": kind, "intent": identity, "message": message["message_id"] if kind != "description" else None, "evidence": evidence})
@@ -270,17 +275,32 @@ class RefreshCoordinator:
     def __init__(self, collect, analysis, *, connected=lambda: True):
         self.collect, self.analysis, self.connected = collect, analysis, connected
         self._current = None
+        self._collection = None
         self._wake = asyncio.Event()
 
     def request(self):
         if self._current is None or self._current.done():
-            self._current = asyncio.create_task(self._refresh())
-            self._current.add_done_callback(lambda _: self._wake.set())
+            self._collection = asyncio.create_task(self._collect())
+            self._current = asyncio.create_task(self._refresh(self._collection))
+            self._current.add_done_callback(self._finished)
         return self._current
 
-    async def _refresh(self):
+    def _finished(self, task):
+        self._wake.set()
+        if not task.cancelled():
+            task.exception()  # Consume failures even if only collection was awaited.
+
+    async def collection_result(self):
+        self.request()
+        return await asyncio.shield(self._collection)
+
+    async def _collect(self):
         if self.connected():
-            await asyncio.to_thread(self.collect)
+            return await asyncio.to_thread(self.collect)
+        return {"status": "failed", "scanned": 0, "filed": 0, "unassigned": 0}
+
+    async def _refresh(self, collection):
+        await collection
         await self.analysis.run_pending()
 
     async def run(self):
