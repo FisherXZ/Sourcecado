@@ -7,5 +7,5 @@
 - [x] Proposals, human protection, audit and scoped undo
 - [x] Read-only interpretation, refresh loop and recovery
 - [x] Focused regression tests, frontend suite/build, browser verification and documentation
-- [ ] Native macOS/Tauri validation on the supported environment
+- [ ] Native macOS/Tauri interactive validation (CI build and packaged smoke verified)
 - [ ] Consented real-email interpretation evaluation before release certification
