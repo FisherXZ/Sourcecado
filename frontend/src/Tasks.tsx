@@ -16,6 +16,8 @@ import {
   type TaskFields,
   type TaskListing,
 } from "./api";
+import { followUpHash } from "./app/route";
+import { Icon } from "./icons";
 
 /** Fired after any task save so every mounted list reloads the same records. */
 export const TASKS_CHANGED = "sourcecado:tasks-changed";
@@ -519,6 +521,14 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
               </button>
             ) : (
               <>
+                <a
+                  id={`task-prepare-${task.task_id}`}
+                  className="task-row-action task-row-prepare"
+                  href={followUpHash(task.person_id, task.task_id)}
+                  aria-label={`Prepare a follow-up draft for ${task.title}`}
+                >
+                  <Icon name="draft" /> Prepare draft
+                </a>
                 <button
                   type="button"
                   className="task-row-action"

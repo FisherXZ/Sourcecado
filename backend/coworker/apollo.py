@@ -125,6 +125,26 @@ class LiveHttp:
             raise HttpError(res.status_code, url, body)
         return _decode_response(res)
 
+    def put(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        import httpx
+
+        res = httpx.put(url, headers=headers, json=json, params=params, timeout=15.0)
+        if res.status_code >= 400:
+            body: object | None
+            try:
+                body = res.json()
+            except Exception:
+                body = res.text
+            raise HttpError(res.status_code, url, body)
+        return _decode_response(res)
+
 
 class FakeHttp:
     def __init__(self, routes: dict[str, Any] | None = None) -> None:
@@ -201,6 +221,29 @@ class FakeHttp:
                 "headers": dict(headers or {}),
                 "json": dict(json or {}),
                 "data": dict(data or {}),
+                "params": dict(params or {}),
+            }
+        )
+        payload = self._lookup(url)
+        if isinstance(payload, Exception):
+            raise payload
+        return payload
+
+    def put(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        self.calls.append(
+            {
+                "method": "PUT",
+                "url": url,
+                "headers": dict(headers or {}),
+                "json": dict(json or {}),
+                "data": {},
                 "params": dict(params or {}),
             }
         )

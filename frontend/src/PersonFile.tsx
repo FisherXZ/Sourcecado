@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { DescriptionEditor } from "./DescriptionEditor";
+import { FollowUpPanel } from "./FollowUpPanel";
 import { OutreachPanel } from "./OutreachPanel";
 import { TaskList } from "./Tasks";
 
@@ -142,7 +143,13 @@ function unassignedReplyGaps(file: PersonFile): PersonKnowledgeGap[] {
   );
 }
 
-export function PersonFileView({ personId }: { personId: string }) {
+export function PersonFileView({
+  personId,
+  followUpTaskId,
+}: {
+  personId: string;
+  followUpTaskId?: string;
+}) {
   const [file, setFile] = useState<PersonFile | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -469,6 +476,25 @@ export function PersonFileView({ personId }: { personId: string }) {
       <div className="person-section person-tasks">
         <TaskList personId={personId} heading="Tasks" />
       </div>
+
+      {followUpTaskId ? (
+        <FollowUpPanel
+          key={followUpTaskId}
+          personId={personId}
+          taskId={followUpTaskId}
+          personVersion={
+            typeof file.person.version === "number" ? file.person.version : null
+          }
+          sessionId={file.sourcing_chat?.session_id ?? null}
+          onClose={() => {
+            window.location.hash = `#/people/${encodeURIComponent(personId)}`;
+            // Put focus back on the task's Prepare draft link.
+            requestAnimationFrame(() =>
+              document.getElementById(`task-prepare-${followUpTaskId}`)?.focus(),
+            );
+          }}
+        />
+      ) : null}
 
       <div className="person-summary-grid">
         <section className="person-summary-card" aria-labelledby="person-outcome-heading">

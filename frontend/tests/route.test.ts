@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseHash } from "../src/app/route";
+import { followUpHash, parseHash } from "../src/app/route";
 
 describe("app route parser", () => {
   it("parses Board and decoded person-file destinations", () => {
@@ -19,6 +19,15 @@ describe("app route parser", () => {
     expect(parseHash("#/scheduled/42")).toEqual({ kind: "scheduled", jobId: 42 });
     expect(parseHash("#/scheduled/not-a-task")).toEqual({ kind: "scheduled" });
     expect(parseHash("#/scheduled/0")).toEqual({ kind: "scheduled" });
+  });
+
+  it("parses a person file opened on one task's follow-up", () => {
+    expect(parseHash("#/people/per%201/follow-up/task_abc")).toEqual({
+      kind: "person",
+      personId: "per 1",
+      followUpTaskId: "task_abc",
+    });
+    expect(followUpHash("per 1", "task_abc")).toBe("#/people/per%201/follow-up/task_abc");
   });
 
   it("falls back safely when a person id is malformed", () => {
