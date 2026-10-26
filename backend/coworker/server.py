@@ -109,6 +109,7 @@ from coworker.gmail import (
     GmailError,
     GmailOutcomeUnknown,
     MissingGmail,
+    ReplyTarget,
     SendAuthority,
     SendAuthorityError,
     authority_for_draft,
@@ -116,6 +117,7 @@ from coworker.gmail import (
     gmail_from_secrets,
     send_reviewed_draft,
 )
+from coworker.follow_up import prepare_follow_up
 from coworker.inbox import Inbox
 from coworker.mcp import LiveMcp, write_default_mcp_json
 from coworker.mcp_oauth import McpOAuth
@@ -722,6 +724,7 @@ def create_app(
                 actor="director",
                 session_id=str(item.get("session_id") or "") or None,
                 run_id=str(item.get("run_id") or "") or None,
+                task_id=authority.task_id,
             )
         except Exception as exc:
             # The message is already gone. Report the send truthfully and say
@@ -2648,18 +2651,149 @@ def create_app(
             )
         return session_id, None
 
+    def _gmail_account() -> str | None:
+        reader = getattr(app.state.gmail, "account", None)
+        if not callable(reader):
+            return None
+        try:
+            return reader() or None
+        except Exception:
+            return None
+
+    def _draft_view(snapshot: dict[str, Any], **extra: Any) -> dict[str, Any]:
+        return {
+            "id": snapshot["draft_id"],
+            "to": snapshot["to"],
+            "subject": snapshot["subject"],
+            "body": snapshot["body"],
+            "body_digest": snapshot["body_digest"],
+            "account": snapshot["account"],
+            "thread_id": snapshot.get("thread_id"),
+            # Gmail deletes a draft when it is sent, so a draft we can read
+            # has not been sent.
+            "sent": False,
+            **extra,
+        }
+
+    def _filed_thread(person_id: str, thread_id: str) -> dict[str, Any] | None:
+        """The thread if it is one of this person's threads, else None."""
+        return next(
+            (
+                row
+                for row in app.state.people.mail_threads(person_id)
+                if row["thread_id"] == thread_id
+            ),
+            None,
+        )
+
+    def _follow_up_task(person_id: str, task_id: str) -> tuple[dict | None, JSONResponse | None]:
+        if not task_id:
+            return None, None
+        try:
+            return app.state.tasks.get(person_id, task_id), None
+        except TaskError as exc:
+            return None, _task_error(exc)
+
+    def _reply_target(thread_id: str) -> tuple[ReplyTarget | None, JSONResponse | None]:
+        try:
+            return app.state.gmail.reply_target(thread_id=thread_id), None
+        except GmailError as exc:
+            return None, JSONResponse(
+                {
+                    "error": f"Couldn't read the Gmail thread, so no draft was made. {exc}",
+                    "code": "thread_unavailable",
+                },
+                status_code=502,
+            )
+
+    def _thread_not_preserved(snapshot: dict[str, Any], thread_id: str) -> JSONResponse:
+        # Don't quietly start a new thread. Report the draft; the send check
+        # will refuse it because it is in the wrong thread.
+        return JSONResponse(
+            {
+                "error": (
+                    "Gmail put this draft in a different thread, so Sourcecado "
+                    "will not send it. Your text is kept."
+                ),
+                "code": "thread_not_preserved",
+                "draft": _draft_view(snapshot),
+                "expected_thread_id": thread_id,
+            },
+            status_code=409,
+        )
+
+    @app.get("/v1/people/{person_id}/tasks/{task_id}/follow-up")
+    def people_task_follow_up(person_id: str, task_id: str, thread_id: str | None = None):
+        """Prepare a follow-up email for one open task. Read-only.
+
+        Creates no draft, sends nothing, does not change the task and does
+        not enrich. A missing email blocks sending, not writing.
+        """
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        task, refusal = _follow_up_task(person_id, task_id)
+        if refusal is not None:
+            return refusal
+        assert task is not None
+        if task["state"] != "open":
+            return JSONResponse(
+                {
+                    "error": "Only an open task can be followed up.",
+                    "code": "task_not_open",
+                },
+                status_code=409,
+            )
+        timeline = [_public_event(event) for event in app.state.people.timeline(person_id)]
+        try:
+            session_id = app.state.people.session_for_person(person_id)
+        except ValueError:
+            session_id = None
+        brief = brief_payload(project(person, timeline, session_id=session_id))
+        try:
+            prepared = prepare_follow_up(
+                person=person,
+                task=task,
+                threads=app.state.people.mail_threads(person_id),
+                descriptions=app.state.people.descriptions(person_id),
+                brief=brief,
+                account=_gmail_account(),
+                thread_id=(thread_id or "").strip() or None,
+                label=str(brief.get("who") or "this person"),
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": "thread_not_on_file"}, status_code=404
+            )
+        return {
+            "follow_up": prepared,
+            "sourcing_chat": (
+                {"session_id": session_id, "person_id": person_id}
+                if session_id is not None
+                else None
+            ),
+        }
+
     @app.post("/v1/people/{person_id}/outreach/draft", status_code=201)
     async def people_outreach_draft(person_id: str, request: Request):
         """Draft outreach for a bound person. The recipient is never guessed.
 
         The address comes from the person file, not from the request and not
         from the model. Creating a draft sends nothing.
+
+        With ``thread_id`` the draft is a reply in that thread, which must be
+        one of this person's threads. It uses the thread's subject so Gmail
+        keeps it in the thread. If Gmail puts it elsewhere, the request fails.
         """
         person = app.state.people.get(person_id)
         if person is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         payload = await request.json()
         session_id, refusal = _bound_sourcing_session(person_id, payload)
+        if refusal is not None:
+            return refusal
+        task_id = str(payload.get("task_id") or "").strip()
+        _task, refusal = _follow_up_task(person_id, task_id)
         if refusal is not None:
             return refusal
         to = str(person.get("email") or "").strip()
@@ -2671,14 +2805,31 @@ def create_app(
                 },
                 status_code=409,
             )
-        subject = str(payload.get("subject") or "").strip()
+        thread_id = str(payload.get("thread_id") or "").strip()
+        reply: ReplyTarget | None = None
+        if thread_id:
+            if _filed_thread(person_id, thread_id) is None:
+                return JSONResponse(
+                    {
+                        "error": "That Gmail conversation is not filed on this person.",
+                        "code": "thread_not_on_file",
+                    },
+                    status_code=409,
+                )
+            reply, refusal = _reply_target(thread_id)
+            if refusal is not None:
+                return refusal
+            assert reply is not None
+        subject = reply.subject if reply else str(payload.get("subject") or "").strip()
         body = str(payload.get("body") or "").strip()
         if not subject or not body:
             return JSONResponse(
                 {"error": "subject and body are required"}, status_code=400
             )
         try:
-            created = app.state.gmail.create_draft(to=to, subject=subject, body=body)
+            created = app.state.gmail.create_draft(
+                to=to, subject=subject, body=body, **({"reply": reply} if reply else {})
+            )
         except GmailError as exc:
             return JSONResponse({"error": str(exc)}, status_code=502)
         draft_id = str(created.get("id") or "")
@@ -2686,16 +2837,10 @@ def create_app(
             snapshot = draft_snapshot(app.state.gmail, draft_id=draft_id)
         except SendAuthorityError as exc:
             return JSONResponse({"error": str(exc)}, status_code=502)
+        if thread_id and snapshot["thread_id"] != thread_id:
+            return _thread_not_preserved(snapshot, thread_id)
         return {
-            "draft": {
-                "id": draft_id,
-                "to": snapshot["to"],
-                "subject": snapshot["subject"],
-                "body": snapshot["body"],
-                "body_digest": snapshot["body_digest"],
-                "account": snapshot["account"],
-                "sent": False,
-            },
+            "draft": _draft_view(snapshot, task_id=task_id or None),
             "person_id": person_id,
             "session_id": session_id,
         }
@@ -2711,27 +2856,89 @@ def create_app(
             return JSONResponse(
                 {"error": str(exc), "code": exc.code}, status_code=404
             )
-        return {
-            "draft": {
-                "id": snapshot["draft_id"],
-                "to": snapshot["to"],
-                "subject": snapshot["subject"],
-                "body": snapshot["body"],
-                "body_digest": snapshot["body_digest"],
-                "account": snapshot["account"],
-                # Reaching this line means Gmail still holds the draft, and
-                # Gmail only holds drafts that have not been sent.
-                "sent": False,
-            }
-        }
+        return {"draft": _draft_view(snapshot)}
+
+    @app.put("/v1/people/{person_id}/outreach/draft/{draft_id}")
+    async def people_outreach_draft_edit(person_id: str, draft_id: str, request: Request):
+        """Save an edit to the Gmail draft from inside Sourcecado.
+
+        Refused if the draft changed in Gmail since the director opened it.
+        The recipient and thread stay the same. The new text has a new digest,
+        so an approval for the old text can no longer send.
+        """
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        session_id, refusal = _bound_sourcing_session(person_id, payload)
+        if refusal is not None:
+            return refusal
+        body = str(payload.get("body") or "").strip()
+        expected = str(payload.get("expected_body_digest") or "").strip()
+        if not body or not expected:
+            return JSONResponse(
+                {"error": "body and expected_body_digest are required"},
+                status_code=400,
+            )
+        try:
+            current = draft_snapshot(app.state.gmail, draft_id=draft_id)
+        except SendAuthorityError as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=404)
+        if current["body_digest"] != expected:
+            return JSONResponse(
+                {
+                    "error": "This draft changed in Gmail since you opened it.",
+                    "code": "stale_draft",
+                    "draft": _draft_view(current),
+                },
+                status_code=409,
+            )
+        to = str(person.get("email") or "").strip()
+        if not to or current["to"].strip().casefold() != to.casefold():
+            return JSONResponse(
+                {
+                    "error": "This draft is addressed to someone other than this person.",
+                    "code": "recipient_not_bound",
+                },
+                status_code=409,
+            )
+        thread_id = current.get("thread_id") or ""
+        reply: ReplyTarget | None = None
+        if thread_id and _filed_thread(person_id, thread_id) is not None:
+            reply, refusal = _reply_target(thread_id)
+            if refusal is not None:
+                return refusal
+            assert reply is not None
+        subject = (
+            reply.subject
+            if reply
+            else str(payload.get("subject") or "").strip() or current["subject"]
+        )
+        try:
+            app.state.gmail.update_draft(
+                draft_id=draft_id,
+                to=to,
+                subject=subject,
+                body=body,
+                **({"reply": reply} if reply else {}),
+            )
+            snapshot = draft_snapshot(app.state.gmail, draft_id=draft_id)
+        except SendAuthorityError as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=502)
+        except GmailError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        if reply and snapshot["thread_id"] != reply.thread_id:
+            return _thread_not_preserved(snapshot, reply.thread_id)
+        return {"draft": _draft_view(snapshot), "session_id": session_id}
 
     @app.post("/v1/people/{person_id}/outreach/send-approval", status_code=201)
     async def people_outreach_send_approval(person_id: str, request: Request):
         """Park one send approval bound to one reviewed draft version.
 
         Nothing is sent here. This records what the director is being asked to
-        authorize: the account, the draft, the recipient, the subject, and the
-        digest of the body version they read. POST /v1/inbox/{id} decides it.
+        authorize: the account, the draft, the recipient, the subject, the
+        digest of the body version they read and, for a reply, the thread.
+        POST /v1/inbox/{id} decides it.
         """
         person = app.state.people.get(person_id)
         if person is None:
@@ -2747,6 +2954,19 @@ def create_app(
                 {"error": "draft_id and reviewed_body_digest are required"},
                 status_code=400,
             )
+        thread_id = str(payload.get("expected_thread_id") or "").strip() or None
+        if thread_id and _filed_thread(person_id, thread_id) is None:
+            return JSONResponse(
+                {
+                    "error": "That Gmail conversation is not filed on this person.",
+                    "code": "thread_not_on_file",
+                },
+                status_code=409,
+            )
+        task_id = str(payload.get("task_id") or "").strip()
+        _task, refusal = _follow_up_task(person_id, task_id)
+        if refusal is not None:
+            return refusal
         approval_id = f"send_{secrets.token_hex(8)}"
         try:
             authority = authority_for_draft(
@@ -2755,6 +2975,8 @@ def create_app(
                 person_id=person_id,
                 draft_id=draft_id,
                 reviewed_body_digest=reviewed,
+                expected_thread_id=thread_id,
+                task_id=task_id or None,
             )
         except SendAuthorityError as exc:
             return JSONResponse(

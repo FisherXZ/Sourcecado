@@ -359,7 +359,9 @@ export function AppShell() {
   } else if (route.kind === "board") {
     outlet = <BoardView />;
   } else if (route.kind === "person") {
-    outlet = <PersonFileView personId={route.personId} />;
+    outlet = (
+      <PersonFileView personId={route.personId} followUpTaskId={route.followUpTaskId} />
+    );
   } else if (route.kind === "skills") {
     outlet = <SkillsPage />;
   } else if (route.kind === "memory") {

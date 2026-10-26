@@ -752,6 +752,7 @@ class PersonStore:
         actor: str = "director",
         session_id: str | None = None,
         run_id: str | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
         """File the durable receipt for one approved send, then open the person.
 
@@ -774,6 +775,9 @@ class PersonStore:
             "account": account,
             "approval_id": approval_id,
         }
+        if task_id:
+            # Recorded only. Sending does not complete the task.
+            payload["task_id"] = task_id
         with self._lock:
             row = self._load_person_row(person_id)
             already = self._conn.execute(
@@ -1022,6 +1026,47 @@ class PersonStore:
             rationale_summary="Inbound reply could not be tied to one person.",
         )
         return {"gap": gap, "already_recorded": already_recorded}
+
+    def mail_threads(self, person_id: str) -> list[dict[str, Any]]:
+        """This person's Gmail threads, newest first.
+
+        Only threads with an approved send to them or a reply verified as
+        theirs. Replies we could not match to one person are not included.
+        """
+        threads: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for event in self.timeline(person_id):
+            payload = (
+                event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            )
+            thread_id = str(payload.get("thread_id") or "").strip()
+            if not thread_id:
+                continue
+            if event.get("kind") == "send" and payload.get("sent"):
+                direction = "outbound"
+                at = str(event.get("created_at") or "") or None
+            elif payload.get("direction") == "inbound":
+                direction = "inbound"
+                at = payload.get("received_at") or event.get("created_at")
+            else:
+                continue
+            entry = threads.setdefault(
+                thread_id,
+                {"thread_id": thread_id, "subject": None, "message_count": 0},
+            )
+            subject = str(payload.get("subject") or "").strip()
+            if subject:
+                entry["subject"] = subject
+            entry["message_count"] += 1
+            entry["last_direction"] = direction
+            entry["last_at"] = at
+            entry["last_message_id"] = payload.get("message_id")
+            entry["url"] = f"https://mail.google.com/mail/u/0/#all/{thread_id}"
+            # Events are in write order, so the latest thread ends up last.
+            if thread_id in order:
+                order.remove(thread_id)
+            order.append(thread_id)
+        return [threads[thread_id] for thread_id in reversed(order)]
 
     def mail_state(self, person_id: str) -> dict[str, Any]:
         """Last contact, replied state, and whether the person needs attention.
