@@ -1,6 +1,6 @@
 export type AppRoute =
   | { kind: "board" }
-  | { kind: "person"; personId: string }
+  | { kind: "person"; personId: string; followUpTaskId?: string }
   | { kind: "connections"; connectorId?: string }
   | { kind: "scheduled"; jobId?: number }
   | { kind: "settings" }
@@ -11,6 +11,20 @@ export type AppRoute =
 
 export function parseHash(hash: string): AppRoute {
   if (hash === "#/board") return { kind: "board" };
+  if (hash.startsWith("#/people/") && hash.includes("/follow-up/")) {
+    const [personId, taskId] = hash.slice("#/people/".length).split("/follow-up/", 2);
+    if (personId && taskId) {
+      try {
+        return {
+          kind: "person",
+          personId: decodeURIComponent(personId),
+          followUpTaskId: decodeURIComponent(taskId),
+        };
+      } catch {
+        return { kind: "board" };
+      }
+    }
+  }
   if (hash.startsWith("#/people/") && hash.length > "#/people/".length) {
     try {
       return {
@@ -70,4 +84,9 @@ export function parseHash(hash: string): AppRoute {
     }
   }
   return { kind: "chat" };
+}
+
+/** Link to a person file with the follow-up editor open for one task. */
+export function followUpHash(personId: string, taskId: string): string {
+  return `#/people/${encodeURIComponent(personId)}/follow-up/${encodeURIComponent(taskId)}`;
 }

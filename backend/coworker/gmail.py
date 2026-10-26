@@ -161,9 +161,77 @@ class GmailClient(Protocol):
     drafts: list[dict[str, Any]]
     sends: list[dict[str, Any]]
 
-    def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]: ...
+    def create_draft(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        reply: "ReplyTarget | None" = None,
+    ) -> dict[str, Any]: ...
+    def update_draft(
+        self,
+        *,
+        draft_id: str,
+        to: str,
+        subject: str,
+        body: str,
+        reply: "ReplyTarget | None" = None,
+    ) -> dict[str, Any]: ...
     def send(self, *, draft_id: str) -> dict[str, Any]: ...
     def get_draft(self, *, draft_id: str) -> dict[str, Any]: ...
+    def reply_target(self, *, thread_id: str) -> "ReplyTarget": ...
+
+
+@dataclass(frozen=True)
+class ReplyTarget:
+    """The Gmail thread a reply goes in, and the message it answers.
+
+    Gmail only keeps a draft in a thread if it has the thread id, the
+    answered message's Message-ID in In-Reply-To/References, and a matching
+    subject.
+    """
+
+    thread_id: str
+    subject: str
+    in_reply_to: str | None = None
+    references: str | None = None
+
+
+def reply_subject(subject: str | None) -> str:
+    """Add "Re: " unless the subject already has it."""
+    text = (subject or "").strip()
+    if not text:
+        return "Re: (no subject)"
+    if text[:3].casefold() == "re:":
+        return text
+    return f"Re: {text}"
+
+
+def _reply_target_from_messages(
+    thread_id: str, messages: list[dict[str, Any]]
+) -> ReplyTarget:
+    """Reply to the newest message in the thread."""
+    if not messages:
+        raise GmailError("This Gmail conversation has no messages to reply to.")
+    last = messages[-1]
+    message_id = (last.get("message_id_header") or "").strip() or None
+    earlier = (last.get("references") or "").strip()
+    references = " ".join(part for part in (earlier, message_id or "") if part) or None
+    subject = next(
+        (
+            str(item.get("subject") or "").strip()
+            for item in reversed(messages)
+            if str(item.get("subject") or "").strip()
+        ),
+        "",
+    )
+    return ReplyTarget(
+        thread_id=thread_id,
+        subject=reply_subject(subject),
+        in_reply_to=message_id,
+        references=references,
+    )
 
 
 class FakeGmail:
@@ -204,6 +272,7 @@ class FakeGmail:
         snippet: str = "",
         cc: str | None = None,
         label_ids: tuple[str, ...] = ("INBOX",),
+        references: str | None = None,
     ) -> dict[str, Any]:
         """Put one message in the mailbox and advance the history id."""
         self.history_id += 1
@@ -211,9 +280,12 @@ class FakeGmail:
             {"name": "From", "value": sender},
             {"name": "To", "value": to},
             {"name": "Subject", "value": subject},
+            {"name": "Message-ID", "value": f"<{message_id}@mail.example.test>"},
         ]
         if cc:
             headers.append({"name": "Cc", "value": cc})
+        if references:
+            headers.append({"name": "References", "value": references})
         record = {
             "id": message_id,
             "threadId": thread_id,
@@ -270,6 +342,24 @@ class FakeGmail:
             ],
         }
 
+    def reply_target(self, *, thread_id: str) -> ReplyTarget:
+        self.thread_reads.append(thread_id)
+        messages = []
+        for item in self.inbox:
+            if item["threadId"] != thread_id:
+                continue
+            headers = _header_map(item.get("payload") or {})
+            messages.append(
+                {
+                    "subject": headers.get("subject"),
+                    "message_id_header": headers.get("message-id"),
+                    "references": headers.get("references"),
+                }
+            )
+        if not messages:
+            raise GmailError(f"Thread {thread_id} was not found.")
+        return _reply_target_from_messages(thread_id, messages)
+
     def _find(self, draft_id: str) -> dict[str, Any] | None:
         for item in self.drafts:
             if item["id"] == draft_id:
@@ -285,15 +375,27 @@ class FakeGmail:
             "to": item["to"],
             "subject": item["subject"],
             "body": item["body"],
+            "thread_id": item.get("thread_id"),
+            "in_reply_to": item.get("in_reply_to"),
             "sent": False,
         }
 
-    def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]:
+    def create_draft(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        reply: ReplyTarget | None = None,
+    ) -> dict[str, Any]:
         item = {
             "id": f"draft_{len(self.drafts) + 1}",
             "to": to,
             "subject": subject,
             "body": body,
+            "thread_id": reply.thread_id if reply else None,
+            "in_reply_to": reply.in_reply_to if reply else None,
+            "references": reply.references if reply else None,
             "sent": False,
         }
         self.drafts.append(item)
@@ -301,6 +403,39 @@ class FakeGmail:
             "id": item["id"],
             "to": to,
             "subject": subject,
+            "thread_id": item["thread_id"],
+            "drafted": True,
+            "sent": False,
+        }
+
+    def update_draft(
+        self,
+        *,
+        draft_id: str,
+        to: str,
+        subject: str,
+        body: str,
+        reply: ReplyTarget | None = None,
+    ) -> dict[str, Any]:
+        item = self._find(draft_id)
+        if item is None or item["sent"]:
+            raise GmailError(f"Draft {draft_id} was not found.")
+        # Like Gmail's drafts.update, this replaces the whole message.
+        item.update(
+            {
+                "to": to,
+                "subject": subject,
+                "body": body,
+                "thread_id": reply.thread_id if reply else None,
+                "in_reply_to": reply.in_reply_to if reply else None,
+                "references": reply.references if reply else None,
+            }
+        )
+        return {
+            "id": draft_id,
+            "to": to,
+            "subject": subject,
+            "thread_id": item["thread_id"],
             "drafted": True,
             "sent": False,
         }
@@ -315,7 +450,8 @@ class FakeGmail:
             raise GmailError(f"Draft {draft_id} was not found.")
         item["sent"] = True
         message_id = f"msg_{len(self.sends) + 1}"
-        thread_id = f"thread_{len(self.sends) + 1}"
+        # A reply stays in its thread; a new message gets a new thread.
+        thread_id = item.get("thread_id") or f"thread_{len(self.sends) + 1}"
         item["message_id"] = message_id
         item["thread_id"] = thread_id
         self.sends.append({"draft_id": draft_id})
@@ -328,6 +464,7 @@ class FakeGmail:
             to=item["to"],
             subject=item["subject"],
             label_ids=("SENT",),
+            references=item.get("references"),
         )
         return {
             "id": message_id,
@@ -347,7 +484,32 @@ class MissingGmail:
     drafts: list[dict[str, Any]] = []
     sends: list[dict[str, Any]] = []
 
-    def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]:
+    def create_draft(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        reply: ReplyTarget | None = None,
+    ) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
+    def update_draft(
+        self,
+        *,
+        draft_id: str,
+        to: str,
+        subject: str,
+        body: str,
+        reply: ReplyTarget | None = None,
+    ) -> dict[str, Any]:
+        raise GmailError(
+            "Gmail is not connected. Click Connect Gmail in the window first."
+        )
+
+    def reply_target(self, *, thread_id: str) -> ReplyTarget:
         raise GmailError(
             "Gmail is not connected. Click Connect Gmail in the window first."
         )
@@ -398,12 +560,28 @@ class MissingGmail:
         )
 
 
-def _raw_message(*, to: str, subject: str, body: str) -> str:
+def _raw_message(
+    *, to: str, subject: str, body: str, reply: ReplyTarget | None = None
+) -> str:
     msg = EmailMessage()
     msg["To"] = to
     msg["Subject"] = subject
+    if reply is not None and reply.in_reply_to:
+        msg["In-Reply-To"] = reply.in_reply_to
+        msg["References"] = reply.references or reply.in_reply_to
     msg.set_content(body)
     return base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii").rstrip("=")
+
+
+def _draft_message(
+    *, to: str, subject: str, body: str, reply: ReplyTarget | None
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "raw": _raw_message(to=to, subject=subject, body=body, reply=reply)
+    }
+    if reply is not None:
+        message["threadId"] = reply.thread_id
+    return message
 
 
 class GmailApi:
@@ -462,14 +640,21 @@ class GmailApi:
         save_google(self.secrets, profile)
         return access
 
+    def _send(
+        self, method: str, url: str, headers: dict[str, str], kwargs: dict[str, Any]
+    ) -> Any:
+        if method == "get":
+            return self.http.get(url, headers=headers, **kwargs)
+        if method == "put":
+            return self.http.put(url, headers=headers, **kwargs)
+        return self.http.post(url, headers=headers, **kwargs)
+
     def _request(self, method: str, url: str, **kwargs: Any) -> Any:
         token = self._access_token()
         headers = dict(kwargs.pop("headers", None) or {})
         headers["Authorization"] = f"Bearer {token}"
         try:
-            if method == "get":
-                return self.http.get(url, headers=headers, **kwargs)
-            return self.http.post(url, headers=headers, **kwargs)
+            return self._send(method, url, headers, kwargs)
         except HttpError as exc:
             if exc.status == 401:
                 profile = load_google(self.secrets)
@@ -494,9 +679,7 @@ class GmailApi:
                 # transport error escaped raw, missed every classifier, and was
                 # swallowed as an ordinary failure by the tool layer.
                 try:
-                    if method == "get":
-                        return self.http.get(url, headers=headers, **kwargs)
-                    return self.http.post(url, headers=headers, **kwargs)
+                    return self._send(method, url, headers, kwargs)
                 except GmailError:
                     raise
                 except Exception as retry_exc:
@@ -507,13 +690,24 @@ class GmailApi:
         except Exception as exc:
             raise _from_http_error(exc) from exc
 
-    def create_draft(self, *, to: str, subject: str, body: str) -> dict[str, Any]:
+    def create_draft(
+        self,
+        *,
+        to: str,
+        subject: str,
+        body: str,
+        reply: ReplyTarget | None = None,
+    ) -> dict[str, Any]:
         try:
             data = self._request(
                 "post",
                 DRAFTS_URL,
                 headers={"Content-Type": "application/json"},
-                json={"message": {"raw": _raw_message(to=to, subject=subject, body=body)}},
+                json={
+                    "message": _draft_message(
+                        to=to, subject=subject, body=body, reply=reply
+                    )
+                },
             )
         except GmailError:
             raise
@@ -526,11 +720,70 @@ class GmailApi:
             "id": draft_id,
             "to": to,
             "subject": subject,
+            "thread_id": str(((data or {}).get("message") or {}).get("threadId") or "")
+            or None,
             "drafted": True,
             "sent": False,
         }
         self.drafts.append(item)
         return item
+
+    def update_draft(
+        self,
+        *,
+        draft_id: str,
+        to: str,
+        subject: str,
+        body: str,
+        reply: ReplyTarget | None = None,
+    ) -> dict[str, Any]:
+        """Replace the draft's whole message."""
+        try:
+            data = self._request(
+                "put",
+                f"{DRAFTS_URL}/{draft_id}",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "id": draft_id,
+                    "message": _draft_message(
+                        to=to, subject=subject, body=body, reply=reply
+                    ),
+                },
+            )
+        except GmailError:
+            raise
+        except Exception as exc:
+            raise _from_http_error(exc) from exc
+        return {
+            "id": str((data or {}).get("id") or draft_id),
+            "to": to,
+            "subject": subject,
+            "thread_id": str(((data or {}).get("message") or {}).get("threadId") or "")
+            or None,
+            "drafted": True,
+            "sent": False,
+        }
+
+    def reply_target(self, *, thread_id: str) -> ReplyTarget:
+        """Read the thread's headers (not bodies) needed to reply in it."""
+        data = self._request(
+            "get",
+            f"{THREADS_URL}/{thread_id}",
+            params={"format": "metadata", "metadataHeaders": list(REPLY_HEADERS)},
+        ) or {}
+        messages = []
+        for item in data.get("messages") or []:
+            if not isinstance(item, dict):
+                continue
+            headers = _header_map(item.get("payload") or {})
+            messages.append(
+                {
+                    "subject": headers.get("subject"),
+                    "message_id_header": headers.get("message-id"),
+                    "references": headers.get("references"),
+                }
+            )
+        return _reply_target_from_messages(str(data.get("id") or thread_id), messages)
 
     def send(self, *, draft_id: str) -> dict[str, Any]:
         data = self._request(
@@ -576,6 +829,8 @@ class GmailApi:
             "to": headers.get("to", ""),
             "subject": headers.get("subject", ""),
             "body": _flatten_body(payload),
+            "thread_id": str(message.get("threadId") or "") or None,
+            "in_reply_to": headers.get("in-reply-to") or None,
             "sent": False,
         }
 
@@ -709,6 +964,8 @@ THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads"
 # `format=metadata` never returns a body, so a background read cannot pull
 # message text into a person file even by accident.
 INBOUND_HEADERS = ("From", "To", "Cc", "Reply-To", "Delivered-To", "Subject", "Date")
+# Headers needed to reply in a thread. No message bodies are read.
+REPLY_HEADERS = ("Subject", "Message-ID", "References")
 
 
 def _received_at(value: Any) -> str | None:
@@ -818,10 +1075,15 @@ class SendAuthority:
     to: str
     subject: str
     body_digest: str
+    # The reviewed thread. If set, a draft in any other thread is not sent.
+    thread_id: str | None = None
+    # The task this email follows up on. Recorded only; sending does not
+    # complete it.
+    task_id: str | None = None
 
     def as_resource(self) -> dict[str, Any]:
         """The approval-card payload. Safe to persist and to show."""
-        return {
+        resource: dict[str, Any] = {
             "kind": "gmail_send_authority",
             "person_id": self.person_id,
             "draft_id": self.draft_id,
@@ -831,6 +1093,11 @@ class SendAuthority:
             "body_digest": self.body_digest,
             "sent": False,
         }
+        if self.thread_id:
+            resource["thread_id"] = self.thread_id
+        if self.task_id:
+            resource["task_id"] = self.task_id
+        return resource
 
     @classmethod
     def from_resource(
@@ -844,6 +1111,8 @@ class SendAuthority:
         if not all(str(resource.get(field) or "") for field in required):
             return None
         account = resource.get("account")
+        thread_id = resource.get("thread_id")
+        task_id = resource.get("task_id")
         return cls(
             approval_id=approval_id,
             person_id=str(resource["person_id"]),
@@ -852,6 +1121,8 @@ class SendAuthority:
             to=str(resource["to"]),
             subject=str(resource["subject"]),
             body_digest=str(resource["body_digest"]),
+            thread_id=str(thread_id) if thread_id else None,
+            task_id=str(task_id) if task_id else None,
         )
 
 
@@ -883,6 +1154,7 @@ def draft_snapshot(client: Any, *, draft_id: str) -> dict[str, Any]:
         "body": body,
         "body_digest": body_digest(body),
         "account": account,
+        "thread_id": str(draft.get("thread_id") or "") or None,
     }
 
 
@@ -893,6 +1165,8 @@ def authority_for_draft(
     person_id: str,
     draft_id: str,
     reviewed_body_digest: str,
+    expected_thread_id: str | None = None,
+    task_id: str | None = None,
 ) -> SendAuthority:
     """Bind an approval to the draft as it stands right now.
 
@@ -906,6 +1180,11 @@ def authority_for_draft(
             "stale_draft",
             "This draft changed after it was reviewed. Read it again before sending.",
         )
+    if expected_thread_id and snapshot["thread_id"] != expected_thread_id:
+        raise SendAuthorityError(
+            "thread_mismatch",
+            "This draft is not in the conversation that was reviewed. Nothing was sent.",
+        )
     return SendAuthority(
         approval_id=approval_id,
         person_id=person_id,
@@ -914,6 +1193,8 @@ def authority_for_draft(
         to=snapshot["to"],
         subject=snapshot["subject"],
         body_digest=snapshot["body_digest"],
+        thread_id=snapshot["thread_id"] if expected_thread_id else None,
+        task_id=task_id,
     )
 
 
@@ -942,6 +1223,12 @@ def verify_send_authority(client: Any, authority: SendAuthority) -> dict[str, An
             "stale_draft",
             "The draft body changed after this send was approved. Nothing was sent.",
         )
+    if authority.thread_id is not None and snapshot["thread_id"] != authority.thread_id:
+        raise SendAuthorityError(
+            "thread_mismatch",
+            "The draft moved to a different conversation after this send was "
+            "approved. Nothing was sent.",
+        )
     return snapshot
 
 
@@ -969,6 +1256,7 @@ def send_reviewed_draft(client: Any, authority: SendAuthority) -> dict[str, Any]
         "body_digest": authority.body_digest,
         "person_id": authority.person_id,
         "approval_id": authority.approval_id,
+        "task_id": authority.task_id,
     }
 
 
