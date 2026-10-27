@@ -37,8 +37,6 @@ export type Health = {
   persona?: string;
 };
 
-export type PersonaInfo = { id: string; name: string; tools: string[] };
-
 export type ScheduleRunStatus =
   | "running"
   | "success"
@@ -1286,12 +1284,6 @@ export async function pinSession(
     body: JSON.stringify({ pinned }),
   });
   if (!res.ok) throw new Error(`pin ${res.status}`);
-  return res.json();
-}
-
-export async function getPersona(): Promise<PersonaInfo> {
-  const res = await get("/v1/persona");
-  if (!res.ok) throw new Error(`persona ${res.status}`);
   return res.json();
 }
 

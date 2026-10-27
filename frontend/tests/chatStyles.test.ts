@@ -111,10 +111,33 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
-  it("keeps the bound person visible as a compact header link", () => {
+  it("shows the bound person as an icon chip in ink, with a 44px touch area on narrow screens", () => {
     expect(styles).toMatch(
-      /\.sourcecado-active-person\s*\{[^}]*display:\s*inline-flex;[^}]*color:\s*var\(--accent-deep\);/,
+      /\.sourcecado-active-person svg\s*\{[^}]*color:\s*var\(--accent-deep\);/,
     );
+    expect(styles).toMatch(
+      /\.sourcecado-run-status,\s*\.sourcecado-active-person\s*\{[^}]*display:\s*inline-flex;[^}]*border-radius:\s*999px;[^}]*color:\s*var\(--text\);/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-active-person::after\s*\{[^}]*inset:\s*-8px -4px;/,
+    );
+  });
+
+  it("keeps the header text at 13px or larger and out of muted ink", () => {
+    const rules = [...styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map((match) => ({ selector: match[1]!.trim(), body: match[2]! }))
+      .filter((rule) =>
+        /sourcecado-(thread-header|run-status|active-person)/.test(rule.selector),
+      );
+    expect(rules.length).toBeGreaterThan(0);
+    for (const rule of rules) {
+      expect(rule.body, rule.selector).not.toMatch(/var\(--muted\)/);
+      for (const [, size] of rule.body.matchAll(/font-size:\s*(\d+(?:\.\d+)?)px/g)) {
+        expect(Number(size), `${rule.selector} font-size`).toBeGreaterThanOrEqual(13);
+      }
+    }
+    expect(styles).toMatch(/\.sourcecado-run-status,[^{]*\{[^}]*font-size:\s*13px;/);
+    expect(styles).not.toContain("sourcecado-persona-badge");
   });
 
   it("distinguishes pending approval cards from collapsed audit receipts", () => {

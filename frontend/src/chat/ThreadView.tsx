@@ -4,16 +4,16 @@ import { AssistantMessage } from "./AssistantMessage";
 import { Composer } from "./Composer";
 import { ComposerDraftProvider } from "./ComposerDraftContext";
 import { Queue } from "./Queue";
-import { ThreadHeader } from "./ThreadHeader";
+import { ThreadHeader, type RunStatus } from "./ThreadHeader";
 import { UserMessage } from "./UserMessage";
-import type { ActivePerson, CurrentRunMetrics, QueueItem } from "../api";
+import type { ActivePerson, QueueItem } from "../api";
 import { Inspector } from "./Inspector";
 
 type ThreadViewProps = {
   readonly title: string | null;
   readonly activePerson?: ActivePerson | null;
-  readonly personaName?: string | null;
-  readonly runMetrics?: CurrentRunMetrics | null;
+  readonly runStatus: RunStatus;
+  readonly elapsedMs: number | null;
   readonly loading: boolean;
   readonly loadError: boolean;
   readonly onRetry: () => void;
@@ -63,8 +63,8 @@ function SuggestedAction({
 export function ThreadView({
   title,
   activePerson,
-  personaName,
-  runMetrics,
+  runStatus,
+  elapsedMs,
   loading,
   loadError,
   onRetry,
@@ -99,8 +99,8 @@ export function ThreadView({
       <ThreadHeader
         title={title}
         activePerson={activePerson}
-        personaName={personaName}
-        runMetrics={runMetrics}
+        status={runStatus}
+        elapsedMs={elapsedMs}
       />
       <ThreadPrimitive.Viewport
         className="sourcecado-transcript"
