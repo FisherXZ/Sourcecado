@@ -185,9 +185,10 @@ export type SourcecadoEvent =
       readonly status: RunBudgetStatus;
     }
   | {
-      readonly type: "run_compacted";
+      readonly type: "run_compaction_known";
       readonly threadId: string;
       readonly messageId: string;
+      readonly generation: number;
     }
   | {
       readonly type: "message_finished";
@@ -591,9 +592,10 @@ export class SourcecadoChatStore {
       }
       if (event.compaction) {
         this.apply({
-          type: "run_compacted",
+          type: "run_compaction_known",
           threadId: event.session_id,
           messageId: event.message_id,
+          generation: event.compaction.generation,
         });
         this.addNotice(
           event.session_id,
@@ -672,12 +674,12 @@ export class SourcecadoChatStore {
       return;
     }
 
-    if (event.type === "run_compacted") {
+    if (event.type === "run_compaction_known") {
       this.threads.set(
         event.threadId,
         messages.map((message) =>
           message.id === event.messageId
-            ? { ...message, compacted: true }
+            ? { ...message, compactionGeneration: event.generation }
             : message,
         ),
       );

@@ -17,8 +17,10 @@ import type { RunBudgetStatus } from "./protocol";
  * is not plan or account usage, and nothing here is named that way.
  *
  * Compactions come from the run's `turn_end.compaction`, the same data as the
- * receipt in the thread. The telemetry's `compaction_count` is not used: the
- * backend does not record a compaction into it during a live run.
+ * receipt in the thread. The backend sends it on every run while a compaction
+ * is in effect, so a run counts as compacting only when its generation is
+ * higher than any earlier run's. The telemetry's `compaction_count` is not
+ * used: the backend does not record a compaction into it during a live run.
  */
 
 /** Context share at which the bar changes color. Compaction starts at 75%. */
@@ -35,7 +37,7 @@ export type UsageSource = {
   readonly budget: RunBudgetStatus | undefined;
   /** True while the numbers belong to the run that is working now. */
   readonly live: boolean;
-  /** Compactions the latest run reported. A run reports at most one. */
+  /** Compactions the latest run made. A run reports at most one. */
   readonly compactions: number;
   /** The run ended and its final telemetry reading is still on its way. */
   readonly settling: boolean;
@@ -60,23 +62,31 @@ export function pickUsage(
   metrics: CurrentRunMetrics | null,
   running: boolean,
   finalRead: FinalRead = "done",
+  endedRunId?: string | null,
 ): UsageSource | null {
   if (messages.length === 0) return null;
-  const latest = messages
-    .filter(
-      (message) =>
-        message.role === "assistant" &&
-        !message.parts.some((part) => part.type === "notice"),
-    )
-    .at(-1);
+  const runs = messages.filter(
+    (message) =>
+      message.role === "assistant" &&
+      !message.parts.some((part) => part.type === "notice"),
+  );
+  const latest = runs.at(-1);
   if (!running) {
+    // Telemetry from another run is not this run's reading. A run that never
+    // got an id (null) has no reading at all. No id given means none is known.
+    const own =
+      endedRunId === undefined || metrics?.run_id === endedRunId ? metrics : null;
+    const before = Math.max(
+      0,
+      ...runs.slice(0, -1).map((run) => run.compactionGeneration ?? 0),
+    );
     return {
-      metrics,
+      metrics: own,
       budget: latest?.runBudget,
       live: false,
-      compactions: latest?.compacted ? 1 : 0,
+      compactions: (latest?.compactionGeneration ?? 0) > before ? 1 : 0,
       settling: finalRead === "pending",
-      partial: finalRead === "failed" && metrics !== null,
+      partial: finalRead === "failed" && own !== null,
     };
   }
   return {
@@ -421,7 +431,7 @@ export function UsageLine({ source }: { readonly source: UsageSource }) {
         <Breakdown source={source} percent={percent} steps={steps} />
         <p className="sourcecado-usage-detail-note">
           {partial
-            ? "The final reading failed. These values are from before the run ended. "
+            ? "The final reading failed. These values are from earlier in this run. "
             : ""}
           Context window is the share of the model's window that the latest
           request filled.

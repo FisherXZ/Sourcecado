@@ -116,10 +116,12 @@ export type SourcecadoStructuredMessage = {
   /** The run's spend against its budget, as of the last event for it. */
   readonly runBudget?: RunBudgetStatus;
   /**
-   * The run ended with a compaction. Kept on the run's own message because a
+   * The compaction generation the run ended under. The backend reports it on
+   * every run while a compaction is in effect, so it is the run that raised
+   * the number that compacted. Kept on the run's own message because a
    * restored thread cannot say which run a compaction receipt belongs to.
    */
-  readonly compacted?: boolean;
+  readonly compactionGeneration?: number;
   readonly state:
     | "running"
     | "stopping"

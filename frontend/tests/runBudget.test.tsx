@@ -580,47 +580,61 @@ describe("ChatPage run budget", () => {
       expect(await screen.findByRole("note")).toHaveTextContent("Context compacted");
     });
 
-    it("says one compaction after a restore even when two runs of the thread compacted", async () => {
-      const compaction = {
-        generation: 1,
+    it("shows the chip only for a run that raised the compaction generation, restored or live", async () => {
+      const compaction = (generation: number) => ({
+        generation,
         summarized: true,
         compacted_messages: 5,
         retained_director_messages: 2,
         omitted_director_messages: 0,
         measurement: "provider",
         rejected_summaries: 0,
-      };
-      const run = (n: number) => {
-        const ids = { message_id: `message-${n}`, run_id: `run-${n}`, part_id: `part-${n}` };
-        return [
-          { ...envelope("turn_start", { state: "running" }), ...ids, event_id: `start-${n}` },
-          { ...envelope("assistant_delta", { delta: `Answer ${n}.` }), ...ids, event_id: `delta-${n}` },
-          {
-            ...envelope("turn_end", { text: `Answer ${n}.`, state: "complete", compaction }),
-            ...ids,
-            event_id: `end-${n}`,
-          },
-        ];
-      };
+      });
+      const ids = (n: number) => ({
+        message_id: `message-${n}`,
+        run_id: `run-${n}`,
+        part_id: `part-${n}`,
+      });
+      const run = (n: number, generation: number) => [
+        { ...envelope("turn_start", { state: "running" }), ...ids(n), event_id: `start-${n}` },
+        { ...envelope("assistant_delta", { delta: `Answer ${n}.` }), ...ids(n), event_id: `delta-${n}` },
+        {
+          ...envelope("turn_end", { text: `Answer ${n}.`, state: "complete", compaction: compaction(generation) }),
+          ...ids(n),
+          event_id: `end-${n}`,
+        },
+      ];
+      // The backend sends the standing generation on every run.
+      const sequence = [1, 1, 1, 2];
       api.getSession.mockResolvedValue({
         id: "thread-alpha",
         title: "Long thread",
-        messages: [
-          { role: "user", content: "One.", message_id: "message-1" },
-          { role: "assistant", content: "Answer 1.", message_id: "message-1" },
-          { role: "user", content: "Two.", message_id: "message-2" },
-          { role: "assistant", content: "Answer 2.", message_id: "message-2" },
-        ],
-        events: [...run(1), ...run(2)],
+        messages: sequence.flatMap((_generation, index) => [
+          { role: "user", content: `Question ${index + 1}.`, message_id: `message-${index + 1}` },
+          { role: "assistant", content: `Answer ${index + 1}.`, message_id: `message-${index + 1}` },
+        ]),
+        events: sequence.slice(0, 3).flatMap((generation, index) => run(index + 1, generation)),
       });
-      api.getCurrentRunTelemetry.mockResolvedValue(reply({ compaction_count: 0 }));
+      api.getCurrentRunTelemetry.mockResolvedValue(
+        reply({ run_id: "run-3", compaction_count: 0 }),
+      );
 
       render(<ChatPage sessionId="thread-alpha" />);
 
-      const usage = await screen.findByRole("group", { name: "Usage, last run" });
-      expect(usage).toHaveTextContent("1 compaction");
-      expect(usage).not.toHaveTextContent("2 compactions");
-      expect(await screen.findAllByRole("note")).toHaveLength(2);
+      // Restored: runs 1 to 3 under generation 1. Run 3 did not compact.
+      const restored = await screen.findByRole("group", { name: "Usage, last run" });
+      expect(restored).not.toHaveTextContent(/compaction/i);
+
+      // Live: run 4 raises the generation to 2.
+      api.getCurrentRunTelemetry.mockResolvedValue(
+        reply({ run_id: "run-4", compaction_count: 0 }),
+      );
+      await waitFor(() => expect(onChatEvent).toBeDefined());
+      act(() => {
+        for (const event of run(4, 2)) onChatEvent?.(event);
+      });
+      const live = await screen.findByRole("group", { name: "Usage, last run" });
+      await waitFor(() => expect(live).toHaveTextContent("1 compaction"));
     });
 
     it("shows no compaction chip for a run that did not compact", async () => {
@@ -692,6 +706,55 @@ describe("ChatPage run budget", () => {
       // The retries are bounded: nothing reads again on its own.
       await new Promise((resolve) => setTimeout(resolve, 1200));
       expect(api.getCurrentRunTelemetry.mock.calls.length - before).toBe(3);
+    });
+
+    it("shows unavailable values, not the previous run's, when no reading works for a whole run", async () => {
+      let down = false;
+      api.getCurrentRunTelemetry.mockImplementation(async () => {
+        if (down) throw new Error("telemetry unavailable");
+        return reply({ run_id: "run-1", estimated_cost_usd: 0.04 });
+      });
+      const ids = (n: number) => ({
+        run_id: `run-${n}`,
+        message_id: `message-${n}`,
+        part_id: `part-${n}`,
+      });
+      render(<ChatPage sessionId="thread-alpha" />);
+      await waitFor(() => expect(onChatEvent).toBeDefined());
+
+      act(() => {
+        onChatEvent?.({ ...envelope("turn_start", { state: "running" }), ...ids(1), event_id: "start-1" });
+        onChatEvent?.({ ...envelope("assistant_delta", { delta: "One." }), ...ids(1), event_id: "delta-1" });
+        onChatEvent?.({
+          ...envelope("turn_end", { text: "One.", state: "complete", run_budget: FINISHED }),
+          ...ids(1),
+          event_id: "end-1",
+        });
+      });
+      const first = await screen.findByRole("group", { name: "Usage, last run" });
+      await waitFor(() => expect(first).toHaveTextContent("$0.04 est."));
+
+      // The second run gets no reading at all.
+      down = true;
+      act(() => {
+        onChatEvent?.({ ...envelope("turn_start", { state: "running" }), ...ids(2), event_id: "start-2" });
+        onChatEvent?.({ ...envelope("assistant_delta", { delta: "Two." }), ...ids(2), event_id: "delta-2" });
+      });
+      expect(await screen.findByRole("group", { name: "Usage, this run" })).toHaveTextContent(
+        "Estimated cost unavailable",
+      );
+      act(() => {
+        onChatEvent?.({
+          ...envelope("turn_end", { text: "Two.", state: "complete", run_budget: FINISHED }),
+          ...ids(2),
+          event_id: "end-2",
+        });
+      });
+
+      const second = await screen.findByRole("group", { name: "Usage, last run" }, { timeout: 3000 });
+      expect(second).toHaveTextContent("Estimated cost unavailable");
+      expect(second).not.toHaveTextContent("$0.04");
+      expect(second).not.toHaveTextContent("incomplete");
     });
 
     it("does not call a finished run the last run until its final reading is in", async () => {

@@ -91,12 +91,18 @@ export function ChatPage({
     state: FinalRead;
   } | null>(null);
   const [runEnds, setRunEnds] = useState(0);
+  // The run that ended last, so telemetry left over from another run is not shown as its own.
+  const [endedRun, setEndedRun] = useState<{
+    threadId: string;
+    runId: string | undefined;
+  } | null>(null);
   const [, setRevision] = useState(0);
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
   // The count makes the telemetry effect read again even when no render saw
   // the run as active, as with a run that starts and ends in one batch.
-  const runEnded = (threadId: string) => {
+  const runEnded = (threadId: string, runId: string | undefined) => {
+    setEndedRun({ threadId, runId });
     setFinalRead({ threadId, state: "pending" });
     setRunEnds((count) => count + 1);
   };
@@ -288,16 +294,16 @@ export function ChatPage({
             setAnnouncement("Sourcecado needs your approval to continue.");
           }
         } else if (applied.type === "turn_stopped") {
+          runEnded(threadId, activeRunsRef.current.get(threadId));
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
-          runEnded(threadId);
           if (threadId === activeThreadRef.current) {
             setAnnouncement("Run cancelled.");
           }
         } else if (applied.type === "turn_end") {
+          runEnded(threadId, activeRunsRef.current.get(threadId));
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
-          runEnded(threadId);
           if (threadId === activeThreadRef.current) {
             setAnnouncement(
               applied.state === "complete"
@@ -306,9 +312,9 @@ export function ChatPage({
             );
           }
         } else if (applied.type === "error") {
+          runEnded(threadId, activeRunsRef.current.get(threadId));
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
-          runEnded(threadId);
           if (threadId === activeThreadRef.current) {
             setAnnouncement(
               // "Run failed." would send someone reading by ear straight to a
@@ -491,6 +497,7 @@ export function ChatPage({
           runMetrics,
           running,
           finalReadOf?.threadId === activeThreadId ? finalReadOf.state : "done",
+          endedRun?.threadId === activeThreadId ? (endedRun.runId ?? null) : undefined,
         );
 
   // The backend names a thread when it saves the first message. No event

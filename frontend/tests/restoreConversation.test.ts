@@ -257,8 +257,8 @@ describe("restoreConversation merge fidelity", () => {
     ]);
   });
 
-  it("keeps which run compacted when two runs of one thread compacted", () => {
-    const run = (n: number, compaction?: Record<string, unknown>) => {
+  it("keeps each run's compaction generation through a restore", () => {
+    const run = (n: number, generation: number) => {
       const ids = {
         version: 2,
         session_id: "thread-production",
@@ -275,37 +275,34 @@ describe("restoreConversation merge fidelity", () => {
           type: "turn_end",
           text: `Answer ${n}.`,
           state: "complete",
-          ...(compaction ? { compaction } : {}),
+          compaction: {
+            generation,
+            summarized: true,
+            compacted_messages: 5,
+            retained_director_messages: 2,
+            omitted_director_messages: 0,
+            measurement: "provider",
+            rejected_summaries: 0,
+          },
         },
       ];
-    };
-    const compaction = {
-      generation: 1,
-      summarized: true,
-      compacted_messages: 5,
-      retained_director_messages: 2,
-      omitted_director_messages: 0,
-      measurement: "provider",
-      rejected_summaries: 0,
     };
 
     const restored = restoreConversation({
       id: "thread-production",
       title: "Long thread",
-      messages: [
-        { role: "user", content: "One.", message_id: "message-1" },
-        { role: "assistant", content: "Answer 1.", message_id: "message-1" },
-        { role: "user", content: "Two.", message_id: "message-2" },
-        { role: "assistant", content: "Answer 2.", message_id: "message-2" },
-        { role: "user", content: "Three.", message_id: "message-3" },
-        { role: "assistant", content: "Answer 3.", message_id: "message-3" },
-      ],
-      events: [...run(1, compaction), ...run(2, compaction), ...run(3)],
+      messages: [1, 2, 3, 4].flatMap((n) => [
+        { role: "user", content: `Question ${n}.`, message_id: `message-${n}` },
+        { role: "assistant", content: `Answer ${n}.`, message_id: `message-${n}` },
+      ]),
+      events: [run(1, 1), run(2, 1), run(3, 1), run(4, 2)].flat(),
     } as never);
 
     const runs = restored.filter(
-      (message) => message.role === "assistant" && !message.parts.some((part) => part.type === "notice"),
+      (message) =>
+        message.role === "assistant" &&
+        !message.parts.some((part) => part.type === "notice"),
     );
-    expect(runs.map((message) => message.compacted === true)).toEqual([true, true, false]);
+    expect(runs.map((message) => message.compactionGeneration)).toEqual([1, 1, 1, 2]);
   });
 });

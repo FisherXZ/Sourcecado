@@ -193,6 +193,12 @@ persisted as it happened.
   ceilings are the backstop, and `unpriced_requests` is how the operator finds
   out.
 - The usage line counts compactions from the `compaction` field of `turn_end`,
-  not from the telemetry. `/telemetry/current` reports `compaction_count` as
-  0 for a live run, because only `evals/runner.py` records a `CompactionEvent`.
-  When `turn.py` records one, the line can read the telemetry again.
+  not from the telemetry. The backend sends that field on every run while a
+  compaction is in effect, so a run counts as compacting only when its
+  `generation` is higher than every earlier run's in the same thread.
+  `/telemetry/current` reports `compaction_count` as 0 for a live run, because
+  only `evals/runner.py` records a `CompactionEvent`. When `turn.py` records
+  one, the line can read the telemetry again.
+- The "Context compacted" receipt in the thread is added for every run that
+  carries `compaction`, so a thread under a standing compaction shows one
+  receipt per run. The usage line chip does not.

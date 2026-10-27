@@ -394,20 +394,36 @@ describe("pickUsage", () => {
     expect(picked?.budget).toBe(budget);
   });
 
-  const compacted = (state: SourcecadoStructuredMessage["state"] = "complete") => ({
-    ...assistant(state, budget),
-    compacted: true,
+  const underGeneration = (
+    generation: number | undefined,
+  ): SourcecadoStructuredMessage => ({
+    ...assistant("complete", budget),
+    ...(generation === undefined ? {} : { compactionGeneration: generation }),
   });
 
-  it("counts the compaction the latest run reported", () => {
-    const picked = pickUsage([user, compacted()], metrics, false);
+  it("counts a compaction for the run that raised the generation", () => {
+    const picked = pickUsage([user, underGeneration(1)], metrics, false);
 
     expect(picked?.compactions).toBe(1);
   });
 
-  it("does not carry an earlier run's compaction into a run that compacted nothing", () => {
+  it("counts a run only when its generation is higher than every earlier run's", () => {
+    // The backend reports the standing generation on every run. Only the runs
+    // that raised it compacted.
+    const generations = [1, 1, 1, 2];
+    const chips = generations.map((_generation, index) => {
+      const thread = generations
+        .slice(0, index + 1)
+        .flatMap((generation) => [user, underGeneration(generation)]);
+      return pickUsage(thread, metrics, false)?.compactions;
+    });
+
+    expect(chips).toEqual([1, 0, 0, 1]);
+  });
+
+  it("counts none for runs that never reported a generation", () => {
     const picked = pickUsage(
-      [user, compacted(), user, assistant("complete", budget)],
+      [user, underGeneration(undefined), user, underGeneration(undefined)],
       metrics,
       false,
     );
@@ -417,12 +433,24 @@ describe("pickUsage", () => {
 
   it("counts none while a run works", () => {
     const picked = pickUsage(
-      [user, compacted(), user, assistant("running")],
+      [user, underGeneration(1), user, assistant("running")],
       metrics,
       true,
     );
 
     expect(picked?.compactions).toBe(0);
+  });
+
+  it("does not show another run's telemetry as the ended run's reading", () => {
+    const messages = [user, assistant("complete", budget)];
+
+    expect(pickUsage(messages, metrics, false, "done", "run-1")?.metrics).toBe(metrics);
+    const stale = pickUsage(messages, metrics, false, "failed", "run-2");
+    expect(stale?.metrics).toBeNull();
+    expect(stale?.partial).toBe(false);
+    // A run that never got an id has no reading, and no id given means none is known.
+    expect(pickUsage(messages, metrics, false, "done", null)?.metrics).toBeNull();
+    expect(pickUsage(messages, metrics, false, "done")?.metrics).toBe(metrics);
   });
 
   it("waits for the final reading before it calls a finished run the last run", () => {
@@ -467,7 +495,7 @@ describe("UsageLine final reading", () => {
     expect(usage).toHaveTextContent("Last run, may be incomplete");
     fireEvent.focus(usage);
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "The final reading failed. These values are from before the run ended.",
+      "The final reading failed. These values are from earlier in this run.",
     );
   });
 });
