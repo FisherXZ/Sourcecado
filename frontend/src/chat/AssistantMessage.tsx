@@ -12,6 +12,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { RunBudgetView } from "./RunBudget";
 import { useLastApprovalDelivery } from "./approvalDelivery";
 import { SourceCitation } from "./SourceCitation";
+import { AnswerResults } from "./AnswerResults";
 import { useInspector } from "./Inspector";
 import { resolveInbox } from "../api";
 import type { RunBudgetStatus } from "./protocol";
@@ -124,6 +125,17 @@ export function AssistantMessage() {
   const tools = message.content.filter(
     (part): part is ToolCallMessagePart => part.type === "tool-call",
   );
+  // The answer has started once text streams in after the last step. Text
+  // before a step is a lead-in, not the answer.
+  let lastToolIndex = -1;
+  message.content.forEach((part, index) => {
+    if (part.type === "tool-call") lastToolIndex = index;
+  });
+  const answerStarted =
+    lastToolIndex >= 0 &&
+    message.content
+      .slice(lastToolIndex + 1)
+      .some((part) => part.type === "text" && part.text.trim().length > 0);
   const artifacts = Array.isArray(
     message.metadata.custom?.sourcecadoArtifacts,
   )
@@ -140,6 +152,11 @@ export function AssistantMessage() {
       {frame ? (
         <p className="sourcecado-notice-title">{frame.title}</p>
       ) : null}
+      <ActivityGroup
+        tools={tools}
+        messageState={sourcecadoState}
+        answerStarted={answerStarted}
+      />
       <MessagePrimitive.Parts
         components={{
           Text: AssistantText,
@@ -147,7 +164,7 @@ export function AssistantMessage() {
           tools: { Fallback: SafeToolFallback },
         }}
       />
-      <ActivityGroup tools={tools} messageState={sourcecadoState} />
+      <AnswerResults tools={tools} />
       <RunBudgetView status={runBudget} messageState={sourcecadoState} />
       {artifacts.length > 0 ? <ArtifactControls artifacts={artifacts} /> : null}
       {sourcecadoState === "cancelled" ? (

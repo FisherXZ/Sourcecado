@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 
 function calendarList(
@@ -76,6 +77,7 @@ function renderCalendar(tool = calendarList()) {
   return render(
     <InspectorProvider threadId="thread-calendar">
       <ActivityGroup tools={[tool]} messageState="complete" />
+      <AnswerResults tools={[tool]} />
       <Inspector />
     </InspectorProvider>,
   );
@@ -106,7 +108,7 @@ describe("Calendar event result", () => {
   it("renders a created Calendar event as a truthful review artifact", () => {
     renderCalendar(calendarWrite("calendar_create"));
     fireEvent.click(
-      screen.getByRole("button", { name: "Prepared calendar event · Completed" }),
+      screen.getByRole("button", { name: /^Prepared calendar event/ }),
     );
 
     expect(
@@ -130,7 +132,7 @@ describe("Calendar event result", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Updated calendar event · Completed" }),
+      screen.getByRole("button", { name: /^Updated calendar event/ }),
     );
 
     expect(
@@ -145,8 +147,8 @@ describe("Calendar event result", () => {
   });
 
   it.each([
-    ["calendar_create", "Prepared calendar event", "created"],
-    ["calendar_update", "Updated calendar event", "updated"],
+    ["calendar_create", "Preparing calendar event", "created"],
+    ["calendar_update", "Updating calendar event", "updated"],
   ] as const)(
     "keeps a failed %s write truthful",
     (toolName, activityLabel, verb) => {
@@ -161,9 +163,10 @@ describe("Calendar event result", () => {
           },
         }),
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: `${activityLabel} · Failed` }),
-      );
+      // A failed step opens itself, so its summary needs no click.
+      expect(
+        screen.getByRole("button", { name: new RegExp(`^${activityLabel}`) }),
+      ).toHaveTextContent("Failed");
 
       expect(screen.getByRole("alert")).toHaveTextContent(
         "Google Calendar couldn’t save this event.",
@@ -198,7 +201,7 @@ describe("Calendar event result", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Prepared calendar event · Completed" }),
+      screen.getByRole("button", { name: /^Prepared calendar event/ }),
     );
 
     expect(container).not.toHaveTextContent("PRIVATE_DESCRIPTION_TAIL");
@@ -245,7 +248,7 @@ describe("Calendar event result", () => {
   it("renders a clear empty Calendar window without inventing actions", () => {
     renderCalendar(calendarList({ result: { events: [] } }));
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
 
     expect(
@@ -262,7 +265,7 @@ describe("Calendar event result", () => {
       calendarList({ result: { events: "PRIVATE_LEGACY_CALENDAR_PAYLOAD" } }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
 
     expect(
@@ -289,9 +292,9 @@ describe("Calendar event result", () => {
         },
       }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Failed" }),
-    );
+    expect(
+      screen.getByRole("button", { name: /^Checking calendar/ }),
+    ).toHaveTextContent("Failed");
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Calendar couldn’t load upcoming events.",
@@ -340,7 +343,7 @@ describe("Calendar event result", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
 
     expect(screen.getByText("Aug 26, 2026 · All day")).toBeInTheDocument();
@@ -375,7 +378,7 @@ describe("Calendar event result", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
     fireEvent.click(
       screen.getByRole("button", {
@@ -402,13 +405,13 @@ describe("Calendar event result", () => {
   it("renders valid events while visibly preserving invalid partial rows", () => {
     const { container } = renderCalendar();
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Upcoming Calendar events" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("2 events")).toBeInTheDocument();
+    const heading = screen.getByRole("heading", { name: "Upcoming Calendar events" });
+    expect(heading).toBeInTheDocument();
+    // The step row also shows the count, so scope this one to the result card.
+    expect(within(heading.closest("section")!).getByText("2 events")).toBeInTheDocument();
     expect(screen.getByText("Sourcing standup")).toBeInTheDocument();
     expect(screen.getByText("Aug 25, 2026 · 10:00 AM–10:30 AM")).toBeInTheDocument();
     expect(screen.getByText("America/Los_Angeles")).toBeInTheDocument();

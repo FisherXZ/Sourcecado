@@ -1060,78 +1060,207 @@
   background: var(--warn-bg);
 }
 
+/* Process layer (#226): the tool step rows above the answer. One step is one
+   bordered row. Several steps group under a receipt line, and the open layer
+   scrolls inside a bounded height so it never pushes the answer off screen. */
 .sourcecado-activity {
-  max-width: 680px;
-  margin-top: 14px;
-  padding-top: 9px;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
+  max-width: 100%;
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-.sourcecado-activity > button {
-  min-height: 34px;
-  padding: 0 7px;
+.sourcecado-activity-receipt,
+.sourcecado-step-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: transparent;
-  color: inherit;
+  color: var(--text);
   font: inherit;
-  font-weight: 600;
   text-align: left;
   cursor: pointer;
 }
 
-.sourcecado-activity > button:hover {
+.sourcecado-activity-receipt:hover,
+.sourcecado-step-toggle:hover {
   background: var(--raised);
-  color: var(--text);
 }
 
-.sourcecado-activity-running > button {
-  color: var(--accent-deep);
-}
-
-.sourcecado-activity-failed > button,
-.sourcecado-activity-partial > button {
-  color: var(--error);
-}
-
-@media (max-width: 767px) {
-  .sourcecado-activity > button {
-    min-height: 44px;
-    min-width: 44px;
-  }
-}
-
-.sourcecado-activity > ol {
-  display: grid;
-  gap: 0;
-  margin: 4px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-activity > ol > li {
-  display: flex;
+.sourcecado-activity-summary,
+.sourcecado-step-label {
   min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 7px;
-  border-top: 1px solid var(--border);
-}
-
-.sourcecado-activity > ol > li > .sourcecado-activity-row-copy > span {
-  min-width: 0;
+  flex: 1;
   overflow: hidden;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sourcecado-activity > ol > li > strong {
+.sourcecado-step-object {
+  font-weight: 400;
+}
+
+.sourcecado-process-icon {
+  display: block;
+  flex: none;
+}
+
+.sourcecado-tool-icon,
+.sourcecado-action-icon-chevron {
   color: var(--muted);
-  font-size: 11px;
+}
+
+.sourcecado-activity-receipt[aria-expanded="true"] .sourcecado-action-icon-chevron,
+.sourcecado-step-toggle[aria-expanded="true"] .sourcecado-action-icon-chevron {
+  transform: rotate(90deg);
+}
+
+.sourcecado-step-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-step-state {
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--raised);
+  font-weight: 500;
+}
+
+.sourcecado-status-icon-running,
+.sourcecado-status-icon-done {
+  color: var(--accent-deep);
+}
+
+.sourcecado-status-icon-failed,
+.sourcecado-status-icon-denied {
+  color: var(--error);
+}
+
+.sourcecado-status-icon-waiting,
+.sourcecado-status-icon-partial,
+.sourcecado-status-icon-interrupted,
+.sourcecado-status-icon-unknown {
+  color: var(--warn);
+}
+
+.sourcecado-step-failed .sourcecado-step-state,
+.sourcecado-step-denied .sourcecado-step-state,
+.sourcecado-activity-failed > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-denied > .sourcecado-activity-receipt .sourcecado-step-state {
+  background: var(--error-bg);
+}
+
+.sourcecado-step-waiting .sourcecado-step-state,
+.sourcecado-step-partial .sourcecado-step-state,
+.sourcecado-step-interrupted .sourcecado-step-state,
+.sourcecado-step-unknown .sourcecado-step-state,
+.sourcecado-activity-waiting > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-partial > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-interrupted > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-unknown > .sourcecado-activity-receipt .sourcecado-step-state {
+  background: var(--warn-bg);
+}
+
+@keyframes sourcecado-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sourcecado-status-icon-running {
+  animation: sourcecado-step-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-status-icon-running {
+    animation: none;
+  }
+}
+
+.sourcecado-activity-body {
+  max-height: min(320px, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 7px 7px;
+}
+
+.sourcecado-activity-body .sourcecado-step-toggle {
+  border-radius: 0;
+}
+
+.sourcecado-activity-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sourcecado-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-step + .sourcecado-step {
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-step-detail {
+  display: grid;
+  max-height: 240px;
+  gap: 8px;
+  padding: 2px 12px 12px 38px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sourcecado-step-detail > p {
+  margin: 0;
+}
+
+.sourcecado-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sourcecado-step-actions .sourcecado-inspect-tool {
+  display: inline-flex;
+  width: 32px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-activity-receipt,
+  .sourcecado-step-toggle {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .sourcecado-step-actions .sourcecado-inspect-tool {
+    width: 44px;
+  }
+
+  .sourcecado-step-detail {
+    padding-left: 12px;
+  }
 }
 
 .sourcecado-apollo-result {
@@ -1874,17 +2003,6 @@
   margin: 3px 0;
 }
 
-.sourcecado-activity-row-copy {
-  min-width: 0;
-  flex: 1;
-}
-
-.sourcecado-activity-row-copy > p {
-  margin: 4px 0;
-  color: var(--muted);
-  white-space: normal;
-}
-
 .sourcecado-recovery-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1896,6 +2014,7 @@
   display: inline-flex;
   min-height: 34px;
   align-items: center;
+  gap: 6px;
   padding: 0 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1908,6 +2027,7 @@
 
 .sourcecado-failure-detail {
   max-width: 100%;
+  font-size: 13px;
   margin: 8px 0 0;
   padding: 9px;
   overflow-x: auto;

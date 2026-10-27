@@ -258,7 +258,7 @@ describe("ChatPage run budget", () => {
     // Current activity is named, and the run's spend sits beside it.
     const strip = await screen.findByRole("region", { name: "Run budget" });
     const activity = document.querySelector(".sourcecado-activity");
-    expect(activity).toHaveTextContent("Searched Drive");
+    expect(activity).toHaveTextContent("Searching Drive");
     expect(activity).toHaveTextContent("Running");
     expect(strip).toHaveTextContent("Step 33 of 40");
     expect(strip).toHaveTextContent("61 of 120 tool calls");

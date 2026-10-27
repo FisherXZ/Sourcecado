@@ -1211,7 +1211,7 @@ describe("ChatPage Warm Operator thread", () => {
     const { container } = render(<ChatPage sessionId="thread-alpha" />);
 
     const activity = await screen.findByRole("button", {
-      name: "Searched Drive · Completed",
+      name: /^Searched Drive/,
     });
     expect(activity).toHaveAttribute("aria-expanded", "false");
     expect(container).not.toHaveTextContent("DO_NOT_RENDER_ARGUMENT");
@@ -1635,7 +1635,7 @@ describe("ChatPage Warm Operator thread", () => {
     const { container } = render(<ChatPage sessionId="thread-alpha" />);
 
     const disclosure = await screen.findByRole("button", {
-      name: /Checked 2 sources · 2s · Completed/,
+      name: /^Used 2 sources in 2s/,
     });
     expect(disclosure).toHaveAttribute("aria-expanded", "false");
     expect(container).not.toHaveTextContent("DO_NOT_RENDER");
@@ -1958,7 +1958,7 @@ describe("ChatPage Warm Operator thread", () => {
 
     const { container } = render(<ChatPage sessionId="thread-alpha" />);
     const activity = await screen.findByRole("button", {
-      name: /Checked 2 sources · Partial/,
+      name: /^Used 2 sources/,
     });
     fireEvent.click(activity);
 
@@ -2088,7 +2088,7 @@ describe("ChatPage Warm Operator thread", () => {
     expect(within(reopenedInspector).queryByText("Google Drive")).not.toBeInTheDocument();
     expect(within(reopenedInspector).getByText("Truncated")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Searched Drive · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Drive/ }));
     fireEvent.click(screen.getByRole("button", { name: "Inspect Searched Drive" }));
     expect(within(reopenedInspector).getByRole("heading", { level: 2 })).toHaveTextContent(
       "Searched Drive",
@@ -2147,18 +2147,124 @@ describe("ChatPage Warm Operator thread", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Searched Apollo · Completed",
+        name: /^Searched Apollo/,
       }),
     );
+    const emptyHeading = screen.getByRole("heading", { name: "No Apollo matches" });
+    expect(emptyHeading).toBeInTheDocument();
+    // The step row repeats the query, so scope this to the result card.
     expect(
-      screen.getByRole("heading", { name: "No Apollo matches" }),
+      within(emptyHeading.closest("section")!).getByText("CEO at Apollo", {
+        exact: false,
+      }),
     ).toBeInTheDocument();
-    expect(screen.getByText("CEO at Apollo", { exact: false })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Adjust criteria" }));
     expect(screen.getByRole("textbox", { name: "Message Sourcecado" })).toHaveValue(
       "Adjust the Apollo people search for CEO at Apollo.",
     );
+  });
+
+  it("shows step rows above the answer while a turn runs and leaves one receipt line after it", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Process layer",
+      messages: [],
+      queue: [],
+      queue_paused: false,
+      events: [],
+    });
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+    const receiptLine = () => container.querySelector(".sourcecado-activity-receipt");
+    const live = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-process",
+      message_id: "message-process",
+      part_id: "part-process",
+    } as const;
+    const emit = (event: Record<string, unknown>) =>
+      act(() => onChatEvent?.({ ...live, ...event }));
+    const before = (first: Element, second: Element) =>
+      Boolean(
+        first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+
+    emit({ type: "turn_start", event_id: "process-1", state: "running" });
+    emit({
+      type: "tool_started",
+      event_id: "process-2",
+      id: "process-drive",
+      name: "drive_search",
+      arguments: { query: "Q3 plan" },
+      started_at: "2026-10-26T12:00:00.000Z",
+    });
+    // A step row exists as soon as the tool starts, before any answer text.
+    const driveRow = (await screen.findByText("Searching Drive")).closest("button");
+    expect(driveRow).toHaveTextContent("Searching Drive for “Q3 plan”");
+    expect(driveRow).toHaveTextContent("Running");
+
+    emit({
+      type: "tool_finished",
+      event_id: "process-3",
+      id: "process-drive",
+      name: "drive_search",
+      ok: true,
+      result: { files: [{ id: "doc-1", name: "Q3 plan" }] },
+      finished_at: "2026-10-26T12:00:00.300Z",
+    });
+    emit({
+      type: "tool_started",
+      event_id: "process-4",
+      id: "process-apollo",
+      name: "apollo_search_people",
+      arguments: { organizationName: "Acme", personTitles: ["VP Talent"] },
+      started_at: "2026-10-26T12:00:00.300Z",
+    });
+    await screen.findByText("Searching Apollo");
+    expect(receiptLine()).toHaveTextContent("Using 2 sources");
+    expect(receiptLine()).toHaveAttribute("aria-expanded", "true");
+
+    emit({
+      type: "tool_finished",
+      event_id: "process-5",
+      id: "process-apollo",
+      name: "apollo_search_people",
+      ok: true,
+      result: {
+        people: [
+          {
+            apolloId: "p-1",
+            firstName: "Maya",
+            lastNameObfuscated: "Ch***",
+            title: "VP Talent",
+            organizationName: "Acme",
+            hasEmail: true,
+          },
+        ],
+      },
+      finished_at: "2026-10-26T12:00:03.100Z",
+    });
+    emit({
+      type: "assistant_delta",
+      event_id: "process-6",
+      delta: "Found one VP Talent at Acme.",
+    });
+    // The answer has started, so the layer closes by itself.
+    const answer = await screen.findByText("Found one VP Talent at Acme.");
+    expect(receiptLine()).toHaveTextContent("Used 2 sources in 3s");
+    expect(receiptLine()).toHaveAttribute("aria-expanded", "false");
+    emit({ type: "turn_end", event_id: "process-7", state: "complete", text: "" });
+
+    // After the turn: the layer is above the answer, the result card is below
+    // it, and neither needs an expansion to be visible.
+    const card = screen.getByText("Surname hidden by Apollo");
+    const receipt = receiptLine()!;
+    expect(receipt).toHaveAttribute("aria-expanded", "false");
+    expect(before(receipt, answer)).toBe(true);
+    expect(before(answer, card)).toBe(true);
+    expect(container.querySelector(".sourcecado-activity-body")).toBeNull();
   });
 
   it("renders equivalent Apollo shortlist states from restored and live events", async () => {
@@ -2220,7 +2326,7 @@ describe("ChatPage Warm Operator thread", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Searched Apollo · Completed",
+        name: /^Searched Apollo/,
       }),
     );
     expect(screen.getByText("Restored")).toBeInTheDocument();
@@ -2343,7 +2449,7 @@ describe("ChatPage Warm Operator thread", () => {
     render(<ChatPage sessionId="thread-alpha" />);
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Prepared Gmail draft · Completed",
+        name: /^Prepared Gmail draft/,
       }),
     );
     expect(screen.getByText("Draft ID: draft-restored")).toBeInTheDocument();
@@ -2471,7 +2577,7 @@ describe("ChatPage Warm Operator thread", () => {
 
     render(<ChatPage sessionId="thread-alpha" />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Checked calendar · Completed" }),
+      await screen.findByRole("button", { name: /^Checked calendar/ }),
     );
     expect(screen.getByText("Restored calendar event")).toBeInTheDocument();
 
@@ -2592,7 +2698,7 @@ describe("ChatPage Warm Operator thread", () => {
 
     render(<ChatPage sessionId="thread-alpha" />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Read Drive evidence · Completed" }),
+      await screen.findByRole("button", { name: /^Read Drive evidence/ }),
     );
     expect(screen.getByText("Restored Drive evidence")).toBeInTheDocument();
     expect(screen.getByText("Restored evidence excerpt")).toBeInTheDocument();
