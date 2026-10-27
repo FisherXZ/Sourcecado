@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { ContactPreview } from "./ContactPreview";
 import { DescriptionEditor, describeDescription } from "./DescriptionEditor";
 import {
   defaultPersonDescriptions,
@@ -104,27 +105,34 @@ function ContactDescriptionCell({ person }: { person: BoardPerson }) {
   );
 }
 
-function ContactRow({ person }: { person: BoardPerson }) {
+function ContactRow({
+  person,
+  selected,
+  onSelect,
+}: {
+  person: BoardPerson;
+  selected: boolean;
+  onSelect: (personId: string) => void;
+}) {
   const name = personName(person);
   const sequence = SEQUENCE_LABEL[person.sequence_state ?? ""] ?? "Unknown";
-  const href = `#/people/${encodeURIComponent(person.person_id)}`;
-  const openPersonFile = () => {
-    window.location.hash = href;
-  };
+  const open = () => onSelect(person.person_id);
   return (
     <tr
-      className="contacts-row"
+      id={`contact-row-${person.person_id}`}
+      className={`contacts-row${selected ? " is-selected" : ""}`}
       tabIndex={0}
-      aria-label={`Open Person File for ${name}`}
+      aria-selected={selected}
+      aria-label={`Open preview for ${name}`}
       onClick={(event) => {
         if ((event.target as HTMLElement).closest("a, button, textarea")) return;
-        openPersonFile();
+        open();
       }}
       onKeyDown={(event) => {
         if (event.key !== "Enter") return;
-        if ((event.target as HTMLElement).closest("button, textarea")) return;
+        if ((event.target as HTMLElement).closest("a, button, textarea")) return;
         event.preventDefault();
-        openPersonFile();
+        open();
       }}
     >
       <td>
@@ -133,9 +141,7 @@ function ContactRow({ person }: { person: BoardPerson }) {
             {initials(person)}
           </span>
           <span className="contacts-cell-copy">
-            <a href={href} tabIndex={-1}>
-              <strong>{name}</strong>
-            </a>
+            <strong>{name}</strong>
             {person.last_name_status === "hidden_by_apollo" ? (
               <span>Surname hidden by Apollo</span>
             ) : null}
@@ -170,7 +176,15 @@ function ContactRow({ person }: { person: BoardPerson }) {
   );
 }
 
-function ContactsTable({ people }: { people: BoardPerson[] }) {
+function ContactsTable({
+  people,
+  selectedId,
+  onSelect,
+}: {
+  people: BoardPerson[];
+  selectedId: string | null;
+  onSelect: (personId: string) => void;
+}) {
   return (
     <div className="contacts-table-scroll">
       <table className="contacts-table" aria-label="Active sourcing contacts">
@@ -186,7 +200,12 @@ function ContactsTable({ people }: { people: BoardPerson[] }) {
         </thead>
         <tbody>
           {people.map((person) => (
-            <ContactRow key={person.person_id} person={person} />
+            <ContactRow
+              key={person.person_id}
+              person={person}
+              selected={selectedId === person.person_id}
+              onSelect={onSelect}
+            />
           ))}
         </tbody>
       </table>
@@ -317,6 +336,26 @@ export function BoardView() {
   const [sequenceFilter, setSequenceFilter] = useState<SequenceFilter>("all");
   const [contactQuery, setContactQuery] = useState("");
   const [view, setView] = useState<BoardViewMode>("contacts");
+  // Which person's preview is open beside the list. Selection, filters, search
+  // and scroll all live here, so closing the preview restores the operator's
+  // place without a reload.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  function closePreview() {
+    const returning = selectedId;
+    setSelectedId(null);
+    if (returning) {
+      // Return focus to the row after it re-renders without the preview.
+      requestAnimationFrame(() =>
+        document.getElementById(`contact-row-${returning}`)?.focus(),
+      );
+    }
+  }
+
+  function switchView(next: BoardViewMode) {
+    if (next === "tasks") setSelectedId(null);
+    setView(next);
+  }
 
   useEffect(() => {
     let active = true;
@@ -373,7 +412,7 @@ export function BoardView() {
         <p className="eyebrow">Active sequences</p>
         <h1>Contacts</h1>
         <p>Keep active people moving from open outreach through completed follow-up.</p>
-        <ViewSwitch active={view} onChange={setView} />
+        <ViewSwitch active={view} onChange={switchView} />
         <div className="board-page-actions">
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
             {checking ? "Checking for replies…" : "Check for replies"}
@@ -427,7 +466,23 @@ export function BoardView() {
               matches={(task) => matchesTask(task, sequenceFilter, contactQuery)}
             />
           ) : visibleContacts.length > 0 ? (
-            <ContactsTable people={visibleContacts} />
+            <div className={`contacts-split${selectedId ? " has-preview" : ""}`}>
+              <ContactsTable
+                people={visibleContacts}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+              />
+              {selectedId ? (
+                <ContactPreview
+                  key={selectedId}
+                  personId={selectedId}
+                  onClose={closePreview}
+                  onBoardChanged={() =>
+                    window.dispatchEvent(new Event("sourcecado:board-changed"))
+                  }
+                />
+              ) : null}
+            </div>
           ) : (
             <p className="contacts-filter-empty" role="status">
               {contactQuery.trim()

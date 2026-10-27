@@ -160,11 +160,11 @@ describe("reply filing on Contacts and the person file", () => {
   it("shows last contact, replied state, and the follow-up flag on Contacts", async () => {
     render(<BoardView />);
 
-    const waiting = contactRow(await screen.findByRole("link", { name: /Ada Analytic/ }));
+    const waiting = contactRow(await screen.findByRole("row", { name: "Open preview for Ada Analytic" }));
     expect(waiting).toHaveTextContent("We wrote · 2026-08-20");
     expect(waiting).not.toHaveTextContent("Needs follow-up");
 
-    const talking = contactRow(screen.getByRole("link", { name: /Bob Builder/ }));
+    const talking = contactRow(screen.getByRole("row", { name: "Open preview for Bob Builder" }));
     expect(talking).toHaveTextContent("They replied · 2026-08-26");
     expect(talking).toHaveTextContent("Needs follow-up");
   });
@@ -173,7 +173,7 @@ describe("reply filing on Contacts and the person file", () => {
     api.getBoard.mockResolvedValue(boardWith([NEEDS_REVIEW], []));
     render(<BoardView />);
 
-    const row = contactRow(await screen.findByRole("link", { name: /Cleo Chen/ }));
+    const row = contactRow(await screen.findByRole("row", { name: "Open preview for Cleo Chen" }));
     expect(row).toHaveTextContent("Reply needs review");
     expect(row).not.toHaveTextContent("They replied");
   });
@@ -188,13 +188,13 @@ describe("reply filing on Contacts and the person file", () => {
     render(<BoardView />);
 
     expect(
-      contactRow(await screen.findByRole("link", { name: /Ada Analytic/ })),
+      contactRow(await screen.findByRole("row", { name: "Open preview for Ada Analytic" })),
     ).toHaveTextContent("No contact yet");
   });
 
   it("checks for replies on demand and reports what the refresh did", async () => {
     render(<BoardView />);
-    await screen.findByRole("link", { name: /Ada Analytic/ });
+    await screen.findByRole("row", { name: "Open preview for Ada Analytic" });
 
     fireEvent.click(screen.getByRole("button", { name: "Check for replies" }));
 
@@ -208,7 +208,7 @@ describe("reply filing on Contacts and the person file", () => {
       board: boardWith([NEEDS_REVIEW], []),
     });
     render(<BoardView />);
-    await screen.findByRole("link", { name: /Ada Analytic/ });
+    await screen.findByRole("row", { name: "Open preview for Ada Analytic" });
     fireEvent.click(screen.getByRole("button", { name: "Check for replies" }));
 
     expect(await screen.findByText("2 replies need review.")).toBeInTheDocument();
@@ -220,7 +220,7 @@ describe("reply filing on Contacts and the person file", () => {
       board: boardWith([WAITING], []),
     });
     render(<BoardView />);
-    await screen.findByRole("link", { name: /Ada Analytic/ });
+    await screen.findByRole("row", { name: "Open preview for Ada Analytic" });
     fireEvent.click(screen.getByRole("button", { name: "Check for replies" }));
 
     expect(
@@ -234,7 +234,7 @@ describe("reply filing on Contacts and the person file", () => {
       board: boardWith([WAITING], []),
     });
     render(<BoardView />);
-    await screen.findByRole("link", { name: /Ada Analytic/ });
+    await screen.findByRole("row", { name: "Open preview for Ada Analytic" });
     fireEvent.click(screen.getByRole("button", { name: "Check for replies" }));
 
     expect(

@@ -9,6 +9,7 @@ import {
   attachPersonDriveEvidence,
   defaultPersonDescriptions,
   getPerson,
+  newOperationId,
   openPersonSourcingChat,
   refreshPersonMeetings,
   rejectPersonMeeting,
@@ -200,14 +201,29 @@ export function PersonFileView({ personId }: { personId: string }) {
   }, []);
 
   async function move(state: string) {
-    if (moving) return;
+    if (moving || !file) return;
+    const expectedVersion = file.person.version;
+    if (typeof expectedVersion !== "number" || !Number.isInteger(expectedVersion)) {
+      setMoveFailed(true);
+      return;
+    }
     setMoving(state);
     setMoveFailed(false);
     try {
-      await setPersonSequence(personId, state);
+      await setPersonSequence(personId, state, {
+        expectedVersion,
+        operationId: newOperationId(),
+      });
       setFile(await getPerson(personId));
     } catch {
+      // A failed save keeps the old status; refetch so a retry sees the current
+      // version rather than the stale one.
       setMoveFailed(true);
+      try {
+        setFile(await getPerson(personId));
+      } catch {
+        /* leave the loaded file in place */
+      }
     } finally {
       setMoving(null);
     }

@@ -213,27 +213,41 @@ describe("Contacts and person-file routes", () => {
     expect(within(table).getByRole("columnheader", { name: "Sequence" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Last contact" })).toBeInTheDocument();
     expect(within(table).getByRole("columnheader", { name: "Attention" })).toBeInTheDocument();
-    expect(within(table).getByRole("link", { name: /Alyssa Lee/ })).toHaveAttribute(
-      "href",
-      "#/people/person%20one",
-    );
+    expect(
+      within(table).getByRole("row", { name: "Open preview for Alyssa Lee" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Open" })).not.toBeInTheDocument();
   });
 
-  it("opens the Person File from pointer or keyboard interaction anywhere in a row", async () => {
+  it("opens the preview from pointer or keyboard without leaving the list", async () => {
     window.location.hash = "#/board";
     render(<BoardView />);
 
-    const row = await screen.findByRole("row", { name: "Open Person File for Alyssa Lee" });
+    const row = await screen.findByRole("row", { name: "Open preview for Alyssa Lee" });
     expect(row).toHaveAttribute("tabindex", "0");
 
+    // A click anywhere in the row opens the preview beside the list; the hash
+    // stays on the board (no navigation away).
     fireEvent.click(within(row).getByText("Codeology"));
-    expect(window.location.hash).toBe("#/people/person%20one");
+    const preview = await screen.findByRole("complementary", { name: "Person preview" });
+    expect(window.location.hash).toBe("#/board");
+    // The full record stays reachable from the preview.
+    expect(within(preview).getByRole("link", { name: "Open person file →" })).toHaveAttribute(
+      "href",
+      "#/people/person%20one",
+    );
 
-    window.location.hash = "#/board";
+    // Closing returns focus to the row and leaves the hash untouched.
+    fireEvent.click(within(preview).getByRole("button", { name: "← Back to list" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("complementary", { name: "Person preview" })).not.toBeInTheDocument(),
+    );
+    expect(window.location.hash).toBe("#/board");
+
+    // Keyboard activation opens it too.
     row.focus();
     fireEvent.keyDown(row, { key: "Enter" });
-    expect(window.location.hash).toBe("#/people/person%20one");
+    expect(await screen.findByRole("complementary", { name: "Person preview" })).toBeInTheDocument();
   });
 
   it("filters Contacts by the three sequence states", async () => {
@@ -292,13 +306,15 @@ describe("Contacts and person-file routes", () => {
       within(filters).getByRole("button", { name: "In conversation 1" }),
     ).toBeInTheDocument();
     expect(within(filters).getByRole("button", { name: "Done 1" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Hidden Backlog/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Hidden Backlog/ })).not.toBeInTheDocument();
 
     fireEvent.click(within(filters).getByRole("button", { name: "In conversation 1" }));
 
-    expect(screen.getByRole("link", { name: /Connie Conversation/ })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Olive Open/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Dana Done/ })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("row", { name: "Open preview for Connie Conversation" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Olive Open/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Dana Done/ })).not.toBeInTheDocument();
   });
 
   it("searches active Contacts by identity, role, and company", async () => {
@@ -331,8 +347,8 @@ describe("Contacts and person-file routes", () => {
     const search = await screen.findByRole("searchbox", { name: "Search active contacts" });
     fireEvent.change(search, { target: { value: "northstar" } });
 
-    expect(screen.getByRole("link", { name: /Maya Chen/ })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Jordan Patel/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("row", { name: "Open preview for Maya Chen" })).toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Jordan Patel/ })).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: "no such contact" } });
 
@@ -406,7 +422,7 @@ describe("Contacts and person-file routes", () => {
     render(<BoardView />);
 
     expect(await screen.findByRole("heading", { name: "No active contacts" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Hudson Liao/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Hudson Liao/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("table", { name: "Active sourcing contacts" })).not.toBeInTheDocument();
   });
 
@@ -421,6 +437,7 @@ describe("Contacts and person-file routes", () => {
       expect(api.setPersonSequence).toHaveBeenCalledWith(
         "person one",
         "in_conversation",
+        { expectedVersion: 2, operationId: expect.any(String) },
       ),
     );
     expect(screen.getByText("Found in a sourcing search.")).toBeInTheDocument();
@@ -429,7 +446,7 @@ describe("Contacts and person-file routes", () => {
 
   it("refreshes Contacts after a person-file write", async () => {
     render(<BoardView />);
-    await screen.findByRole("link", { name: /Alyssa Lee/ });
+    await screen.findByRole("row", { name: "Open preview for Alyssa Lee" });
     window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
     await waitFor(() => expect(api.getBoard).toHaveBeenCalledTimes(2));
   });

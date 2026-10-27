@@ -364,6 +364,11 @@ export type BoardPerson = {
   title: string | null;
   company: string | null;
   sequence_state: string | null;
+  // Present on board rows and person reads; used as the expected version for a
+  // status save and shown as copyable contact details in the preview.
+  version?: number;
+  email?: string | null;
+  phone?: string | null;
   board_lane?: "backlog" | "open" | "in_conversation" | "done";
   last_contact_at?: string | null;
   last_contact_direction?: "outbound" | "inbound" | null;
@@ -1171,19 +1176,93 @@ export async function decideApproval(
   return body;
 }
 
+/** One recorded status change. `compensates_change_id` marks an undo. */
+export type StatusChange = {
+  change_id: string;
+  entity_type: "status";
+  entity_version: number;
+  action: "update" | "undo";
+  actor: "director" | "assistant";
+  reason: string;
+  operation_id: string;
+  compensates_change_id: string | null;
+  created_at: string;
+};
+
+export type StatusSaveResult = {
+  person: BoardPerson;
+  change: StatusChange | null;
+  replayed: boolean;
+};
+
+/** A status save the server refused. A stale edit carries the current person. */
+export class StatusSaveError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly current: BoardPerson | null;
+
+  constructor(
+    message: string,
+    status: number,
+    code: string | null,
+    current: BoardPerson | null,
+  ) {
+    super(message);
+    this.name = "StatusSaveError";
+    this.status = status;
+    this.code = code;
+    this.current = current;
+  }
+}
+
+async function statusWrite(
+  path: string,
+  payload: Record<string, unknown>,
+): Promise<StatusSaveResult> {
+  const res = await fetch(`${httpBase()}${path}`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let body: Record<string, unknown> = {};
+  try {
+    body = await res.json();
+  } catch {
+    body = {};
+  }
+  if (!res.ok) {
+    throw new StatusSaveError(
+      typeof body.error === "string" ? body.error : `status ${res.status}`,
+      res.status,
+      typeof body.code === "string" ? body.code : null,
+      (body.person as BoardPerson) ?? null,
+    );
+  }
+  return body as StatusSaveResult;
+}
+
 export async function setPersonSequence(
   id: string,
   state: string,
-  actor = "director"
-): Promise<{ person: BoardPerson }> {
-  const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}/sequence`, {
-    method: "POST",
-    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
-    body: JSON.stringify({ state, actor }),
+  input: { expectedVersion: number; operationId: string },
+): Promise<StatusSaveResult> {
+  return statusWrite(`/v1/people/${encodeURIComponent(id)}/sequence`, {
+    state,
+    expected_version: input.expectedVersion,
+    operation_id: input.operationId,
   });
-  const body = await res.json();
-  if (!res.ok) throw new Error(body.error || `sequence ${res.status}`);
-  return body;
+}
+
+/** Undo a recorded status change; 409 if a later status edit moved the person. */
+export async function undoStatusChange(
+  personId: string,
+  changeId: string,
+  input: { operationId: string },
+): Promise<StatusSaveResult> {
+  return statusWrite(
+    `/v1/people/${encodeURIComponent(personId)}/crm-changes/${encodeURIComponent(changeId)}/undo`,
+    { operation_id: input.operationId },
+  );
 }
 
 export async function revertPerson(
