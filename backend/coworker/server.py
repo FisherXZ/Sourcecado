@@ -118,6 +118,12 @@ from coworker.gmail import (
 )
 from coworker.inbox import Inbox
 from coworker.mcp import LiveMcp, write_default_mcp_json
+from coworker.connector_probe import (
+    ConnectorProbes,
+    ProbeResult,
+    default_fingerprints,
+    probe_google,
+)
 from coworker.mcp_oauth import McpOAuth
 from coworker.meeting_evidence import MeetingEvidenceStore
 from coworker.brief import (
@@ -502,6 +508,11 @@ def create_app(
             config_path=Path(root) / "mcp.json",
             oauth=app.state.mcp_oauth,
         )
+    )
+    app.state.connector_probes = ConnectorProbes(
+        google=lambda: probe_google(app.state.secrets, app.state.http),
+        granola=lambda: app.state.mcp.probe(),
+        fingerprints=default_fingerprints(app.state.secrets),
     )
 
     def _effective_tool_catalog(
@@ -1689,10 +1700,20 @@ def create_app(
 
     @app.get("/v1/connectors")
     def connectors():
+        return _connector_catalog()
+
+    @app.post("/v1/connectors/check")
+    def connectors_check():
+        # Read-only probes; Apollo is never probed, so no credit is spent.
+        app.state.connector_probes.check()
+        return _connector_catalog()
+
+    def _connector_catalog() -> dict[str, Any]:
         profile = load_google(app.state.secrets)
         email = profile.get("email")
         refresh = bool(profile.get("refresh_token"))
         granola = app.state.secrets.get("mcp-oauth:granola") or {}
+        google_probe = app.state.connector_probes.result("google")
 
         def normalized_connector(
             *,
@@ -1708,7 +1729,12 @@ def create_app(
             available_actions: list[str],
             authorization_group: str | None = None,
             manual_configuration: bool = False,
+            probe: ProbeResult | None = None,
         ) -> dict[str, Any]:
+            # A failed live check outranks what the saved credential implies.
+            if probe is not None and probe.outcome != "ok" and status != "available":
+                status = "reconnect_required" if probe.outcome == "rejected" else "failed"
+                available_actions = ["reconnect", "disconnect"]
             if status == "connected":
                 health = {
                     "category": "healthy",
@@ -1726,6 +1752,22 @@ def create_app(
                     "category": "grant_scopes",
                     "action_label": "Finish setup",
                     "message": "Reconnect and approve the listed permissions.",
+                }
+            elif status in ("reconnect_required", "failed") and probe is not None:
+                rejected = status == "reconnect_required"
+                health = {
+                    "category": "error",
+                    "label": "Reconnect required" if rejected else "Connection failed",
+                    "message": probe.detail,
+                }
+                recovery = {
+                    "category": "reconnect" if rejected else "retry",
+                    "action_label": "Reconnect",
+                    "message": (
+                        "Reconnect, then return to this page."
+                        if rejected
+                        else "Check that this device is online, then open this page again."
+                    ),
                 }
             else:
                 health = {
@@ -1753,8 +1795,8 @@ def create_app(
                 "missing_scopes": missing_scopes,
                 "health": health,
                 "recovery": recovery,
-                # A completed sign-in proved the grant; a saved key was never
-                # checked. Neither is a live probe of the connection today.
+                # A completed sign-in or a passing live check proved the
+                # grant; a saved Apollo key is never checked.
                 "verified": status == "connected" and not manual_configuration,
                 "supported_actions": supported_actions,
                 "available_actions": available_actions,
@@ -1808,6 +1850,7 @@ def create_app(
                         else ["disconnect"]
                     ),
                     authorization_group="google",
+                    probe=google_probe,
                 ),
                 normalized_connector(
                     connector_id="drive",
@@ -1827,6 +1870,7 @@ def create_app(
                         else ["disconnect"]
                     ),
                     authorization_group="google",
+                    probe=google_probe,
                 ),
                 normalized_connector(
                     connector_id="calendar",
@@ -1848,6 +1892,7 @@ def create_app(
                         else ["disconnect"]
                     ),
                     authorization_group="google",
+                    probe=google_probe,
                 ),
                 normalized_connector(
                     connector_id="apollo",
@@ -1874,6 +1919,7 @@ def create_app(
                     supported_actions=["Search meeting notes", "Read meeting context"],
                     available_actions=["disconnect"] if granola_connected else ["connect"],
                     authorization_group="granola",
+                    probe=app.state.connector_probes.result("granola"),
                 ),
             ]
         }

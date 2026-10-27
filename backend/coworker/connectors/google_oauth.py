@@ -6,9 +6,16 @@ before users.drafts.send.
 
 from __future__ import annotations
 
+import threading
 from urllib.parse import urlencode
 from typing import Any
 
+from coworker.connectors.token_renewal import (
+    CredentialRejected,
+    RenewalUnavailable,
+    access_from,
+    classify_token_error,
+)
 from coworker.secrets import SecretStore
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -122,3 +129,58 @@ def google_client_credentials() -> tuple[str, str]:
         os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET") or os.environ.get("GOOGLE_CLIENT_SECRET") or ""
     ).strip()
     return client_id, client_secret
+
+
+_RENEW_LOCK = threading.Lock()
+
+
+class GoogleTokens:
+    """The one way Drive, Calendar and the connection check renew Google access.
+
+    Renewal is serialized: a caller whose token was refused passes it as
+    ``rejected``, and if another caller already replaced it the new token is
+    reused instead of spending a second exchange.
+    """
+
+    def __init__(
+        self,
+        secrets: SecretStore,
+        http: Any,
+        *,
+        client_id: str,
+        client_secret: str,
+    ) -> None:
+        self.secrets = secrets
+        self.http = http
+        self.client_id = client_id
+        self.client_secret = client_secret
+
+    def renew(self, *, rejected: str | None = None) -> str:
+        with _RENEW_LOCK:
+            profile = load_google(self.secrets)
+            current = str(profile.get("access_token") or "")
+            if rejected is not None and current and current != rejected:
+                return current
+            refresh = str(profile.get("refresh_token") or "")
+            if not refresh:
+                raise CredentialRejected("Google is not connected.")
+            if not self.client_id or not self.client_secret:
+                raise RenewalUnavailable(
+                    "Google sign-in is not configured on this device.", kind="setup"
+                )
+            try:
+                tokens = refresh_access_token(
+                    self.http,
+                    client_id=self.client_id,
+                    client_secret=self.client_secret,
+                    refresh_token=refresh,
+                )
+            except Exception as exc:
+                raise classify_token_error(exc, provider="Google") from None
+            access, rotated = access_from(tokens, provider="Google")
+            profile = dict(profile)
+            profile["access_token"] = access
+            if rotated:
+                profile["refresh_token"] = rotated
+            save_google(self.secrets, profile)
+            return access

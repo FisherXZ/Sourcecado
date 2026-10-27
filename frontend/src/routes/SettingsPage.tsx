@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import {
+  checkConnectors,
   getConnectors,
   getSettings,
   setPersona as persistPersona,
@@ -106,6 +107,16 @@ export function SettingsPage() {
         if (active) {
           setState({ status: "loaded", settings, connectors: connectorBody.connectors });
         }
+        // Same live check as Connections, so both screens show one result.
+        checkConnectors().then(
+          (checked) => {
+            if (!active) return;
+            setState((current) =>
+              current.status === "loaded" ? { ...current, connectors: checked.connectors } : current,
+            );
+          },
+          () => {},
+        );
       },
       () => {
         if (active) setState({ status: "failed" });

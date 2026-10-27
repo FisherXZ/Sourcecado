@@ -1993,6 +1993,23 @@ export async function getConnectors(): Promise<{ connectors: Connector[] }> {
   return { connectors };
 }
 
+/**
+ * Run the backend's read-only connector probes and return the refreshed
+ * catalog. Results are cached server-side, so repeated calls are cheap.
+ */
+export async function checkConnectors(): Promise<{ connectors: Connector[] }> {
+  const res = await fetch(`${httpBase()}/v1/connectors/check`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken() },
+  });
+  if (!res.ok) throw new Error(`connectors check ${res.status}`);
+  const body = record(await res.json());
+  const connectors = Array.isArray(body.connectors)
+    ? body.connectors.map(normalizeConnector).filter((item): item is Connector => item !== null)
+    : [];
+  return { connectors };
+}
+
 export async function connectDrive(): Promise<{ url: string; opened?: boolean }> {
   const res = await fetch(`${httpBase()}/v1/connectors/drive/connect`, {
     method: "POST",
