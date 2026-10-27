@@ -550,6 +550,7 @@
 }
 
 .sourcecado-user-message {
+  position: relative;
   width: fit-content;
   max-width: min(72%, 660px);
   align-self: flex-end;
@@ -850,28 +851,151 @@
   font-weight: 600;
 }
 
-.sourcecado-copy-action {
-  min-height: 32px;
-  margin-top: 8px;
-  padding: 0 8px;
+/* Message actions: icon buttons under an answer, and Edit beside the
+   operator's own message. They show on hover and on keyboard focus. Hiding is
+   opacity only, so every button stays in the tab order. Where there is no hover
+   they stay shown. A tooltip is the button's name, or the reason it is off. */
+.sourcecado-message-actions {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+:is(.sourcecado-assistant-message, .sourcecado-user-message):is(:hover, :focus-within)
+  .sourcecado-message-actions {
+  opacity: 1;
+}
+
+.sourcecado-message-action {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font: inherit;
-  font-size: 12px;
   cursor: pointer;
 }
 
-.sourcecado-copy-action:hover {
+.sourcecado-message-action:hover {
   background: var(--raised);
   color: var(--text);
 }
 
+.sourcecado-message-action[aria-pressed="true"] {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.sourcecado-message-action[aria-pressed="true"] .sourcecado-icon {
+  fill: currentcolor;
+  fill-opacity: 0.25;
+}
+
+.sourcecado-message-action[data-state="copied"] {
+  color: var(--accent-deep);
+}
+
+.sourcecado-message-action[data-state="failed"] {
+  color: var(--error);
+}
+
+.sourcecado-message-action[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* Only the icon fades. The tooltip is the reason, and it stays at full strength. */
+.sourcecado-message-action[aria-disabled="true"] .sourcecado-icon {
+  opacity: 0.5;
+}
+
+.sourcecado-message-action::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: 240px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  visibility: hidden;
+}
+
+.sourcecado-message-action:is(:hover, :focus-visible)::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Edit sits left of the operator's bubble. Its wrapper touches the bubble, so
+   the pointer can cross from one to the other without losing the hover. */
+.sourcecado-user-actions {
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  padding-right: 6px;
+  transform: translateY(-50%);
+}
+
+.sourcecado-user-actions .sourcecado-message-actions {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* Its tooltip opens below. The first message sits at the top of the thread,
+   where a tooltip that opens upward would be cut off by the scroll area. */
+.sourcecado-user-actions .sourcecado-message-action::after {
+  top: calc(100% + 8px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+}
+
+@media (hover: none), (max-width: 767px) {
+  .sourcecado-message-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-message-actions {
+    transition: none;
+  }
+}
+
 @media (max-width: 767px) {
-  .sourcecado-copy-action {
-    min-height: 44px;
-    min-width: 44px;
+  .sourcecado-message-action {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* Below the bubble, because the bubble can fill nearly the whole row. */
+  .sourcecado-user-actions {
+    top: 100%;
+    right: 0;
+    padding-right: 0;
+    transform: none;
   }
 
   .sourcecado-code-head {
@@ -1554,6 +1678,7 @@
 
   .sourcecado-user-message {
     max-width: 88%;
+    margin-bottom: 24px;
     font-size: 15px;
   }
 
