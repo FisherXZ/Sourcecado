@@ -127,6 +127,7 @@ export function SettingsPage() {
           ? { ...current, settings: { ...current.settings, persona: body.persona } }
           : current,
       );
+      window.dispatchEvent(new Event("sourcecado:settings-changed"));
       setPersonaFeedback({ kind: "success", message: `Persona changed to ${label}.` });
     } catch {
       setPersonaFeedback({

@@ -2079,6 +2079,11 @@ export type CommandDelivery =
   | { readonly state: "queued" }
   | { readonly state: "dropped"; readonly reason: string };
 
+// Fired when a run starts or ends on any thread. The backend names a thread
+// from its first message, so this is when the rail's thread list can learn the
+// name. The shell listens; no backend event is involved.
+export const SESSIONS_CHANGED = "sourcecado:sessions-changed";
+
 export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
   send: (text: string, sessionId: string) => CommandDelivery;
   cancel: (sessionId: string, runId: string) => CommandDelivery;
@@ -2130,6 +2135,14 @@ export function openChat(onEvent: (event: SourcecadoSocketEvent) => void): {
       queueSnapshots.set(event.session_id, event);
     } else if ("version" in event) {
       trackEnvelope(event);
+      if (
+        event.type === "turn_start" ||
+        event.type === "turn_end" ||
+        event.type === "turn_stopped" ||
+        event.type === "error"
+      ) {
+        window.dispatchEvent(new Event(SESSIONS_CHANGED));
+      }
     }
     onEvent(event);
   }
