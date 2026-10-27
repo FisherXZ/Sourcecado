@@ -9,6 +9,7 @@ as it passes the size limit.
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any, Callable
 
 from fastapi import APIRouter, Request
@@ -71,17 +72,30 @@ def attachments_router(
 
     @router.post("/v1/attachments")
     async def upload_attachment(request: Request):
+        cancel = threading.Event()
         try:
             data = await _read_body(request)
             name = request.headers.get(NAME_HEADER, "")
-            attachment = await asyncio.to_thread(
-                store.create,
-                name=name,
-                data=data,
-                accepts_images=accepts_images(),
+            work = asyncio.create_task(
+                asyncio.to_thread(
+                    store.create,
+                    name=name,
+                    data=data,
+                    accepts_images=accepts_images(),
+                    cancel=cancel,
+                )
             )
+            # A PDF read can take seconds. If the director removes the chip, or
+            # the window goes away, stop the read instead of letting it finish.
+            while not (await asyncio.wait({work}, timeout=0.25))[0]:
+                if await request.is_disconnected():
+                    cancel.set()
+            attachment = work.result()
         except AttachmentRejected as error:
             return _rejected(error)
+        except asyncio.CancelledError:
+            cancel.set()
+            raise
         return _json({"attachment": attachment.public()}, 201)
 
     @router.get("/v1/attachments/{attachment_id}")

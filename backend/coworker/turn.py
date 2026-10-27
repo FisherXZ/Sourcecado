@@ -1247,15 +1247,20 @@ async def run_turn(
                 provider_context_window: int | None = None
                 meaningful_stream = False
                 request_messages = model_messages
+                request_image_ids: list[str] = []
                 if attachments is not None:
-                    # The reference lines become labelled, fenced file text.
-                    # The transcript and the ledger keep only the lines.
-                    request_messages, file_evidence = expand_messages(
+                    # The reference lines become fenced file text, with each
+                    # file name inside the fence. The transcript and the ledger
+                    # keep only the lines.
+                    expansion = expand_messages(
                         model_messages,
                         attachments,
                         accepts_images=provider_accepts_images(attempt_provider),
                     )
-                    for envelope in file_evidence:
+                    request_messages = expansion.messages
+                    request_image_ids = expansion.images
+                    attachments.record_context(expansion.left_out, expansion.cleared)
+                    for envelope in expansion.envelopes:
                         if envelope.ref_id not in admitted_files:
                             admitted_files.add(envelope.ref_id)
                             authority.admit(
@@ -1441,6 +1446,23 @@ async def run_turn(
                         ) from exc
                     turn_error_kind = error_kind
                     turn_error_message = safe_provider_failure_message(exc)
+                    if (
+                        attachments is not None
+                        and request_image_ids
+                        and error_kind is ErrorKind.INVALID_REQUEST
+                    ):
+                        # The request held an image and the provider refused it.
+                        # Stop sending those images, here and in every later
+                        # request, so the thread keeps working. Say which ones.
+                        names = attachments.reject_images(request_image_ids)
+                        turn_error_message = (
+                            "The model provider rejected this request, and it "
+                            f"held {'an image' if len(names) == 1 else 'images'}: "
+                            f"{', '.join(names)}. "
+                            f"{'It is' if len(names) == 1 else 'They are'} left "
+                            "out of this thread from now on. Send your message "
+                            "again without it."
+                        )
                     provider_failure = _record_model_failure(
                         exc, directive, turn_error_message
                     )
