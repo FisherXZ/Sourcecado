@@ -191,11 +191,14 @@ describe("Thinking row", () => {
     expect(toggle).toHaveTextContent("The director wants ML founders in Berkeley.");
     expect(toggle).not.toHaveTextContent("I will search Apollo first.");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
+    // A closed row controls nothing, so it names no id.
+    expect(toggle).not.toHaveAttribute("aria-controls");
     expect(screen.queryByRole("group", { name: "Model reasoning" })).toBeNull();
 
     fireEvent.click(toggle);
     const body = screen.getByRole("group", { name: "Model reasoning" });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle.getAttribute("aria-controls")).toBe(body.id);
     expect(body).toHaveTextContent("I will search Apollo first.");
     expect(toggle).not.toHaveTextContent("The director wants ML founders in Berkeley.");
   });
@@ -317,6 +320,119 @@ describe("Thinking row", () => {
     expect(screen.getByRole("group", { name: "Model reasoning" })).toHaveTextContent(
       "I will search Apollo first.",
     );
+  });
+
+  it("goes back to Thinking… when a reload lands in the middle of a reasoning stream", async () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(Date.parse(at(6)));
+    const snapshot = restored([
+      { type: "turn_start", state: "running" },
+      { type: "reasoning_delta", step: 1, at: at(0), delta: "The director wants founders. " },
+      { type: "reasoning_delta", step: 1, at: at(5), delta: "Checking Apollo. " },
+    ]);
+    api.getSession.mockResolvedValue(conversation(snapshot));
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+    const emit = (event: Record<string, unknown>) =>
+      act(() => onChatEvent?.({ ...envelope, ...event }));
+
+    // The snapshot alone cannot say the run is alive.
+    const toggle = await waitFor(() => {
+      const found = thinkingToggle(container);
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(toggle).toHaveTextContent("Thought for 5s");
+
+    // The backend re-announces the run. The row is thinking again at once.
+    emit(snapshot[0]!);
+    expect(toggle).toHaveTextContent("Thinking…");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    // More reasoning arrives. It is added to the same row, which keeps counting.
+    now.mockReturnValue(Date.parse(at(9)));
+    emit({ type: "reasoning_delta", event_id: "live-1", step: 1, at: at(9), delta: "Then LinkedIn." });
+    expect(toggle).toHaveTextContent("Thinking…");
+    expect(toggle).toHaveTextContent("9s");
+    expect(screen.getByRole("group", { name: "Model reasoning" })).toHaveTextContent(
+      "The director wants founders. Checking Apollo. Then LinkedIn.",
+    );
+
+    emit({ type: "assistant_delta", event_id: "live-2", delta: "Found two founders." });
+    await screen.findByText("Found two founders.");
+    expect(toggle).toHaveTextContent("Thought for 9s");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("goes back to Thinking… when more reasoning arrives and no re-announcement came", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse(at(8)));
+    api.getSession.mockResolvedValue(
+      conversation(
+        restored([
+          { type: "turn_start", state: "running" },
+          { type: "reasoning_delta", step: 1, at: at(0), delta: "First. " },
+          { type: "reasoning_delta", step: 1, at: at(5), delta: "Second. " },
+        ]),
+      ),
+    );
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+    const toggle = await waitFor(() => {
+      const found = thinkingToggle(container);
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(toggle).toHaveTextContent("Thought for 5s");
+
+    act(() =>
+      onChatEvent?.({
+        ...envelope,
+        type: "reasoning_delta",
+        event_id: "live-1",
+        step: 1,
+        at: at(8),
+        delta: "Third.",
+      }),
+    );
+
+    expect(toggle).toHaveTextContent("Thinking…");
+    expect(toggle).toHaveTextContent("8s");
+  });
+
+  it("stops the live count when a provider attempt fails, and counts again for the retry", async () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(Date.parse(at(9)));
+    const { container, emit } = await openLive();
+    emit({ type: "turn_start", event_id: "p-1", state: "running" });
+    emit({ type: "reasoning_delta", event_id: "p-2", step: 1, at: at(0), delta: "Plan the search." });
+    emit({ type: "reasoning_delta", event_id: "p-3", step: 1, at: at(2), delta: " Go." });
+    const toggle = await waitFor(() => {
+      const found = thinkingToggle(container);
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(toggle).toHaveTextContent("Thinking…");
+
+    emit({
+      type: "provider_recovery",
+      event_id: "p-4",
+      action: "retry",
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      attempt: 2,
+      reason: "rate_limit",
+      delay_ms: 250,
+      message: "Retrying the model provider after a temporary failure.",
+    });
+
+    // The thinking time is what the model streamed, not the wait for the retry.
+    expect(toggle).toHaveTextContent("Thought for 2s");
+    expect(toggle).not.toHaveTextContent("Thinking…");
+
+    now.mockReturnValue(Date.parse(at(11)));
+    emit({ type: "reasoning_delta", event_id: "p-5", step: 2, at: at(10), delta: "Second attempt." });
+    expect(toggle).toHaveTextContent("Thinking…");
+    expect(toggle).toHaveTextContent("3s");
   });
 
   it("shows no row and no gap for a provider that sent no reasoning", async () => {

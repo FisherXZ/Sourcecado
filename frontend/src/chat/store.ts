@@ -325,10 +325,14 @@ export class SourcecadoChatStore {
           ? {
               ...message,
               state: "running" as const,
-              parts: message.parts.map((part) =>
+              parts: message.parts.map((part, index) =>
                 part.type === "text" && part.state === "interrupted"
                   ? { ...part, state: "running" as const }
-                  : part,
+                  : // The snapshot settled a block the model was still in.
+                    part.type === "reasoning" &&
+                      index === message.parts.length - 1
+                    ? { ...part, state: "running" as const }
+                    : part,
               ),
             }
           : message,
@@ -446,6 +450,15 @@ export class SourcecadoChatStore {
         delta: event.delta,
         ...(at !== undefined && Number.isFinite(at) ? { at } : {}),
       });
+      return;
+    }
+    if (event.type === "provider_recovery") {
+      // The attempt that was reasoning has failed. Its block is over, so the
+      // live count stops here. The retry opens a new block if it reasons.
+      this.threads.set(
+        event.session_id,
+        settleReasoningIn(this.messagesFor(event.session_id), event.message_id),
+      );
       return;
     }
     if (event.type === "turn_stopping") {
@@ -724,6 +737,10 @@ export class SourcecadoChatStore {
                     ? {
                         ...part,
                         text: part.text + event.delta,
+                        // A delta means the model is still reasoning. A part
+                        // restored from a run that is still going was settled
+                        // by the snapshot, so it runs again here.
+                        state: "running" as const,
                         ...(event.at !== undefined ? { endedAt: event.at } : {}),
                       }
                     : part,

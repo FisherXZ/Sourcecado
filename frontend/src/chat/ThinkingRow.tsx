@@ -97,7 +97,7 @@ export function ThinkingRow({
         type="button"
         className="sourcecado-step-toggle sourcecado-thinking-toggle"
         aria-expanded={open}
-        aria-controls={bodyId}
+        aria-controls={open ? bodyId : undefined}
         onClick={() => onChoose(!open)}
       >
         <SparkIcon />

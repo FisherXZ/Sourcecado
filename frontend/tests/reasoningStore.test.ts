@@ -194,6 +194,108 @@ describe("reasoning in the structured thread", () => {
   });
 });
 
+describe("reload in the middle of a reasoning stream", () => {
+  const midRun = () => [
+    event({ type: "turn_start", state: "running" }),
+    event({ type: "reasoning_delta", step: 1, at: at(0), delta: "First part. " }),
+    event({ type: "reasoning_delta", step: 1, at: at(5), delta: "Second part. " }),
+  ];
+
+  it("shows the restored part as settled while nothing says the run is alive", () => {
+    const store = newStore();
+    store.replayChatEvents(midRun());
+
+    expect(store.messagesFor("thread-alpha")[0]!.state).toBe("interrupted");
+    expect(parts(store)[0]).toMatchObject({ type: "reasoning", state: "complete" });
+  });
+
+  it("runs again when more reasoning arrives for the restored part", () => {
+    const store = newStore();
+    store.replayChatEvents(midRun());
+
+    store.applyChatEvent(
+      event({ type: "reasoning_delta", step: 1, at: at(9), delta: "Third part." }),
+    );
+
+    expect(store.messagesFor("thread-alpha")[0]!.state).toBe("running");
+    expect(parts(store)).toEqual([
+      {
+        type: "reasoning",
+        id: "part-1:reasoning:1",
+        text: "First part. Second part. Third part.",
+        state: "running",
+        startedAt: T0,
+        endedAt: T0 + 9000,
+      },
+    ]);
+    store.applyChatEvent(event({ type: "assistant_delta", delta: "Answer." }));
+    expect(parts(store)[0]).toMatchObject({ type: "reasoning", state: "complete" });
+  });
+
+  it("runs again when the backend re-announces the run, before more text arrives", () => {
+    const events = midRun();
+    const store = newStore();
+    store.replayChatEvents(events);
+
+    store.applyChatEvent(events[0]);
+
+    expect(store.messagesFor("thread-alpha")[0]!.state).toBe("running");
+    expect(parts(store)[0]).toMatchObject({ type: "reasoning", state: "running" });
+  });
+
+  it("leaves an earlier block settled when the re-announced run is past it", () => {
+    const events = [
+      event({ type: "turn_start", state: "running" }),
+      event({ type: "reasoning_delta", step: 1, at: at(0), delta: "Plan." }),
+      event({ type: "tool_started", id: "call-1", name: "now", arguments: {} }),
+    ];
+    const store = newStore();
+    store.replayChatEvents(events);
+
+    store.applyChatEvent(events[0]);
+
+    expect(parts(store).map((part) => [part.type, "state" in part ? part.state : null])).toEqual([
+      ["reasoning", "complete"],
+      ["tool", "running"],
+    ]);
+  });
+});
+
+describe("a failed provider attempt", () => {
+  it("settles the running block so the count stops, and the retry opens a new one", () => {
+    const store = newStore();
+    store.applyChatEvent(event({ type: "turn_start", state: "running" }));
+    store.applyChatEvent(
+      event({ type: "reasoning_delta", step: 1, at: at(0), delta: "Thinking." }),
+    );
+
+    store.applyChatEvent(
+      event({
+        type: "provider_recovery",
+        action: "retry",
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        attempt: 2,
+        reason: "rate_limit",
+        delay_ms: 250,
+        message: "Retrying the model provider after a temporary failure.",
+      }),
+    );
+
+    expect(store.messagesFor("thread-alpha")[0]!.state).toBe("running");
+    expect(parts(store)[0]).toMatchObject({ type: "reasoning", state: "complete" });
+
+    store.applyChatEvent(
+      event({ type: "reasoning_delta", step: 2, at: at(6), delta: "Again." }),
+    );
+
+    expect(parts(store).map((part) => [part.id, "state" in part ? part.state : null])).toEqual([
+      ["part-1:reasoning:1", "complete"],
+      ["part-1:reasoning:2", "running"],
+    ]);
+  });
+});
+
 describe("restoring reasoning from the conversation transcript", () => {
   it("keeps the reasoning part beside the text that replaces the legacy assistant record", () => {
     const restored = restoreConversation({
