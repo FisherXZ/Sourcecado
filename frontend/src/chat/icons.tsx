@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
  * restyled where it is used. Every icon is decorative: the button that holds
  * it carries the accessible name.
  */
-function Icon({ children }: { readonly children: ReactNode }) {
+export function Icon({ children }: { readonly children: ReactNode }) {
   return (
     <svg
       className="sourcecado-icon"

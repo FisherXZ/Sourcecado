@@ -9,6 +9,7 @@ import { useState } from "react";
 import { ActivityGroup } from "./ActivityGroup";
 import { AnswerMarkdown } from "./AnswerMarkdown";
 import { ApprovalCard } from "./ApprovalCard";
+import { AssistantActions } from "./MessageActions";
 import { RunBudgetView } from "./RunBudget";
 import { CompactIcon } from "./UsageLine";
 import { useLastApprovalDelivery } from "./approvalDelivery";
@@ -182,13 +183,11 @@ export function AssistantMessage() {
         <p className="sourcecado-notice-detail">{frame.detail}</p>
       ) : null}
       {copyable ? (
-        <button
-          type="button"
-          className="sourcecado-copy-action"
-          onClick={() => void navigator.clipboard?.writeText(prose)}
-        >
-          Copy response
-        </button>
+        <AssistantActions
+          prose={prose}
+          tools={tools}
+          messageState={sourcecadoState}
+        />
       ) : null}
     </MessagePrimitive.Root>
   );
