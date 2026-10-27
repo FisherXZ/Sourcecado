@@ -26,6 +26,8 @@ vi.mock("../src/api", () => ({
   openChat: api.openChat,
 }));
 
+let onChatEvent: ((event: Record<string, unknown>) => void) | undefined;
+
 const envelope = {
   version: 2,
   session_id: "thread-alpha",
@@ -94,11 +96,32 @@ function scrollTo(el: HTMLElement, top: number) {
   });
 }
 
-async function openThread() {
-  api.getSession.mockResolvedValue(CONVERSATION);
+const APPROVAL_CONVERSATION = {
+  ...CONVERSATION,
+  events: [
+    { ...envelope, type: "turn_start", event_id: "wait-1", state: "running" },
+    {
+      ...envelope,
+      type: "permission_required",
+      event_id: "wait-2",
+      id: "approval-draft",
+      name: "gmail_draft",
+      arguments: { to: "alyssa@example.com", subject: "Hello", body: "Full body" },
+      reason: "Creating a Gmail draft changes an external account.",
+      requested_at: "2026-08-25T12:00:00.000Z",
+      scope: "once",
+    },
+  ],
+};
+
+async function openThread(conversation = CONVERSATION) {
+  api.getSession.mockResolvedValue(conversation);
   render(<ChatPage sessionId="thread-alpha" />);
   const transcript = await screen.findByRole("log", { name: "Conversation" });
-  await screen.findByRole("button", { name: SOURCE_CHIP });
+  await screen.findByRole(
+    conversation === CONVERSATION ? "button" : "heading",
+    conversation === CONVERSATION ? { name: SOURCE_CHIP } : { level: 2 },
+  );
   // The thread library schedules its first scroll to the bottom on a frame.
   // Let that frame pass so the test starts from a settled viewport.
   await act(async () => {
@@ -135,14 +158,18 @@ describe("Scroll follow and Jump to latest", () => {
     });
     api.getSkills.mockResolvedValue({ skills: [] });
     api.getBoard.mockResolvedValue({ backlog: [], open: [], in_conversation: [], done: [] });
-    api.openChat.mockImplementation(() => ({
+    onChatEvent = undefined;
+    api.openChat.mockImplementation((callback) => {
+      onChatEvent = callback;
+      return {
       send: vi.fn(),
       approve: vi.fn(),
       cancel: vi.fn(),
       queue: vi.fn(),
       recover: vi.fn(),
       close: vi.fn(),
-    }));
+      };
+    });
   });
 
   it("shows no Jump to latest while the thread is at the bottom", async () => {
@@ -223,6 +250,71 @@ describe("Scroll follow and Jump to latest", () => {
     grow(2900);
     await waitFor(() => expect(scrollCalls).toHaveBeenCalledWith(expect.objectContaining({ top: 2900 })));
     expect(jumpButton()).not.toBeInTheDocument();
+  });
+
+  it("does not scroll when a run starts that the operator did not send, such as a queued run", async () => {
+    const { transcript, scrollCalls } = await openThread();
+    scrollTo(transcript, 600);
+    await screen.findByRole("button", { name: "Jump to latest" });
+    scrollCalls.mockClear();
+
+    act(() => {
+      onChatEvent?.({
+        ...envelope,
+        run_id: "run-queued",
+        message_id: "message-queued",
+        part_id: "part-queued",
+        type: "turn_start",
+        event_id: "queued-1",
+        state: "running",
+      });
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    expect(await screen.findByRole("button", { name: "Stop run" })).toBeInTheDocument();
+    expect(scrollCalls).not.toHaveBeenCalled();
+    expect(transcript.scrollTop).toBe(600);
+    expect(jumpButton()).toBeInTheDocument();
+  });
+
+  it("scrolls to the newest output when the operator sends a message", async () => {
+    const { transcript, scrollCalls } = await openThread();
+    scrollTo(transcript, 600);
+    await screen.findByRole("button", { name: "Jump to latest" });
+    scrollCalls.mockClear();
+
+    const draft = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(draft, { target: { value: "Find the founders" } });
+    fireEvent.submit(draft.closest("form") as HTMLFormElement);
+
+    expect(scrollCalls).toHaveBeenCalledWith(expect.objectContaining({ top: 2000 }));
+    await waitFor(() => expect(jumpButton()).not.toBeInTheDocument());
+  });
+
+  it("does not scroll when the operator submits an empty box", async () => {
+    const { transcript, scrollCalls } = await openThread();
+    scrollTo(transcript, 600);
+    await screen.findByRole("button", { name: "Jump to latest" });
+    scrollCalls.mockClear();
+
+    const draft = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.submit(draft.closest("form") as HTMLFormElement);
+
+    expect(scrollCalls).not.toHaveBeenCalled();
+    expect(transcript.scrollTop).toBe(600);
+  });
+
+  it("puts focus on a waiting approval after Jump to latest, so Allow and Deny are a few Tabs away", async () => {
+    const { transcript } = await openThread(APPROVAL_CONVERSATION);
+    const heading = screen.getByRole("heading", { level: 2 });
+    transcript.focus();
+    scrollTo(transcript, 600);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Jump to latest" }));
+
+    expect(heading).toHaveFocus();
   });
 
   it("keeps the thread scroll and the draft when the inspector opens and closes", async () => {

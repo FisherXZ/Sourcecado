@@ -1,4 +1,5 @@
 import { ThreadPrimitive, useAui, useAuiState } from "@assistant-ui/react";
+import { useRef } from "react";
 
 import { AssistantMessage } from "./AssistantMessage";
 import { Composer } from "./Composer";
@@ -9,7 +10,7 @@ import { ThreadHeader, type RunStatus } from "./ThreadHeader";
 import { UserMessage } from "./UserMessage";
 import type { ActivePerson, QueueItem } from "../api";
 import { Inspector } from "./Inspector";
-import { JumpToLatest } from "./JumpToLatest";
+import { JumpToLatest, ScrollOnOwnSend } from "./JumpToLatest";
 import { UsageLine, type UsageSource } from "./UsageLine";
 
 type ThreadViewProps = {
@@ -58,6 +59,7 @@ export function ThreadView({
   // it, so it lives in the composer zone rather than in the transcript.
   const showEmptyState =
     useAuiState((state) => state.thread.isEmpty) && !loading && !loadError;
+  const scrollOnSend = useRef<() => void>(() => {});
   const populateComposer = (draft: string) => {
     aui.composer.setText(draft);
     onDraftChange(draft);
@@ -68,6 +70,7 @@ export function ThreadView({
   const sendMessage = (text: string) => {
     aui.composer.setText(text);
     void aui.composer.send();
+    scrollOnSend.current();
     onDraftChange("");
   };
   return (
@@ -94,6 +97,9 @@ export function ThreadView({
         // below, so the transcript itself must be explicitly non-live.
         aria-live="off"
         tabIndex={0}
+        // A queued message that starts while the operator reads must not pull
+        // the thread down. ScrollOnOwnSend scrolls for the operator's own sends.
+        scrollToBottomOnRunStart={false}
       >
         {loading ? (
           <div className="sourcecado-transcript-skeleton" aria-label="Loading conversation">
@@ -128,6 +134,7 @@ export function ThreadView({
       >
         {announcement}
       </p>
+      <ScrollOnOwnSend scrollRef={scrollOnSend} />
       <JumpToLatest />
       <Queue
         items={queueItems}
