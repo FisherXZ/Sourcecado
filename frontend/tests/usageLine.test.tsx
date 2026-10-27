@@ -448,8 +448,7 @@ describe("pickUsage", () => {
     const stale = pickUsage(messages, metrics, false, "failed", "run-2");
     expect(stale?.metrics).toBeNull();
     expect(stale?.partial).toBe(false);
-    // A run that never got an id has no reading, and no id given means none is known.
-    expect(pickUsage(messages, metrics, false, "done", null)?.metrics).toBeNull();
+    // A run not seen starting, as after a reload, has no id to compare.
     expect(pickUsage(messages, metrics, false, "done")?.metrics).toBe(metrics);
   });
 

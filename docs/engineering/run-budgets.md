@@ -199,6 +199,7 @@ persisted as it happened.
   `/telemetry/current` reports `compaction_count` as 0 for a live run, because
   only `evals/runner.py` records a `CompactionEvent`. When `turn.py` records
   one, the line can read the telemetry again.
-- The "Context compacted" receipt in the thread is added for every run that
-  carries `compaction`, so a thread under a standing compaction shows one
-  receipt per run. The usage line chip does not.
+- The "Context compacted" receipt in the thread follows the same rule as the
+  usage line chip. It is added only for a run whose `compaction.generation` is
+  higher than every earlier run's in the thread, live and after a restore.
+  Runs under a standing compaction add no receipt.

@@ -7,9 +7,10 @@ import {
   type RecoverableChatNotice,
   type TransportChatError,
 } from "./protocol";
-import type {
-  SourcecadoPart,
-  SourcecadoStructuredMessage,
+import {
+  highestCompactionGeneration,
+  type SourcecadoPart,
+  type SourcecadoStructuredMessage,
 } from "./messageAdapter";
 import type {
   ApprovalResource,
@@ -380,7 +381,11 @@ export class SourcecadoChatStore {
         }
       }
     }
-    const messageId = `${threadId}:notice:${++this.noticeNumber}`;
+    // A restored thread numbered its own receipts from 1, so skip ids in use.
+    let messageId: string;
+    do {
+      messageId = `${threadId}:notice:${++this.noticeNumber}`;
+    } while (messages.some((message) => message.id === messageId));
     this.threads.set(threadId, [
       ...messages,
       {
@@ -591,17 +596,28 @@ export class SourcecadoChatStore {
         });
       }
       if (event.compaction) {
+        // The backend sends the standing generation on every run while a
+        // compaction is in effect. Only a run that raised it compacted.
+        const compacted =
+          event.compaction.generation >
+          highestCompactionGeneration(
+            this.messagesFor(event.session_id).filter(
+              (message) => message.id !== event.message_id,
+            ),
+          );
         this.apply({
           type: "run_compaction_known",
           threadId: event.session_id,
           messageId: event.message_id,
           generation: event.compaction.generation,
         });
-        this.addNotice(
-          event.session_id,
-          "compacted",
-          compactionNoticeText(event.compaction),
-        );
+        if (compacted) {
+          this.addNotice(
+            event.session_id,
+            "compacted",
+            compactionNoticeText(event.compaction),
+          );
+        }
       }
       if (event.state === "complete") {
         this.apply({

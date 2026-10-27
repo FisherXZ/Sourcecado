@@ -110,6 +110,17 @@ export type SourcecadoPart =
   | SourcecadoSourcePart
   | SourcecadoArtifactPart;
 
+/**
+ * The highest compaction generation any of these messages ended under, or 0.
+ * A run raised the generation, and so compacted, only when its own generation
+ * is above this for the runs before it.
+ */
+export function highestCompactionGeneration(
+  messages: readonly SourcecadoStructuredMessage[],
+): number {
+  return Math.max(0, ...messages.map((message) => message.compactionGeneration ?? 0));
+}
+
 export type SourcecadoStructuredMessage = {
   readonly id: string;
   readonly role: "assistant" | "user" | "system";

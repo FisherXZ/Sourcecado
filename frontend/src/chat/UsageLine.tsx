@@ -1,7 +1,10 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 
 import type { CurrentRunMetrics } from "../api";
-import type { SourcecadoStructuredMessage } from "./messageAdapter";
+import {
+  highestCompactionGeneration,
+  type SourcecadoStructuredMessage,
+} from "./messageAdapter";
 import type { RunBudgetStatus } from "./protocol";
 
 /**
@@ -62,7 +65,7 @@ export function pickUsage(
   metrics: CurrentRunMetrics | null,
   running: boolean,
   finalRead: FinalRead = "done",
-  endedRunId?: string | null,
+  endedRunId?: string,
 ): UsageSource | null {
   if (messages.length === 0) return null;
   const runs = messages.filter(
@@ -72,14 +75,11 @@ export function pickUsage(
   );
   const latest = runs.at(-1);
   if (!running) {
-    // Telemetry from another run is not this run's reading. A run that never
-    // got an id (null) has no reading at all. No id given means none is known.
+    // Telemetry from another run is not this run's reading. Without an id the
+    // run was not seen starting, as after a reload, and the telemetry is taken as it is.
     const own =
       endedRunId === undefined || metrics?.run_id === endedRunId ? metrics : null;
-    const before = Math.max(
-      0,
-      ...runs.slice(0, -1).map((run) => run.compactionGeneration ?? 0),
-    );
+    const before = highestCompactionGeneration(runs.slice(0, -1));
     return {
       metrics: own,
       budget: latest?.runBudget,

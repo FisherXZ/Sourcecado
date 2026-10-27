@@ -304,5 +304,10 @@ describe("restoreConversation merge fidelity", () => {
         !message.parts.some((part) => part.type === "notice"),
     );
     expect(runs.map((message) => message.compactionGeneration)).toEqual([1, 1, 1, 2]);
+    // Receipts only for the runs that raised the generation: runs 1 and 4.
+    const receipts = restored.filter((message) =>
+      message.parts.some((part) => part.type === "notice" && part.code === "compacted"),
+    );
+    expect(receipts).toHaveLength(2);
   });
 });

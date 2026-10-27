@@ -134,6 +134,37 @@ describe("compaction notice in the thread", () => {
     expect(run?.compactionGeneration).toBe(2);
   });
 
+  it("adds the receipt only for a run that raised the generation", () => {
+    const store = new SourcecadoChatStore([], "thread-alpha");
+    // The backend sends the standing generation on every run.
+    const generations = [undefined, undefined, 1, 1, 1, 2];
+    const receiptsAfterEachRun = generations.map((generation, index) => {
+      const n = index + 1;
+      const ids = {
+        version: 2,
+        session_id: "thread-alpha",
+        run_id: `run-${n}`,
+        message_id: `message-${n}`,
+        part_id: `part-${n}`,
+      } as const;
+      store.applyChatEvent({ ...ids, event_id: `start-${n}`, type: "turn_start", state: "running" });
+      store.applyChatEvent({
+        ...ids,
+        event_id: `end-${n}`,
+        type: "turn_end",
+        text: "done",
+        state: "complete",
+        ...(generation === undefined ? {} : { compaction: { ...notice, generation } }),
+      });
+      return store
+        .messagesFor("thread-alpha")
+        .filter((message) => message.parts.some((part) => part.type === "notice")).length;
+    });
+
+    // Receipts after each run: none, none, run 3's, still one, still one, run 6's.
+    expect(receiptsAfterEachRun).toEqual([0, 0, 1, 1, 1, 2]);
+  });
+
   it("adds no notice when the turn compacted nothing", () => {
     const store = new SourcecadoChatStore([], "thread-alpha");
     store.applyChatEvent({

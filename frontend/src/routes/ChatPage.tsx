@@ -91,7 +91,8 @@ export function ChatPage({
     state: FinalRead;
   } | null>(null);
   const [runEnds, setRunEnds] = useState(0);
-  // The run that ended last, so telemetry left over from another run is not shown as its own.
+  // The run that ended last, when this page saw it start, so telemetry left over
+  // from another run is not shown as its own. A run seen only at its end has no id here.
   const [endedRun, setEndedRun] = useState<{
     threadId: string;
     runId: string | undefined;
@@ -497,7 +498,7 @@ export function ChatPage({
           runMetrics,
           running,
           finalReadOf?.threadId === activeThreadId ? finalReadOf.state : "done",
-          endedRun?.threadId === activeThreadId ? (endedRun.runId ?? null) : undefined,
+          endedRun?.threadId === activeThreadId ? endedRun.runId : undefined,
         );
 
   // The backend names a thread when it saves the first message. No event

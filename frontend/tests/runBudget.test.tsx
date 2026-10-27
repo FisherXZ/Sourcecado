@@ -624,6 +624,8 @@ describe("ChatPage run budget", () => {
       // Restored: runs 1 to 3 under generation 1. Run 3 did not compact.
       const restored = await screen.findByRole("group", { name: "Usage, last run" });
       expect(restored).not.toHaveTextContent(/compaction/i);
+      // One receipt, from run 1. Runs 2 and 3 ran under the same compaction.
+      expect(screen.getAllByRole("note")).toHaveLength(1);
 
       // Live: run 4 raises the generation to 2.
       api.getCurrentRunTelemetry.mockResolvedValue(
@@ -635,6 +637,7 @@ describe("ChatPage run budget", () => {
       });
       const live = await screen.findByRole("group", { name: "Usage, last run" });
       await waitFor(() => expect(live).toHaveTextContent("1 compaction"));
+      expect(screen.getAllByRole("note")).toHaveLength(2);
     });
 
     it("shows no compaction chip for a run that did not compact", async () => {
@@ -755,6 +758,27 @@ describe("ChatPage run budget", () => {
       expect(second).toHaveTextContent("Estimated cost unavailable");
       expect(second).not.toHaveTextContent("$0.04");
       expect(second).not.toHaveTextContent("incomplete");
+    });
+
+    it("keeps the telemetry of a run it never saw start, as after a reload", async () => {
+      api.getCurrentRunTelemetry.mockResolvedValue(reply({ run_id: "run-9", estimated_cost_usd: 0.04 }));
+      api.getSession.mockResolvedValue({
+        id: "thread-alpha",
+        title: "Reloaded",
+        messages: [
+          { role: "user", content: "One." },
+          { role: "assistant", content: "Answer 1." },
+        ],
+        events: [],
+      });
+      render(<ChatPage sessionId="thread-alpha" />);
+      await waitFor(() => expect(onChatEvent).toBeDefined());
+
+      // The end of a run arrives, and its start does not.
+      endRun({ run_id: "run-9" });
+
+      const usage = await screen.findByRole("group", { name: "Usage, last run" });
+      await waitFor(() => expect(usage).toHaveTextContent("$0.04 est."));
     });
 
     it("does not call a finished run the last run until its final reading is in", async () => {
