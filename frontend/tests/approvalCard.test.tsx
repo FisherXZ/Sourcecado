@@ -152,7 +152,7 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard part={part} onDecision={vi.fn()} />);
 
     expect(
-      screen.getByRole("heading", { name: "Prepared calendar event" }),
+      screen.getByRole("heading", { name: "Create calendar event" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Google Calendar · Connected Google account")).toBeInTheDocument();
     expect(screen.getByText("Candidate interview")).toBeInTheDocument();
@@ -186,7 +186,7 @@ describe("ApprovalCard", () => {
 
     expect(
       screen.getByRole("button", {
-        name: `Updated calendar event · ${label}`,
+        name: new RegExp(`^${label} · Update calendar event`),
       }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -196,10 +196,11 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard part={approvalPart()} onDecision={vi.fn()} />);
 
     expect(
-      screen.getByRole("heading", { name: "Prepared Gmail draft" }),
+      screen.getByRole("heading", {
+        name: "Create Gmail draft for alyssa@example.com",
+      }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Gmail draft · Connected Google account")).toBeInTheDocument();
-    expect(screen.getByText("Not sent")).toBeInTheDocument();
+    expect(screen.getByText("Creates a draft. Not sent.")).toBeInTheDocument();
     expect(screen.getByText("alyssa@example.com")).toBeInTheDocument();
     expect(screen.getByText("Hello")).toBeInTheDocument();
     expect(screen.getByText("Full body")).toBeInTheDocument();
@@ -257,7 +258,7 @@ describe("ApprovalCard", () => {
 
     expect(
       screen.getByText(
-        "Apollo enrichment uses credits. No credit is spent until you choose Allow once.",
+        "Spends Apollo credits. No credit is spent until you choose Allow once.",
       ),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
@@ -286,7 +287,7 @@ describe("ApprovalCard", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Review full request and policy" }),
+      screen.getByRole("button", { name: "Details" }),
     );
     expect(container).toHaveTextContent("Fisher (surname hidden by Apollo)");
     expect(container).not.toHaveTextContent("Zh***g");
@@ -328,7 +329,7 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard part={approvalPart(state)} onDecision={vi.fn()} />);
 
     const receipt = screen.getByRole("button", {
-      name: `Prepared Gmail draft · ${label}`,
+      name: new RegExp(`^${label} · Create Gmail draft for alyssa@example.com`),
     });
     expect(receipt).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
@@ -349,16 +350,16 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard part={part} onDecision={vi.fn()} />);
 
     expect(
-      screen.getByRole("heading", { name: "Send Gmail draft" }),
+      screen.getByRole("heading", { name: "Send email" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("draft-123")).toBeInTheDocument();
+    expect(screen.getByText("Gmail draft draft-123")).toBeInTheDocument();
     expect(
       screen.getByText("Sending this draft changes Gmail."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Not sent")).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Review full request and policy" }),
+      screen.getByRole("button", { name: "Details" }),
     );
     expect(
       screen.getByText("Scope: allow once. Sourcecado will send this email now."),
@@ -385,7 +386,10 @@ describe("ApprovalCard", () => {
 
     render(<ApprovalCard part={part} onDecision={vi.fn()} />);
 
-    expect(screen.getByText("Gmail · fisher@example.com")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Send email to alyssa@example.com" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("fisher@example.com")).toBeInTheDocument();
     expect(screen.getByText("alyssa@example.com")).toBeInTheDocument();
     expect(screen.getByText("Sourcing update")).toBeInTheDocument();
     expect(
@@ -421,7 +425,7 @@ describe("ApprovalCard", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Sourcing update")).toBeInTheDocument();
     expect(
-      screen.getByText("Gmail · Account could not be determined"),
+      screen.getByText("Account could not be determined"),
     ).toBeInTheDocument();
     expect(screen.queryByText("null", { exact: false })).not.toBeInTheDocument();
   });
@@ -463,7 +467,6 @@ describe("ApprovalCard", () => {
 
     render(<ApprovalCard part={part} onDecision={vi.fn()} />);
 
-    expect(screen.getByText("Gmail · Connected Google account")).toBeInTheDocument();
     expect(
       screen.getByText(
         "Sourcecado can’t show the recipient or subject for this approval. Review the drafted email before choosing Allow once.",
@@ -482,7 +485,7 @@ describe("ApprovalCard", () => {
 
     const { unmount } = render(<ApprovalCard part={part} onDecision={vi.fn()} />);
     const receipt = screen.getByRole("button", {
-      name: "Send Gmail draft · Denied",
+      name: /^Denied · Send email/,
     });
     expect(receipt).toBeInTheDocument();
     fireEvent.click(receipt);
@@ -504,7 +507,7 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard part={part} onDecision={vi.fn()} />);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Review full request and policy" }),
+      screen.getByRole("button", { name: "Details" }),
     );
     expect(
       screen.getByText(
@@ -530,7 +533,7 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard part={part} onDecision={vi.fn()} />);
 
     const receipt = screen.getByRole("button", {
-      name: "Prepared Gmail draft · Outcome unknown",
+      name: /^Outcome unknown · Create Gmail draft for alyssa@example.com/,
     });
     expect(receipt).not.toHaveTextContent("Allowed");
     fireEvent.click(receipt);
@@ -595,7 +598,9 @@ describe("ApprovalCard", () => {
 
       expect(screen.queryByText(/Outcome is unknown/i)).not.toBeInTheDocument();
       expect(
-        screen.getByRole("button", { name: "Prepared Gmail draft · Allowed" }),
+        screen.getByRole("button", {
+          name: /^Allowed · Create Gmail draft for alyssa@example.com/,
+        }),
       ).toBeInTheDocument();
     } finally {
       vi.useRealTimers();

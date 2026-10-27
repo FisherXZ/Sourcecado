@@ -1,208 +1,81 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
-import { toolPresentation } from "./toolRegistry";
+import { ApprovalIcon } from "./approvalIcons";
+import {
+  approvalView,
+  auditOf,
+  canOfferAlways,
+  executionText,
+  formatDecisionTime,
+  rawRequestText,
+  receiptOf,
+  scopeStatement,
+  visibleReason,
+  type ApprovalRow,
+  type ApprovalState,
+} from "./approvalModel";
 import { CalendarApprovalSummary } from "../generative/CalendarEventResult";
-import { GmailDraftBody } from "../generative/GmailDraftResult";
-import { sanitizeApolloNameMasks, withoutApolloNameMasks } from "../personName";
 
-type ApprovalState =
-  | "pending"
-  | "submitting"
-  | "allowed"
-  | "denied"
-  | "expired"
-  | "cancelled"
-  | "failed-submit"
-  | "resolved-elsewhere";
+const BODY_CLAMP = 280;
 
-type ApprovalAudit = {
-  readonly approvalState: ApprovalState;
-  readonly actor: string | null;
-  readonly requestedAt: string | null;
-  readonly resolvedAt: string | null;
-  readonly scope: string | null;
-  readonly executionStatus: string | null;
-  readonly executionError: string | null;
-};
-
-function auditOf(part: ToolCallMessagePartProps): ApprovalAudit {
-  const raw = part.providerMetadata?.sourcecado as
-    | Record<string, unknown>
-    | undefined;
-  const standardState: ApprovalState = part.approval?.resolution
-    ? part.approval.resolution
-    : part.approval?.approved === true
-      ? "allowed"
-      : part.approval?.approved === false
-        ? "denied"
-        : "pending";
-  return {
-    approvalState:
-      typeof raw?.approvalState === "string"
-        ? (raw.approvalState as ApprovalState)
-        : standardState,
-    actor: typeof raw?.actor === "string" ? raw.actor : null,
-    requestedAt:
-      typeof raw?.requestedAt === "string" ? raw.requestedAt : null,
-    resolvedAt: typeof raw?.resolvedAt === "string" ? raw.resolvedAt : null,
-    scope: typeof raw?.scope === "string" ? raw.scope : null,
-    executionStatus:
-      typeof raw?.executionStatus === "string" ? raw.executionStatus : null,
-    executionError:
-      typeof raw?.executionError === "string" ? raw.executionError : null,
-  };
+function ReviewedBody({ body }: { readonly body: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const bodyId = useId();
+  const truncated = body.length > BODY_CLAMP;
+  const visible =
+    truncated && !expanded ? `${body.slice(0, BODY_CLAMP).trimEnd()}…` : body;
+  return (
+    <div className="sourcecado-approval-body">
+      <p id={bodyId}>{visible}</p>
+      {truncated ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <ApprovalIcon name={expanded ? "chevron-down" : "chevron-right"} />
+          {expanded ? "Collapse draft body" : "Expand draft body"}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
-type GmailSendResource = {
-  readonly to: string | null;
-  readonly subject: string | null;
-  readonly account: string | null;
-};
-
-type ShellCommandResource = {
-  readonly executionTarget: "docker" | "host" | "unknown";
-  readonly commandSummary: string;
-  readonly commandDisplay: string;
-  readonly environmentKeys: readonly string[];
-  readonly cwd: string | null;
-  readonly fingerprint: string | null;
-  readonly unsandboxed: boolean;
-  readonly permanentEligible: boolean;
-};
-
-function gmailSendResourceOf(
-  part: ToolCallMessagePartProps,
-): GmailSendResource | null {
-  const raw = part.providerMetadata?.sourcecado as
-    | Record<string, unknown>
-    | undefined;
-  const resource = raw?.resource;
-  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
-    return null;
+function RowValue({ row }: { readonly row: ApprovalRow }) {
+  if (row.value === null) {
+    return <span className="sourcecado-approval-unavailable">{row.unavailable}</span>;
   }
-  const record = resource as Record<string, unknown>;
-  if (record.kind !== "gmail_draft") return null;
-  const field = (key: string): string | null =>
-    typeof record[key] === "string" ? (record[key] as string) : null;
-  return {
-    to: field("to"),
-    subject: field("subject"),
-    account: field("account"),
-  };
+  if (row.variant === "body") return <ReviewedBody body={row.value} />;
+  if (row.variant === "code") return <code>{row.value}</code>;
+  return <>{row.value}</>;
 }
 
-function shellCommandResourceOf(
-  part: ToolCallMessagePartProps,
-): ShellCommandResource | null {
-  const raw = part.providerMetadata?.sourcecado as
-    | Record<string, unknown>
-    | undefined;
-  const resource = raw?.resource;
-  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
-    return null;
-  }
-  const record = resource as Record<string, unknown>;
-  if (
-    record.kind !== "shell_command" ||
-    !["docker", "host", "unknown"].includes(String(record.execution_target)) ||
-    typeof record.command_summary !== "string" ||
-    typeof record.command_display !== "string" ||
-    !Array.isArray(record.environment_keys) ||
-    !record.environment_keys.every((key) => typeof key === "string") ||
-    typeof record.unsandboxed !== "boolean" ||
-    typeof record.permanent_eligible !== "boolean"
-  ) {
-    return null;
-  }
-  return {
-    executionTarget: record.execution_target as "docker" | "host" | "unknown",
-    commandSummary: record.command_summary,
-    commandDisplay: record.command_display,
-    environmentKeys: record.environment_keys as string[],
-    cwd: typeof record.cwd === "string" ? record.cwd : null,
-    fingerprint:
-      typeof record.fingerprint === "string" ? record.fingerprint : null,
-    unsandboxed: record.unsandboxed,
-    permanentEligible: record.permanent_eligible === true,
-  };
-}
-
-function knownOrUnknown(value: string | null, unknown: string): string {
-  return value && value.trim() ? value.trim() : unknown;
-}
-
-function decisionFields(
-  toolName: string,
-  args: Readonly<Record<string, unknown>>,
-): readonly [string, string][] {
-  const value = (key: string) =>
-    typeof args[key] === "string" && args[key] ? String(args[key]) : null;
-  if (toolName === "gmail_draft" || toolName === "gmail_create_draft") {
-    return [
-      ["To", value("to")],
-      ["Subject", value("subject")],
-    ].filter((row): row is [string, string] => row[1] !== null);
-  }
-  if (toolName === "calendar_create" || toolName === "calendar_update") {
-    return [
-      ["Event", value("title") ?? value("summary")],
-      ["Starts", value("start") ?? value("start_time")],
-    ].filter((row): row is [string, string] => row[1] !== null);
-  }
-  if (toolName === "apollo_enrich_contact") {
-    return [
-      ["Contact", value("name") ?? value("email")],
-      ["Company", value("company") ?? value("domain")],
-    ].filter((row): row is [string, string] => row[1] !== null);
-  }
-  if (toolName === "gmail_send") {
-    return [["Draft", value("draft_id")]].filter(
-      (row): row is [string, string] => row[1] !== null,
-    );
-  }
-  return [];
-}
-
-function scopeStatement(toolName: string): string {
-  if (toolName === "gmail_send") {
-    return "Scope: allow once. Sourcecado will send this email now.";
-  }
-  if (toolName === "gmail_draft" || toolName === "gmail_create_draft") {
-    return "Scope: allow once. Sourcecado will not send email.";
-  }
-  if (toolName === "calendar_create" || toolName === "calendar_update") {
-    return "Scope: allow once. This changes Google Calendar and will not send email.";
-  }
-  if (toolName === "shell_exec") {
-    return "Scope: allow once. Only this exact command request will run.";
-  }
-  return "Scope: allow once.";
-}
-
-function displayedArguments(
-  toolName: string,
-  args: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> {
-  if (toolName !== "apollo_enrich_contact") return args;
-  return sanitizeApolloNameMasks(args) as Readonly<Record<string, unknown>>;
-}
-
-function resolvedLabel(state: ApprovalState): string {
-  switch (state) {
-    case "allowed":
-      return "Allowed";
-    case "denied":
-      return "Denied";
-    case "expired":
-      return "Expired";
-    case "cancelled":
-      return "Cancelled";
-    case "resolved-elsewhere":
-      return "Resolved elsewhere";
-    default:
-      return "Pending";
-  }
+function ApprovalTable({ rows }: { readonly rows: readonly ApprovalRow[] }) {
+  return (
+    <table className="sourcecado-approval-table">
+      <thead>
+        <tr>
+          <th scope="col">Field</th>
+          <th scope="col">Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.key}>
+            <th scope="row">
+              <ApprovalIcon name={row.icon} />
+              <span>{row.label}</span>
+            </th>
+            <td>
+              <RowValue row={row} />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 }
 
 export function ApprovalCard({
@@ -216,6 +89,7 @@ export function ApprovalCard({
   ) => Promise<"queued" | void> | "queued" | void;
 }) {
   const audit = auditOf(part);
+  const view = approvalView(part);
   const [submitting, setSubmitting] = useState(false);
   const [submitQueued, setSubmitQueued] = useState(false);
   const [submitOutcomeUnknown, setSubmitOutcomeUnknown] = useState(false);
@@ -226,25 +100,8 @@ export function ApprovalCard({
   const previousState = useRef<ApprovalState>(audit.approvalState);
   const detailsId = useId();
   const pending = audit.approvalState === "pending";
-  const presentation = toolPresentation(part.toolName);
-  const args = part.args as Readonly<Record<string, unknown>>;
-  const safeArgs = displayedArguments(part.toolName, args);
-  const fields = decisionFields(part.toolName, args);
-  const gmailDraft =
-    part.toolName === "gmail_draft" || part.toolName === "gmail_create_draft";
-  const gmailSend = part.toolName === "gmail_send";
-  const gmailSendResource = gmailSend ? gmailSendResourceOf(part) : null;
-  const calendarWrite =
-    part.toolName === "calendar_create" || part.toolName === "calendar_update";
-  const gmailBody =
-    gmailDraft && typeof args.body === "string" ? args.body : null;
-  const shellCommand =
-    part.toolName === "shell_exec" ? shellCommandResourceOf(part) : null;
-  const approvalReason = part.approval?.reason
-    ? part.toolName === "apollo_enrich_contact"
-      ? withoutApolloNameMasks(part.approval.reason)
-      : part.approval.reason
-    : "This external action needs your approval.";
+  const alwaysOffered = canOfferAlways(part.toolName, view.shell);
+  const reason = visibleReason(part.approval?.reason, part.toolName);
 
   useEffect(() => {
     if (pending) headingRef.current?.focus();
@@ -281,6 +138,10 @@ export function ApprovalCard({
   }, [submitting]);
 
   async function decide(approved: boolean, scope: "once" | "always" = "once") {
+    // A standing grant exists only for the one shell command the model
+    // allows. Refuse here as well as hiding the button, so no keyboard or
+    // overflow path can request it for an email send or paid enrichment.
+    if (scope === "always" && !(approved && alwaysOffered)) return;
     setSubmitting(true);
     setSubmitFailed(false);
     setSubmitOutcomeUnknown(false);
@@ -298,24 +159,31 @@ export function ApprovalCard({
   }
 
   if (!pending) {
+    const receipt = receiptOf(audit);
+    const time = formatDecisionTime(audit.resolvedAt);
+    const line = [receipt.label, view.title, receipt.note, time]
+      .filter(Boolean)
+      .join(" · ");
     const outcomeUnknown = audit.executionStatus === "interrupted";
-    const label = outcomeUnknown
-      ? "Outcome unknown"
-      : resolvedLabel(audit.approvalState);
     return (
-      <section className="sourcecado-approval-receipt">
+      <section
+        className="sourcecado-approval-receipt"
+        data-tone={receipt.tone}
+      >
         <button
           type="button"
           aria-expanded={showReceipt}
           aria-controls={detailsId}
           onClick={() => setShowReceipt((current) => !current)}
         >
-          {presentation.label} · {label}
+          <ApprovalIcon name={receipt.icon} className="sourcecado-approval-state" />
+          <span>{line}</span>
+          <ApprovalIcon name={showReceipt ? "chevron-down" : "chevron-right"} />
         </button>
         {showReceipt ? (
           <div id={detailsId}>
             <p>
-              {label}
+              {receipt.label}
               {audit.actor ? ` by ${audit.actor}` : ""}
             </p>
             <p>Scope: {audit.scope ?? "once"}</p>
@@ -325,13 +193,36 @@ export function ApprovalCard({
                   "Outcome is unknown after Sourcecado restarted. Verify the external resource before retrying."}
               </p>
             ) : (
-              <p>Execution {audit.executionStatus ?? "not recorded"}</p>
+              <p>Execution {executionText(audit.executionStatus)}</p>
             )}
-            {audit.resolvedAt ? <time dateTime={audit.resolvedAt}>{audit.resolvedAt}</time> : null}
+            {audit.resolvedAt ? (
+              <time dateTime={audit.resolvedAt}>
+                {new Date(audit.resolvedAt).toString() === "Invalid Date"
+                  ? audit.resolvedAt
+                  : new Date(audit.resolvedAt).toLocaleString()}
+              </time>
+            ) : null}
           </div>
         ) : null}
       </section>
     );
+  }
+
+  // Command-Enter allows once, only while focus is inside this card and the
+  // decision is not already in flight. Escape is not handled: it never denies,
+  // never allows, and never closes the card.
+  function onKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (
+      event.key !== "Enter" ||
+      !(event.metaKey || event.ctrlKey) ||
+      event.repeat ||
+      submitting
+    ) {
+      return;
+    }
+    if ((event.target as HTMLElement).closest('[data-decision="deny"]')) return;
+    event.preventDefault();
+    void decide(true);
   }
 
   return (
@@ -340,160 +231,114 @@ export function ApprovalCard({
       aria-busy={
         (submitting && !submitOutcomeUnknown && !submitQueued) || undefined
       }
+      onKeyDown={onKeyDown}
     >
-      <h2 ref={headingRef} tabIndex={-1}>
-        {presentation.label}
-      </h2>
-      {calendarWrite ? (
+      <header className="sourcecado-approval-head">
+        <ApprovalIcon name={view.icon} className="sourcecado-approval-action" />
+        <h2 ref={headingRef} tabIndex={-1}>
+          {view.title}
+        </h2>
+      </header>
+      {view.calendarWrite ? (
         <CalendarApprovalSummary
-          args={args}
+          args={part.args as Readonly<Record<string, unknown>>}
           toolName={part.toolName as "calendar_create" | "calendar_update"}
         />
-      ) : null}
-      {!calendarWrite && fields.length > 0 ? (
-        <dl>
-          {fields.map(([label, value]) => (
-            <div key={label}>
-              <dt>{label}</dt>
-              <dd>{value}</dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
-      {gmailDraft ? (
-        <div className="sourcecado-gmail-approval-preview">
-          <p>Gmail draft · Connected Google account</p>
-          <strong>Not sent</strong>
-          {gmailBody ? <GmailDraftBody body={gmailBody} /> : null}
-        </div>
-      ) : null}
-      {gmailSend ? (
-        <div className="sourcecado-gmail-approval-preview">
-          <p>
-            Gmail ·{" "}
-            {gmailSendResource
-              ? knownOrUnknown(
-                  gmailSendResource.account,
-                  "Account could not be determined",
-                )
-              : "Connected Google account"}
-          </p>
-          <strong>Not yet sent</strong>
-          {gmailSendResource ? (
-            <dl>
-              <div>
-                <dt>To</dt>
-                <dd>
-                  {knownOrUnknown(
-                    gmailSendResource.to,
-                    "Recipient could not be determined",
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Subject</dt>
-                <dd>
-                  {knownOrUnknown(
-                    gmailSendResource.subject,
-                    "Subject could not be determined",
-                  )}
-                </dd>
-              </div>
-            </dl>
-          ) : (
-            <p>
-              Sourcecado can’t show the recipient or subject for this approval.
-              Review the drafted email before choosing Allow once.
-            </p>
-          )}
-        </div>
-      ) : null}
-      {part.toolName === "shell_exec" ? (
-        <div className="sourcecado-shell-approval-summary">
-          <strong>{shellCommand?.unsandboxed ? "Not sandboxed" : "Docker sandbox"}</strong>
-          <dl>
-            <div>
-              <dt>Command</dt>
-              <dd><code>{shellCommand?.commandDisplay ?? "Command details unavailable"}</code></dd>
-            </div>
-            <div>
-              <dt>Working folder</dt>
-              <dd>{shellCommand?.cwd ?? "Could not be resolved"}</dd>
-            </div>
-          </dl>
-          {shellCommand?.environmentKeys.length ? (
-            <p>Environment keys: {shellCommand.environmentKeys.join(", ")}</p>
-          ) : (
-            <p>No additional environment values.</p>
-          )}
-          {shellCommand?.unsandboxed ? (
-            <p>This runs directly under your macOS account and can access everything that account can access.</p>
-          ) : (
-            <p>The real workspace is mounted read-write and container networking is unrestricted.</p>
-          )}
-        </div>
-      ) : null}
-      {part.toolName === "apollo_enrich_contact" ? (
-        <p className="sourcecado-approval-credit-note">
-          Apollo enrichment uses credits. No credit is spent until you choose Allow once.
+      ) : (
+        <ApprovalTable rows={view.rows} />
+      )}
+      {view.warning ? (
+        <p className="sourcecado-approval-warning" role="note">
+          <ApprovalIcon name={view.spendsCredits ? "coins" : "alert"} />
+          <span>{view.warning}</span>
         </p>
       ) : null}
-      <p>{approvalReason}</p>
-      <button
-        type="button"
-        aria-expanded={showDetails}
-        aria-controls={detailsId}
-        onClick={() => setShowDetails((current) => !current)}
-      >
-        Review full request and policy
-      </button>
+      {view.caveat ? (
+        <p className="sourcecado-approval-warning" role="note">
+          <ApprovalIcon name="alert" />
+          <span>{view.caveat}</span>
+        </p>
+      ) : null}
+      {reason ? <p className="sourcecado-approval-reason">{reason}</p> : null}
       {showDetails ? (
         <div id={detailsId} className="sourcecado-approval-details">
-          {part.toolName === "shell_exec" ? (
+          {view.shell || part.toolName === "shell_exec" ? (
             <p>
-              Exact fingerprint: {shellCommand?.fingerprint?.slice(0, 16) ?? "unavailable"}
+              Exact fingerprint:{" "}
+              {view.shell?.fingerprint?.slice(0, 16) ?? "unavailable"}
             </p>
           ) : (
-            <pre>{JSON.stringify(safeArgs, null, 2)}</pre>
+            <pre>{rawRequestText(part)}</pre>
           )}
           <p>{scopeStatement(part.toolName)}</p>
         </div>
       ) : null}
       {submitFailed ? (
-        <p role="alert">The decision couldn’t be saved. Try again.</p>
+        <p role="alert" className="sourcecado-approval-status">
+          The decision couldn’t be saved. Try again.
+        </p>
       ) : null}
       {submitOutcomeUnknown ? (
-        <p>
+        <p className="sourcecado-approval-status">
           Outcome is unknown. Sourcecado didn’t confirm this decision before
           its wait ended. Verify the external resource before retrying.
         </p>
       ) : submitQueued ? (
-        <p>
+        <p className="sourcecado-approval-status">
           Waiting for the connection. Your decision will send once
           Sourcecado reconnects.
         </p>
       ) : submitting ? (
-        <p>Submitting decision…</p>
+        <p className="sourcecado-approval-status">Submitting decision…</p>
       ) : null}
-      <div className="sourcecado-approval-actions">
-        <button type="button" disabled={submitting} onClick={() => void decide(false)}>
-          Deny
+      <footer className="sourcecado-approval-foot">
+        <button
+          type="button"
+          className="sourcecado-approval-toggle"
+          aria-expanded={showDetails}
+          aria-controls={detailsId}
+          onClick={() => setShowDetails((current) => !current)}
+        >
+          <ApprovalIcon name={showDetails ? "chevron-down" : "chevron-right"} />
+          Details
         </button>
-        <button type="button" disabled={submitting} onClick={() => void decide(true)}>
-          Allow once
-        </button>
-        {shellCommand?.unsandboxed &&
-        shellCommand.fingerprint &&
-        shellCommand.permanentEligible ? (
+        <div className="sourcecado-approval-actions">
           <button
             type="button"
+            data-decision="deny"
+            aria-label="Deny"
             disabled={submitting}
-            onClick={() => void decide(true, "always")}
+            onClick={() => void decide(false)}
           >
-            Always allow this exact command
+            <ApprovalIcon name="x" />
+            <span>Deny</span>
           </button>
-        ) : null}
-      </div>
+          <button
+            type="button"
+            data-decision="allow"
+            aria-label="Allow once"
+            aria-keyshortcuts="Meta+Enter Control+Enter"
+            disabled={submitting}
+            onClick={() => void decide(true)}
+          >
+            <ApprovalIcon name="check" />
+            <span>Allow once</span>
+            <kbd aria-hidden="true">⌘⏎</kbd>
+          </button>
+          {alwaysOffered ? (
+            <button
+              type="button"
+              data-decision="always"
+              aria-label="Always allow this exact command"
+              disabled={submitting}
+              onClick={() => void decide(true, "always")}
+            >
+              <ApprovalIcon name="shield" />
+              <span>Always allow this exact command</span>
+            </button>
+          ) : null}
+        </div>
+      </footer>
     </section>
   );
 }

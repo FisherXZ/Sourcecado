@@ -18,7 +18,11 @@ import { SourcecadoChatStore } from "../src/chat/store";
  * The operator decision this protects: authorizing gmail_send without being
  * shown the recipient is not a decision anyone can actually make.
  */
-function pendingApprovalPart(resource: unknown) {
+function pendingApprovalPart(
+  resource: unknown,
+  name = "gmail_send",
+  args: Record<string, unknown> = { draft_id: "draft-1" },
+) {
   const store = new SourcecadoChatStore([{ id: "t", messages: [] }], "t");
   const envelope = {
     version: 2,
@@ -42,8 +46,8 @@ function pendingApprovalPart(resource: unknown) {
       event_id: "event-2",
       type: "permission_required",
       id: "call-1",
-      name: "gmail_send",
-      arguments: { draft_id: "draft-1" },
+      name,
+      arguments: args,
       reason: "Sending requires permission.",
       ...(resource === undefined ? {} : { resource }),
     } as never) as never,
@@ -115,5 +119,187 @@ describe("gmail_send approval resource, wire to rendered part", () => {
 
   it("leaves the approval intact when no resource is sent at all", () => {
     expect(pendingApprovalPart(undefined) ?? null).toBeNull();
+  });
+});
+
+describe("person-bound approval resources, wire to rendered part", () => {
+  it("keeps exactly the send authority fields and drops the rest", () => {
+    // Shape: backend/coworker/gmail.py SendAuthority.as_resource.
+    expect(
+      pendingApprovalPart({
+        kind: "gmail_send_authority",
+        person_id: "person_8f2a",
+        draft_id: "draft-1",
+        account: "operator@example.com",
+        to: "candidate@example.com",
+        subject: "Following up",
+        body_digest: "3f7a9c1e5b2d",
+        sent: false,
+        body: "secret message body",
+      }),
+    ).toEqual({
+      kind: "gmail_send_authority",
+      person_id: "person_8f2a",
+      draft_id: "draft-1",
+      account: "operator@example.com",
+      to: "candidate@example.com",
+      subject: "Following up",
+      body_digest: "3f7a9c1e5b2d",
+    });
+  });
+
+  it("keeps exactly the enrichment fields and drops the rest", () => {
+    // Shape: backend/coworker/apollo.py enrichment_resource.
+    expect(
+      pendingApprovalPart(
+        {
+          kind: "apollo_enrichment",
+          person_id: "person_8f2a",
+          person: "Maya Chen",
+          title: "Founder",
+          company: "Acme",
+          matched_on: "email",
+          credits: 1,
+          reason: "Spends 1 Apollo credit to look up Maya Chen by email.",
+          email: "maya@example.com",
+        },
+        "apollo_enrich_contact",
+        { firstName: "Maya", lastName: "Chen" },
+      ),
+    ).toEqual({
+      kind: "apollo_enrichment",
+      person_id: "person_8f2a",
+      person: "Maya Chen",
+      title: "Founder",
+      company: "Acme",
+      matched_on: "email",
+      credits: 1,
+    });
+  });
+
+  it("drops an enrichment resource with a cost that is not a number", () => {
+    expect(
+      pendingApprovalPart(
+        {
+          kind: "apollo_enrichment",
+          person_id: "person_8f2a",
+          person: "Maya Chen",
+          matched_on: "email",
+          credits: "one",
+        },
+        "apollo_enrich_contact",
+        { firstName: "Maya", lastName: "Chen" },
+      ) ?? null,
+    ).toBeNull();
+  });
+});
+
+function resolvedToolPart(decision: "denied" | "allowed", toolOk: boolean) {
+  const store = new SourcecadoChatStore([{ id: "t", messages: [] }], "t");
+  const envelope = {
+    version: 2,
+    session_id: "t",
+    run_id: "run-1",
+    message_id: "message-1",
+    part_id: "call-1",
+  } as const;
+  const apply = (event: Record<string, unknown>) =>
+    store.applyChatEvent(parseChatEvent({ ...envelope, ...event } as never) as never);
+
+  apply({ event_id: "e-1", type: "turn_start", state: "running" });
+  apply({
+    event_id: "e-2",
+    type: "permission_required",
+    id: "call-1",
+    name: "gmail_send",
+    arguments: { draft_id: "draft-1" },
+    reason: "Sending requires permission.",
+    resource: {
+      kind: "gmail_draft",
+      draft_id: "draft-1",
+      to: "candidate@example.com",
+      subject: "Following up",
+      account: "operator@example.com",
+    },
+  });
+  // The backend closes a denied call with ok=false and a failure record
+  // before it writes the approval receipt (turn.py).
+  apply({
+    event_id: "e-3",
+    type: "tool_finished",
+    id: "call-1",
+    name: "gmail_send",
+    ok: toolOk,
+    result: toolOk ? { sent: true } : { error: "denied by user" },
+    ...(toolOk
+      ? {}
+      : {
+          failure: {
+            class: "unknown",
+            connector_id: "gmail",
+            source: "Gmail",
+            retry_safe: false,
+            idempotent: false,
+            summary: "Gmail failed.",
+            repair_route: null,
+            detail: "denied by user",
+            call_id: "call-1",
+            run_id: "run-1",
+            session_id: "t",
+            state: "failed",
+          },
+        }),
+  });
+  apply({
+    event_id: "e-4",
+    type: "approval_resolved",
+    id: "call-1",
+    name: "gmail_send",
+    resolution: decision,
+    decision: decision === "denied" ? "deny" : "allow",
+    actor: "operator",
+    requested_at: "2026-10-26T12:00:00Z",
+    resolved_at: "2026-10-26T12:00:05Z",
+    scope: "once",
+    execution_status: decision === "denied" ? "not_run" : "failed",
+    execution_error: null,
+  });
+
+  const [message] = store.messagesFor("t");
+  const converted = convertStructuredMessage(message as never) as {
+    content: readonly Record<string, unknown>[];
+  };
+  const part = converted.content.find((entry) => entry.type === "tool-call") as {
+    isError: boolean;
+    approval?: { approved?: boolean };
+    providerMetadata: { sourcecado: Record<string, unknown> };
+  };
+  return part;
+}
+
+describe("a resolved approval, store to rendered part", () => {
+  it("keeps the resolved request so the receipt can still name the recipient", () => {
+    const part = resolvedToolPart("denied", false);
+
+    expect(part.providerMetadata.sourcecado.resource).toMatchObject({
+      kind: "gmail_draft",
+      to: "candidate@example.com",
+    });
+  });
+
+  it("does not turn a denial into a failed step", () => {
+    const part = resolvedToolPart("denied", false);
+
+    expect(part.approval?.approved).toBe(false);
+    expect(part.isError).toBe(false);
+    expect(part.providerMetadata.sourcecado.failure).toBeNull();
+  });
+
+  it("still reports a failure for an allowed call that failed", () => {
+    const part = resolvedToolPart("allowed", false);
+
+    expect(part.approval?.approved).toBe(true);
+    expect(part.isError).toBe(true);
+    expect(part.providerMetadata.sourcecado.failure).not.toBeNull();
   });
 });

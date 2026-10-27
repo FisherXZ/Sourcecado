@@ -1499,14 +1499,14 @@ describe("ChatPage Warm Operator thread", () => {
     expect(
       await screen.findByRole("heading", {
         level: 2,
-        name: "Prepared Gmail draft",
+        name: "Create Gmail draft for legacy@example.com",
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("Creating a draft changes Gmail.")).toBeInTheDocument();
     expect(screen.getByText("legacy@example.com")).toBeInTheDocument();
     expect(screen.getByText("Legacy draft")).toBeInTheDocument();
     expect(screen.getByText("Safe legacy body preview")).toBeInTheDocument();
-    expect(screen.getByText("Not sent")).toBeInTheDocument();
+    expect(screen.getByText("Creates a draft. Not sent.")).toBeInTheDocument();
     expect(container).not.toHaveTextContent("Sent successfully");
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
     await waitFor(() =>
@@ -1959,7 +1959,7 @@ describe("ChatPage Warm Operator thread", () => {
     render(<ChatPage sessionId="thread-alpha" />);
 
     const receipt = await screen.findByRole("button", {
-      name: "Prepared Gmail draft · Allowed",
+      name: /^Allowed · Create Gmail draft for alyssa@example.com/,
     });
     expect(receipt).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("button", { name: "Allow once" })).not.toBeInTheDocument();
@@ -2053,14 +2053,14 @@ describe("ChatPage Warm Operator thread", () => {
 
     const title = await screen.findByRole("heading", {
       level: 2,
-      name: "Prepared Gmail draft",
+      name: "Create Gmail draft for alyssa@example.com",
     });
     const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
     await waitFor(() => expect(title).toHaveFocus());
     expect(screen.getByText("alyssa@example.com")).toBeInTheDocument();
     expect(screen.getByText("Hello")).toBeInTheDocument();
     expect(screen.getByText(/Here is the sourcing update/)).toBeInTheDocument();
-    expect(screen.getByText("Not sent")).toBeInTheDocument();
+    expect(screen.getByText("Creates a draft. Not sent.")).toBeInTheDocument();
     expect(screen.getByText(/changes an external account/)).toBeInTheDocument();
     const approval = title.closest("section");
     expect(approval).not.toBeNull();
@@ -2068,7 +2068,7 @@ describe("ChatPage Warm Operator thread", () => {
       within(approval as HTMLElement).queryByRole("button", { name: /^Send$/i }),
     ).not.toBeInTheDocument();
     const details = screen.getByRole("button", {
-      name: "Review full request and policy",
+      name: "Details",
     });
     expect(details).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(details);
@@ -2098,7 +2098,7 @@ describe("ChatPage Warm Operator thread", () => {
     });
     expect(
       await screen.findByRole("button", {
-        name: "Prepared Gmail draft · Allowed",
+        name: /^Allowed · Create Gmail draft for alyssa@example.com/,
       }),
     ).toBeInTheDocument();
     await waitFor(() => expect(composer).toHaveFocus());

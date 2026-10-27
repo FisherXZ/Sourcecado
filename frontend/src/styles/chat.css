@@ -790,34 +790,6 @@
   color: var(--muted);
 }
 
-.sourcecado-approval-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.sourcecado-shell-approval-summary {
-  margin: 12px 0;
-  padding: 12px;
-  border: 1px solid var(--warn);
-  border-radius: 8px;
-  background: var(--warn-bg);
-}
-
-.sourcecado-shell-approval-summary > strong {
-  color: var(--warn);
-}
-
-.sourcecado-shell-approval-summary dl {
-  margin: 9px 0;
-}
-
-.sourcecado-shell-approval-summary p {
-  margin: 8px 0 0;
-  color: var(--muted);
-  line-height: 1.45;
-}
-
-.sourcecado-approval-actions button,
 .sourcecado-load-error button {
   min-height: 38px;
   padding: 0 11px;
@@ -827,12 +799,6 @@
   color: var(--text);
   font: inherit;
   cursor: pointer;
-}
-
-.sourcecado-approval-actions button:last-child {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--surface);
 }
 
 .sourcecado-empty-thread,
@@ -1416,7 +1382,6 @@
     font-size: 15px;
   }
 
-  .sourcecado-approval-actions button,
   .sourcecado-load-error button {
     min-height: 44px;
   }
@@ -2142,8 +2107,7 @@
   color: var(--warn);
 }
 
-.sourcecado-apollo-credit-note p,
-.sourcecado-approval-card > .sourcecado-approval-credit-note {
+.sourcecado-apollo-credit-note p {
   color: var(--warn);
 }
 
@@ -2620,52 +2584,114 @@
 .sourcecado-approval-card {
   max-width: 620px;
   margin-top: 12px;
-  padding: 16px;
   border: 1px solid var(--warn);
   border-radius: 8px;
-  background: var(--warn-bg);
+  background: var(--surface);
+  font-size: 13px;
+  overflow: hidden;
 }
 
-.sourcecado-approval-card h2 {
+.sourcecado-approval-icon {
+  flex: none;
+}
+
+.sourcecado-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sourcecado-approval-action {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-deep);
+}
+
+.sourcecado-approval-head h2 {
+  min-width: 0;
   margin: 0;
   font-size: 15px;
-}
-
-.sourcecado-approval-card > p {
-  margin: 9px 0;
-  color: var(--muted);
-  line-height: 1.45;
-}
-
-.sourcecado-approval-card dl {
-  display: grid;
-  gap: 5px;
-  margin: 12px 0;
-}
-
-.sourcecado-approval-card dl > div {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 10px;
-}
-
-.sourcecado-approval-card :where(dt, dd) {
-  margin: 0;
-}
-
-.sourcecado-approval-card dt {
-  color: var(--muted);
-}
-
-.sourcecado-approval-card dd {
-  overflow-wrap: anywhere;
   font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
-.sourcecado-approval-card > button,
-.sourcecado-approval-receipt > button {
-  min-height: 38px;
-  padding: 0 9px;
+/* Focus lands on the title so a screen reader announces the request. The
+   ring goes on the card, which is what Command-Enter applies to. */
+.sourcecado-approval-head h2:focus-visible {
+  outline: none;
+}
+
+.sourcecado-approval-card:has(h2:focus-visible) {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.sourcecado-approval-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.sourcecado-approval-table :where(th, td) {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  vertical-align: top;
+}
+
+.sourcecado-approval-table thead th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.sourcecado-approval-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.sourcecado-approval-table tbody th {
+  width: 38%;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.sourcecado-approval-table tbody th > svg {
+  margin-right: 8px;
+  color: var(--muted);
+  vertical-align: -3px;
+}
+
+.sourcecado-approval-table td {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-approval-table code {
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 13px;
+}
+
+.sourcecado-approval-unavailable {
+  color: var(--warn);
+  font-weight: 500;
+}
+
+.sourcecado-approval-body p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.sourcecado-approval-body button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 0 8px 0 4px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
@@ -2674,37 +2700,149 @@
   cursor: pointer;
 }
 
+.sourcecado-approval-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 16px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  line-height: 1.4;
+}
+
+.sourcecado-approval-warning > svg {
+  margin-top: 1px;
+}
+
+.sourcecado-approval-reason,
+.sourcecado-approval-status {
+  margin: 12px 16px 0;
+  color: var(--text);
+  line-height: 1.45;
+}
+
 .sourcecado-approval-details {
-  margin-top: 8px;
+  margin: 12px 16px 0;
   padding: 10px;
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--raised);
+  color: var(--text);
+}
+
+.sourcecado-approval-details p {
+  margin: 8px 0 0;
 }
 
 .sourcecado-approval-details pre {
   max-width: 100%;
   margin: 0;
   overflow-x: auto;
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 13px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-approval-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-approval-foot button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sourcecado-approval-foot button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.sourcecado-approval-foot .sourcecado-approval-toggle {
+  padding-left: 6px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.sourcecado-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.sourcecado-approval-foot .sourcecado-approval-actions button[data-decision="allow"] {
+  border-color: var(--accent-deep);
+  background: var(--accent-deep);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.sourcecado-approval-actions kbd {
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .sourcecado-approval-receipt {
   max-width: 620px;
   margin-top: 10px;
   background: transparent;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text);
+  font-size: 13px;
 }
 
 .sourcecado-approval-receipt > button {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sourcecado-approval-receipt > button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-approval-receipt[data-tone="ok"] .sourcecado-approval-state {
+  color: var(--accent-deep);
+}
+
+.sourcecado-approval-receipt[data-tone="warn"] .sourcecado-approval-state {
+  color: var(--warn);
 }
 
 .sourcecado-approval-receipt > div {
-  margin-top: 5px;
-  padding: 9px;
+  margin-top: 4px;
+  padding: 8px 12px;
   border-left: 2px solid var(--border);
 }
 
@@ -2747,11 +2885,34 @@
 }
 
 @media (max-width: 767px) {
-  .sourcecado-approval-card > button,
+  .sourcecado-approval-foot .sourcecado-approval-toggle,
+  .sourcecado-approval-foot .sourcecado-approval-actions button,
+  .sourcecado-approval-body button,
   .sourcecado-approval-receipt > button,
   .sourcecado-recovery-actions :where(button, a) {
     min-height: 44px;
     min-width: 44px;
+  }
+
+  .sourcecado-approval-actions {
+    width: 100%;
+  }
+
+  .sourcecado-approval-actions button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .sourcecado-approval-actions kbd {
+    display: none;
+  }
+
+  .sourcecado-approval-table :where(th, td) {
+    padding-inline: 12px;
+  }
+
+  .sourcecado-approval-table tbody th {
+    width: 42%;
   }
 }
 

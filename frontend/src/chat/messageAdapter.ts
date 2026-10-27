@@ -328,7 +328,9 @@ export function convertStructuredMessage(
         args: part.arguments as never,
         argsText: JSON.stringify(part.arguments),
         ...(part.result !== undefined ? { result: part.result } : {}),
-        isError: part.state === "error",
+        // A denial is the operator's decision. The backend closes the denied
+        // call with ok=false, which must not surface as a Failed step.
+        isError: part.state === "error" && part.approval?.state !== "denied",
         ...(part.startedAt !== undefined
           ? {
               timing: {
@@ -343,7 +345,10 @@ export function convertStructuredMessage(
           ? {
               providerMetadata: {
                 sourcecado: {
-                  failure: part.failure ?? null,
+                  failure:
+                    part.approval?.state === "denied"
+                      ? null
+                      : (part.failure ?? null),
                   recovery: part.recovery ?? null,
                   approvalState: part.approval?.state ?? null,
                   actor: part.approval?.actor ?? null,

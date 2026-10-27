@@ -37,9 +37,9 @@ describe("44px touch targets on narrow viewports (M4 regression guard)", () => {
     );
   });
 
-  it("sizes the approval-card review-details disclosure", () => {
+  it("sizes the approval-card Details toggle, decision buttons and body toggle", () => {
     expect(styles).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-approval-card > button,[\s\S]*?min-height:\s*44px;[^}]*min-width:\s*44px;/,
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-approval-foot \.sourcecado-approval-toggle,\s*\.sourcecado-approval-foot \.sourcecado-approval-actions button,\s*\.sourcecado-approval-body button,[\s\S]*?min-height:\s*44px;[^}]*min-width:\s*44px;/,
     );
   });
 

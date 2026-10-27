@@ -52,6 +52,26 @@ export type ApprovalResource =
       readonly account: string | null;
     }
   | {
+      /** Person-bound send: backend `SendAuthority.as_resource` (gmail.py). */
+      readonly kind: "gmail_send_authority";
+      readonly person_id: string;
+      readonly draft_id: string;
+      readonly account: string | null;
+      readonly to: string;
+      readonly subject: string;
+      readonly body_digest: string;
+    }
+  | {
+      /** Person-bound enrichment: backend `enrichment_resource` (apollo.py). */
+      readonly kind: "apollo_enrichment";
+      readonly person_id: string;
+      readonly person: string;
+      readonly title: string | null;
+      readonly company: string | null;
+      readonly matched_on: "email" | "apollo_id" | "name";
+      readonly credits: number;
+    }
+  | {
       readonly kind: "shell_command";
       readonly execution_target: "docker" | "host" | "unknown";
       readonly command_summary: string;
@@ -702,6 +722,46 @@ function approvalResource(value: unknown): ApprovalResource | undefined {
       fingerprint: typeof value.fingerprint === "string" ? value.fingerprint : null,
       unsandboxed: value.unsandboxed,
       permanent_eligible: value.permanent_eligible,
+    };
+  }
+  if (value.kind === "gmail_send_authority") {
+    if (
+      typeof value.person_id !== "string" ||
+      typeof value.draft_id !== "string" ||
+      typeof value.to !== "string" ||
+      typeof value.subject !== "string" ||
+      typeof value.body_digest !== "string"
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "gmail_send_authority",
+      person_id: value.person_id,
+      draft_id: value.draft_id,
+      account: typeof value.account === "string" ? value.account : null,
+      to: value.to,
+      subject: value.subject,
+      body_digest: value.body_digest,
+    };
+  }
+  if (value.kind === "apollo_enrichment") {
+    if (
+      typeof value.person_id !== "string" ||
+      typeof value.person !== "string" ||
+      !["email", "apollo_id", "name"].includes(String(value.matched_on)) ||
+      typeof value.credits !== "number" ||
+      !Number.isFinite(value.credits)
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "apollo_enrichment",
+      person_id: value.person_id,
+      person: value.person,
+      title: typeof value.title === "string" ? value.title : null,
+      company: typeof value.company === "string" ? value.company : null,
+      matched_on: value.matched_on as "email" | "apollo_id" | "name",
+      credits: value.credits,
     };
   }
   if (value.kind !== "gmail_draft" || typeof value.draft_id !== "string") {
