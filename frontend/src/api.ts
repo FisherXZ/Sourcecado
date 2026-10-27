@@ -37,8 +37,6 @@ export type Health = {
   persona?: string;
 };
 
-export type PersonaInfo = { id: string; name: string; tools: string[] };
-
 export type ScheduleRunStatus =
   | "running"
   | "success"
@@ -346,7 +344,10 @@ export async function renameSession(id: string, title: string): Promise<{ id: st
     body: JSON.stringify({ title }),
   });
   if (!res.ok) throw new Error(`rename ${res.status}`);
-  return res.json();
+  const renamed: { id: string; title: string } = await res.json();
+  // The open thread's header shows this title too, and it is not in the rail.
+  window.dispatchEvent(new CustomEvent("sourcecado:session-renamed", { detail: renamed }));
+  return renamed;
 }
 
 export type FollowUpReason = "reply_unanswered" | "reply_needs_review";
@@ -1286,12 +1287,6 @@ export async function pinSession(
     body: JSON.stringify({ pinned }),
   });
   if (!res.ok) throw new Error(`pin ${res.status}`);
-  return res.json();
-}
-
-export async function getPersona(): Promise<PersonaInfo> {
-  const res = await get("/v1/persona");
-  if (!res.ok) throw new Error(`persona ${res.status}`);
   return res.json();
 }
 
