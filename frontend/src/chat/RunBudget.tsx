@@ -8,41 +8,6 @@ import {
 
 const RECEIPT_LIMIT = 12;
 
-function duration(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${String(Math.round(seconds % 60)).padStart(2, "0")}s`;
-}
-
-function money(value: number): string {
-  const digits = value === 0 ? 2 : value < 0.01 ? 4 : 2;
-  return `$${value.toFixed(digits)}`;
-}
-
-/**
- * What the run is spending, in the same dense strip the header metrics use.
- * Deliberately quiet: it sits under the activity list and reads as a status
- * line, not as an alarm.
- */
-function RunBudgetStrip({ status }: { readonly status: RunBudgetStatus }) {
-  const { consumed, limits } = status;
-  return (
-    <section
-      className="sourcecado-run-metrics sourcecado-run-metrics-running"
-      aria-label="Run budget"
-    >
-      <span>{`Step ${consumed.model_turns} of ${limits.model_turns}`}</span>
-      <span>{`${consumed.tool_calls} of ${limits.tool_calls} tool calls`}</span>
-      <span>
-        {`${duration(consumed.elapsed_seconds)} of ${duration(limits.elapsed_seconds)}`}
-      </span>
-      <span>
-        {`${money(consumed.estimated_cost_usd)} of ${money(limits.estimated_cost_usd)} est.`}
-      </span>
-    </section>
-  );
-}
-
 /**
  * The stop. A run that ran out of budget did not finish, so this says so
  * first, then lists what it actually completed, what it had queued, and
@@ -114,10 +79,5 @@ export function RunBudgetView({
   if (status.state === "finished") return null;
   const live = messageState === "running" || messageState === "waiting-approval";
   if (!live) return null;
-  return (
-    <>
-      <RunBudgetStrip status={status} />
-      <RunBudgetWarning status={status} />
-    </>
-  );
+  return <RunBudgetWarning status={status} />;
 }

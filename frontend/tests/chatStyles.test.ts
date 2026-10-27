@@ -208,13 +208,14 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
-  it("keeps current-run measurements compact and numerically stable", () => {
+  it("keeps the usage line at 13px in text ink with stable digits and a 44px touch area on narrow screens", () => {
     expect(styles).toMatch(
-      /\.sourcecado-run-metrics\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;[^}]*font-variant-numeric:\s*tabular-nums;/,
+      /\.sourcecado-usage-line\s*\{[^}]*flex-wrap:\s*wrap;[^}]*color:\s*var\(--text\);[^}]*font-size:\s*13px;[^}]*font-variant-numeric:\s*tabular-nums;/,
     );
     expect(styles).toMatch(
-      /\.sourcecado-run-metrics > span\s*\{[^}]*border-right:\s*1px solid var\(--border\);/,
+      /@media \(max-width: 767px\)\s*\{\s*\.sourcecado-usage-line\s*\{[^}]*min-height:\s*44px;/,
     );
+    expect(styles).not.toMatch(/\.sourcecado-run-metrics/);
   });
 
   it("shows the bound person as an icon chip in ink, with a 44px touch area on narrow screens", () => {

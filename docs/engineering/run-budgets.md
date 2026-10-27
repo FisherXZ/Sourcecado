@@ -28,7 +28,8 @@ This replaces the fixed eight-step loop ceiling in `turn.py`.
 | `backend/coworker/turn.py` | Creates one meter per run, feeds it, and stops on its decision. |
 | `backend/coworker/telemetry/` | The typed values the meter reads: `UsageEvent`, `CostEstimate`. |
 | `frontend/src/chat/protocol.ts` | Parses the operator payload. Drops anything not on the allowlist. |
-| `frontend/src/chat/RunBudget.tsx` | The live strip, the warning, the stop card, the Continue action. |
+| `frontend/src/chat/RunBudget.tsx` | The warning, the stop card, the Continue action. |
+| `frontend/src/chat/UsageLine.tsx` | The usage line above the composer. Steps against the limit come from this payload. The hover and focus breakdown also lists tool calls, time and the cost limit. |
 
 ## The defaults
 
@@ -130,6 +131,9 @@ The thread renders it as one quiet line under the activity list, not a banner.
 A director who is watching sees the run approaching a stop; a director who is
 away sees it in the transcript afterwards.
 
+The run's spend is not a separate strip. It shows in the usage line above the
+composer, which stays after the run ends and then says "Last run".
+
 ## Continuation
 
 Continue is not a resumption. It is an ordinary new turn on the same
@@ -170,7 +174,8 @@ persisted as it happened.
 | --- | --- |
 | `backend/tests/test_run_budget.py` | Ordinary work past eight steps; each of the six budgets; two at once; loop detection; the warning; the partial result; continuation, no replay, restart, compaction, the bound person; cancellation; retry; the meter on its own. Criterion 8 is parametrized over the real `ASK` set. |
 | `backend/tests/test_run_budget_mutations.py` | Each guard broken on purpose: a budget that never trips, a loop detector that never fires, budgets checked before the loop detector, a detector that ignores refusals, a continuation that grants authority, a partial result that claims completion, receipts that omit failed calls. |
-| `frontend/tests/runBudget.test.tsx` | The allowlist projection, the live strip and warning, the stop card and its receipts, Continue sending the director's message, and the same after a restore. |
+| `frontend/tests/runBudget.test.tsx` | The allowlist projection, the warning, the stop card and its receipts, Continue sending the director's message, and the same after a restore. |
+| `frontend/tests/usageLine.test.tsx` | The usage line: values, unavailable values, the last-run label, retry and compaction chips, the hover and focus breakdown. |
 
 ## Known gaps
 
