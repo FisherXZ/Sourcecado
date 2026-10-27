@@ -360,6 +360,7 @@ export class SourcecadoChatStore {
     code: string,
     message: string,
     recoverable = true,
+    provider?: { readonly provider: string; readonly model: string },
   ): void {
     let messages = this.messagesFor(threadId);
     let occurrences = 1;
@@ -403,6 +404,7 @@ export class SourcecadoChatStore {
                 : message,
             recoverable,
             ...(occurrences > 1 ? { occurrences } : {}),
+            ...provider,
           },
         ],
       },
@@ -658,6 +660,9 @@ export class SourcecadoChatStore {
             : "error"),
           event.message,
           false,
+          event.failure
+            ? { provider: event.failure.provider, model: event.failure.model }
+            : undefined,
         );
       }
     }

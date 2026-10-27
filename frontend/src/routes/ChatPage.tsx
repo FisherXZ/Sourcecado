@@ -18,6 +18,7 @@ import {
   type QueueItem,
 } from "../api";
 import { ApprovalDeliveryProvider } from "../chat/approvalDelivery";
+import { ConnectionProvider } from "../chat/ConnectionChip";
 import { restoreConversation } from "../chat/restoreConversation";
 import { SourcecadoRuntimeProvider } from "../chat/SourcecadoRuntimeProvider";
 import {
@@ -33,7 +34,7 @@ import {
   RecoveryProvider,
   type RecoveryAction,
 } from "../chat/recovery";
-import type { ToolFailure } from "../chat/protocol";
+import type { ConnectionChangeEvent, ToolFailure } from "../chat/protocol";
 import { InspectorProvider } from "../chat/Inspector";
 
 /** Extra tries for the run's final telemetry reading, after the first one. */
@@ -76,6 +77,7 @@ export function ChatPage({
   const pendingCancelsRef = useRef(new Set<string>());
   const nextLegacyIndexRef = useRef(new Map<string, number>());
   const connectionStatusRef = useRef<ConnectionStatus>("connected");
+  const connectionRef = useRef<ConnectionChangeEvent | null>(null);
   const lastApprovalDeliveryRef = useRef<CommandDelivery | null>(null);
   const [activeThreadId, setActiveThreadId] = useState(initialThreadId);
   const [title, setTitle] = useState<string | null>(null);
@@ -267,6 +269,7 @@ export function ChatPage({
       const applied = storeRef.current.applyChatEvent(event);
       if (applied.type === "connection_change") {
         connectionStatusRef.current = applied.status;
+        connectionRef.current = applied;
       } else if ("version" in applied) {
         const threadId = applied.session_id;
         if (applied.type === "turn_start") {
@@ -478,7 +481,7 @@ export function ChatPage({
         : action === "repair"
           ? "repair_connection"
           : "continue_without_source";
-    chatRef.current?.recover?.({
+    return chatRef.current?.recover?.({
       type,
       session_id: failure.session_id,
       run_id: failure.run_id,
@@ -554,6 +557,7 @@ export function ChatPage({
     <main className="chat-page">
       <ApprovalDeliveryProvider deliveryRef={lastApprovalDeliveryRef}>
       <RecoveryProvider onAction={handleRecovery}>
+      <ConnectionProvider value={connectionRef.current}>
       <InspectorProvider threadId={activeThreadId}>
       <SourcecadoRuntimeProvider
         key={activeThreadId || "empty-thread"}
@@ -586,6 +590,7 @@ export function ChatPage({
         />
       </SourcecadoRuntimeProvider>
       </InspectorProvider>
+      </ConnectionProvider>
       </RecoveryProvider>
       </ApprovalDeliveryProvider>
     </main>

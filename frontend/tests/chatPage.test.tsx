@@ -2231,11 +2231,7 @@ describe("ChatPage Warm Operator thread", () => {
       ),
     ).toBeInTheDocument();
     expect(container).not.toHaveTextContent("PRIVATE_RAW_TRANSPORT_ERROR");
-    expect(screen.getByRole("link", { name: "Repair Google Drive" })).toHaveAttribute(
-      "href",
-      "#/connections/drive",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Retry failed step" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Retry Searching Drive/ }));
     expect(chatRecover.mock.calls[0]?.[0]).toMatchObject({
       type: "retry_failed_step",
       session_id: "thread-alpha",
@@ -2243,7 +2239,15 @@ describe("ChatPage Warm Operator thread", () => {
       call_id: "call-drive-ui",
     });
     chatRecover.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "Continue without Google Drive" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /^More recovery options for/ }),
+    );
+    expect(
+      screen.getByRole("menuitem", { name: /Repair connection/ }),
+    ).toHaveAttribute("href", "#/connections/drive");
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /Continue without this source/ }),
+    );
     expect(chatRecover.mock.calls[0]?.[0]).toMatchObject({
       type: "continue_without_source",
       session_id: "thread-alpha",

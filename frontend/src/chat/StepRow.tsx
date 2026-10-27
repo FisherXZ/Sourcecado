@@ -12,8 +12,9 @@ import {
   stepLabel,
   type StepState,
 } from "./processState";
-import { useRecoveryActions } from "./recovery";
+import { failureReason, recoveryChoices } from "./recovery";
 import { showResultCard, stepHasResultCard } from "./resultCards";
+import { StepRecovery } from "./StepRecovery";
 import { toolPresentation } from "./toolRegistry";
 import { sanitizeApolloNameMasks } from "../personName";
 
@@ -36,25 +37,33 @@ const SCREEN_READER_WORDS: Readonly<Partial<Record<StepState, string>>> = {
 /**
  * The right edge of a row or of the receipt line: elapsed while running, the
  * result count, the state icon, and a state word for every outcome that is
- * not a plain success.
+ * not a plain success. A failed step may say why in place of the word.
  */
 export function StepStatus({
   state,
   count,
   elapsed,
+  reason,
 }: {
   readonly state: StepState;
   readonly count?: string | null;
   readonly elapsed?: string | null;
+  /** A short reason that replaces the state word, such as "Could not connect". */
+  readonly reason?: string | null;
 }) {
-  const word = STATE_WORDS[state];
+  const word = reason ?? STATE_WORDS[state];
   return (
     <span className="sourcecado-step-status">
       {elapsed ? <span className="sourcecado-step-elapsed">{elapsed}</span> : null}{" "}
       {count ? <span className="sourcecado-step-count">{count}</span> : null}{" "}
       <StatusIcon state={state} />{" "}
       {word ? (
-        <span className="sourcecado-step-state">{word}</span>
+        <span className="sourcecado-step-state">
+          {reason && reason !== STATE_WORDS[state] ? (
+            <span className="sr-only">{STATE_WORDS[state]}: </span>
+          ) : null}
+          {word}
+        </span>
       ) : (
         <span className="sr-only">{SCREEN_READER_WORDS[state]}</span>
       )}
@@ -74,15 +83,7 @@ export function StepRow({
   const presentation = toolPresentation(tool.toolName);
   const failure = failureOf(tool);
   const recovery = recoveryOf(tool);
-  const recoveryStatus = recovery?.status ? String(recovery.status) : null;
-  const canRecover =
-    (state === "failed" || state === "blocked") &&
-    failure !== null &&
-    recoveryStatus !== "succeeded" &&
-    recoveryStatus !== "skipped" &&
-    recoveryStatus !== "denied" &&
-    recoveryStatus !== "interrupted";
-  const { act } = useRecoveryActions();
+  const choices = recoveryChoices(state, failure, recovery);
   const { select } = useInspector();
   const [showFailureDetail, setShowFailureDetail] = useState(false);
   // The operator's open or close choice wins. Until they make one, a step
@@ -113,6 +114,7 @@ export function StepRow({
       data-tool-call-id={tool.toolCallId}
       {...(presentation.slot ? { "data-renderer-slot": presentation.slot } : {})}
     >
+      <div className="sourcecado-step-row">
       <button
         type="button"
         className="sourcecado-step-toggle"
@@ -133,6 +135,7 @@ export function StepRow({
         <StepStatus
           state={state}
           count={count}
+          reason={state === "failed" && failure ? failureReason(failure) : null}
           elapsed={
             state === "running" && elapsedMs !== null
               ? formatElapsed(elapsedMs, true)
@@ -141,6 +144,15 @@ export function StepRow({
         />{" "}
         <ActionIcon name="chevron" />
       </button>
+      {choices && failure ? (
+        <StepRecovery
+          label={summary ? `${label} ${summary}` : label}
+          failure={failure}
+          choices={choices}
+          recoveryKey={`${String(recovery?.commandId ?? "")}:${String(recovery?.status ?? "")}`}
+        />
+      ) : null}
+      </div>
       {open ? (
         <div id={detailId} className="sourcecado-step-detail">
           {state === "denied" ? <p>Denied. This step did not run.</p> : null}
@@ -152,6 +164,9 @@ export function StepRow({
           ) : null}
           {(state === "failed" || state === "blocked") && failure ? (
             <p role="alert">{failure.summary}</p>
+          ) : null}
+          {choices?.retry?.asksApproval ? (
+            <p>Retry asks for approval first.</p>
           ) : null}
           {recovery?.outcome ? <p>{String(recovery.outcome)}</p> : null}
           {elapsedMs !== null && state !== "running" ? (
@@ -191,36 +206,16 @@ export function StepRow({
             >
               <ActionIcon name="inspect" />
             </button>
-            {canRecover && failure ? (
-              <div className="sourcecado-recovery-actions">
-                {state === "failed" ? (
-                  <button type="button" onClick={() => act("retry", failure)}>
-                    <ActionIcon name="retry" />
-                    Retry failed step
-                  </button>
-                ) : null}
-                {failure.repair_route ? (
-                  <a
-                    href={failure.repair_route}
-                    onClick={() => act("repair", failure)}
-                  >
-                    <ActionIcon name="repair" />
-                    Repair {failure.source}
-                  </a>
-                ) : null}
-                <button type="button" onClick={() => act("continue", failure)}>
-                  <ActionIcon name="continue" />
-                  Continue without {failure.source}
-                </button>
-                <button
-                  type="button"
-                  aria-expanded={showFailureDetail}
-                  onClick={() => setShowFailureDetail((current) => !current)}
-                >
-                  <ActionIcon name="details" />
-                  Failure details
-                </button>
-              </div>
+            {(state === "failed" || state === "blocked") && failure ? (
+              <button
+                type="button"
+                className="sourcecado-failure-toggle"
+                aria-expanded={showFailureDetail}
+                onClick={() => setShowFailureDetail((current) => !current)}
+              >
+                <ActionIcon name="details" />
+                Failure details
+              </button>
             ) : null}
           </div>
           {showFailureDetail && failure ? (

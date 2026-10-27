@@ -193,7 +193,7 @@ describe("ActivityGroup step rows", () => {
     expect(container).not.toHaveTextContent("Failed");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Retry failed step" }),
+      screen.queryByRole("button", { name: /^Retry|More recovery options/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -252,7 +252,7 @@ describe("ActivityGroup step rows", () => {
     expect(container).not.toHaveTextContent("Failed");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /Retry failed step|Continue without/ }),
+      screen.queryByRole("button", { name: /^Retry|More recovery options/ }),
     ).not.toBeInTheDocument();
 
     rerender(
@@ -286,11 +286,16 @@ describe("ActivityGroup step rows", () => {
       "Board was not allowed to complete this action.",
     );
     expect(
-      screen.queryByRole("button", { name: "Retry failed step" }),
+      screen.queryByRole("button", { name: /^Retry/ }),
     ).not.toBeInTheDocument();
+    // Continue stays in the overflow menu, and Retry is not in it either.
+    fireEvent.click(
+      screen.getByRole("button", { name: /^More recovery options for/ }),
+    );
     expect(
-      screen.getByRole("button", { name: "Continue without Board" }),
+      screen.getByRole("menuitem", { name: /Continue without this source/ }),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Retry/ })).not.toBeInTheDocument();
   });
 
   it("opens the outcome inline from the row and moves Inspect into it as an icon button", () => {
@@ -366,7 +371,7 @@ describe("ActivityGroup step rows", () => {
       "Drive could not be reached. Retry is safe.",
     );
     expect(document.body).not.toHaveTextContent("PRIVATE_TRANSPORT_ERROR");
-    fireEvent.click(screen.getByRole("button", { name: "Retry failed step" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Retry Searching Drive/ }));
     expect(act).toHaveBeenCalledWith("retry", expect.objectContaining({ source: "Drive" }));
   });
 

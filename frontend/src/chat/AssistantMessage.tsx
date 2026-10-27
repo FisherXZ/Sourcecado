@@ -18,6 +18,7 @@ import { AnswerResults } from "./AnswerResults";
 import { useInspector } from "./Inspector";
 import { answerHasStarted, isLiveMessage } from "./processState";
 import { ThinkingRow } from "./ThinkingRow";
+import { TurnNoticeHead } from "./TurnNotice";
 import {
   joinReasoning,
   reasoningParts,
@@ -109,6 +110,9 @@ export function AssistantMessage() {
   const frame = notice
     ? noticeFrame(message.metadata.custom?.sourcecadoNoticeCode)
     : null;
+  // A notice about a turn that failed, as opposed to a connection or history notice.
+  const failedTurn =
+    notice && message.metadata.custom?.sourcecadoNoticeFailedTurn === true;
   const prose = message.content
     .filter((part) => part.type === "text")
     .map((part) => (part.type === "text" ? part.text : ""))
@@ -154,14 +158,22 @@ export function AssistantMessage() {
 
   return (
     <MessagePrimitive.Root
-      className={`sourcecado-assistant-message${notice ? " sourcecado-notice" : ""}${compacted ? " sourcecado-compaction-receipt" : ""}`}
+      className={`sourcecado-assistant-message${notice ? " sourcecado-notice" : ""}${compacted ? " sourcecado-compaction-receipt" : ""}${failedTurn ? " sourcecado-notice-failed" : ""}`}
       {...(notice ? { role: "note" } : {})}
     >
       {frame ? (
-        <p className="sourcecado-notice-title">
-          {compacted ? <CompactIcon /> : null}
-          {frame.title}
-        </p>
+        failedTurn ? (
+          <TurnNoticeHead
+            title={frame.title}
+            provider={message.metadata.custom?.sourcecadoNoticeProvider}
+            model={message.metadata.custom?.sourcecadoNoticeModel}
+          />
+        ) : (
+          <p className="sourcecado-notice-title">
+            {compacted ? <CompactIcon /> : null}
+            {frame.title}
+          </p>
+        )
       ) : null}
       <ActivityGroup
         tools={tools}
