@@ -1,7 +1,10 @@
-import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 
 import type { CurrentRunMetrics } from "../api";
-import type { SourcecadoStructuredMessage } from "./messageAdapter";
+import {
+  highestCompactionGeneration,
+  type SourcecadoStructuredMessage,
+} from "./messageAdapter";
 import type { RunBudgetStatus } from "./protocol";
 
 /**
@@ -15,6 +18,12 @@ import type { RunBudgetStatus } from "./protocol";
  *
  * Context share is how full the model's window was on the latest request. It
  * is not plan or account usage, and nothing here is named that way.
+ *
+ * Compactions come from the run's `turn_end.compaction`, the same data as the
+ * receipt in the thread. The backend sends it on every run while a compaction
+ * is in effect, so a run counts as compacting only when its generation is
+ * higher than any earlier run's. The telemetry's `compaction_count` is not
+ * used: the backend does not record a compaction into it during a live run.
  */
 
 /** Context share at which the bar changes color. Compaction starts at 75%. */
@@ -31,34 +40,63 @@ export type UsageSource = {
   readonly budget: RunBudgetStatus | undefined;
   /** True while the numbers belong to the run that is working now. */
   readonly live: boolean;
+  /** Compactions the latest run made. A run reports at most one. */
+  readonly compactions: number;
+  /** The run ended and its final telemetry reading is still on its way. */
+  readonly settling: boolean;
+  /** The final reading failed, so the values may be from before the run ended. */
+  readonly partial: boolean;
 };
+
+/** How the read of the run's final telemetry went. */
+export type FinalRead = "pending" | "done" | "failed";
 
 /**
  * Chooses which run the line describes.
  *
  * While the thread works, the line describes that run. Telemetry that still
  * holds the previous run is left out, because it is not this run's number.
- * Once the run ends, the line describes that finished run and says "Last run".
+ * Once the run ends, the line describes that finished run and says "Last run",
+ * but only after the final reading is in. A failed final reading leaves the
+ * mid-run values on screen, so the line marks them as possibly incomplete.
  */
 export function pickUsage(
   messages: readonly SourcecadoStructuredMessage[],
   metrics: CurrentRunMetrics | null,
   running: boolean,
+  finalRead: FinalRead = "done",
+  endedRunId?: string,
 ): UsageSource | null {
   if (messages.length === 0) return null;
-  const latest = messages
-    .filter(
-      (message) =>
-        message.role === "assistant" &&
-        !message.parts.some((part) => part.type === "notice"),
-    )
-    .at(-1);
-  if (!running) return { metrics, budget: latest?.runBudget, live: false };
+  const runs = messages.filter(
+    (message) =>
+      message.role === "assistant" &&
+      !message.parts.some((part) => part.type === "notice"),
+  );
+  const latest = runs.at(-1);
+  if (!running) {
+    // Telemetry from another run is not this run's reading. Without an id the
+    // run was not seen starting, as after a reload, and the telemetry is taken as it is.
+    const own =
+      endedRunId === undefined || metrics?.run_id === endedRunId ? metrics : null;
+    const before = highestCompactionGeneration(runs.slice(0, -1));
+    return {
+      metrics: own,
+      budget: latest?.runBudget,
+      live: false,
+      compactions: (latest?.compactionGeneration ?? 0) > before ? 1 : 0,
+      settling: finalRead === "pending",
+      partial: finalRead === "failed" && own !== null,
+    };
+  }
   return {
     metrics: metrics?.status === "running" ? metrics : null,
     // Before the new run's first event, the latest message is the previous run.
     budget: latest && LIVE_STATES.has(latest.state) ? latest.runBudget : undefined,
     live: true,
+    compactions: 0,
+    settling: false,
+    partial: false,
   };
 }
 
@@ -235,29 +273,53 @@ function Breakdown({
       {metrics && metrics.retry_count > 0 ? (
         <Row term="Retries" value={count(metrics.retry_count)} />
       ) : null}
-      {metrics && metrics.compaction_count > 0 ? (
-        <Row term="Compactions" value={count(metrics.compaction_count)} />
+      {source.compactions > 0 ? (
+        <Row term="Compactions" value={count(source.compactions)} />
       ) : null}
     </dl>
   );
 }
 
 export function UsageLine({ source }: { readonly source: UsageSource }) {
-  const { metrics, live } = source;
+  const { metrics, compactions, partial } = source;
+  // A run that just ended keeps its "this run" label until its final reading is in.
+  const live = source.live || source.settling;
   const percent = percentOf(metrics);
   const steps = stepsOf(source.budget);
   const cost = metrics?.estimated_cost_usd ?? null;
   const contextTokens = metrics?.current_context_tokens ?? null;
+  const retries = metrics?.retry_count ?? 0;
   const reported =
-    percent !== null || contextTokens !== null || cost !== null || steps !== null;
+    percent !== null ||
+    contextTokens !== null ||
+    cost !== null ||
+    steps !== null ||
+    retries > 0 ||
+    compactions > 0;
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const detailId = useId();
   const open = (hovered || focused) && !dismissed;
-  const retries = metrics?.retry_count ?? 0;
-  const compactions = metrics?.compaction_count ?? 0;
-  const scope = live ? "This run" : "Last run";
+
+  // Escape closes the breakdown wherever focus is, and leaves focus where it
+  // is. The window sees the key before the composer, so the first Escape
+  // closes the breakdown and does not also stop a running turn.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setDismissed(true);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [open]);
+  const scope = live
+    ? "This run"
+    : partial
+      ? "Last run, may be incomplete"
+      : "Last run";
   const unpriced = source.budget?.unpriced_requests ?? 0;
 
   return (
@@ -281,12 +343,9 @@ export function UsageLine({ source }: { readonly source: UsageSource }) {
           setFocused(true);
         }}
         onBlur={() => setFocused(false)}
-        onKeyDown={(event: KeyboardEvent) => {
-          if (event.key === "Escape") setDismissed(true);
-        }}
       >
         {!live && reported ? (
-          <span className="sourcecado-usage-scope">Last run</span>
+          <span className="sourcecado-usage-scope">{scope}</span>
         ) : null}
         <span className="sourcecado-usage-item">
           <ContextIcon />
@@ -371,6 +430,9 @@ export function UsageLine({ source }: { readonly source: UsageSource }) {
         <p className="sourcecado-usage-detail-title">{scope}</p>
         <Breakdown source={source} percent={percent} steps={steps} />
         <p className="sourcecado-usage-detail-note">
+          {partial
+            ? "The final reading failed. These values are from earlier in this run. "
+            : ""}
           Context window is the share of the model's window that the latest
           request filled.
           {unpriced > 0

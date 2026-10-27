@@ -133,6 +133,9 @@ away sees it in the transcript afterwards.
 
 The run's spend is not a separate strip. It shows in the usage line above the
 composer, which stays after the run ends and then says "Last run".
+If the final telemetry read fails, the line tries it twice more. If it still
+fails, the line says "Last run, may be incomplete" and shows the values it had
+before the run ended.
 
 ## Continuation
 
@@ -189,3 +192,14 @@ persisted as it happened.
 - `estimated_cost_usd` cannot bind on a model with no pricing entry. The token
   ceilings are the backstop, and `unpriced_requests` is how the operator finds
   out.
+- The usage line counts compactions from the `compaction` field of `turn_end`,
+  not from the telemetry. The backend sends that field on every run while a
+  compaction is in effect, so a run counts as compacting only when its
+  `generation` is higher than every earlier run's in the same thread.
+  `/telemetry/current` reports `compaction_count` as 0 for a live run, because
+  only `evals/runner.py` records a `CompactionEvent`. When `turn.py` records
+  one, the line can read the telemetry again.
+- The "Context compacted" receipt in the thread follows the same rule as the
+  usage line chip. It is added only for a run whose `compaction.generation` is
+  higher than every earlier run's in the thread, live and after a restore.
+  Runs under a standing compaction add no receipt.

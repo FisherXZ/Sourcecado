@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { CurrentRunMetrics } from "../src/api";
 import type { SourcecadoStructuredMessage } from "../src/chat/messageAdapter";
@@ -68,7 +68,15 @@ const budget: RunBudgetStatus = {
 };
 
 function last(over: Partial<UsageSource> = {}): UsageSource {
-  return { metrics, budget, live: false, ...over };
+  return {
+    metrics,
+    budget,
+    live: false,
+    compactions: 0,
+    settling: false,
+    partial: false,
+    ...over,
+  };
 }
 
 function line(name = "Usage, last run") {
@@ -172,12 +180,40 @@ describe("UsageLine chips", () => {
     rerender(
       <UsageLine
         source={last({
-          metrics: { ...metrics, retry_count: 1, compaction_count: 2 },
+          metrics: { ...metrics, retry_count: 1 },
+          compactions: 2,
         })}
       />,
     );
     expect(line()).toHaveTextContent("1 retry");
     expect(line()).toHaveTextContent("2 compactions");
+  });
+
+  it("counts compactions from the thread's receipts, not from the telemetry count", () => {
+    const { rerender } = render(
+      <UsageLine
+        source={last({ metrics: { ...metrics, compaction_count: 5 } })}
+      />,
+    );
+    expect(line()).not.toHaveTextContent(/compaction/i);
+
+    rerender(<UsageLine source={last({ compactions: 1 })} />);
+    expect(line()).toHaveTextContent("1 compaction");
+    expect(line()).not.toHaveTextContent("1 compactions");
+  });
+
+  it("keeps the last-run label when only a chip has anything to report", () => {
+    render(
+      <UsageLine
+        source={last({
+          metrics: { ...unreported, retry_count: 2 },
+          budget: undefined,
+        })}
+      />,
+    );
+
+    expect(line()).toHaveTextContent("Last run");
+    expect(line()).toHaveTextContent("2 retries");
   });
 });
 
@@ -257,7 +293,10 @@ describe("UsageLine breakdown", () => {
 
     rerender(
       <UsageLine
-        source={last({ metrics: { ...metrics, retry_count: 3, compaction_count: 1 } })}
+        source={last({
+          metrics: { ...metrics, retry_count: 3 },
+          compactions: 1,
+        })}
       />,
     );
     const detail = screen.getByRole("tooltip", { hidden: true });
@@ -301,6 +340,8 @@ const user: SourcecadoStructuredMessage = {
 
 describe("pickUsage", () => {
   const live = { ...metrics, status: "running" as const };
+  const idle = { live: false, compactions: 0, settling: false, partial: false };
+  const working = { live: true, compactions: 0, settling: false, partial: false };
 
   it("shows nothing for an empty thread", () => {
     expect(pickUsage([], null, false)).toBeNull();
@@ -309,7 +350,7 @@ describe("pickUsage", () => {
   it("describes the finished run after the run ends", () => {
     const picked = pickUsage([user, assistant("complete", budget)], metrics, false);
 
-    expect(picked).toEqual({ metrics, budget, live: false });
+    expect(picked).toEqual({ metrics, budget, ...idle });
   });
 
   it("drops the previous run's telemetry and steps until the new run reports its own", () => {
@@ -319,14 +360,14 @@ describe("pickUsage", () => {
       metrics,
       true,
     );
-    expect(early).toEqual({ metrics: null, budget: undefined, live: true });
+    expect(early).toEqual({ metrics: null, budget: undefined, ...working });
 
     const started = pickUsage(
       [user, assistant("complete", budget), user, assistant("running")],
       metrics,
       true,
     );
-    expect(started).toEqual({ metrics: null, budget: undefined, live: true });
+    expect(started).toEqual({ metrics: null, budget: undefined, ...working });
   });
 
   it("uses the live run's telemetry and budget while it works", () => {
@@ -337,7 +378,7 @@ describe("pickUsage", () => {
       true,
     );
 
-    expect(picked).toEqual({ metrics: live, budget: liveBudget, live: true });
+    expect(picked).toEqual({ metrics: live, budget: liveBudget, ...working });
   });
 
   it("skips a compaction notice when it looks for the run's budget", () => {
@@ -351,5 +392,165 @@ describe("pickUsage", () => {
     );
 
     expect(picked?.budget).toBe(budget);
+  });
+
+  const underGeneration = (
+    generation: number | undefined,
+  ): SourcecadoStructuredMessage => ({
+    ...assistant("complete", budget),
+    ...(generation === undefined ? {} : { compactionGeneration: generation }),
+  });
+
+  it("counts a compaction for the run that raised the generation", () => {
+    const picked = pickUsage([user, underGeneration(1)], metrics, false);
+
+    expect(picked?.compactions).toBe(1);
+  });
+
+  it("counts a run only when its generation is higher than every earlier run's", () => {
+    // The backend reports the standing generation on every run. Only the runs
+    // that raised it compacted.
+    const generations = [1, 1, 1, 2];
+    const chips = generations.map((_generation, index) => {
+      const thread = generations
+        .slice(0, index + 1)
+        .flatMap((generation) => [user, underGeneration(generation)]);
+      return pickUsage(thread, metrics, false)?.compactions;
+    });
+
+    expect(chips).toEqual([1, 0, 0, 1]);
+  });
+
+  it("counts none for runs that never reported a generation", () => {
+    const picked = pickUsage(
+      [user, underGeneration(undefined), user, underGeneration(undefined)],
+      metrics,
+      false,
+    );
+
+    expect(picked?.compactions).toBe(0);
+  });
+
+  it("counts none while a run works", () => {
+    const picked = pickUsage(
+      [user, underGeneration(1), user, assistant("running")],
+      metrics,
+      true,
+    );
+
+    expect(picked?.compactions).toBe(0);
+  });
+
+  it("does not show another run's telemetry as the ended run's reading", () => {
+    const messages = [user, assistant("complete", budget)];
+
+    expect(pickUsage(messages, metrics, false, "done", "run-1")?.metrics).toBe(metrics);
+    const stale = pickUsage(messages, metrics, false, "failed", "run-2");
+    expect(stale?.metrics).toBeNull();
+    expect(stale?.partial).toBe(false);
+    // A run not seen starting, as after a reload, has no id to compare.
+    expect(pickUsage(messages, metrics, false, "done")?.metrics).toBe(metrics);
+  });
+
+  it("waits for the final reading before it calls a finished run the last run", () => {
+    const messages = [user, assistant("complete", budget)];
+
+    expect(pickUsage(messages, metrics, false, "pending")).toMatchObject({
+      live: false,
+      settling: true,
+      partial: false,
+    });
+    expect(pickUsage(messages, metrics, false, "done")).toMatchObject({
+      settling: false,
+      partial: false,
+    });
+  });
+
+  it("marks values partial only when the final reading failed and something was read before", () => {
+    const messages = [user, assistant("complete", budget)];
+
+    expect(pickUsage(messages, metrics, false, "failed")?.partial).toBe(true);
+    expect(pickUsage(messages, null, false, "failed")?.partial).toBe(false);
+    expect(pickUsage(messages, live, true, "failed")?.partial).toBe(false);
+  });
+});
+
+describe("UsageLine final reading", () => {
+  it("keeps the this-run label until the final reading is in", () => {
+    const { rerender } = render(<UsageLine source={last({ settling: true })} />);
+
+    const settling = screen.getByRole("group", { name: "Usage, this run" });
+    expect(settling).not.toHaveTextContent("Last run");
+    expect(settling.closest(".sourcecado-usage")).toHaveAttribute("data-scope", "live");
+
+    rerender(<UsageLine source={last()} />);
+    expect(line()).toHaveTextContent("Last run");
+  });
+
+  it("says the values may be incomplete when the final reading failed", () => {
+    render(<UsageLine source={last({ partial: true })} />);
+
+    const usage = screen.getByRole("group", { name: "Usage, last run, may be incomplete" });
+    expect(usage).toHaveTextContent("Last run, may be incomplete");
+    fireEvent.focus(usage);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "The final reading failed. These values are from earlier in this run.",
+    );
+  });
+});
+
+describe("UsageLine Escape", () => {
+  it("closes a breakdown opened by hover while focus is elsewhere, and leaves focus alone", () => {
+    const { container } = render(
+      <>
+        <UsageLine source={last()} />
+        <textarea aria-label="Message" />
+      </>,
+    );
+    const box = screen.getByLabelText("Message");
+    box.focus();
+    const wrapper = container.querySelector(".sourcecado-usage")!;
+    const detail = screen.getByRole("tooltip", { hidden: true });
+    fireEvent.mouseEnter(wrapper);
+    expect(detail).toBeVisible();
+
+    fireEvent.keyDown(box, { key: "Escape" });
+
+    expect(detail).not.toBeVisible();
+    expect(box).toHaveFocus();
+
+    // The pointer coming back opens it again.
+    fireEvent.mouseLeave(wrapper);
+    fireEvent.mouseEnter(wrapper);
+    expect(detail).toBeVisible();
+  });
+
+  it("takes the first Escape itself, so the composer does not stop the run", () => {
+    const composer = vi.fn();
+    const radixStyle = vi.fn();
+    document.addEventListener("keydown", radixStyle, true);
+    const { container } = render(
+      <>
+        <UsageLine source={last()} />
+        <textarea aria-label="Message" onKeyDown={composer} />
+      </>,
+    );
+    const box = screen.getByLabelText("Message");
+    const wrapper = container.querySelector(".sourcecado-usage")!;
+
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(composer).toHaveBeenCalledTimes(1);
+
+    fireEvent.mouseEnter(wrapper);
+    composer.mockClear();
+    radixStyle.mockClear();
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(composer).not.toHaveBeenCalled();
+    expect(radixStyle).not.toHaveBeenCalled();
+
+    // With the breakdown closed, the next Escape reaches the composer again.
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(composer).toHaveBeenCalledTimes(1);
+    document.removeEventListener("keydown", radixStyle, true);
   });
 });

@@ -110,11 +110,29 @@ export type SourcecadoPart =
   | SourcecadoSourcePart
   | SourcecadoArtifactPart;
 
+/**
+ * The highest compaction generation any of these messages ended under, or 0.
+ * A run raised the generation, and so compacted, only when its own generation
+ * is above this for the runs before it.
+ */
+export function highestCompactionGeneration(
+  messages: readonly SourcecadoStructuredMessage[],
+): number {
+  return Math.max(0, ...messages.map((message) => message.compactionGeneration ?? 0));
+}
+
 export type SourcecadoStructuredMessage = {
   readonly id: string;
   readonly role: "assistant" | "user" | "system";
   /** The run's spend against its budget, as of the last event for it. */
   readonly runBudget?: RunBudgetStatus;
+  /**
+   * The compaction generation the run ended under. The backend reports it on
+   * every run while a compaction is in effect, so it is the run that raised
+   * the number that compacted. Kept on the run's own message because a
+   * restored thread cannot say which run a compaction receipt belongs to.
+   */
+  readonly compactionGeneration?: number;
   readonly state:
     | "running"
     | "stopping"

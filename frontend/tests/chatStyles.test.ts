@@ -238,6 +238,12 @@ describe("Warm Operator thread styles", () => {
     expect(styles).not.toMatch(/\.sourcecado-run-metrics/);
   });
 
+  it("keeps the budget stop card, with its Continue button, at 13px", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-notice\.sourcecado-run-stop\s*\{[^}]*font-size:\s*13px;/,
+    );
+  });
+
   it("shows the bound person as an icon chip in ink, with a 44px touch area on narrow screens", () => {
     expect(styles).toMatch(
       /\.sourcecado-active-person svg\s*\{[^}]*color:\s*var\(--accent-deep\);/,

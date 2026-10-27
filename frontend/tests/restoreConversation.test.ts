@@ -256,4 +256,58 @@ describe("restoreConversation merge fidelity", () => {
       },
     ]);
   });
+
+  it("keeps each run's compaction generation through a restore", () => {
+    const run = (n: number, generation: number) => {
+      const ids = {
+        version: 2,
+        session_id: "thread-production",
+        run_id: `run-${n}`,
+        message_id: `message-${n}`,
+        part_id: `part-${n}`,
+      } as const;
+      return [
+        { ...ids, event_id: `start-${n}`, type: "turn_start", state: "running" },
+        { ...ids, event_id: `delta-${n}`, type: "assistant_delta", delta: `Answer ${n}.` },
+        {
+          ...ids,
+          event_id: `end-${n}`,
+          type: "turn_end",
+          text: `Answer ${n}.`,
+          state: "complete",
+          compaction: {
+            generation,
+            summarized: true,
+            compacted_messages: 5,
+            retained_director_messages: 2,
+            omitted_director_messages: 0,
+            measurement: "provider",
+            rejected_summaries: 0,
+          },
+        },
+      ];
+    };
+
+    const restored = restoreConversation({
+      id: "thread-production",
+      title: "Long thread",
+      messages: [1, 2, 3, 4].flatMap((n) => [
+        { role: "user", content: `Question ${n}.`, message_id: `message-${n}` },
+        { role: "assistant", content: `Answer ${n}.`, message_id: `message-${n}` },
+      ]),
+      events: [run(1, 1), run(2, 1), run(3, 1), run(4, 2)].flat(),
+    } as never);
+
+    const runs = restored.filter(
+      (message) =>
+        message.role === "assistant" &&
+        !message.parts.some((part) => part.type === "notice"),
+    );
+    expect(runs.map((message) => message.compactionGeneration)).toEqual([1, 1, 1, 2]);
+    // Receipts only for the runs that raised the generation: runs 1 and 4.
+    const receipts = restored.filter((message) =>
+      message.parts.some((part) => part.type === "notice" && part.code === "compacted"),
+    );
+    expect(receipts).toHaveLength(2);
+  });
 });

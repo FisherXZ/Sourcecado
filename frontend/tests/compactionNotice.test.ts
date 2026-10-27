@@ -114,6 +114,57 @@ describe("compaction notice in the thread", () => {
     expect(rendered).toContain("Older parts of this conversation were compacted");
   });
 
+  it("keeps the compaction generation on the run's own message, so the usage line can count it", () => {
+    const store = new SourcecadoChatStore([], "thread-alpha");
+    store.applyChatEvent({
+      version: 2,
+      type: "turn_start",
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      event_id: "event-start",
+      message_id: "message-1",
+      part_id: "part-1",
+      state: "running",
+    });
+    store.applyChatEvent(turnEnd(notice));
+
+    const run = store
+      .messagesFor("thread-alpha")
+      .find((message) => message.id === "message-1");
+    expect(run?.compactionGeneration).toBe(2);
+  });
+
+  it("adds the receipt only for a run that raised the generation", () => {
+    const store = new SourcecadoChatStore([], "thread-alpha");
+    // The backend sends the standing generation on every run.
+    const generations = [undefined, undefined, 1, 1, 1, 2];
+    const receiptsAfterEachRun = generations.map((generation, index) => {
+      const n = index + 1;
+      const ids = {
+        version: 2,
+        session_id: "thread-alpha",
+        run_id: `run-${n}`,
+        message_id: `message-${n}`,
+        part_id: `part-${n}`,
+      } as const;
+      store.applyChatEvent({ ...ids, event_id: `start-${n}`, type: "turn_start", state: "running" });
+      store.applyChatEvent({
+        ...ids,
+        event_id: `end-${n}`,
+        type: "turn_end",
+        text: "done",
+        state: "complete",
+        ...(generation === undefined ? {} : { compaction: { ...notice, generation } }),
+      });
+      return store
+        .messagesFor("thread-alpha")
+        .filter((message) => message.parts.some((part) => part.type === "notice")).length;
+    });
+
+    // Receipts after each run: none, none, run 3's, still one, still one, run 6's.
+    expect(receiptsAfterEachRun).toEqual([0, 0, 1, 1, 1, 2]);
+  });
+
   it("adds no notice when the turn compacted nothing", () => {
     const store = new SourcecadoChatStore([], "thread-alpha");
     store.applyChatEvent({

@@ -1,4 +1,5 @@
 import { useSendComposer } from "./ComposerDraftContext";
+import { ActionIcon } from "./ProcessIcons";
 import {
   CONTINUE_RUN_PROMPT,
   runBudgetStopText,
@@ -24,7 +25,7 @@ function RunBudgetStop({ status }: { readonly status: RunBudgetStatus }) {
   const hidden = status.completed.length - receipts.length;
   return (
     <section
-      className="sourcecado-notice"
+      className="sourcecado-notice sourcecado-run-stop"
       role="note"
       aria-label="Run stopped before finishing"
     >
@@ -44,6 +45,7 @@ function RunBudgetStop({ status }: { readonly status: RunBudgetStatus }) {
       {status.continue_available && send ? (
         <div className="sourcecado-recovery-actions">
           <button type="button" onClick={() => send(CONTINUE_RUN_PROMPT)}>
+            <ActionIcon name="continue" />
             Continue this run
           </button>
         </div>
