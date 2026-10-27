@@ -297,6 +297,10 @@ describe("Message actions", () => {
 
       await waitFor(() => expect(chatSend).toHaveBeenCalledTimes(1));
       expect(composerBox()).toHaveValue("Half a thought");
+      // The saved copy that survives a reload stays too.
+      expect(window.localStorage.getItem("sourcecado.chat.draft.v1:thread-alpha")).toBe(
+        "Half a thought",
+      );
     });
 
     it("stays on for a turn that only read data", async () => {

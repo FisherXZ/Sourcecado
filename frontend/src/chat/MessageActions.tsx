@@ -151,8 +151,15 @@ function RetryAction({
       label="Retry"
       reason={reason}
       // thread().append starts the turn the way the composer does, without
-      // touching a draft the operator is typing.
-      onClick={() => aui.thread().append(prompt)}
+      // touching a draft the operator is typing. The mark tells the page this
+      // send did not come from the composer, so the saved draft stays.
+      onClick={() =>
+        aui.thread().append({
+          role: "user",
+          content: [{ type: "text", text: prompt }],
+          metadata: { custom: { sourcecadoResend: true } },
+        })
+      }
     >
       <RetryIcon />
     </ActionButton>
