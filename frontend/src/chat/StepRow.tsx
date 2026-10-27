@@ -1,6 +1,7 @@
 import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { useId, useState } from "react";
 
+import { Glyph } from "../generative/ResultCard";
 import { useInspector } from "./Inspector";
 import { ActionIcon, StatusIcon, ToolIcon } from "./ProcessIcons";
 import {
@@ -12,6 +13,7 @@ import {
   type StepState,
 } from "./processState";
 import { useRecoveryActions } from "./recovery";
+import { showResultCard, stepHasResultCard } from "./resultCards";
 import { toolPresentation } from "./toolRegistry";
 import { sanitizeApolloNameMasks } from "../personName";
 
@@ -156,6 +158,17 @@ export function StepRow({
             <p>Took {formatElapsed(elapsedMs)}</p>
           ) : null}
           <div className="sourcecado-step-actions">
+            {stepHasResultCard(tool) ? (
+              <button
+                type="button"
+                className="sourcecado-show-result"
+                aria-label={`Show result of ${presentation.label}`}
+                title="Show result"
+                onClick={() => showResultCard(tool.toolCallId)}
+              >
+                <Glyph name="card" />
+              </button>
+            ) : null}
             <button
               type="button"
               className="sourcecado-inspect-tool"

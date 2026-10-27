@@ -524,7 +524,7 @@ describe("Thinking row styles", () => {
   it("keeps the row at 13px or larger and out of muted ink", () => {
     const block = styles.slice(
       styles.indexOf("/* Thinking row (#225)"),
-      styles.indexOf(".sourcecado-apollo-result {"),
+      styles.indexOf("/* End of the process layer (#226) */"),
     );
     expect(block).toContain(".sourcecado-thinking-body");
     const sizes = [...block.matchAll(/font-size:\s*(\d+)px/g)].map((m) => Number(m[1]));
