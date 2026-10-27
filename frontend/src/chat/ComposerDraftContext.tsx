@@ -1,6 +1,14 @@
 import { createContext, useContext, type ReactNode } from "react";
 
-type PopulateComposer = (draft: string) => void;
+import type { ContextChip } from "./messageContext";
+
+/** The chips and files that belong with a draft, such as an edited message's. */
+export type ComposerRestore = {
+  readonly chips: readonly ContextChip[];
+  readonly files: readonly string[];
+};
+
+type PopulateComposer = (draft: string, restore?: ComposerRestore) => void;
 
 type ComposerActions = {
   /** Put text in the composer and leave sending to the director. */

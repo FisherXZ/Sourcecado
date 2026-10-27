@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MessageFileChips } from "../src/chat/AttachmentChips";
-import { parseCsv, resetAttachments } from "../src/chat/attachments";
+import { describeAttachment, parseCsv, resetAttachments } from "../src/chat/attachments";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 import { splitContext, withContext } from "../src/chat/messageContext";
 import type { AttachmentInfo } from "../src/api";
@@ -31,6 +31,10 @@ function info(overrides: Partial<AttachmentInfo> & { id: string }): AttachmentIn
     total_chars: 120,
     truncated: false,
     pages: 2,
+    encoding: null,
+    width: null,
+    height: null,
+    excluded: null,
     ...overrides,
   };
 }
@@ -46,6 +50,8 @@ const FILES: Record<string, AttachmentInfo> = {
     pages: null,
     chars: 0,
     total_chars: null,
+    width: 640,
+    height: 400,
   }),
   [ID("3")]: info({
     id: ID("3"),
@@ -120,7 +126,7 @@ describe("Attached files on a sent message", () => {
       "Open people.csv",
     ]);
     expect(chips[0]).toHaveTextContent("PDF · 2 pages · 148 KB");
-    expect(chips[1]).toHaveTextContent("Image · 2 KB");
+    expect(chips[1]).toHaveTextContent("Image · 640 by 400 pixels · 2 KB");
     expect(chips[2]).toHaveTextContent("CSV · 154 B");
     for (const chip of chips) expect(chip.querySelector("svg")).not.toBeNull();
   });
@@ -237,6 +243,19 @@ describe("Attached files on a sent message", () => {
     renderChips([ID("1"), ID("1")]);
     await screen.findAllByRole("button", { name: "Open brief.pdf" });
     expect(api.getAttachment).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("describing a file", () => {
+  it("names the encoding of a converted text file, and says nothing for UTF-8", () => {
+    const base = info({ id: ID("9"), kind: "csv", pages: null, size: 285 });
+
+    expect(describeAttachment({ ...base, encoding: "windows-1252" })).toBe(
+      "CSV · Windows-1252 text · 285 B",
+    );
+    expect(describeAttachment({ ...base, encoding: "utf-16" })).toBe("CSV · UTF-16 text · 285 B");
+    expect(describeAttachment({ ...base, encoding: "utf-8" })).toBe("CSV · 285 B");
+    expect(describeAttachment({ ...base, encoding: null })).toBe("CSV · 285 B");
   });
 });
 

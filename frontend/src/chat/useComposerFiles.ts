@@ -7,7 +7,7 @@ import {
   type AttachmentKind,
   type AttachmentLimits,
 } from "../api";
-import { formatBytes, rememberAttachment } from "./attachments";
+import { formatBytes, readAttachment, rememberAttachment } from "./attachments";
 
 /** One file above the composer box, from the moment it is chosen. */
 export type ComposerFile = {
@@ -74,6 +74,18 @@ export function useComposerFiles() {
 
   const send = useCallback(
     (key: string, file: File, rules: AttachmentLimits | null) => {
+      if (
+        rules &&
+        rules.max_image_bytes > 0 &&
+        file.type.startsWith("image/") &&
+        file.size > rules.max_image_bytes
+      ) {
+        patch(key, {
+          state: "failed",
+          message: `This image is ${formatBytes(file.size)}. Models accept images up to ${formatBytes(rules.max_image_bytes)}.`,
+        });
+        return;
+      }
       if (rules && file.size > rules.max_bytes) {
         patch(key, {
           state: "failed",
@@ -159,6 +171,45 @@ export function useComposerFiles() {
     [write],
   );
 
+  /**
+   * Put the files of an earlier message back, as chips, when it is edited.
+   * A file that is gone, or that a provider refused, shows as failed, so it is
+   * never dropped quietly: the director removes it, or sends without it.
+   */
+  const restore = useCallback(
+    (ids: readonly string[]) => {
+      const held = new Set(current.current.flatMap((file) => (file.id ? [file.id] : [])));
+      const entries = ids
+        .filter((id) => !held.has(id))
+        .map<ComposerFile>((id) => {
+          count.current += 1;
+          return { key: `file-${count.current}`, name: "Loading file…", size: 0, state: "processing", id };
+        });
+      if (entries.length === 0) return;
+      write([...current.current, ...entries]);
+      for (const entry of entries) {
+        readAttachment(entry.id!).then(
+          (info) =>
+            patch(
+              entry.key,
+              info === null
+                ? { state: "failed", message: "File unavailable. It is no longer on this computer." }
+                : info.excluded === "provider_rejected"
+                  ? {
+                      state: "failed",
+                      name: info.name,
+                      size: info.size,
+                      message: "The model provider rejected this image earlier. Remove it.",
+                    }
+                  : { state: "ready", name: info.name, size: info.size, kind: info.kind },
+            ),
+          () => patch(entry.key, { state: "failed", message: "File details did not load." }),
+        );
+      }
+    },
+    [patch, write],
+  );
+
   /** After a send: the files belong to the message now. */
   const clear = useCallback(() => {
     setNotice("");
@@ -167,8 +218,11 @@ export function useComposerFiles() {
 
   const failed = files.filter((file) => file.state === "failed").length;
   const processing = files.filter((file) => file.state === "processing").length;
+  const tooMany = limits !== null ? files.length - limits.max_files : 0;
   const blockedReason =
-    failed > 0
+    tooMany > 0
+      ? `Remove ${tooMany} ${tooMany === 1 ? "file" : "files"}. A message can carry up to ${limits!.max_files}.`
+      : failed > 0
       ? failed === 1
         ? "Remove the file that failed before you send."
         : `Remove the ${failed} files that failed before you send.`
@@ -186,6 +240,7 @@ export function useComposerFiles() {
     readyIds: files.flatMap((file) => (file.state === "ready" && file.id ? [file.id] : [])),
     add,
     remove,
+    restore,
     clear,
     refreshLimits,
   };

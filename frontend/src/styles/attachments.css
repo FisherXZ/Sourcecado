@@ -55,7 +55,7 @@ button.sourcecado-attachment-chip:hover {
   margin-top: 8px;
 }
 
-.sourcecado-user-message .sourcecado-attachment-chip {
+.sourcecado-user-message .sourcecado-attachment-chip:not([data-state="excluded"]) {
   background: var(--surface);
 }
 
@@ -80,6 +80,23 @@ button.sourcecado-attachment-chip:hover {
 
 .sourcecado-attachment-chip[data-state="unavailable"] {
   border-style: dashed;
+}
+
+/* The model does not see this file. It still opens. */
+.sourcecado-attachment-chip[data-state="excluded"] {
+  border-color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.sourcecado-attachment-chip[data-state="excluded"] .sourcecado-attachment-icon,
+.sourcecado-attachment-excluded {
+  color: var(--warn);
+}
+
+.sourcecado-attachment-excluded {
+  max-width: 340px;
+  font-weight: 600;
+  white-space: normal;
 }
 
 .sourcecado-attachment-chip[data-state="unavailable"] .sourcecado-attachment-icon {

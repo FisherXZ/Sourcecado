@@ -641,14 +641,17 @@ describe("Message actions", () => {
       );
     });
 
-    it("keeps attached context lines, so the edited message loses nothing", async () => {
+    it("brings attached people back as chips, so the edited message loses nothing", async () => {
       const text =
         "Draft a note\n\n[Attached by the director]\nPerson: person_id p-1. Read the person file with board_get.";
       open(exchange(1, text, "Draft ready."));
 
       fireEvent.click(await screen.findByRole("button", { name: "Edit message" }));
 
-      await waitFor(() => expect(composerBox()).toHaveValue(text));
+      // The box holds the text. The reference lines are chips, not raw text.
+      await waitFor(() => expect(composerBox()).toHaveValue("Draft a note"));
+      const composer = composerBox().closest(".sourcecado-composer") as HTMLElement;
+      expect(within(composer).getByRole("list", { name: "Attached context" })).toBeInTheDocument();
     });
 
     it("will not overwrite a different draft, and says why", async () => {

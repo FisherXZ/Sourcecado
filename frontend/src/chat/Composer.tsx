@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ClipboardEvent,
+  type MutableRefObject,
   type DragEvent,
   type KeyboardEvent,
   type SyntheticEvent,
@@ -15,6 +16,7 @@ import { ComposerFileChips } from "./AttachmentChips";
 import { formatBytes } from "./attachments";
 import { ConnectionChip } from "./ConnectionChip";
 import { ContextChips } from "./ContextChips";
+import type { ComposerRestore } from "./ComposerDraftContext";
 import { ContextMenu } from "./ContextMenu";
 import { FileIcon, SendIcon } from "./icons";
 import { useScrollActiveIntoView } from "./MenuRow";
@@ -38,11 +40,14 @@ export function Composer({
   initialDraft,
   onDraftChange,
   boundPerson = null,
+  restoreRef,
 }: {
   readonly initialDraft: string;
   readonly onDraftChange: (draft: string) => void;
   /** Set when the conversation is about one person. */
   readonly boundPerson?: ActivePerson | null;
+  /** Filled with a function that puts an edited message's chips and files back. */
+  readonly restoreRef?: MutableRefObject<((restore: ComposerRestore) => void) | null>;
 }) {
   const aui = useAui();
   const running = useAuiState((state) => state.thread.isRunning);
@@ -59,6 +64,21 @@ export function Composer({
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const blocked = attachments.blockedReason !== null;
+  const restoreFiles = attachments.restore;
+
+  useEffect(() => {
+    if (!restoreRef) return;
+    restoreRef.current = (restore) => {
+      setChips((current) => [
+        ...current,
+        ...restore.chips.filter((chip) => !current.some((item) => item.id === chip.id)),
+      ]);
+      restoreFiles(restore.files);
+    };
+    return () => {
+      restoreRef.current = null;
+    };
+  }, [restoreRef, restoreFiles]);
 
   useEffect(() => {
     if (hydrated.current) return;
@@ -251,9 +271,15 @@ export function Composer({
             detail: filesFull
               ? `Up to ${limits.max_files} files per message. Remove one to add another.`
               : limits
-                ? `Up to ${limits.max_files} files, ${formatBytes(limits.max_bytes)} each${
-                    limits.images ? "" : ". No images with this model."
-                  }`
+                ? [
+                    `Up to ${limits.max_files} files, ${formatBytes(limits.max_bytes)} each.`,
+                    limits.max_text_chars > 0 && limits.max_context_chars > 0
+                      ? `The model reads ${limits.max_text_chars.toLocaleString("en-US")} characters of text per file and ${limits.max_context_chars.toLocaleString("en-US")} in all.`
+                      : null,
+                    limits.images ? null : "No images with this model.",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")
                 : "PDF, images, text, Markdown or CSV",
             full: filesFull,
             onChoose: () => picker.current?.click(),

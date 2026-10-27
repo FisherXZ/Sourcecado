@@ -56,6 +56,9 @@ const LIMITS: AttachmentLimits = {
   max_files: 3,
   max_bytes: 10 * 1024 * 1024,
   max_text_chars: 30_000,
+  max_context_chars: 90_000,
+  max_image_bytes: 5 * 1024 * 1024,
+  max_image_side: 8000,
   images: false,
   accept: ".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,.markdown,.csv",
   types: ["PDF", "PNG", "JPEG", "WebP", "Text", "Markdown", "CSV"],
@@ -73,6 +76,10 @@ function stored(overrides: Partial<AttachmentInfo> & { id: string }): Attachment
     total_chars: 90,
     truncated: false,
     pages: 2,
+    encoding: null,
+    width: null,
+    height: null,
+    excluded: null,
     ...overrides,
   };
 }
@@ -162,7 +169,9 @@ describe("Attaching files in the composer", () => {
       const item = await screen.findByRole("menuitem", { name: /Attach a file/ });
       expect(item).not.toHaveAttribute("aria-disabled");
       await waitFor(() =>
-        expect(item).toHaveTextContent("Up to 3 files, 10.0 MB each. No images with this model."),
+        expect(item).toHaveTextContent(
+          "Up to 3 files, 10.0 MB each. The model reads 30,000 characters of text per file and 90,000 in all. No images with this model.",
+        ),
       );
       expect(item).not.toHaveTextContent("Not available yet");
     });
@@ -494,6 +503,156 @@ describe("Attaching files in the composer", () => {
       expect(chatQueue.mock.calls[0][0].text).toBe(
         `Then summarize this\n\n[Attached by the director]\nFile: file_id ${ID("1")}.`,
       );
+    });
+  });
+
+  describe("images", () => {
+    it("refuses an image over the image limit without uploading it", async () => {
+      const box = await openChat();
+      const picture = new File(["x"], "big.png", { type: "image/png" });
+      Object.defineProperty(picture, "size", { value: 6 * 1024 * 1024 });
+
+      chosen(picture);
+
+      const chip = await within(composer(box)).findByRole("listitem");
+      expect(await within(chip).findByRole("alert")).toHaveTextContent(
+        "This image is 6.0 MB. Models accept images up to 5.0 MB.",
+      );
+      expect(api.uploadAttachment).not.toHaveBeenCalled();
+    });
+
+    it("shows the words for a broken image that the backend gave", async () => {
+      const box = await openChat();
+      api.uploadAttachment.mockRejectedValueOnce(
+        new api.AttachmentError("corrupt_image", "This image could not be read. It may be damaged."),
+      );
+
+      chosen(new File(["x"], "broken.jpg", { type: "image/jpeg" }));
+
+      expect(await within(composer(box)).findByRole("alert")).toHaveTextContent(
+        "This image could not be read. It may be damaged.",
+      );
+    });
+  });
+
+  describe("editing a message that carried files", () => {
+    const sentFile = (id: string) => `Summarize this\n\n[Attached by the director]\nFile: file_id ${id}.`;
+    const edit = async () =>
+      fireEvent.click(await screen.findByRole("button", { name: "Edit message" }));
+
+    it("puts the files back as chips and not as reference lines, and resends them", async () => {
+      api.getAttachment.mockResolvedValue(stored({ id: ID("5"), name: "kept.pdf" }));
+      const box = await openChat({ messages: [{ role: "user", content: sentFile(ID("5")) }] });
+
+      await edit();
+
+      await waitFor(() => expect(box).toHaveValue("Summarize this"));
+      const chip = await within(composer(box)).findByRole("listitem");
+      expect(chip).toHaveTextContent("kept.pdf");
+      expect(await within(chip).findByText(/Ready/)).toBeInTheDocument();
+      expect(box).not.toHaveValue(expect.stringContaining("file_id"));
+
+      // Any change to the text keeps the file.
+      fireEvent.change(box, { target: { value: "Summarize this in two lines" } });
+      send();
+      await waitFor(() => expect(chatSend).toHaveBeenCalledOnce());
+      expect(chatSend.mock.calls[0][0]).toBe(
+        `Summarize this in two lines\n\n[Attached by the director]\nFile: file_id ${ID("5")}.`,
+      );
+    });
+
+    it("shows a file that is gone as failed and holds the send until it is removed", async () => {
+      api.getAttachment.mockResolvedValue(null);
+      const box = await openChat({ messages: [{ role: "user", content: sentFile(ID("6")) }] });
+
+      await edit();
+
+      const chip = await within(composer(box)).findByRole("listitem");
+      expect(await within(chip).findByRole("alert")).toHaveTextContent(
+        "File unavailable. It is no longer on this computer.",
+      );
+      send();
+      expect(chatSend).not.toHaveBeenCalled();
+      expect(screen.getByText("Remove the file that failed before you send.")).toBeInTheDocument();
+      fireEvent.click(within(chip).getByRole("button", { name: /^Remove/ }));
+      send();
+      await waitFor(() => expect(chatSend).toHaveBeenCalledOnce());
+      expect(chatSend.mock.calls[0][0]).toBe("Summarize this");
+    });
+
+    it("shows an image a provider refused as failed, so it is not sent again by accident", async () => {
+      api.getAttachment.mockResolvedValue(
+        stored({ id: ID("7"), name: "refused.png", kind: "image", excluded: "provider_rejected" }),
+      );
+      const box = await openChat({ messages: [{ role: "user", content: sentFile(ID("7")) }] });
+
+      await edit();
+
+      const chip = await within(composer(box)).findByRole("listitem");
+      expect(await within(chip).findByRole("alert")).toHaveTextContent(
+        "The model provider rejected this image earlier. Remove it.",
+      );
+      expect(chip).toHaveTextContent("refused.png");
+      send();
+      expect(chatSend).not.toHaveBeenCalled();
+    });
+
+    it("does not add a second chip for a file that is already attached", async () => {
+      api.getAttachment.mockResolvedValue(stored({ id: ID("1"), name: "brief.pdf" }));
+      const box = await openChat({ messages: [{ role: "user", content: sentFile(ID("1")) }] });
+      chosen(pdf("brief.pdf"));
+      await within(composer(box)).findByText(/Ready/);
+
+      await edit();
+
+      await waitFor(() => expect(within(composer(box)).getAllByRole("listitem")).toHaveLength(1));
+    });
+
+    it("holds the send when edits bring back more files than a message can carry", async () => {
+      const box = await openChat({
+        messages: [
+          {
+            role: "user",
+            content: `Look\n\n[Attached by the director]\n${["1", "2", "3", "4"]
+              .map((digit) => `File: file_id ${ID(digit)}.`)
+              .join("\n")}`,
+          },
+        ],
+      });
+      api.getAttachment.mockImplementation(async (id: string) => stored({ id, name: `${id.slice(4, 6)}.pdf` }));
+      // The limits are read when the menu opens, as they are for any attach.
+      fireEvent.click(screen.getByRole("button", { name: "Add context" }));
+      await screen.findByRole("menuitem", { name: /Attach a file/ });
+      await waitFor(() => expect(api.getAttachmentLimits).toHaveBeenCalled());
+      fireEvent.keyDown(screen.getByRole("menu", { name: "Add context" }), { key: "Escape" });
+
+      await edit();
+
+      await waitFor(() => expect(within(composer(box)).getAllByRole("listitem")).toHaveLength(4));
+      expect(await screen.findByText("Remove 1 file. A message can carry up to 3.")).toBeInTheDocument();
+      send();
+      expect(chatSend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("files the model does not see", () => {
+    const sentFile = (id: string) => `Look\n\n[Attached by the director]\nFile: file_id ${id}.`;
+
+    it.each([
+      ["left_out", "Left out of the model's view. The request is at its text limit."],
+      ["provider_rejected", "The model provider rejected an image in this thread. It is not sent."],
+    ] as const)("says so on the chip when %s, and the file still opens", async (excluded, line) => {
+      api.getAttachment.mockResolvedValue(stored({ id: ID("8"), name: "old.pdf", excluded }));
+      api.getAttachmentText.mockResolvedValue({ text: "Old text.", truncated: false, total_chars: 9 });
+      await openChat({ messages: [{ role: "user", content: sentFile(ID("8")) }] });
+
+      const log = screen.getByRole("log", { name: "Conversation" });
+      const chip = await within(log).findByRole("button", { name: "Open old.pdf" });
+
+      expect(chip).toHaveAttribute("data-state", "excluded");
+      expect(chip).toHaveTextContent(line);
+      fireEvent.click(chip);
+      expect(await screen.findByLabelText("Text of old.pdf")).toHaveTextContent("Old text.");
     });
   });
 

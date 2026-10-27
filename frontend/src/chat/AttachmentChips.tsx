@@ -1,6 +1,6 @@
 import { AlertIcon, KindIcon, SpinnerIcon } from "./AttachmentIcons";
 import { AttachmentPreview } from "./AttachmentPreview";
-import { describeAttachment, formatBytes, useAttachmentRecord } from "./attachments";
+import { describeAttachment, excludedLine, formatBytes, useAttachmentRecord } from "./attachments";
 import { useInspector } from "./Inspector";
 import { CloseIcon, RetryIcon } from "./icons";
 import type { ComposerFile } from "./useComposerFiles";
@@ -10,7 +10,7 @@ function stateLine(file: ComposerFile): { readonly text: string; readonly role: 
     return { text: file.message ?? "This file could not be attached.", role: "alert" };
   }
   return {
-    text: `${formatBytes(file.size)} · ${file.state === "ready" ? "Ready" : "Processing…"}`,
+    text: `${file.size > 0 ? `${formatBytes(file.size)} · ` : ""}${file.state === "ready" ? "Ready" : "Processing…"}`,
     role: "status",
   };
 }
@@ -123,12 +123,14 @@ function SentFileChip({ id }: { readonly id: string }) {
     );
   }
   const { info } = record;
+  // A file the model does not see says so on its chip. It still opens.
+  const excluded = excludedLine(info);
   return (
     <li>
       <button
         type="button"
         className="sourcecado-attachment-chip"
-        data-state="ready"
+        data-state={excluded ? "excluded" : "ready"}
         aria-label={`Open ${info.name}`}
         title={`Open ${info.name}`}
         onClick={(event) =>
@@ -145,11 +147,18 @@ function SentFileChip({ id }: { readonly id: string }) {
         }
       >
         <span className="sourcecado-attachment-icon">
-          <KindIcon kind={info.kind} />
+          {excluded ? <AlertIcon /> : <KindIcon kind={info.kind} />}
         </span>
         <span className="sourcecado-attachment-text">
           <span className="sourcecado-attachment-name">{info.name}</span>
-          <span className="sourcecado-attachment-meta">{describeAttachment(info)}</span>
+          <span className="sourcecado-attachment-meta" role={excluded ? "note" : undefined}>
+            {describeAttachment(info)}
+          </span>
+          {excluded ? (
+            <span className="sourcecado-attachment-meta sourcecado-attachment-excluded">
+              {excluded}
+            </span>
+          ) : null}
         </span>
       </button>
     </li>

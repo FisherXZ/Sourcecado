@@ -2078,12 +2078,26 @@ export type AttachmentInfo = {
   total_chars: number | null;
   truncated: boolean;
   pages: number | null;
+  /** How a text file was read, when not as UTF-8. */
+  encoding: string | null;
+  /** An image's own size. */
+  width: number | null;
+  height: number | null;
+  /**
+   * Why the model does not see this file now: a provider refused an image that
+   * held it, or a request had no room left for it.
+   */
+  excluded: "provider_rejected" | "left_out" | null;
 };
 
 export type AttachmentLimits = {
   max_files: number;
   max_bytes: number;
   max_text_chars: number;
+  /** All the file text one model request carries, newest message first. */
+  max_context_chars: number;
+  max_image_bytes: number;
+  max_image_side: number;
   /** True when the configured model can read an image. */
   images: boolean;
   /** The file picker's `accept` list. The backend still checks the content. */
@@ -2130,6 +2144,13 @@ function toAttachmentInfo(value: unknown): AttachmentInfo {
     total_chars: typeof raw.total_chars === "number" ? raw.total_chars : null,
     truncated: raw.truncated === true,
     pages: typeof raw.pages === "number" ? raw.pages : null,
+    encoding: typeof raw.encoding === "string" ? raw.encoding : null,
+    width: typeof raw.width === "number" ? raw.width : null,
+    height: typeof raw.height === "number" ? raw.height : null,
+    excluded:
+      raw.excluded === "provider_rejected" || raw.excluded === "left_out"
+        ? raw.excluded
+        : null,
   };
 }
 
@@ -2144,6 +2165,9 @@ export async function getAttachmentLimits(): Promise<AttachmentLimits> {
     max_files: body.max_files,
     max_bytes: body.max_bytes,
     max_text_chars: typeof body.max_text_chars === "number" ? body.max_text_chars : 0,
+    max_context_chars: typeof body.max_context_chars === "number" ? body.max_context_chars : 0,
+    max_image_bytes: typeof body.max_image_bytes === "number" ? body.max_image_bytes : 0,
+    max_image_side: typeof body.max_image_side === "number" ? body.max_image_side : 0,
     images: body.images === true,
     accept: typeof body.accept === "string" ? body.accept : "",
     types: Array.isArray(body.types) ? body.types.map(String) : [],

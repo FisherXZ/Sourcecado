@@ -1,8 +1,9 @@
 import { ThreadPrimitive, useAui, useAuiState } from "@assistant-ui/react";
+import { useRef } from "react";
 
 import { AssistantMessage } from "./AssistantMessage";
 import { Composer } from "./Composer";
-import { ComposerDraftProvider } from "./ComposerDraftContext";
+import { ComposerDraftProvider, type ComposerRestore } from "./ComposerDraftContext";
 import { EmptyGreeting, EmptyPrompts } from "./EmptyThread";
 import { Queue } from "./Queue";
 import { ThreadHeader, type RunStatus } from "./ThreadHeader";
@@ -57,9 +58,13 @@ export function ThreadView({
   // it, so it lives in the composer zone rather than in the transcript.
   const showEmptyState =
     useAuiState((state) => state.thread.isEmpty) && !loading && !loadError;
-  const populateComposer = (draft: string) => {
+  // The composer owns its chips and files. It registers how to restore them,
+  // so editing a message brings its files back as chips.
+  const restoreRef = useRef<((restore: ComposerRestore) => void) | null>(null);
+  const populateComposer = (draft: string, restore?: ComposerRestore) => {
     aui.composer.setText(draft);
     onDraftChange(draft);
+    if (restore) restoreRef.current?.(restore);
   };
   // Built here on purpose: this is the thread's composer. A component
   // rendered under a message sees the edit composer instead, so it cannot
@@ -142,6 +147,7 @@ export function ThreadView({
           initialDraft={initialDraft}
           onDraftChange={onDraftChange}
           boundPerson={activePerson ?? null}
+          restoreRef={restoreRef}
         />
         {showEmptyState ? <EmptyPrompts onPick={populateComposer} /> : null}
       </div>

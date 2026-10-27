@@ -17,15 +17,33 @@ export const KIND_LABEL: Readonly<Record<AttachmentInfo["kind"], string>> = {
   csv: "CSV",
 };
 
-/** "PDF · 3 pages · 148 KB". */
+const ENCODING_LABEL: Readonly<Record<string, string>> = {
+  "utf-16": "UTF-16",
+  "windows-1252": "Windows-1252",
+};
+
+/** "PDF · 3 pages · 148 KB", "Image · 640 by 400 pixels · 26 KB". */
 export function describeAttachment(info: AttachmentInfo): string {
   return [
     KIND_LABEL[info.kind],
+    info.width !== null && info.height !== null ? `${info.width} by ${info.height} pixels` : null,
     info.pages !== null ? `${info.pages} ${info.pages === 1 ? "page" : "pages"}` : null,
+    info.encoding && ENCODING_LABEL[info.encoding] ? `${ENCODING_LABEL[info.encoding]} text` : null,
     formatBytes(info.size),
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+/** What the chip says when the model does not see the file. Null when it does. */
+export function excludedLine(info: AttachmentInfo): string | null {
+  if (info.excluded === "provider_rejected") {
+    return "The model provider rejected an image in this thread. It is not sent.";
+  }
+  if (info.excluded === "left_out") {
+    return "Left out of the model's view. The request is at its text limit.";
+  }
+  return null;
 }
 
 // A file's record is read once per id and kept. A sent message shows its chip
