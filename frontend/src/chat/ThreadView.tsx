@@ -1,5 +1,4 @@
 import { ThreadPrimitive, useAui, useAuiState } from "@assistant-ui/react";
-import { useRef } from "react";
 
 import { AssistantMessage } from "./AssistantMessage";
 import { Composer } from "./Composer";
@@ -59,7 +58,6 @@ export function ThreadView({
   // it, so it lives in the composer zone rather than in the transcript.
   const showEmptyState =
     useAuiState((state) => state.thread.isEmpty) && !loading && !loadError;
-  const scrollOnSend = useRef<() => void>(() => {});
   const populateComposer = (draft: string) => {
     aui.composer.setText(draft);
     onDraftChange(draft);
@@ -70,7 +68,6 @@ export function ThreadView({
   const sendMessage = (text: string) => {
     aui.composer.setText(text);
     void aui.composer.send();
-    scrollOnSend.current();
     onDraftChange("");
   };
   return (
@@ -98,7 +95,7 @@ export function ThreadView({
         aria-live="off"
         tabIndex={0}
         // A queued message that starts while the operator reads must not pull
-        // the thread down. ScrollOnOwnSend scrolls for the operator's own sends.
+        // the thread down. ScrollOnOwnSend scrolls for the operator's own send.
         scrollToBottomOnRunStart={false}
       >
         {loading ? (
@@ -134,7 +131,7 @@ export function ThreadView({
       >
         {announcement}
       </p>
-      <ScrollOnOwnSend scrollRef={scrollOnSend} />
+      <ScrollOnOwnSend />
       <JumpToLatest />
       <Queue
         items={queueItems}

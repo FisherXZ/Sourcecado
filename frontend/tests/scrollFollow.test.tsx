@@ -279,7 +279,7 @@ describe("Scroll follow and Jump to latest", () => {
     expect(jumpButton()).toBeInTheDocument();
   });
 
-  it("scrolls to the newest output when the operator sends a message", async () => {
+  it("scrolls to the newest output when the operator clicks the Send button", async () => {
     const { transcript, scrollCalls } = await openThread();
     scrollTo(transcript, 600);
     await screen.findByRole("button", { name: "Jump to latest" });
@@ -287,23 +287,74 @@ describe("Scroll follow and Jump to latest", () => {
 
     const draft = screen.getByRole("textbox", { name: "Message Sourcecado" });
     fireEvent.change(draft, { target: { value: "Find the founders" } });
-    fireEvent.submit(draft.closest("form") as HTMLFormElement);
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
+    // The library raises the send event after its own async step.
+    await waitFor(() => expect(scrollCalls).toHaveBeenCalledTimes(1));
     expect(scrollCalls).toHaveBeenCalledWith(expect.objectContaining({ top: 2000 }));
     await waitFor(() => expect(jumpButton()).not.toBeInTheDocument());
   });
 
-  it("does not scroll when the operator submits an empty box", async () => {
+  it("scrolls to the newest output when the operator presses Enter in the box", async () => {
     const { transcript, scrollCalls } = await openThread();
     scrollTo(transcript, 600);
     await screen.findByRole("button", { name: "Jump to latest" });
     scrollCalls.mockClear();
 
     const draft = screen.getByRole("textbox", { name: "Message Sourcecado" });
-    fireEvent.submit(draft.closest("form") as HTMLFormElement);
+    fireEvent.change(draft, { target: { value: "Find the founders" } });
+    fireEvent.keyDown(draft, { key: "Enter" });
+
+    // The library raises the send event after its own async step.
+    await waitFor(() => expect(scrollCalls).toHaveBeenCalledTimes(1));
+    expect(scrollCalls).toHaveBeenCalledWith(expect.objectContaining({ top: 2000 }));
+  });
+
+  it("does not scroll when the operator presses Enter in an empty box", async () => {
+    const { transcript, scrollCalls } = await openThread();
+    scrollTo(transcript, 600);
+    await screen.findByRole("button", { name: "Jump to latest" });
+    scrollCalls.mockClear();
+
+    const draft = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.keyDown(draft, { key: "Enter" });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
 
     expect(scrollCalls).not.toHaveBeenCalled();
     expect(transcript.scrollTop).toBe(600);
+  });
+
+  it("does not scroll when the operator queues a message during a run", async () => {
+    const { transcript, scrollCalls } = await openThread();
+    act(() => {
+      onChatEvent?.({
+        ...envelope,
+        run_id: "run-active",
+        message_id: "message-active",
+        part_id: "part-active",
+        type: "turn_start",
+        event_id: "active-1",
+        state: "running",
+      });
+    });
+    await screen.findByRole("button", { name: "Stop run" });
+    scrollTo(transcript, 600);
+    await screen.findByRole("button", { name: "Jump to latest" });
+    scrollCalls.mockClear();
+
+    const draft = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(draft, { target: { value: "queue this one" } });
+    fireEvent.keyDown(draft, { key: "Enter" });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    expect(draft).toHaveValue("");
+    expect(scrollCalls).not.toHaveBeenCalled();
+    expect(transcript.scrollTop).toBe(600);
+    expect(jumpButton()).toBeInTheDocument();
   });
 
   it("puts focus on a waiting approval after Jump to latest, so Allow and Deny are a few Tabs away", async () => {

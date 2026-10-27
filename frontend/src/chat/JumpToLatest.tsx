@@ -1,5 +1,10 @@
-import { ThreadPrimitive, useThreadViewport, useThreadViewportStore } from "@assistant-ui/react";
-import { useEffect, type MutableRefObject } from "react";
+import {
+  ThreadPrimitive,
+  useAui,
+  useAuiEvent,
+  useThreadViewport,
+  useThreadViewportStore,
+} from "@assistant-ui/react";
 
 import { ArrowDownIcon } from "./icons";
 
@@ -45,38 +50,27 @@ export function JumpToLatest() {
 }
 
 /**
- * Scrolls to the newest output when the operator sends a message of their own,
- * and only then.
+ * Scrolls to the newest output when the operator sends a message of their own
+ * to an idle thread, and only then.
  *
  * The thread library can also scroll to the bottom on every run start. That
  * includes a queued message that starts after the run before it ends, while
  * the operator is reading earlier output. The thread turns that option off, so
- * this component handles the send instead:
- * - a composer form submit inside the thread (typed Enter, the Send button,
- *   an edited message), when its box holds text;
- * - `scrollRef.current()`, for sends that are not a form submit (a card button).
+ * this component handles the send instead. It listens for the library's
+ * `composer.send` event, which every send path raises once: Enter, the Send
+ * button, the steer shortcut, a card button, an edited message.
+ *
+ * A send while a run is active goes to the queue panel. Nothing new appears in
+ * the thread, so the operator stays where they are. If that queued run later
+ * starts while they read, they stay there too. If they are at the bottom, the
+ * thread follows it as it follows any output.
  */
-export function ScrollOnOwnSend({
-  scrollRef,
-}: {
-  readonly scrollRef: MutableRefObject<() => void>;
-}) {
+export function ScrollOnOwnSend() {
+  const aui = useAui();
   const viewport = useThreadViewportStore();
-  useEffect(() => {
-    const scroll = () => viewport.getState().scrollToBottom();
-    scrollRef.current = scroll;
-    const onSubmit = (event: Event) => {
-      const form = event.target as HTMLElement;
-      if (!form.closest(".sourcecado-thread")) return;
-      if (form.querySelector("textarea")?.value.trim()) scroll();
-    };
-    // Capture phase: the composer clears its box while it handles the submit,
-    // so this must read the text first.
-    document.addEventListener("submit", onSubmit, true);
-    return () => {
-      document.removeEventListener("submit", onSubmit, true);
-      scrollRef.current = () => {};
-    };
-  }, [viewport, scrollRef]);
+  useAuiEvent("composer.send", () => {
+    if (aui.thread.getState().isRunning) return;
+    viewport.getState().scrollToBottom();
+  });
   return null;
 }
