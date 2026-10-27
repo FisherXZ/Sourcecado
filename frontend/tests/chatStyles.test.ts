@@ -114,20 +114,31 @@ describe("Warm Operator thread styles", () => {
 
   it("keeps one fixed composer action slot when Send becomes Stop", () => {
     expect(styles).toMatch(
-      /\.sourcecado-composer\s*\{[^}]*grid-template-areas:\s*"input action";[^}]*min-height:\s*88px;[^}]*padding:\s*13px;/,
-    );
-    expect(styles).toMatch(
-      /\.sourcecado-composer-action\s*\{[^}]*grid-area:\s*action;[^}]*width:\s*44px;[^}]*height:\s*44px;/,
+      /\.sourcecado-composer-action\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px;[^}]*flex:\s*0 0 44px;/,
     );
     expect(styles).toMatch(
       /\.sourcecado-composer-action-visual\s*\{[^}]*width:\s*38px;[^}]*height:\s*38px;/,
     );
-    expect(styles).toMatch(
-      /\.sourcecado-composer-running\s*\{[^}]*min-height:\s*16px;[^}]*margin:\s*7px 0 0 13px;[^}]*font-size:\s*11px;[^}]*visibility:\s*hidden;/,
-    );
-    expect(styles).toMatch(
-      /\.sourcecado-composer-running\.is-visible\s*\{[^}]*visibility:\s*visible;/,
-    );
+  });
+
+  it("keeps the keyboard hints, chips and menus at 13px or larger", () => {
+    for (const selector of [
+      ".sourcecado-composer-hints",
+      ".sourcecado-context-chip",
+      ".sourcecado-menu-detail",
+      ".sourcecado-menu-status",
+      ".sourcecado-queue-title",
+      ".sourcecado-queue li > strong",
+    ]) {
+      const rule = styles.match(
+        new RegExp(`${selector.replace(/[.>]/g, "\\$&")}\\s*\\{([^}]*)\\}`),
+      );
+      expect(rule, selector).not.toBeNull();
+      const size = rule?.[1].match(/font-size:\s*(\d+)px/);
+      expect(size, `${selector} font-size`).not.toBeNull();
+      expect(Number(size?.[1]), selector).toBeGreaterThanOrEqual(13);
+    }
+    expect(styles).not.toContain("sourcecado-composer-running");
   });
 
   it("keeps the empty-thread suggestion understated above the composer", () => {

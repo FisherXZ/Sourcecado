@@ -1,6 +1,18 @@
 import type { QueueItem } from "../api";
 import { useState } from "react";
 
+import { ContextChips } from "./ContextChips";
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CheckIcon,
+  EditIcon,
+  PlayIcon,
+  RetryIcon,
+  TrashIcon,
+} from "./icons";
+import { splitContext, withContext } from "./messageContext";
+
 function queueStateLabel(state: QueueItem["state"]): string {
   switch (state) {
     case "waiting":
@@ -38,9 +50,13 @@ export function Queue({
   if (items.length === 0) return null;
   return (
     <section className="sourcecado-queue" role="region" aria-label="Queued messages">
-      <p className="eyebrow">Queued messages</p>
+      <p className="sourcecado-queue-title">
+        Queued messages
+        <span className="sourcecado-queue-count">{items.length}</span>
+      </p>
       {paused ? (
         <button type="button" onClick={onResume}>
+          <PlayIcon />
           Resume queue
         </button>
       ) : null}
@@ -79,8 +95,11 @@ function QueueRow({
   readonly onEdit: (itemId: string, text: string) => void;
   readonly onRemove: (itemId: string) => void;
 }) {
+  // A queued message may carry attached context. The row shows the text and
+  // the chips apart, and an edit changes the text only.
+  const { body, chips } = splitContext(item.text);
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(item.text);
+  const [text, setText] = useState(body);
   const mutable = item.state !== "sending";
   return (
     <li data-queue-item-id={item.id}>
@@ -89,7 +108,7 @@ function QueueRow({
           onSubmit={(event) => {
             event.preventDefault();
             if (!text.trim()) return;
-            onEdit(item.id, text.trim());
+            onEdit(item.id, withContext(text.trim(), chips));
             setEditing(false);
           }}
         >
@@ -98,12 +117,15 @@ function QueueRow({
             value={text}
             onChange={(event) => setText(event.currentTarget.value)}
           />
-          <button type="submit" aria-label="Save queued message">
-            Save
+          <button type="submit" aria-label="Save queued message" title="Save">
+            <CheckIcon />
           </button>
         </form>
       ) : (
-        <span>{item.text}</span>
+        <div className="sourcecado-queue-text">
+          <span>{body}</span>
+          <ContextChips chips={chips} />
+        </div>
       )}
       <strong>{queueStateLabel(item.state)}</strong>
       <div className="sourcecado-queue-actions">
@@ -111,10 +133,11 @@ function QueueRow({
           {previousId && mutable ? (
             <button
               type="button"
-              aria-label={`Move ${item.text} up`}
+              aria-label={`Move ${body} up`}
+              title="Move up"
               onClick={() => onMove(item.id, previousId)}
             >
-              Up
+              <ArrowUpIcon />
             </button>
           ) : null}
         </span>
@@ -122,10 +145,11 @@ function QueueRow({
           {nextId && mutable ? (
             <button
               type="button"
-              aria-label={`Move ${item.text} down`}
+              aria-label={`Move ${body} down`}
+              title="Move down"
               onClick={() => onMove(item.id, undefined, nextId)}
             >
-              Down
+              <ArrowDownIcon />
             </button>
           ) : null}
         </span>
@@ -133,10 +157,11 @@ function QueueRow({
           {mutable ? (
             <button
               type="button"
-              aria-label={`Edit ${item.text}`}
+              aria-label={`Edit ${body}`}
+              title="Edit"
               onClick={() => setEditing(true)}
             >
-              Edit
+              <EditIcon />
             </button>
           ) : null}
         </span>
@@ -147,9 +172,10 @@ function QueueRow({
             <button
               type="button"
               aria-label="Retry queued message"
+              title="Retry"
               onClick={() => onRetry(item.id)}
             >
-              Retry
+              <RetryIcon />
             </button>
           ) : null}
         </span>
@@ -157,10 +183,11 @@ function QueueRow({
           {mutable ? (
             <button
               type="button"
-              aria-label={`Remove ${item.text}`}
+              aria-label={`Remove ${body}`}
+              title="Remove"
               onClick={() => onRemove(item.id)}
             >
-              Remove
+              <TrashIcon />
             </button>
           ) : null}
         </span>
