@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -72,6 +73,8 @@ export type InspectorTarget = {
   readonly state?: StepState;
   /** Tool steps. Every step of the turn, for the Progress tab. */
   readonly steps?: readonly InspectorStep[];
+  /** Facts for the Output summary, such as the failure class. */
+  readonly facts?: readonly { readonly label: string; readonly value: string }[];
   /** The result rendered as the thread's own card. Output shows it first. */
   readonly card?: ReactNode;
   /** One line for the Output tab when there is no result to show. */
@@ -243,6 +246,10 @@ export const INSPECTOR_MAX_WIDTH = 720;
 /** The thread keeps at least this much room beside a docked panel. */
 const THREAD_MIN_WIDTH = 440;
 const KEY_STEP = 16;
+/** Matches the CSS rule that makes the panel fill the window. */
+const FULL_SCREEN_QUERY = "(max-width: 767px)";
+const TAB_STOPS =
+  'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
 
 /** Keeps a panel width between the minimum and what the workspace can spare. */
 export function clampInspectorWidth(width: number, available: number): number {
@@ -291,7 +298,11 @@ export function Inspector() {
   const panelRef = useRef<HTMLElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const dragRef = useRef<{ startX: number; startWidth: number; available: number; width: number } | null>(null);
+  // The width the operator chose. The width shown is this, held to the room
+  // the workspace has now: a width stored on a wide window must not squeeze
+  // the thread on a narrower one.
   const [width, setWidth] = useState(readWidth);
+  const [room, setRoom] = useState(0);
   const [tabChoice, setTabChoice] = useState<{ id: string; tab: InspectorTabId } | null>(null);
   // The tab an item opens on is chosen once. A step that finishes while the
   // panel is open does not move the operator to another tab.
@@ -305,7 +316,59 @@ export function Inspector() {
     if (openCount > 0) headingRef.current?.focus({ preventScroll: true });
   }, [openCount]);
 
+  const open = selected !== null;
+  const fullScreenRef = useRef(false);
+
+  // Measure the room beside the thread when the panel opens and whenever the
+  // window or workspace changes size. An overlay panel does not sit beside the
+  // thread, so it has no room limit (0 means no limit).
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const workspace = panel?.parentElement;
+    if (!open || !panel || !workspace) return;
+    const measure = () =>
+      setRoom(window.getComputedStyle(panel).position === "fixed" ? 0 : workspace.clientWidth);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(workspace);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
+
+  // A full-screen panel hides the thread, so the thread must not take focus.
+  // Escape still closes the panel. The thread is live again before focus goes
+  // back to the control that opened the panel.
+  useEffect(() => {
+    const panel = panelRef.current;
+    const workspace = panel?.parentElement;
+    if (!open || !panel || !workspace || typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(FULL_SCREEN_QUERY);
+    let held: Element[] = [];
+    const release = () => {
+      held.forEach((element) => element.removeAttribute("inert"));
+      held = [];
+    };
+    const apply = () => {
+      release();
+      fullScreenRef.current = query.matches;
+      if (!query.matches) return;
+      held = [...workspace.children].filter((child) => child !== panel);
+      held.forEach((element) => element.setAttribute("inert", ""));
+    };
+    apply();
+    query.addEventListener("change", apply);
+    return () => {
+      query.removeEventListener("change", apply);
+      release();
+      fullScreenRef.current = false;
+    };
+  }, [open]);
+
   if (!selected) return null;
+  const shownWidth = clampInspectorWidth(width, room);
   const meta = INSPECTOR_KINDS[selected.kind];
   // Progress lists the steps of a turn. An item opened from a card has none.
   const tabs = meta.tabs.filter(
@@ -327,10 +390,30 @@ export function Inspector() {
       : null;
 
   const commitWidth = (next: number) => {
-    const available = panelRef.current?.parentElement?.clientWidth ?? 0;
-    const clamped = clampInspectorWidth(next, available);
+    const clamped = clampInspectorWidth(next, room);
     setWidth(clamped);
     writeWidth(clamped);
+  };
+
+  // In the full-screen panel, Tab stays inside it. The thread is inert, but
+  // the app's own controls (the navigation button) sit outside the thread.
+  const onPanelKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    const panel = panelRef.current;
+    if (event.key !== "Tab" || !fullScreenRef.current || !panel) return;
+    const stops = [...panel.querySelectorAll<HTMLElement>(TAB_STOPS)].filter(
+      (element) => window.getComputedStyle(element).display !== "none",
+    );
+    const first = stops[0];
+    const last = stops[stops.length - 1];
+    if (!first || !last) return;
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !stops.includes(active as HTMLElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
   };
 
   const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -360,7 +443,7 @@ export function Inspector() {
     dragRef.current = {
       startX: event.clientX,
       startWidth,
-      available: panel.parentElement?.clientWidth ?? 0,
+      available: room,
       width: startWidth,
     };
   };
@@ -384,9 +467,9 @@ export function Inspector() {
     const step = event.shiftKey ? KEY_STEP * 3 : KEY_STEP;
     const next =
       event.key === "ArrowLeft"
-        ? width + step
+        ? shownWidth + step
         : event.key === "ArrowRight"
-          ? width - step
+          ? shownWidth - step
           : event.key === "Home"
             ? INSPECTOR_MIN_WIDTH
             : event.key === "End"
@@ -404,14 +487,15 @@ export function Inspector() {
       data-kind={selected.kind}
       role="complementary"
       aria-label="Inspector"
-      style={{ "--inspector-width": `${width}px` } as CSSProperties}
+      onKeyDown={onPanelKeyDown}
+      style={{ "--inspector-width": `${shownWidth}px` } as CSSProperties}
     >
       <div
         className="sourcecado-inspector-resize"
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize inspector"
-        aria-valuenow={width}
+        aria-valuenow={shownWidth}
         aria-valuemin={INSPECTOR_MIN_WIDTH}
         aria-valuemax={INSPECTOR_MAX_WIDTH}
         tabIndex={0}
@@ -425,7 +509,7 @@ export function Inspector() {
       <header className="sourcecado-inspector-head">
         <span className="sourcecado-inspector-kind-icon">{meta.icon(selected)}</span>
         <div className="sourcecado-inspector-titles">
-          <h2 ref={headingRef} tabIndex={-1}>
+          <h2 ref={headingRef} tabIndex={-1} title={selected.title || undefined}>
             {selected.title || "Provenance detail"}
           </h2>
           <p className="sourcecado-inspector-kind">{meta.label}</p>

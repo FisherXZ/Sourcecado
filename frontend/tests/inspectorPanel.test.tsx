@@ -583,6 +583,23 @@ describe("Inspector with the result cards and source chips of the thread", () =>
     expect(panel).toHaveTextContent("Tool result");
   });
 
+  it("hides a password in a source address, as a link and as text", () => {
+    const source: SourceMessagePart = {
+      type: "source",
+      sourceType: "url",
+      id: "s-creds",
+      url: "https://user:secret@creds.example.com/x",
+      title: "With credentials",
+      providerMetadata: { sourcecado: { provider: "Tavily", stale: false, truncated: false } },
+    };
+    renderThread([], [source]);
+    fireEvent.click(screen.getByRole("button", { name: /^Source: With credentials/ }));
+    const panel = inspectorPanel();
+    expect(within(panel).queryByRole("link")).toBeNull();
+    expect(panel).toHaveTextContent("External URL unavailable");
+    expect(panel.innerHTML).not.toContain("secret");
+  });
+
   it("opens a source chip as a Source item with its provider and an icon link", () => {
     const source: SourceMessagePart = {
       type: "source",
@@ -606,6 +623,282 @@ describe("Inspector with the result cards and source chips of the thread", () =>
     expect(link).toHaveAttribute("href", "https://www.example.com/news/story");
     expect(link).toHaveTextContent("");
     expect(within(panel).getByRole("row", { name: /Source.*example\.com/ })).toBeInTheDocument();
+  });
+});
+
+describe("Inspector panel follow-ups from verification", () => {
+  const failure = (cls: string) => ({
+    sourcecado: {
+      failure: {
+        class: cls,
+        connector_id: null,
+        source: "Board",
+        retry_safe: false,
+        idempotent: false,
+        summary: "Board could not run this query.",
+        repair_route: null,
+        detail: "RAW_FAILURE_DETAIL",
+        call_id: "x",
+        run_id: "r",
+        session_id: "s",
+        state: "failed",
+      },
+    },
+  });
+
+  beforeEach(() => {
+    window.localStorage.removeItem(WIDTH_KEY);
+  });
+  afterEach(() => {
+    window.localStorage.removeItem(WIDTH_KEY);
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+  });
+
+  it("shows a failed step as a failure class and counts, with the provider text only in Raw", () => {
+    renderTurn([
+      tool({
+        isError: true,
+        providerMetadata: failure("timeout_network"),
+        result: {
+          error: 'Error: http 502 {"upstream":"RAWPAYLOAD-8841"}',
+          message: "Bad gateway from upstream",
+          count: 3,
+          rows: [{ a: 1 }, { a: 2 }],
+          tags: ["x", "y"],
+          body: `{"long":"${"z".repeat(200)}"}`,
+        },
+      }),
+    ]);
+    // A failed step opens by itself, so its Inspect button is already there.
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Queried Board" }));
+
+    const panel = inspectorPanel();
+    expect(within(panel).getByRole("alert")).toHaveTextContent("Board could not run this query.");
+    expect(within(panel).getByRole("row", { name: /Failure.*Timeout or network/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Failed in.*Board/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Count.*3/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Rows.*2 items/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Tags.*x, y/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /In Raw.*3 more fields/ })).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("RAWPAYLOAD");
+    expect(panel).not.toHaveTextContent("Bad gateway");
+    expect(panel).not.toHaveTextContent("RAW_FAILURE_DETAIL");
+    expect(panel.textContent).not.toMatch(/[{}]/);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Raw" }));
+    expect(panel).toHaveTextContent("RAWPAYLOAD-8841");
+  });
+
+  it("gives a tool step a Provider row, and a long title a tooltip", () => {
+    renderTurn([
+      tool({
+        toolCallId: "call-apollo",
+        toolName: "apollo_enrich_contact",
+        args: { firstName: "Tim" },
+        result: { name: "Tim Zheng" },
+      }),
+    ]);
+    openInspector(/^Enriched contact with Apollo/, "Inspect Enriched contact with Apollo");
+    const panel = inspectorPanel();
+    fireEvent.click(within(panel).getByRole("tab", { name: "Context" }));
+    expect(within(panel).getByRole("row", { name: /Provider.*Apollo/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { level: 2 })).toHaveAttribute(
+      "title",
+      within(panel).getByRole("heading", { level: 2 }).textContent,
+    );
+  });
+
+  it("holds a stored width to the room the workspace has, on load", () => {
+    window.localStorage.setItem(WIDTH_KEY, String(INSPECTOR_MAX_WIDTH));
+    // A 900px workspace leaves 460px for the panel and keeps 440px for the thread.
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 900,
+    });
+    renderTurn([tool()]);
+    openInspector(/^Queried Board/, "Inspect Queried Board");
+    const panel = inspectorPanel();
+    expect(panel.style.getPropertyValue("--inspector-width")).toBe("460px");
+    expect(
+      within(panel).getByRole("separator", { name: "Resize inspector" }),
+    ).toHaveAttribute("aria-valuenow", "460");
+    // The choice is kept. A wider window gives the panel its stored width back.
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 1400,
+    });
+    fireEvent(window, new Event("resize"));
+    expect(panel.style.getPropertyValue("--inspector-width")).toBe(`${INSPECTOR_MAX_WIDTH}px`);
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get: () => 1000,
+    });
+    fireEvent(window, new Event("resize"));
+    expect(panel.style.getPropertyValue("--inspector-width")).toBe("560px");
+  });
+
+  it("makes the thread inert behind a full-screen panel, and frees it before focus returns", async () => {
+    const listeners = new Set<() => void>();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation(() => ({
+        matches: true,
+        addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+        removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+      })),
+    );
+    const { container } = renderTurn([tool()]);
+    const inspect = openInspector(/^Queried Board/, "Inspect Queried Board");
+
+    const thread = container.querySelector("section.sourcecado-activity")!;
+    expect(thread).toHaveAttribute("inert");
+    expect(inspectorPanel()).not.toHaveAttribute("inert");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(thread).not.toHaveAttribute("inert");
+    await waitFor(() => expect(inspect).toHaveFocus());
+    expect(listeners.size).toBe(0);
+  });
+
+  it("keeps Tab inside a full-screen panel", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation(() => ({
+        matches: true,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })),
+    );
+    renderTurn([tool()]);
+    openInspector(/^Queried Board/, "Inspect Queried Board");
+    const panel = inspectorPanel();
+    const stops = [...panel.querySelectorAll<HTMLElement>("button, [role=tab], [tabindex='0']")];
+    const first = within(panel).getByRole("separator", { name: "Resize inspector" });
+    const close = within(panel).getByRole("button", { name: "Close inspector" });
+    const last = stops[stops.length - 1]!;
+
+    // Shift+Tab on the heading (the first stop is the resize handle, which a
+    // phone hides) wraps to the last stop. Tab on the last stop wraps to the first.
+    within(panel).getByRole("heading", { level: 2 }).focus();
+    fireEvent.keyDown(document.activeElement!, { key: "Tab", shiftKey: true });
+    expect(last).toHaveFocus();
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect([first, close]).toContain(document.activeElement);
+  });
+
+  it("leaves the thread live beside a docked or overlay panel", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation(() => ({
+        matches: false,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      })),
+    );
+    const { container } = renderTurn([tool()]);
+    openInspector(/^Queried Board/, "Inspect Queried Board");
+    expect(container.querySelector("section.sourcecado-activity")).not.toHaveAttribute("inert");
+  });
+
+  it("shows no link for an address with a password or a script scheme", () => {
+    const items: InspectorTarget[] = [
+      {
+        kind: "source",
+        id: "creds",
+        title: "With credentials",
+        status: "success",
+        externalUrl: "https://user:secret@creds.example.com/x",
+      },
+      { kind: "source", id: "script", title: "Script", status: "success", externalUrl: "javascript:alert(1)" },
+      { kind: "source", id: "plain", title: "Plain", status: "success", externalUrl: "https://example.com/ok" },
+    ];
+    render(
+      <InspectorProvider threadId="thread-urls">
+        <KindHarness items={items} />
+      </InspectorProvider>,
+    );
+    // The password must not show as text either.
+    for (const id of ["creds", "script"]) {
+      fireEvent.click(screen.getByRole("button", { name: `Open ${id}` }));
+      expect(within(inspectorPanel()).queryByRole("link")).toBeNull();
+      expect(inspectorPanel()).toHaveTextContent("External URL unavailable");
+      expect(inspectorPanel()).not.toHaveTextContent("secret");
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Open plain" }));
+    expect(within(inspectorPanel()).getByRole("link", { name: "Open externally" })).toHaveAttribute(
+      "href",
+      "https://example.com/ok",
+    );
+  });
+});
+
+describe("Inspector shows a result card read only", () => {
+  const apollo = tool({
+    toolCallId: "call-apollo",
+    toolName: "apollo_search_people",
+    args: { organizationName: "Apollo", personTitles: ["CEO"] },
+    result: {
+      people: [
+        { apolloId: "p1", firstName: "Tim", lastNameObfuscated: "Zh***g", title: "CEO", organizationName: "Apollo.io", hasEmail: true, directPhoneStatus: null },
+        { apolloId: "p2", firstName: "Maya", lastNameObfuscated: null, title: "Founder", organizationName: "Apollo.io", hasEmail: false, directPhoneStatus: null },
+      ],
+    },
+  });
+  const empty = tool({
+    toolCallId: "call-empty",
+    toolName: "apollo_search_people",
+    args: { organizationName: "Nowhere" },
+    result: { people: [] },
+  });
+
+  function renderThread(tools: ToolCallMessagePart[]) {
+    return render(
+      <InspectorProvider threadId="thread-readonly">
+        <ActivityGroup tools={tools} messageState="complete" answerStarted />
+        <AnswerResults tools={tools} messageState="complete" />
+        <Inspector />
+      </InspectorProvider>,
+    );
+  }
+
+  it("has no select boxes and no curate, review or keep controls in the panel", () => {
+    renderThread([apollo]);
+    const threadCard = screen.getByRole("region", { name: "Apollo shortlist" });
+    // The thread card is the one place to act.
+    expect(within(threadCard).getAllByRole("checkbox")).toHaveLength(2);
+    expect(within(threadCard).getByRole("textbox")).toBeInTheDocument();
+    expect(within(threadCard).getByRole("button", { name: /^Review 0 selected/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Searched Apollo" }));
+
+    const panel = inspectorPanel();
+    const copy = within(panel).getByRole("region", { name: "Apollo shortlist" });
+    expect(within(copy).getByText("Tim")).toBeInTheDocument();
+    expect(within(copy).queryByRole("checkbox")).toBeNull();
+    expect(within(copy).queryByRole("textbox")).toBeNull();
+    expect(within(copy).queryByRole("button", { name: /Review \d+ selected|Keep|Create chat|Open chat/ })).toBeNull();
+    expect(copy.querySelector(".sourcecado-card-curate")).toBeNull();
+    // Reading controls stay: the candidate and the credit note open items.
+    expect(within(copy).getByRole("button", { name: "Inspect candidate Tim" })).toBeInTheDocument();
+    expect(within(copy).getByRole("button", { name: "Review Apollo credit use" })).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("Zh***g");
+    // The thread card still has everything.
+    expect(within(threadCard).getAllByRole("checkbox")).toHaveLength(2);
+  });
+
+  it("does not offer to edit the search from an empty card in the panel", () => {
+    renderThread([empty]);
+    const threadCard = screen.getByRole("region", { name: "Apollo shortlist" });
+    expect(within(threadCard).getByRole("button", { name: "Adjust criteria" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Searched Apollo" }));
+    expect(
+      within(inspectorPanel()).queryByRole("button", { name: "Adjust criteria" }),
+    ).toBeNull();
+    expect(within(threadCard).getByRole("button", { name: "Adjust criteria" })).toBeInTheDocument();
   });
 });
 

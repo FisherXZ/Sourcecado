@@ -3,7 +3,13 @@ import type { ReactNode } from "react";
 
 import type { InspectorStep, InspectorTarget } from "./Inspector";
 import { failureOf, stepLabel, type StepState } from "./processState";
-import { domainRendererFor, isEvidenceToolName, toolPresentation } from "./toolRegistry";
+import type { ToolFailure } from "./protocol";
+import {
+  domainRendererFor,
+  isEvidenceToolName,
+  toolPresentation,
+  type ToolIconKey,
+} from "./toolRegistry";
 import { EvidenceSetResult } from "../generative/EvidenceSetResult";
 import { CardBoundary, rawToolTarget, UnsupportedCard } from "../generative/ResultCard";
 import { sanitizeApolloNameMasks } from "../personName";
@@ -15,6 +21,26 @@ const NO_RESULT_NOTE: Readonly<Partial<Record<StepState, string>>> = {
   denied: "Denied. This step did not run.",
   interrupted: "The run stopped before this step finished.",
   unknown: "No result was recorded. The step may have run. Check it before you repeat it.",
+};
+
+/** Who runs a tool, from the tool registry's icon. A local tool has no provider row. */
+const PROVIDER_BY_ICON: Readonly<Partial<Record<ToolIconKey, string>>> = {
+  apollo: "Apollo",
+  gmail: "Gmail",
+  drive: "Google Drive",
+  calendar: "Google Calendar",
+  granola: "Granola",
+  web: "Web search",
+  person: "Board",
+};
+
+/** The failure class in words. The provider's own error text stays in Raw. */
+const FAILURE_CLASS: Readonly<Record<ToolFailure["class"], string>> = {
+  connector_auth: "Connector sign-in",
+  timeout_network: "Timeout or network",
+  permission: "Permission",
+  validation: "Validation",
+  unknown: "Unknown",
 };
 
 /** A short key that changes whenever the live data behind this turn's steps changes. */
@@ -114,10 +140,20 @@ export function toolInspectorTarget(
   }));
   const card = cardFor(tool, state);
   const note = NO_RESULT_NOTE[state];
+  const provider = PROVIDER_BY_ICON[presentation.icon];
+  const facts =
+    failed && failure
+      ? [
+          { label: "Failure", value: FAILURE_CLASS[failure.class] ?? FAILURE_CLASS.unknown },
+          ...(failure.source ? [{ label: "Failed in", value: failure.source }] : []),
+        ]
+      : [];
   return {
     kind: "tool",
     id: tool.toolCallId,
     title: stepLabel(tool, state),
+    ...(provider ? { provider } : {}),
+    ...(facts.length > 0 ? { facts } : {}),
     status: failed ? "error" : state === "running" || state === "waiting" ? "loading" : "success",
     state,
     toolName: tool.toolName,

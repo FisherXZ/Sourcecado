@@ -62,11 +62,16 @@ export function humanizeKey(key: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
-/** An http or https link, or null for anything else (a `javascript:` URL, a bad string). */
+/**
+ * An http or https link, or null for anything else: a `javascript:` URL, a
+ * bad string, or an address with a user name or password in it. The link goes
+ * to the operator's browser, so it must not carry a credential.
+ */
 export function safeExternalUrl(value: string | null | undefined): string | null {
   if (!value) return null;
   try {
     const parsed = new URL(value);
+    if (parsed.username || parsed.password) return null;
     return parsed.protocol === "http:" || parsed.protocol === "https:"
       ? parsed.toString()
       : null;

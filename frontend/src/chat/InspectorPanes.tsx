@@ -140,6 +140,10 @@ export function ValueTable({
   if (rows.length === 0) {
     return all.length === 0 ? <p className="sourcecado-inspector-empty">None</p> : null;
   }
+  return <RowsTable rows={rows} />;
+}
+
+function RowsTable({ rows }: { readonly rows: readonly Row[] }) {
   return (
     <table className="sourcecado-inspector-table">
       <tbody>
@@ -152,6 +156,95 @@ export function ValueTable({
       </tbody>
     </table>
   );
+}
+
+/** A short line of text is a fact. Anything longer, or shaped like JSON, stays in Raw. */
+const FACT_TEXT_LIMIT = 100;
+/** Keys that carry the provider's own error text. That text stays in Raw. */
+const RAW_ONLY_KEY = /^(error|errors|err|message|detail|details|reason|stack|stacktrace|trace|traceback|exception)$/i;
+
+function isFactText(text: string): boolean {
+  return text.length <= FACT_TEXT_LIMIT && !/[{}[\]\n\r]/.test(text);
+}
+
+function count(total: number, one: string, many: string): string {
+  return `${total} ${total === 1 ? one : many}`;
+}
+
+/**
+ * The readable form of a result with no card: counts for lists, short values
+ * for fields. Long text, nested records and error text do not show. They are
+ * counted, and the count points to Raw.
+ */
+function summaryOf(
+  value: object,
+  prefix: string,
+  depth: number,
+): { readonly rows: Row[]; readonly hidden: number } {
+  const rows: Row[] = [];
+  let hidden = 0;
+  for (const [key, item] of Object.entries(value)) {
+    if (RAW_ONLY_KEY.test(key)) {
+      hidden += 1;
+      continue;
+    }
+    const label = prefix ? `${prefix} · ${humanizeKey(key)}` : humanizeKey(key);
+    if (typeof item === "string") {
+      if (isFactText(item)) rows.push({ label, value: scalarText(item) });
+      else hidden += 1;
+    } else if (isScalar(item)) {
+      rows.push({ label, value: scalarText(item) });
+    } else if (Array.isArray(item)) {
+      const facts = item.every((entry) => typeof entry === "string" ? isFactText(entry) : isScalar(entry));
+      rows.push({
+        label,
+        value:
+          item.length === 0
+            ? "None"
+            : facts && item.length <= 5
+              ? item.map(scalarText).join(", ")
+              : count(item.length, "item", "items"),
+      });
+    } else if (depth < 1 && Object.keys(item as object).length > 0) {
+      const nested = summaryOf(item as object, label, depth + 1);
+      rows.push(...nested.rows);
+      hidden += nested.hidden;
+    } else {
+      hidden += 1;
+    }
+  }
+  return { rows, hidden };
+}
+
+/** Facts the panel knows (the failure class), then the readable summary of the result. */
+export function SummaryTable({
+  value,
+  skip,
+  facts = [],
+}: {
+  readonly value: unknown;
+  readonly skip?: string | null;
+  readonly facts?: readonly { readonly label: string; readonly value: string }[];
+}) {
+  const rows: Row[] = facts.map((fact) => ({ ...fact }));
+  let hidden = 0;
+  if (value !== undefined) {
+    if (typeof value === "string") {
+      if (isFactText(value)) rows.push({ label: "Result", value: scalarText(value) });
+      else hidden += 1;
+    } else if (isScalar(value)) {
+      rows.push({ label: "Result", value: scalarText(value) });
+    } else if (Array.isArray(value)) {
+      rows.push({ label: "Items", value: value.length === 0 ? "None" : count(value.length, "item", "items") });
+    } else {
+      const summary = summaryOf(value as object, "", 0);
+      rows.push(...summary.rows);
+      hidden += summary.hidden;
+    }
+  }
+  if (hidden > 0) rows.push({ label: "In Raw", value: count(hidden, "more field", "more fields") });
+  const shown = rows.filter((row) => row.value !== skip);
+  return shown.length === 0 ? null : <RowsTable rows={shown} />;
 }
 
 function rawJson(value: unknown): string {
@@ -168,6 +261,7 @@ export function hasOutput(target: InspectorTarget): boolean {
     (target.card !== undefined && target.card !== null) ||
     Boolean(target.preview) ||
     target.result !== undefined ||
+    Boolean(target.facts?.length) ||
     target.stale === true ||
     target.truncated === true ||
     (target.status === "loading" && target.state === undefined)
@@ -216,8 +310,10 @@ export function OutputPane({ target }: { readonly target: InspectorTarget }) {
       ) : (
         <>
           {target.preview ? <p className="sourcecado-inspector-text">{target.preview}</p> : null}
-          {hasResult ? <ValueTable value={target.result} skip={target.preview} /> : null}
-          {!target.preview && !hasResult ? (
+          {hasResult || target.facts?.length ? (
+            <SummaryTable value={target.result} skip={target.preview} facts={target.facts} />
+          ) : null}
+          {!target.preview && !hasResult && !target.facts?.length ? (
             <p className="sourcecado-inspector-empty">{target.note ?? "No output recorded."}</p>
           ) : null}
         </>
