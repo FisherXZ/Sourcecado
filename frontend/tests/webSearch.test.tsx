@@ -488,13 +488,17 @@ describe("web search row", () => {
     ]);
     fireEvent.click(button(/^Used 3 sources/));
     // The two good searches are two rows around the failed step. The failed
-    // one is the ordinary step row, with its state word and Retry.
+    // one is the ordinary step row, with its state word and its recovery menu.
     expect(screen.getAllByRole("button", { name: /^Searched the web/ })).toHaveLength(2);
     const failed = button(/^Searching the web for “bad one”/);
-    expect(failed).toHaveTextContent("Failed");
+    expect(failed).toHaveTextContent("Could not connect");
     // A failed step that needs the operator opens by itself.
     expect(failed).toHaveAttribute("aria-expanded", "true");
-    expect(button("Retry failed step")).toBeInTheDocument();
+    // A web search is not safe to repeat, so Retry is off and says why.
+    expect(screen.getByText(/Retry is off\./)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^More recovery options for Searching the web/ }),
+    ).toBeInTheDocument();
   });
 
   it("shows a search that is still running with its own state and nothing to open yet", () => {
