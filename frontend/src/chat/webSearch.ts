@@ -247,9 +247,21 @@ export function inspectableResult(tool: ToolCallMessagePart): unknown {
   });
 }
 
-/** The call's arguments for the raw Inspect view, without credentials in a URL. */
-export function inspectableArgs(tool: ToolCallMessagePart): unknown {
-  return withoutUserInfo(tool.args);
+/**
+ * The inspector item for one step, with the raw arguments and result of a web
+ * search replaced by the display copies above. Any other tool passes through.
+ * The inspector builds the item. This only changes what it shows as raw.
+ */
+export function searchInspectorTarget(
+  target: InspectorTarget,
+  tool: ToolCallMessagePart,
+): InspectorTarget {
+  if (tool.toolName !== WEB_SEARCH_TOOL) return target;
+  return {
+    ...target,
+    args: withoutUserInfo(tool.args),
+    ...(tool.result !== undefined ? { result: inspectableResult(tool) } : {}),
+  };
 }
 
 /**

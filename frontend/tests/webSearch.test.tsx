@@ -177,6 +177,14 @@ const failure = {
 
 const button = (name: RegExp | string) => screen.getByRole("button", { name });
 
+/** The inspector's raw JSON for the open item: the Output tab, then its Raw toggle. */
+function openRaw() {
+  const panel = screen.getByRole("complementary", { name: "Inspector" });
+  fireEvent.click(within(panel).getByRole("tab", { name: "Output" }));
+  fireEvent.click(within(panel).getByRole("button", { name: "Raw" }));
+  return panel;
+}
+
 function renderLayer(
   tools: readonly ToolCallMessagePart[],
   extra: { messageState?: string; answerStarted?: boolean } = {},
@@ -332,8 +340,7 @@ describe("web search row", () => {
     ]);
     fireEvent.click(button(/^Searched the web/));
     fireEvent.click(button("Inspect search for mismatch"));
-    const inspector = screen.getByRole("complementary", { name: "Inspector" });
-    fireEvent.click(within(inspector).getByText("Result"));
+    const inspector = openRaw();
     for (const row of [STORY, PROFILE, PIPELINE]) {
       expect(inspector).not.toHaveTextContent(row.snippet);
     }
@@ -422,15 +429,16 @@ describe("web search row", () => {
     // The row, the query line and the label show no password.
     expect(container).not.toHaveTextContent("hunter2");
     fireEvent.click(button("Inspect search for find https://host.example.com/q"));
-    const inspector = screen.getByRole("complementary", { name: "Inspector" });
-    for (const name of ["Arguments", "Result"]) {
-      fireEvent.click(within(inspector).getByText(name));
-    }
+    const inspector = openRaw();
     expect(inspector).not.toHaveTextContent("hunter2");
     expect(inspector).not.toHaveTextContent("admin:");
     // Only the user info goes. The rest of the URL, and an "@" in a query, stay.
     expect(inspector).toHaveTextContent("https://creds.example.com/secret/page?email=a@b.example#frag");
     expect(inspector).toHaveTextContent("https://ok.example.com/x?u=a@b.example");
+    // The arguments, in Context, show no password either.
+    fireEvent.click(within(inspector).getByRole("tab", { name: "Context" }));
+    expect(inspector).toHaveTextContent("https://host.example.com/q");
+    expect(inspector).not.toHaveTextContent("hunter2");
     // The stored call is not changed.
     expect(JSON.stringify(tool)).toBe(stored);
     expect(stored).toContain("hunter2");
@@ -528,12 +536,34 @@ describe("web search row", () => {
     fireEvent.click(button(/^Searched the web/));
     fireEvent.click(button(/^sponsor pipeline/));
     fireEvent.click(button("Inspect search for sponsor pipeline"));
-    const inspector = screen.getByRole("complementary", { name: "Inspector" });
-    fireEvent.click(within(inspector).getByText("Result"));
+    const inspector = openRaw();
     expect(inspector).not.toHaveTextContent(PIPELINE.snippet);
     expect(inspector).toHaveTextContent("(withheld: not shown)");
     // The other result in the same call keeps its snippet.
     expect(inspector).toHaveTextContent(HANDBOOK.snippet);
+  });
+
+  it("keeps the withheld excerpt out of the panel when the open item follows its step", () => {
+    const tool = searchWithEvidence(
+      "call-a",
+      [STORY, PIPELINE],
+      [reference(STORY, {}, 0), reference(PIPELINE, { sensitivity: "restricted" }, 2)],
+    );
+    const layer = (tools: readonly ToolCallMessagePart[]) => (
+      <InspectorProvider threadId="thread-1">
+        <ActivityGroup tools={tools} messageState="complete" />
+        <Inspector />
+      </InspectorProvider>
+    );
+    const { rerender } = render(layer([tool]));
+    fireEvent.click(button(/^Searched the web/));
+    fireEvent.click(button("Inspect search for mismatch"));
+    // Another step joins the turn. The open item follows, and is rebuilt.
+    rerender(layer([tool, drive()]));
+    const inspector = openRaw();
+    expect(inspector).toHaveTextContent(STORY.snippet);
+    expect(inspector).not.toHaveTextContent(PIPELINE.snippet);
+    expect(inspector).toHaveTextContent("(withheld: not shown)");
   });
 
   it("keeps a way to inspect the raw call for each query", () => {

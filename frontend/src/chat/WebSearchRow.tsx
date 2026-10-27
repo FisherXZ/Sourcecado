@@ -1,14 +1,12 @@
 import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { useId, useState } from "react";
 
-import { useInspector } from "./Inspector";
+import { useInspector, type InspectorTarget } from "./Inspector";
 import { ActionIcon, ToolIcon } from "./ProcessIcons";
 import { formatElapsed, layerElapsedMs, layerState, type StepState } from "./processState";
 import { StepStatus } from "./StepRow";
 import { toolPresentation } from "./toolRegistry";
 import {
-  inspectableArgs,
-  inspectableResult,
   resultsLabel,
   webQueryOf,
   webResultTarget,
@@ -49,10 +47,12 @@ function SearchQuery({
   tool,
   query,
   open: initiallyOpen,
+  inspect,
 }: {
   readonly tool: ToolCallMessagePart;
   readonly query: WebQuery;
   readonly open: boolean;
+  readonly inspect: (toolCallId: string) => InspectorTarget | null;
 }) {
   const { select } = useInspector();
   const [chosen, setChosen] = useState<boolean | null>(null);
@@ -111,20 +111,10 @@ function SearchQuery({
               className="sourcecado-inspect-tool"
               aria-label={`Inspect search for ${text}`}
               title="Inspect"
-              onClick={(event) =>
-                select(
-                  {
-                    kind: "tool",
-                    id: tool.toolCallId,
-                    title: toolPresentation(tool.toolName).label,
-                    status: "success",
-                    args: inspectableArgs(tool),
-                    result: inspectableResult(tool),
-                    timing: tool.timing,
-                  },
-                  event.currentTarget,
-                )
-              }
+              onClick={(event) => {
+                const target = inspect(tool.toolCallId);
+                if (target) select(target, event.currentTarget);
+              }}
             >
               <ActionIcon name="inspect" />
             </button>
@@ -145,10 +135,13 @@ export function WebSearchRow({
   tools,
   states,
   now,
+  inspect,
 }: {
   readonly tools: readonly ToolCallMessagePart[];
   readonly states: readonly StepState[];
   readonly now: number;
+  /** Builds the inspector item for one of this row's calls. */
+  readonly inspect: (toolCallId: string) => InspectorTarget | null;
 }) {
   const [chosen, setChosen] = useState<boolean | null>(null);
   const open = chosen ?? false;
@@ -209,6 +202,7 @@ export function WebSearchRow({
                 tool={tools[index]!}
                 query={query}
                 open={queries.length === 1}
+                inspect={inspect}
               />
             ))}
           </ul>

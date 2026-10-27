@@ -14,7 +14,7 @@ import {
   stepsSegment,
 } from "./processState";
 import { StepRow, StepStatus } from "./StepRow";
-import { stepItems } from "./webSearch";
+import { searchInspectorTarget, stepItems } from "./webSearch";
 import { WebSearchRow } from "./WebSearchRow";
 
 /**
@@ -94,10 +94,17 @@ export function ActivityGroup({
   // An open inspector item follows its step: when the step or the turn
   // changes, the panel shows the new state, not the state at the click.
   const { selected, sync } = useInspector();
+  // The inspector item for one step. A web search shows its raw result without
+  // a withheld excerpt and without a password in a URL (#252).
+  const inspectTarget = (toolCallId: string) => {
+    const target = toolInspectorTarget(tools, states, toolCallId);
+    const tool = tools.find((step) => step.toolCallId === toolCallId);
+    return target && tool ? searchInspectorTarget(target, tool) : target;
+  };
   useEffect(() => {
     if (!selected || !tools.some((tool) => tool.toolCallId === selected.id)) return;
     if (selected.revision === turnRevision(tools, states)) return;
-    const next = toolInspectorTarget(tools, states, selected.id);
+    const next = inspectTarget(selected.id);
     if (next) sync(next);
   }, [selected, tools, messageState]);
 
@@ -117,6 +124,7 @@ export function ActivityGroup({
             tools={item.indexes.map((index) => tools[index]!)}
             states={item.indexes.map((index) => states[index]!)}
             now={now}
+            inspect={inspectTarget}
           />
         ) : (
           <StepRow
@@ -125,7 +133,7 @@ export function ActivityGroup({
             state={states[item.index]!}
             now={now}
             turnFailed={messageState === "failed"}
-            inspect={() => toolInspectorTarget(tools, states, tools[item.index]!.toolCallId)}
+            inspect={() => inspectTarget(tools[item.index]!.toolCallId)}
           />
         ),
       )}
