@@ -12,7 +12,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from coworker.crm_tasks import CRM_TASK_STATEMENTS
+from coworker.crm_tasks import (
+    CRM_TASK_STATEMENTS,
+    TaskConflict,
+    TaskError,
+    TaskNotFound,
+    _CHANGE_ID_RE,
+    _clean_operation_id,
+    _clean_reason,
+    _fingerprint,
+)
 from coworker.person_identity import (
     apollo_surname_is_masked,
     without_apollo_name_masks,
@@ -24,9 +33,10 @@ _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # v3 adds the person_descriptions table (ticket #202); v4 adds the person_tasks,
 # crm_changes and crm_operations tables (ticket #200); v5 rebuilds crm_changes
 # with the task lifecycle actions (ticket #201). The constructor creates them for
-# a fresh database, and the registered 2->3, 3->4 and 4->5 migrations adopt an
-# existing one with backup and rollback.
-SCHEMA_VERSION = 5
+# a fresh database, and the registered 2->3, 3->4, 4->5 and 5->6 migrations adopt
+# an existing one with backup and rollback. Version 6 widens crm_changes so a
+# person status change is recorded and undone on the same path as a task change.
+SCHEMA_VERSION = 6
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -1111,6 +1121,84 @@ class PersonStore:
         person.update(self.mail_state(person_id))
         return person
 
+    def _check_sequence(
+        self,
+        row: sqlite3.Row,
+        state: str,
+        actor: str,
+        expected_version: int | None,
+    ) -> str:
+        """Validate a sequence transition and return the outcome to persist.
+
+        Shared by `set_sequence` and `change_status` so the two paths cannot
+        drift. Raises `ValueError`; callers that need typed HTTP errors wrap it.
+        """
+        if state not in SEQUENCE_STATES:
+            raise ValueError(f"invalid sequence state {state}")
+        if actor not in ACTORS:
+            raise ValueError(f"invalid actor {actor}")
+        if expected_version is not None and int(row["version"]) != expected_version:
+            raise ValueError(
+                f"stale record version: expected {expected_version}, current {row['version']}"
+            )
+        if state == "in_conversation" and actor == "assistant":
+            if not self._has_conversation_evidence(str(row["person_id"])):
+                raise ValueError(
+                    "in_conversation requires sent outreach, an inbound reply, or director Allow"
+                )
+        next_outcome = row["outcome"]
+        if state == "done" and not str(row["outcome"] or "").strip():
+            if actor != "director":
+                raise ValueError("done requires a recorded outcome")
+            next_outcome = "closed"
+        return next_outcome
+
+    def _apply_sequence(
+        self,
+        person_id: str,
+        state: str,
+        next_outcome: str | None,
+        actor: str,
+        now: str,
+        next_version: int,
+        *,
+        rationale_summary: str = "",
+        source_ref: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> None:
+        """Write the sequence move, its timeline receipt and a snapshot.
+
+        No commit: the caller owns the transaction so the person row, its
+        receipt and (for `change_status`) the CRM change commit together.
+        """
+        self._conn.execute(
+            """
+            UPDATE people
+            SET sequence_state = ?, outcome = ?, version = ?, updated_at = ?
+            WHERE person_id = ?
+            """,
+            (state, next_outcome, next_version, now, person_id),
+        )
+        self._receipt(
+            person_id,
+            kind="state",
+            summary=f"Moved to {state.replace('_', ' ')}",
+            payload={
+                "state": state,
+                "rationale_summary": rationale_summary,
+                "version": next_version,
+                # The external record that justified the move, when one did.
+                # This is what a reader points at to check the move, and what
+                # stops the same source moving the person twice.
+                **({"source_ref": source_ref} if source_ref else {}),
+            },
+            actor=actor,
+            session_id=session_id,
+            run_id=run_id,
+        )
+        self._snapshot(person_id, next_version, now)
+
     def set_sequence(
         self,
         person_id: str,
@@ -1123,54 +1211,23 @@ class PersonStore:
         rationale_summary: str = "",
         source_ref: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if state not in SEQUENCE_STATES:
-            raise ValueError(f"invalid sequence state {state}")
-        if actor not in ACTORS:
-            raise ValueError(f"invalid actor {actor}")
         with self._lock:
             row = self._load_person_row(person_id)
-            if expected_version is not None and int(row["version"]) != expected_version:
-                raise ValueError(
-                    f"stale record version: expected {expected_version}, current {row['version']}"
-                )
-            if state == "in_conversation" and actor == "assistant":
-                if not self._has_conversation_evidence(person_id):
-                    raise ValueError(
-                        "in_conversation requires sent outreach, an inbound reply, or director Allow"
-                    )
-            next_outcome = row["outcome"]
-            if state == "done" and not str(row["outcome"] or "").strip():
-                if actor != "director":
-                    raise ValueError("done requires a recorded outcome")
-                next_outcome = "closed"
+            next_outcome = self._check_sequence(row, state, actor, expected_version)
             now = self._now()
             next_version = int(row["version"] or 1) + 1
-            self._conn.execute(
-                """
-                UPDATE people
-                SET sequence_state = ?, outcome = ?, version = ?, updated_at = ?
-                WHERE person_id = ?
-                """,
-                (state, next_outcome, next_version, now, person_id),
-            )
-            self._receipt(
+            self._apply_sequence(
                 person_id,
-                kind="state",
-                summary=f"Moved to {state.replace('_', ' ')}",
-                payload={
-                    "state": state,
-                    "rationale_summary": rationale_summary,
-                    "version": next_version,
-                    # The external record that justified the move, when one
-                    # did. This is what a reader points at to check the move,
-                    # and what stops the same source moving the person twice.
-                    **({"source_ref": source_ref} if source_ref else {}),
-                },
-                actor=actor,
+                state,
+                next_outcome,
+                actor,
+                now,
+                next_version,
+                rationale_summary=rationale_summary,
+                source_ref=source_ref,
                 session_id=session_id,
                 run_id=run_id,
             )
-            self._snapshot(person_id, next_version, now)
             self._conn.commit()
             row = self._conn.execute(
                 "SELECT * FROM people WHERE person_id = ?",
@@ -1179,6 +1236,340 @@ class PersonStore:
         person = self._person_dict(row)
         assert person is not None
         return person
+
+    # --- status change on the CRM change/undo path (ticket: preview) --------
+    #
+    # `change_status` is the deliberate director/UI status edit. Unlike
+    # `set_sequence` (used for internal auto-transitions), it records a
+    # `crm_changes` row and an operation receipt, so the move has history and a
+    # field-scoped undo on the same path as a task edit. It raises the task
+    # error types so the server's existing `_task_error` mapper serves them.
+
+    def _replay_crm_operation(
+        self, operation_id: str, fingerprint: str
+    ) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT fingerprint, response_json FROM crm_operations WHERE operation_id = ?",
+            (operation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if str(row["fingerprint"]) != fingerprint:
+            raise TaskConflict(
+                "this operation id was already used for a different change",
+                code="operation_conflict",
+            )
+        response = json.loads(str(row["response_json"]))
+        response["replayed"] = True
+        return response
+
+    def _record_crm_change(
+        self,
+        *,
+        operation_id: str,
+        person_id: str,
+        entity_version: int,
+        action: str,
+        before: dict[str, Any] | None,
+        after: dict[str, Any],
+        actor: str,
+        reason: str,
+        source_ref: dict[str, Any] | None,
+        compensates: str | None,
+        session_id: str | None,
+        run_id: str | None,
+        now: str,
+    ) -> dict[str, Any]:
+        change_id = "chg_" + uuid.uuid4().hex
+        source_refs = [source_ref] if source_ref else []
+        self._conn.execute(
+            """
+            INSERT INTO crm_changes (
+                change_id, person_id, entity_type, entity_id, entity_version,
+                action, before_json, after_json, actor, reason, source_refs,
+                operation_id, session_id, run_id, compensates_change_id,
+                created_at
+            ) VALUES (?, ?, 'status', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                change_id,
+                person_id,
+                person_id,
+                entity_version,
+                action,
+                json.dumps(before, sort_keys=True) if before is not None else None,
+                json.dumps(after, sort_keys=True),
+                actor,
+                reason,
+                json.dumps(source_refs),
+                operation_id,
+                session_id,
+                run_id,
+                compensates,
+                now,
+            ),
+        )
+        return {
+            "change_id": change_id,
+            "entity_type": "status",
+            "entity_id": person_id,
+            "entity_version": entity_version,
+            "action": action,
+            "actor": actor,
+            "reason": reason,
+            "operation_id": operation_id,
+            "compensates_change_id": compensates,
+            "created_at": now,
+        }
+
+    def _remember_operation(
+        self,
+        operation_id: str,
+        fingerprint: str,
+        change_id: str,
+        entity_id: str,
+        response: dict[str, Any],
+        now: str,
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO crm_operations (
+                operation_id, fingerprint, change_id, entity_type, entity_id,
+                response_json, created_at
+            ) VALUES (?, ?, ?, 'status', ?, ?, ?)
+            """,
+            (
+                operation_id,
+                fingerprint,
+                change_id,
+                entity_id,
+                json.dumps(response, sort_keys=True),
+                now,
+            ),
+        )
+
+    def change_status(
+        self,
+        person_id: str,
+        state: str,
+        *,
+        expected_version: object,
+        operation_id: object,
+        actor: str = "director",
+        reason: object = None,
+        source_ref: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        if actor not in ACTORS:
+            raise TaskError(f"invalid actor {actor}")
+        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
+            raise TaskError("expected_version is required")
+        operation = _clean_operation_id(operation_id)
+        fingerprint = _fingerprint(
+            {
+                "op": "status.change",
+                "person_id": person_id,
+                "state": state,
+                "expected_version": expected_version,
+                "actor": actor,
+            }
+        )
+        with self._lock:
+            try:
+                replay = self._replay_crm_operation(operation, fingerprint)
+                if replay is not None:
+                    return replay
+                try:
+                    row = self._load_person_row(person_id)
+                except ValueError as exc:
+                    raise TaskNotFound("unknown person") from exc
+                current = self._person_dict(row)
+                assert current is not None
+                if int(row["version"]) != expected_version:
+                    raise TaskConflict(
+                        "this person changed after you loaded it",
+                        code="status_conflict",
+                        current={"person": current},
+                    )
+                try:
+                    next_outcome = self._check_sequence(row, state, actor, None)
+                except ValueError as exc:
+                    raise TaskError(str(exc)) from exc
+                before = {
+                    "sequence_state": row["sequence_state"],
+                    "outcome": row["outcome"],
+                }
+                if before["sequence_state"] == state and before["outcome"] == next_outcome:
+                    # Already in this status: no version bump, no change to undo.
+                    return {"person": current, "change": None, "replayed": False}
+                now = self._now()
+                next_version = int(row["version"] or 1) + 1
+                self._apply_sequence(
+                    person_id,
+                    state,
+                    next_outcome,
+                    actor,
+                    now,
+                    next_version,
+                    rationale_summary=_clean_reason(reason, f"Moved to {state.replace('_', ' ')}"),
+                    source_ref=source_ref,
+                    session_id=session_id,
+                    run_id=run_id,
+                )
+                change = self._record_crm_change(
+                    operation_id=operation,
+                    person_id=person_id,
+                    entity_version=next_version,
+                    action="update",
+                    before=before,
+                    after={"sequence_state": state, "outcome": next_outcome},
+                    actor=actor,
+                    reason=_clean_reason(reason, f"Moved to {state.replace('_', ' ')}"),
+                    source_ref=source_ref,
+                    compensates=None,
+                    session_id=session_id,
+                    run_id=run_id,
+                    now=now,
+                )
+                person = self._person_dict(
+                    self._conn.execute(
+                        "SELECT * FROM people WHERE person_id = ?", (person_id,)
+                    ).fetchone()
+                )
+                response = {"person": person, "change": change, "replayed": False}
+                self._remember_operation(
+                    operation, fingerprint, change["change_id"], person_id, response, now
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return response
+
+    def undo_status_change(
+        self,
+        person_id: str,
+        change_id: str,
+        *,
+        operation_id: object,
+        actor: str = "director",
+        reason: object = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Restore the status one recorded change replaced, as a new change.
+
+        Only `sequence_state` and `outcome` move; descriptions, tasks and other
+        person work are untouched. If a later status edit already moved the
+        person past this change's result, the undo is refused with the current
+        person so nothing is erased.
+        """
+        if actor not in ACTORS:
+            raise TaskError(f"invalid actor {actor}")
+        if not _CHANGE_ID_RE.match(change_id):
+            raise TaskNotFound("unknown change")
+        operation = _clean_operation_id(operation_id)
+        fingerprint = _fingerprint(
+            {
+                "op": "status.undo",
+                "person_id": person_id,
+                "change_id": change_id,
+                "actor": actor,
+            }
+        )
+        with self._lock:
+            try:
+                replay = self._replay_crm_operation(operation, fingerprint)
+                if replay is not None:
+                    return replay
+                try:
+                    row = self._load_person_row(person_id)
+                except ValueError as exc:
+                    raise TaskNotFound("unknown person") from exc
+                change_row = self._conn.execute(
+                    """
+                    SELECT before_json, after_json FROM crm_changes
+                    WHERE change_id = ? AND person_id = ? AND entity_type = 'status'
+                    """,
+                    (change_id, person_id),
+                ).fetchone()
+                if change_row is None:
+                    raise TaskNotFound("unknown change")
+                if change_row["before_json"] is None:
+                    raise TaskError("this status change cannot be undone")
+                before = json.loads(str(change_row["before_json"]))
+                after = json.loads(str(change_row["after_json"]))
+                current = self._person_dict(row)
+                assert current is not None
+                if current["sequence_state"] != after["sequence_state"] or (
+                    current.get("outcome") or ""
+                ) != (after.get("outcome") or ""):
+                    raise TaskConflict(
+                        "this person's status changed again after that change",
+                        code="status_conflict",
+                        current={"person": current},
+                    )
+                now = self._now()
+                next_version = int(row["version"] or 1) + 1
+                reason_text = _clean_reason(
+                    reason,
+                    f"Undid status change back to {str(before['sequence_state']).replace('_', ' ')}",
+                )
+                self._apply_sequence(
+                    person_id,
+                    str(before["sequence_state"]),
+                    before.get("outcome"),
+                    actor,
+                    now,
+                    next_version,
+                    rationale_summary=reason_text,
+                    session_id=session_id,
+                    run_id=run_id,
+                )
+                change = self._record_crm_change(
+                    operation_id=operation,
+                    person_id=person_id,
+                    entity_version=next_version,
+                    action="undo",
+                    before={
+                        "sequence_state": after["sequence_state"],
+                        "outcome": after.get("outcome"),
+                    },
+                    after={
+                        "sequence_state": before["sequence_state"],
+                        "outcome": before.get("outcome"),
+                    },
+                    actor=actor,
+                    reason=reason_text,
+                    source_ref=None,
+                    compensates=change_id,
+                    session_id=session_id,
+                    run_id=run_id,
+                    now=now,
+                )
+                person = self._person_dict(
+                    self._conn.execute(
+                        "SELECT * FROM people WHERE person_id = ?", (person_id,)
+                    ).fetchone()
+                )
+                response = {"person": person, "change": change, "replayed": False}
+                self._remember_operation(
+                    operation, fingerprint, change["change_id"], person_id, response, now
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return response
+
+    def crm_change_entity_type(self, person_id: str, change_id: str) -> str | None:
+        """The entity a recorded change touched, for undo-route dispatch."""
+        row = self._conn.execute(
+            "SELECT entity_type FROM crm_changes WHERE change_id = ? AND person_id = ?",
+            (change_id, person_id),
+        ).fetchone()
+        return str(row["entity_type"]) if row is not None else None
 
     def list_board(self) -> dict[str, list[dict[str, Any]]]:
         board: dict[str, list[dict[str, Any]]] = {lane: [] for lane in BOARD_LANES}

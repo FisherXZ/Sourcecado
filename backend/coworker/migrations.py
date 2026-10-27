@@ -833,19 +833,17 @@ def _count_crm_changes(context: MigrationContext) -> int:
     return _row_count(conn, "crm_changes")
 
 
-def _widen_crm_changes(context: MigrationContext) -> int:
-    """Rebuild crm_changes so it can record task state changes and undo.
+def _rebuild_crm_changes(conn: sqlite3.Connection) -> int:
+    """Rebuild crm_changes to the current CRM_CHANGES_COLUMNS shape.
 
     SQLite cannot alter a CHECK, so the table is rebuilt: create the new
     table, copy every row, drop the old one, rename, recreate the index. Each
-    is one statement inside the step's transaction. Foreign keys are off on
+    is one statement inside the caller's transaction. Foreign keys are off on
     the migration connection (sqlite3's default, and a PRAGMA cannot change
     that inside a transaction), so dropping the old table does not trip the
     `crm_operations.change_id` reference; after the rename that reference
     points at the rebuilt table by name again. No row changes.
     """
-    conn = context.connection
-    assert conn is not None
     copied = _row_count(conn, "crm_changes")
     conn.execute(f"CREATE TABLE crm_changes_new ({CRM_CHANGES_COLUMNS})")
     conn.execute(
@@ -866,6 +864,24 @@ def _widen_crm_changes(context: MigrationContext) -> int:
     for statement in CRM_CHANGES_INDEX_STATEMENTS:
         conn.execute(statement)
     return copied
+
+
+def _widen_crm_changes(context: MigrationContext) -> int:
+    """Rebuild crm_changes so it can record task state changes and undo."""
+    conn = context.connection
+    assert conn is not None
+    return _rebuild_crm_changes(conn)
+
+
+def _widen_crm_changes_for_status(context: MigrationContext) -> int:
+    """Rebuild crm_changes so entity_type also admits person status changes.
+
+    The widened CHECK ships in CRM_CHANGES_COLUMNS; the rebuild below adopts it
+    for an already-migrated database. Rows are preserved unchanged.
+    """
+    conn = context.connection
+    assert conn is not None
+    return _rebuild_crm_changes(conn)
 
 
 # DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
@@ -1131,6 +1147,16 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 ),
                 count=_count_crm_changes,
                 apply=_widen_crm_changes,
+            ),
+            Migration(
+                from_version=5,
+                to_version=6,
+                description=(
+                    "Widen crm_changes so it can record person status changes "
+                    "and their undo alongside task changes."
+                ),
+                count=_count_crm_changes,
+                apply=_widen_crm_changes_for_status,
             ),
         ),
         json_columns=(

@@ -520,17 +520,23 @@ def test_board_lists_open_person_and_move(tmp_path):
         title="Founder",
         company="Analytic",
     )
-    app.state.people.set_sequence(person["person_id"], "open", actor="assistant")
+    opened = app.state.people.set_sequence(person["person_id"], "open", actor="assistant")
     client = TestClient(app)
     board = client.get("/v1/board", headers={TOKEN_HEADER: TOKEN}).json()
     assert [row["person_id"] for row in board["open"]] == [person["person_id"]]
     moved = client.post(
         f"/v1/people/{person['person_id']}/sequence",
         headers={TOKEN_HEADER: TOKEN},
-        json={"state": "in_conversation", "actor": "director"},
+        json={
+            "state": "in_conversation",
+            "expected_version": opened["version"],
+            "operation_id": "op-move-1",
+        },
     )
     assert moved.status_code == 200
     assert moved.json()["person"]["sequence_state"] == "in_conversation"
+    # The move is recorded as a CRM status change so it has history and undo.
+    assert moved.json()["change"]["entity_type"] == "status"
     board = client.get("/v1/board", headers={TOKEN_HEADER: TOKEN}).json()
     assert board["open"] == []
     assert [row["person_id"] for row in board["in_conversation"]] == [person["person_id"]]
@@ -551,12 +557,82 @@ def test_board_move_rejects_invalid_state_and_unknown_person(tmp_path):
     bad = client.post(
         f"/v1/people/{person['person_id']}/sequence",
         headers={TOKEN_HEADER: TOKEN},
-        json={"state": "won", "actor": "director"},
+        json={
+            "state": "won",
+            "expected_version": person["version"],
+            "operation_id": "op-bad-state",
+        },
     )
     assert bad.status_code == 400
     missing = client.post(
         f"/v1/people/per_{'0' * 32}/sequence",
         headers={TOKEN_HEADER: TOKEN},
-        json={"state": "open", "actor": "director"},
+        json={"state": "open", "expected_version": 1, "operation_id": "op-missing"},
     )
     assert missing.status_code == 404
+
+
+def test_status_change_and_undo_through_the_routes(tmp_path):
+    app = _app(tmp_path)
+    person = app.state.people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="L",
+        title="Founder",
+        company="Analytic",
+    )
+    opened = app.state.people.set_sequence(
+        person["person_id"], "open", actor="director"
+    )
+    client = TestClient(app)
+
+    moved = client.post(
+        f"/v1/people/{person['person_id']}/sequence",
+        headers={TOKEN_HEADER: TOKEN},
+        json={
+            "state": "in_conversation",
+            "expected_version": opened["version"],
+            "operation_id": "op-route-move",
+        },
+    )
+    assert moved.status_code == 200
+    change_id = moved.json()["change"]["change_id"]
+
+    # The one undo route dispatches to the status path by the change's entity.
+    undone = client.post(
+        f"/v1/people/{person['person_id']}/crm-changes/{change_id}/undo",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"operation_id": "op-route-undo"},
+    )
+    assert undone.status_code == 200
+    assert undone.json()["person"]["sequence_state"] == "open"
+    board = client.get("/v1/board", headers={TOKEN_HEADER: TOKEN}).json()
+    assert [row["person_id"] for row in board["open"]] == [person["person_id"]]
+
+
+def test_stale_status_save_returns_409_with_the_current_person(tmp_path):
+    app = _app(tmp_path)
+    person = app.state.people.keep_from_apollo(
+        apollo_id="ada",
+        first_name="Ada",
+        last_name_obfuscated="L",
+        title="Founder",
+        company="Analytic",
+    )
+    opened = app.state.people.set_sequence(
+        person["person_id"], "open", actor="director"
+    )
+    client = TestClient(app)
+    stale = client.post(
+        f"/v1/people/{person['person_id']}/sequence",
+        headers={TOKEN_HEADER: TOKEN},
+        json={
+            "state": "done",
+            "expected_version": opened["version"] - 1,
+            "operation_id": "op-route-stale",
+        },
+    )
+    assert stale.status_code == 409
+    body = stale.json()
+    assert body["code"] == "status_conflict"
+    assert body["person"]["sequence_state"] == "open"

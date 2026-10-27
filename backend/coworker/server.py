@@ -2043,7 +2043,12 @@ def create_app(
         if isinstance(exc, TaskConflict):
             body: dict[str, Any] = {"error": str(exc), "code": exc.code}
             if exc.current is not None:
-                body["task"] = exc.current
+                # A status conflict carries the current person under "person";
+                # a task conflict carries the task row itself under "task".
+                if isinstance(exc.current, dict) and "person" in exc.current:
+                    body.update(exc.current)
+                else:
+                    body["task"] = exc.current
             return JSONResponse(body, status_code=409)
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -2128,7 +2133,19 @@ def create_app(
         payload = await request.json()
         if not isinstance(payload, dict):
             return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        # One undo route for every CRM change; dispatch by the entity the change
+        # touched so a status change undoes on the person and a task change on
+        # the task.
+        entity_type = app.state.people.crm_change_entity_type(person_id, change_id)
         try:
+            if entity_type == "status":
+                return app.state.people.undo_status_change(
+                    person_id,
+                    change_id,
+                    operation_id=payload.get("operation_id"),
+                    actor="director",
+                    reason=payload.get("reason"),
+                )
             return app.state.tasks.undo(
                 person_id,
                 change_id,
@@ -2215,15 +2232,25 @@ def create_app(
     @app.post("/v1/people/{person_id}/sequence")
     async def people_sequence(person_id: str, request: Request):
         payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
         state = str(payload.get("state") or "")
-        actor = str(payload.get("actor") or "director")
-        if app.state.people.get(person_id) is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
+        # The actor is whoever holds this local session: the director. A request
+        # cannot name a different actor and impersonate the assistant.
         try:
-            person = app.state.people.set_sequence(person_id, state, actor=actor)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return {"person": person}
+            result = app.state.people.change_status(
+                person_id,
+                state,
+                expected_version=payload.get("expected_version"),
+                operation_id=payload.get("operation_id"),
+                actor="director",
+                reason=payload.get("reason"),
+            )
+        except TaskError as exc:
+            return _task_error(exc)
+        if result.get("replayed"):
+            return JSONResponse(result, status_code=200)
+        return result
 
     @app.get("/v1/people/{person_id}")
     def people_get(person_id: str):

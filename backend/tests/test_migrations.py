@@ -618,7 +618,12 @@ def test_people_v3_adds_tasks_and_leaves_existing_people_intact(tmp_path):
 
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
-    assert [(step.from_version, step.to_version) for step in plan.steps] == [(2, 3), (3, 4), (REBUILD_FROM, REBUILD_FROM + 1)]
+    assert [(step.from_version, step.to_version) for step in plan.steps] == [
+        (2, 3),
+        (3, 4),
+        (REBUILD_FROM, REBUILD_FROM + 1),
+        (5, 6),
+    ]
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
@@ -790,7 +795,8 @@ def test_the_crm_changes_rebuild_keeps_every_row(tmp_path):
     plan = _plan_for(migrations.plan_migrations(root), "people_db")
     assert plan.status is StoreStatus.PENDING
     assert [(step.from_version, step.to_version) for step in plan.steps] == [
-        (REBUILD_FROM, REBUILD_FROM + 1)
+        (REBUILD_FROM, REBUILD_FROM + 1),
+        (5, 6),
     ]
     outcome = migrations.apply_migrations(root)
     assert outcome.error is None
@@ -835,6 +841,17 @@ def test_the_crm_changes_rebuild_keeps_every_row(tmp_path):
     )
     assert replay["replayed"] is True and replay["task"]["task_id"] == task_id
     assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
+
+    # The migrated (not fresh) table also admits a person status change, which
+    # version 5's `entity_type IN ('task')` CHECK would have rejected.
+    opened = people.set_sequence(person_id, "open", actor="director")
+    status = people.change_status(
+        person_id,
+        "in_conversation",
+        expected_version=opened["version"],
+        operation_id="op-status-after-migrate",
+    )
+    assert status["change"]["entity_type"] == "status"
 
 
 def test_a_failed_crm_changes_rebuild_restores_the_previous_database(tmp_path, monkeypatch):

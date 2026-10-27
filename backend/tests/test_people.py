@@ -1,5 +1,6 @@
 import pytest
 
+from coworker.crm_tasks import TaskConflict
 from coworker.people import PersonStore
 
 
@@ -355,3 +356,171 @@ def test_handoff_four_fields_survive_get(tmp_path):
     loaded = PersonStore(tmp_path).get(person["person_id"])
     assert loaded is not None
     assert loaded["handoff_they_want"] == "She asked about student builders"
+
+
+# --- status changes on the CRM change/undo path --------------------------
+
+def _opened_ada(store: PersonStore) -> dict:
+    """An Ada moved to Open, so a status change has somewhere to go."""
+    _ada(store)
+    person = store.list_board()["backlog"][0]
+    return store.set_sequence(person["person_id"], "open", actor="director")
+
+
+def _status_changes(store: PersonStore, person_id: str) -> list:
+    rows = store._conn.execute(
+        """
+        SELECT action, before_json, after_json, compensates_change_id
+        FROM crm_changes WHERE person_id = ? AND entity_type = 'status'
+        ORDER BY created_at
+        """,
+        (person_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def test_change_status_records_history_and_updates_the_board(tmp_path):
+    store = PersonStore(tmp_path)
+    opened = _opened_ada(store)
+    pid = opened["person_id"]
+
+    result = store.change_status(
+        pid, "in_conversation", expected_version=opened["version"], operation_id="op-change-01"
+    )
+
+    assert result["replayed"] is False
+    assert result["person"]["sequence_state"] == "in_conversation"
+    assert result["person"]["version"] == opened["version"] + 1
+    assert result["change"]["entity_type"] == "status"
+    assert result["change"]["action"] == "update"
+    recorded = _status_changes(store, pid)
+    assert len(recorded) == 1
+    assert '"sequence_state": "open"' in recorded[0]["before_json"]
+    assert '"sequence_state": "in_conversation"' in recorded[0]["after_json"]
+    # The board reflects the move through its ordinary read.
+    assert [row["person_id"] for row in store.list_board()["in_conversation"]] == [pid]
+
+
+def test_change_status_to_the_current_status_is_a_no_op(tmp_path):
+    store = PersonStore(tmp_path)
+    opened = _opened_ada(store)
+    pid = opened["person_id"]
+
+    result = store.change_status(
+        pid, "open", expected_version=opened["version"], operation_id="op-noop-001"
+    )
+
+    assert result["change"] is None
+    assert result["person"]["version"] == opened["version"]
+    assert _status_changes(store, pid) == []
+
+
+def test_change_status_replays_the_same_operation_without_a_second_change(tmp_path):
+    store = PersonStore(tmp_path)
+    opened = _opened_ada(store)
+    pid = opened["person_id"]
+
+    first = store.change_status(
+        pid, "in_conversation", expected_version=opened["version"], operation_id="op-replay-01"
+    )
+    replay = store.change_status(
+        pid, "in_conversation", expected_version=opened["version"], operation_id="op-replay-01"
+    )
+
+    assert replay["replayed"] is True
+    assert replay["change"]["change_id"] == first["change"]["change_id"]
+    assert store.get(pid)["version"] == first["person"]["version"]
+    assert len(_status_changes(store, pid)) == 1
+
+
+def test_stale_expected_version_conflicts_with_the_current_person(tmp_path):
+    store = PersonStore(tmp_path)
+    opened = _opened_ada(store)
+    pid = opened["person_id"]
+
+    with pytest.raises(TaskConflict) as caught:
+        store.change_status(
+            pid, "in_conversation", expected_version=opened["version"] - 1, operation_id="op-stale-001"
+        )
+
+    assert caught.value.code == "status_conflict"
+    assert caught.value.current["person"]["person_id"] == pid
+    assert store.get(pid)["sequence_state"] == "open"
+
+
+def test_undo_status_change_restores_the_prior_status(tmp_path):
+    store = PersonStore(tmp_path)
+    opened = _opened_ada(store)
+    pid = opened["person_id"]
+    moved = store.change_status(
+        pid, "in_conversation", expected_version=opened["version"], operation_id="op-move-0001"
+    )
+
+    undone = store.undo_status_change(
+        pid, moved["change"]["change_id"], operation_id="op-undo-0001"
+    )
+
+    assert undone["person"]["sequence_state"] == "open"
+    assert undone["change"]["action"] == "undo"
+    assert undone["change"]["compensates_change_id"] == moved["change"]["change_id"]
+    assert store.get(pid)["sequence_state"] == "open"
+
+
+def test_undo_leaves_tasks_and_descriptions_and_survives_unrelated_edits(tmp_path):
+    from coworker.crm_tasks import TaskService
+
+    store = PersonStore(tmp_path)
+    opened = _opened_ada(store)
+    pid = opened["person_id"]
+    moved = store.change_status(
+        pid, "in_conversation", expected_version=opened["version"], operation_id="op-move-0002"
+    )
+    # Unrelated work after the status change: a task and a human description
+    # edit (the description edit bumps the person version).
+    task = TaskService(store).create(
+        pid,
+        title="Send the proposal",
+        timezone="America/Los_Angeles",
+        operation_id="op-task-0001",
+        actor="director",
+    )["task"]
+    store.patch_description(
+        pid,
+        "general",
+        expected_version=0,
+        text="Evaluating a Codeology collaboration.",
+        actor="director",
+        rationale_summary="offline note",
+    )
+
+    # The undo is not stale: status itself was not touched again.
+    undone = store.undo_status_change(
+        pid, moved["change"]["change_id"], operation_id="op-undo-0002"
+    )
+
+    assert undone["person"]["sequence_state"] == "open"
+    assert TaskService(store).get(pid, task["task_id"])["state"] == "open"
+    descriptions = store.descriptions(pid)
+    assert descriptions["general"]["text"] == "Evaluating a Codeology collaboration."
+    assert descriptions["general"]["authority"] == "human"
+
+
+def test_undo_is_refused_after_a_later_status_edit(tmp_path):
+    store = PersonStore(tmp_path)
+    opened = _opened_ada(store)
+    pid = opened["person_id"]
+    first = store.change_status(
+        pid, "in_conversation", expected_version=opened["version"], operation_id="op-aaaa-0001"
+    )
+    # A later status edit moves the person past the first change's result.
+    store.change_status(
+        pid, "done", expected_version=first["person"]["version"], operation_id="op-bbbb-0002"
+    )
+
+    with pytest.raises(TaskConflict) as caught:
+        store.undo_status_change(pid, first["change"]["change_id"], operation_id="op-cccc-0003")
+
+    assert caught.value.code == "status_conflict"
+    assert caught.value.current["person"]["sequence_state"] == "done"
+    # Nothing was reverted; the later status stands.
+    assert store.get(pid)["sequence_state"] == "done"
