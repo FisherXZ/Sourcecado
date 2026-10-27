@@ -189,8 +189,10 @@ export function InspectorProvider({
 
   const close = useCallback(() => {
     setSelected(null);
+    // Return focus without scrolling: the operator may have read on since
+    // the panel opened, and closing it must not move the thread.
     window.setTimeout(
-      () => returnTarget(triggerRef.current, anchorRef.current)?.focus(),
+      () => returnTarget(triggerRef.current, anchorRef.current)?.focus({ preventScroll: true }),
       0,
     );
   }, []);
