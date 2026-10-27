@@ -26,6 +26,8 @@ vi.mock("../src/api", () => ({
   openChat: api.openChat,
 }));
 
+const chatSend = vi.fn();
+const chatQueue = vi.fn();
 let onChatEvent: ((event: Record<string, unknown>) => void) | undefined;
 
 const envelope = {
@@ -159,13 +161,15 @@ describe("Scroll follow and Jump to latest", () => {
     api.getSkills.mockResolvedValue({ skills: [] });
     api.getBoard.mockResolvedValue({ backlog: [], open: [], in_conversation: [], done: [] });
     onChatEvent = undefined;
+    chatSend.mockReset();
+    chatQueue.mockReset();
     api.openChat.mockImplementation((callback) => {
       onChatEvent = callback;
       return {
-      send: vi.fn(),
+      send: chatSend,
       approve: vi.fn(),
       cancel: vi.fn(),
-      queue: vi.fn(),
+      queue: chatQueue,
       recover: vi.fn(),
       close: vi.fn(),
       };
@@ -355,6 +359,54 @@ describe("Scroll follow and Jump to latest", () => {
     expect(scrollCalls).not.toHaveBeenCalled();
     expect(transcript.scrollTop).toBe(600);
     expect(jumpButton()).toBeInTheDocument();
+  });
+
+  it("starts a steered message at once when no run is active, and scrolls to it", async () => {
+    const { transcript, scrollCalls } = await openThread();
+    scrollTo(transcript, 600);
+    await screen.findByRole("button", { name: "Jump to latest" });
+    scrollCalls.mockClear();
+
+    const draft = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(draft, { target: { value: "Find the founders" } });
+    fireEvent.keyDown(draft, { key: "Enter", shiftKey: true, ctrlKey: true });
+
+    await waitFor(() => expect(chatSend).toHaveBeenCalledWith("Find the founders", "thread-alpha"));
+    expect(chatQueue).not.toHaveBeenCalled();
+    await waitFor(() => expect(scrollCalls).toHaveBeenCalledWith(expect.objectContaining({ top: 2000 })));
+  });
+
+  it("queues a steered message during a run and holds the reading position", async () => {
+    const { transcript, scrollCalls } = await openThread();
+    act(() => {
+      onChatEvent?.({
+        ...envelope,
+        run_id: "run-active",
+        message_id: "message-active",
+        part_id: "part-active",
+        type: "turn_start",
+        event_id: "active-1",
+        state: "running",
+      });
+    });
+    await screen.findByRole("button", { name: "Stop run" });
+    scrollTo(transcript, 600);
+    await screen.findByRole("button", { name: "Jump to latest" });
+    scrollCalls.mockClear();
+
+    const draft = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(draft, { target: { value: "Find the founders" } });
+    fireEvent.keyDown(draft, { key: "Enter", shiftKey: true, ctrlKey: true });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    expect(chatQueue).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "queue_add", text: "Find the founders" }),
+    );
+    expect(chatSend).not.toHaveBeenCalled();
+    expect(scrollCalls).not.toHaveBeenCalled();
+    expect(transcript.scrollTop).toBe(600);
   });
 
   it("puts focus on a waiting approval after Jump to latest, so Allow and Deny are a few Tabs away", async () => {
