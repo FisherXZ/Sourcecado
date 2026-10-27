@@ -134,6 +134,23 @@ function search(
   };
 }
 
+/** A search whose evidence list is written by hand, so its length can differ from the rows. */
+function searchWithEvidence(
+  id: string,
+  rows: readonly Row[],
+  evidence: readonly ReturnType<typeof reference>[],
+): ToolCallMessagePart {
+  return {
+    type: "tool-call",
+    toolCallId: id,
+    toolName: "web_search",
+    args: { query: "mismatch" },
+    argsText: "{}",
+    result: { results: rows },
+    providerMetadata: { sourcecado: { evidence } },
+  };
+}
+
 const drive = (): ToolCallMessagePart => ({
   type: "tool-call",
   toolCallId: "call-drive",
@@ -272,6 +289,126 @@ describe("web search row", () => {
     expect(truncated).toHaveTextContent("Partial");
   });
 
+  it("fails closed when the rows and the evidence records do not line up and one record is restricted", () => {
+    // Three result rows, two evidence records. The record for PROFILE is missing,
+    // and nothing says which row the restricted record was written for.
+    const tools = [
+      searchWithEvidence(
+        "call-a",
+        [STORY, PROFILE, PIPELINE],
+        [reference(STORY, {}, 0), reference(PIPELINE, { sensitivity: "restricted" }, 2)],
+      ),
+    ];
+    renderAnswer(tools, `${STORY.url} ${PROFILE.url} ${PIPELINE.url}`);
+    const chips = within(screen.getByRole("list", { name: "Sources" })).getAllByRole("button");
+    expect(chips.map((chip) => chip.getAttribute("aria-label"))).toEqual([
+      "Source: Apollo raises a Series D (techcrunch.com), Unverified",
+      "Source: Tim Zheng on LinkedIn (linkedin.com), Unverified",
+      "Source: Internal sponsor pipeline (sponsors.example.org), Restricted",
+    ]);
+    for (const chip of chips) {
+      fireEvent.click(chip);
+      const inspector = screen.getByRole("complementary", { name: "Inspector" });
+      for (const row of [STORY, PROFILE, PIPELINE]) {
+        expect(inspector).not.toHaveTextContent(row.snippet);
+      }
+    }
+    expect(screen.getByRole("complementary", { name: "Inspector" })).toHaveTextContent(
+      "Restricted source. The excerpt is not shown.",
+    );
+    fireEvent.click(chips[1]!);
+    expect(screen.getByRole("complementary", { name: "Inspector" })).toHaveTextContent(
+      "Unverified source. The excerpt is not shown.",
+    );
+  });
+
+  it("withholds every snippet of such a call from the raw Inspect view too", () => {
+    renderLayer([
+      searchWithEvidence(
+        "call-a",
+        [STORY, PROFILE, PIPELINE],
+        [reference(STORY, {}, 0), reference(PIPELINE, { sensitivity: "restricted" }, 2)],
+      ),
+    ]);
+    fireEvent.click(button(/^Searched the web/));
+    fireEvent.click(button("Inspect search for mismatch"));
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    fireEvent.click(within(inspector).getByText("Result"));
+    for (const row of [STORY, PROFILE, PIPELINE]) {
+      expect(inspector).not.toHaveTextContent(row.snippet);
+    }
+  });
+
+  it("still matches by page when the counts differ, and withholds only the restricted row", () => {
+    // Two rows, three records. Every row finds its own record, so nothing is guessed.
+    renderAnswer(
+      [
+        searchWithEvidence(
+          "call-a",
+          [STORY, PIPELINE],
+          [
+            reference(PIPELINE, { sensitivity: "restricted" }, 2),
+            reference(STORY, {}, 0),
+            reference(HANDBOOK, {}, 3),
+          ],
+        ),
+      ],
+      `${STORY.url} ${PIPELINE.url}`,
+    );
+    fireEvent.click(button(/^Source: Apollo raises a Series D/));
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(inspector).toHaveTextContent(STORY.snippet);
+    fireEvent.click(button(/^Source: Internal sponsor pipeline/));
+    expect(inspector).not.toHaveTextContent(PIPELINE.snippet);
+    expect(inspector).toHaveTextContent("Restricted source.");
+  });
+
+  it("guesses no state when the counts differ and no record is restricted", () => {
+    renderAnswer(
+      [searchWithEvidence("call-a", [STORY, PROFILE, PIPELINE], [reference(STORY, {}, 0)])],
+      `${PROFILE.url}`,
+    );
+    const chip = button(/^Source: Tim Zheng on LinkedIn/);
+    expect(chip).toHaveAccessibleName("Source: Tim Zheng on LinkedIn (linkedin.com)");
+    fireEvent.click(chip);
+    expect(screen.getByRole("complementary", { name: "Inspector" })).toHaveTextContent(
+      PROFILE.snippet,
+    );
+  });
+
+  it("does not warn about duplicate keys when one query returns the same page twice", () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The backend gives the same page and title the same evidence id.
+    renderLayer([searchWithEvidence("call-a", [STORY, STORY], [reference(STORY), reference(STORY)])]);
+    fireEvent.click(button(/^Searched the web/));
+    expect(screen.getAllByRole("button", { name: /^Result: Apollo raises a Series D/ })).toHaveLength(2);
+    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/same key/);
+    warn.mockRestore();
+  });
+
+  it("treats a stored URL with a user name or password as not safe: no domain, no link, no chip", () => {
+    const secret: Row = {
+      title: "Private page",
+      url: "https://admin:hunter2@creds.example.com/secret/page?token=abc",
+      snippet: "A page behind a login.",
+    };
+    const tools = [search("call-a", "creds", [secret])];
+    const layer = renderLayer(tools);
+    fireEvent.click(button(/^Searched the web/));
+    const row = button(/^Result: Private page/);
+    expect(row).toHaveAccessibleName("Result: Private page (Link not safe)");
+    expect(layer.container).not.toHaveTextContent("hunter2");
+    fireEvent.click(row);
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(within(inspector).queryByRole("link")).toBeNull();
+    expect(inspector).toHaveTextContent("External URL unavailable");
+    expect(inspector).not.toHaveTextContent("hunter2");
+    layer.unmount();
+    // The answer cannot make it a chip either.
+    renderAnswer(tools, secret.url);
+    expect(screen.queryByRole("list", { name: "Sources" })).toBeNull();
+  });
+
   it("shows an evidence state this build does not know as Unverified, never as clean", () => {
     renderLayer([
       search("call-a", "q", [STORY, PROFILE], [{ content: "constructor" }, { content: "ambiguous" }]),
@@ -363,7 +500,7 @@ describe("web search row", () => {
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
     fireEvent.click(within(inspector).getByText("Result"));
     expect(inspector).not.toHaveTextContent(PIPELINE.snippet);
-    expect(inspector).toHaveTextContent("(restricted: not shown)");
+    expect(inspector).toHaveTextContent("(withheld: not shown)");
     // The other result in the same call keeps its snippet.
     expect(inspector).toHaveTextContent(HANDBOOK.snippet);
   });
@@ -761,6 +898,16 @@ describe("web search styles", () => {
     expect(styles).toMatch(
       /\.sourcecado-activity-body \.sourcecado-search-detail\s*\{[^}]*max-height:\s*none;/,
     );
+  });
+
+  it("lets the search row label wrap on narrow screens and keeps the query count whole", () => {
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-search > \.sourcecado-step-toggle \.sourcecado-step-label\s*\{[^}]*-webkit-line-clamp:\s*2;[^}]*white-space:\s*normal;/,
+    );
+    expect(styles).toMatch(/\.sourcecado-search-count\s*\{[^}]*white-space:\s*nowrap;/);
+    expect(
+      screen.queryByText("3 queries") ?? (renderLayer(THREE), screen.getByText("3 queries")),
+    ).toHaveClass("sourcecado-search-count");
   });
 
   it("sits inside the process layer block, so the 13px and muted-ink rules cover it", () => {

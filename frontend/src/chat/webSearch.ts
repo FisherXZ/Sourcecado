@@ -59,16 +59,26 @@ function evidenceOf(tool: ToolCallMessagePart): readonly EvidenceReference[] {
   return evidenceReferences(meta?.evidence);
 }
 
-/** The host of an http(s) URL without "www.". Anything else is not a web link. */
-export function webDomain(value: string | null | undefined): string | null {
+/**
+ * An http(s) URL with no user name or password in it. This is the only kind of
+ * stored URL the UI treats as a web link. A stored URL with credentials is
+ * never drawn, linked or compared, even though the inspector would link it.
+ */
+function parseWebUrl(value: string | null | undefined): URL | null {
   if (!value) return null;
   try {
     const parsed = new URL(value);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-    return parsed.hostname.replace(/^www\./, "") || null;
+    if (parsed.username || parsed.password) return null;
+    return parsed;
   } catch {
     return null;
   }
+}
+
+/** The host of a safe web URL without "www.". Anything else is not a web link. */
+export function webDomain(value: string | null | undefined): string | null {
+  return parseWebUrl(value)?.hostname.replace(/^www\./, "") || null;
 }
 
 /**
@@ -105,29 +115,80 @@ function flagsOf(
   return flags;
 }
 
+/** A page without its query: what the backend's sanitized evidence URL keeps. */
+function pageKey(value: string | null | undefined): string | null {
+  const parsed = parseWebUrl(value);
+  if (!parsed) return null;
+  const path = parsed.pathname.replace(/\/+$/, "");
+  return `${parsed.hostname.replace(/^www\./, "")}${parsed.port ? `:${parsed.port}` : ""}${path}`;
+}
+
+type RowEvidence = {
+  readonly reference: EvidenceReference | undefined;
+  /** True when this row's excerpt must not be shown. */
+  readonly withheld: boolean;
+  /** True when withheld only because the record could not be matched to the row. */
+  readonly unverified: boolean;
+};
+
+const sameRecord = (first: EvidenceReference, second: EvidenceReference) =>
+  first.sensitivity === second.sensitivity &&
+  first.content === second.content &&
+  first.truncated === second.truncated;
+
 /**
- * The backend writes one evidence record per result row, in order. If the
- * counts differ the two cannot be lined up, and no state is guessed.
+ * Pairs each result row with its evidence record. The backend writes one
+ * record per row, in order, so equal counts pair by position. If the counts
+ * differ, each row is matched by its page (the record URL has no query). A
+ * page that more than one record names, with records that disagree, does not
+ * match.
+ *
+ * It fails closed. If any row cannot be matched and any record in the call is
+ * restricted, nothing says which row it was for, so every excerpt in the call
+ * is withheld and marked unverified.
  */
-function alignedEvidence(
+function reconcile(
   tool: ToolCallMessagePart,
-  rowCount: number,
-): readonly (EvidenceReference | undefined)[] {
+  rows: readonly Record<string, unknown>[],
+): RowEvidence[] {
   const evidence = evidenceOf(tool);
-  return evidence.length === rowCount ? evidence : [];
+  const restricted = (reference: EvidenceReference | undefined) =>
+    reference?.sensitivity === "restricted";
+  if (evidence.length === rows.length) {
+    return rows.map((_, index) => ({
+      reference: evidence[index],
+      withheld: restricted(evidence[index]),
+      unverified: false,
+    }));
+  }
+  const matched = rows.map((row) => {
+    const key = pageKey(text(row.url));
+    if (!key) return undefined;
+    const named = evidence.filter((reference) => pageKey(reference.url) === key);
+    const first = named[0];
+    return first && named.every((reference) => sameRecord(first, reference)) ? first : undefined;
+  });
+  const closed =
+    matched.some((reference) => reference === undefined) && evidence.some(restricted);
+  return matched.map((reference) => ({
+    reference,
+    withheld: closed || restricted(reference),
+    unverified: closed && !restricted(reference),
+  }));
 }
 
 function resultsOf(tool: ToolCallMessagePart, query: string): WebResult[] | null {
   const rows = record(tool.result)?.results;
   if (!Array.isArray(rows)) return null;
   const dicts = rows.filter((row): row is Record<string, unknown> => record(row) !== null);
-  const evidence = alignedEvidence(tool, dicts.length);
+  const paired = reconcile(tool, dicts);
   return dicts.map((row, index) => {
-    const reference = evidence[index];
+    const { reference, withheld, unverified } = paired[index]!;
     const url = text(row.url) || null;
-    const restricted = reference?.sensitivity === "restricted";
     const snippet = text(row.snippet);
-    const excerpt = restricted || !snippet ? null : snippet;
+    const excerpt = withheld || !snippet ? null : snippet;
+    const flags = flagsOf(reference, withheld || snippet !== "");
+    if (unverified && !flags.includes("Unverified")) flags.push("Unverified");
     const domain = webDomain(url);
     return {
       id: reference?.id ?? `${tool.toolCallId}:result:${index}`,
@@ -135,7 +196,7 @@ function resultsOf(tool: ToolCallMessagePart, query: string): WebResult[] | null
       url,
       domain,
       excerpt,
-      flags: flagsOf(reference, restricted || snippet !== ""),
+      flags,
       truncated: reference?.truncated === true,
       query,
     };
@@ -143,23 +204,26 @@ function resultsOf(tool: ToolCallMessagePart, query: string): WebResult[] | null
 }
 
 /**
- * The stored result for the raw Inspect view, with the snippet of a restricted
- * result taken out. The row, the chip and the inspector withhold that excerpt,
- * so the raw view must not hand it back.
+ * The stored result for the raw Inspect view, with the snippet of every
+ * withheld result taken out. The row, the chip and the inspector withhold that
+ * excerpt, so the raw view must not hand it back.
  */
 export function inspectableResult(tool: ToolCallMessagePart): unknown {
   const raw = record(tool.result);
   const rows = raw?.results;
   if (!raw || !Array.isArray(rows)) return tool.result;
-  const evidence = alignedEvidence(tool, rows.filter((row) => record(row) !== null).length);
-  if (!evidence.some((reference) => reference?.sensitivity === "restricted")) return tool.result;
+  const paired = reconcile(
+    tool,
+    rows.filter((row): row is Record<string, unknown> => record(row) !== null),
+  );
+  if (!paired.some((entry) => entry.withheld)) return tool.result;
   let next = 0;
   return {
     ...raw,
     results: rows.map((row) => {
       if (record(row) === null) return row;
-      return evidence[next++]?.sensitivity === "restricted"
-        ? { ...(row as Record<string, unknown>), snippet: "(restricted: not shown)" }
+      return paired[next++]!.withheld
+        ? { ...(row as Record<string, unknown>), snippet: "(withheld: not shown)" }
         : row;
     }),
   };
@@ -205,15 +269,11 @@ export function webQueryOf(tool: ToolCallMessagePart, state: StepState): WebQuer
 
 /** A URL reduced to what names the page: no scheme, "www.", fragment or trailing slash. */
 function urlKey(value: string): string | null {
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-    const host = parsed.hostname.replace(/^www\./, "");
-    const path = parsed.pathname.replace(/\/+$/, "");
-    return `${host}${parsed.port ? `:${parsed.port}` : ""}${path}${parsed.search}`;
-  } catch {
-    return null;
-  }
+  const parsed = parseWebUrl(value);
+  if (!parsed) return null;
+  const host = parsed.hostname.replace(/^www\./, "");
+  const path = parsed.pathname.replace(/\/+$/, "");
+  return `${host}${parsed.port ? `:${parsed.port}` : ""}${path}${parsed.search}`;
 }
 
 /** True when two URLs name the same page. */
@@ -316,7 +376,14 @@ const STATE_NOTES: Readonly<Record<string, string>> = {
  */
 export function webResultTarget(result: WebResult): InspectorTarget {
   const states = result.flags.filter((flag) => flag !== "Truncated");
-  const preview = [...states.map((flag) => STATE_NOTES[flag]), result.excerpt]
+  const preview = [
+    ...states.map((flag) =>
+      flag === "Unverified" && result.excerpt === null
+        ? "Unverified source. The excerpt is not shown."
+        : STATE_NOTES[flag],
+    ),
+    result.excerpt,
+  ]
     .filter(Boolean)
     .join(" ");
   return {
@@ -325,7 +392,11 @@ export function webResultTarget(result: WebResult): InspectorTarget {
     title: result.title,
     status: "success",
     provider: "Web",
-    externalUrl: result.url,
+    // Only a safe web URL goes to the inspector as it is. For any other stored
+    // URL the inspector gets a value it refuses, so it says "External URL
+    // unavailable" and the stored string (which may hold credentials) is not
+    // handed on.
+    externalUrl: webDomain(result.url) ? result.url : result.url ? "about:blank" : null,
     preview: preview || null,
     stale: false,
     truncated: result.truncated,

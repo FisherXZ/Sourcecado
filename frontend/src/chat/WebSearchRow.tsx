@@ -98,8 +98,9 @@ function SearchQuery({
             <p>The search returned no results.</p>
           ) : (
             <ul className="sourcecado-search-results" aria-label={`Results for ${text}`}>
-              {query.results.map((result) => (
-                <ResultRow key={result.id} result={result} />
+              {query.results.map((result, index) => (
+                // The same page can come back twice in one query, with the same id.
+                <ResultRow key={`${result.id}:${index}`} result={result} />
               ))}
             </ul>
           )}
@@ -185,7 +186,9 @@ export function WebSearchRow({
           ) : queries.length > 1 ? (
             <>
               {" "}
-              <span className="sourcecado-step-object">{queries.length} queries</span>
+              <span className="sourcecado-step-object sourcecado-search-count">
+                {queries.length} queries
+              </span>
             </>
           ) : null}
         </span>{" "}

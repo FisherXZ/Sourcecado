@@ -3319,6 +3319,18 @@ button.sourcecado-search-query-line[aria-expanded="true"] .sourcecado-action-ico
     min-height: 44px;
   }
 
+  /* The row label wraps to two lines, and "3 queries" never splits or drops. */
+  .sourcecado-search > .sourcecado-step-toggle .sourcecado-step-label {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+
+  .sourcecado-search-count {
+    white-space: nowrap;
+  }
+
   /* A long query or title wraps to two lines instead of being cut at one. */
   .sourcecado-search-query-text,
   .sourcecado-search-result-title {
