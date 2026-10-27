@@ -306,12 +306,12 @@ export function ApprovalCard({
         armed.current = true;
       }}
     >
-      <header className="sourcecado-approval-head">
+      <div className="sourcecado-approval-head">
         <ApprovalIcon name={view.icon} className="sourcecado-approval-action" />
         <h2 ref={headingRef} tabIndex={-1}>
           {view.title}
         </h2>
-      </header>
+      </div>
       {view.calendarWrite ? (
         <CalendarApprovalSummary
           args={part.args as Readonly<Record<string, unknown>>}
@@ -364,7 +364,7 @@ export function ApprovalCard({
       ) : submitting ? (
         <p className="sourcecado-approval-status">Submitting decision…</p>
       ) : null}
-      <footer className="sourcecado-approval-foot">
+      <div className="sourcecado-approval-foot">
         <button
           type="button"
           className="sourcecado-approval-toggle"
@@ -411,7 +411,7 @@ export function ApprovalCard({
             </button>
           ) : null}
         </div>
-      </footer>
+      </div>
     </section>
   );
 }

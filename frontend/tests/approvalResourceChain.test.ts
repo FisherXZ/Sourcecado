@@ -194,7 +194,11 @@ describe("person-bound approval resources, wire to rendered part", () => {
   });
 });
 
-function resolvedToolPart(decision: "denied" | "allowed", toolOk: boolean) {
+function resolvedToolPart(
+  decision: "denied" | "allowed",
+  toolOk: boolean,
+  options: { stopBeforeDecision?: boolean } = {},
+) {
   const store = new SourcecadoChatStore([{ id: "t", messages: [] }], "t");
   const envelope = {
     version: 2,
@@ -250,7 +254,7 @@ function resolvedToolPart(decision: "denied" | "allowed", toolOk: boolean) {
           },
         }),
   });
-  apply({
+  if (!options.stopBeforeDecision) apply({
     event_id: "e-4",
     type: "approval_resolved",
     id: "call-1",
@@ -287,12 +291,18 @@ describe("a resolved approval, store to rendered part", () => {
     });
   });
 
-  it("does not turn a denial into a failed step", () => {
+  it("gives a denied call no result, so no result card can be drawn from the refusal", () => {
     const part = resolvedToolPart("denied", false);
 
     expect(part.approval?.approved).toBe(false);
-    expect(part.isError).toBe(false);
-    expect(part.providerMetadata.sourcecado.failure).toBeNull();
+    expect(part).not.toHaveProperty("result");
+  });
+
+  it("holds back a failed result while the approval is still undecided", () => {
+    const part = resolvedToolPart("denied", false, { stopBeforeDecision: true });
+
+    expect(part.approval).not.toHaveProperty("approved");
+    expect(part).not.toHaveProperty("result");
   });
 
   it("still reports a failure for an allowed call that failed", () => {

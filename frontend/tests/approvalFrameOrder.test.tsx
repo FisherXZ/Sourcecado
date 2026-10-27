@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { parseChatEvent } from "../src/api";
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { convertStructuredMessage } from "../src/chat/messageAdapter";
 import { SourcecadoChatStore } from "../src/chat/store";
 
@@ -39,22 +40,28 @@ const FAILURE = {
   state: "failed",
 } as const;
 
-function frames(decision: "denied" | "allowed") {
+function frames(
+  decision: "denied" | "allowed",
+  tool: { name: string; args: Record<string, unknown> } = {
+    name: "board_delete",
+    args: { person_id: "person_qa_does_not_exist" },
+  },
+) {
   return [
     { event_id: "e-1", type: "turn_start", state: "running" },
     {
       event_id: "e-2",
       type: "permission_required",
       id: "call-1",
-      name: "board_delete",
-      arguments: { person_id: "person_qa_does_not_exist" },
+      name: tool.name,
+      arguments: tool.args,
       reason: "consequential: waits for Allow or Deny",
     },
     {
       event_id: "e-3",
       type: "tool_finished",
       id: "call-1",
-      name: "board_delete",
+      name: tool.name,
       ok: false,
       result: { error: decision === "denied" ? "denied by user" : "unknown person" },
       failure: FAILURE,
@@ -63,7 +70,7 @@ function frames(decision: "denied" | "allowed") {
       event_id: "e-4",
       type: "approval_resolved",
       id: "call-1",
-      name: "board_delete",
+      name: tool.name,
       resolution: decision,
       decision: decision === "denied" ? "deny" : "allow",
       actor: "operator",
@@ -122,13 +129,8 @@ describe("a denied approval, frame by frame", () => {
 
     // tool_finished ok=false lands first. The approval is still undecided.
     apply(finished);
-    const waiting = snapshot("failed result, no decision yet");
-    expect(waiting.isError).toBeFalsy();
-    expect(waiting.result).toBeUndefined();
-    expect(
-      (waiting.providerMetadata as { sourcecado: { failure: unknown } }).sourcecado.failure,
-    ).toBeNull();
-    expect(view!.container).toHaveTextContent(/Running/);
+    snapshot("failed result, no decision yet");
+    expect(view!.container).toHaveTextContent(/Needs approval/);
 
     act(() => {
       vi.advanceTimersByTime(1500);
@@ -139,6 +141,7 @@ describe("a denied approval, frame by frame", () => {
     const denied = snapshot("denied");
     expect(denied.approval).toMatchObject({ approved: false });
     expect(view!.container).toHaveTextContent(/Denied/);
+    expect(view!.container).not.toHaveTextContent(/Needs approval/);
 
     for (const line of seen) {
       expect(line, line).not.toMatch(/Failed|Completed/);
@@ -168,5 +171,53 @@ describe("a denied approval, frame by frame", () => {
     const after = render1(store);
     rerender(<ActivityGroup tools={after.tools} messageState={after.state} />);
     expect(container).toHaveTextContent(/Failed/);
+  });
+});
+
+describe("a denied approval for a tool with a result card", () => {
+  afterEach(() => vi.useRealTimers());
+
+  // gmail_draft has a result card in the answer area. The backend's failed
+  // result for a denial is a refusal, not an outcome. No frame may draw a card
+  // from it: not "draft was not created", not "needs review", not a draft.
+  it("draws no result card at any frame", () => {
+    vi.useFakeTimers();
+    const store = new SourcecadoChatStore([{ id: "t", messages: [] }], "t");
+    const apply = (event: Record<string, unknown>) =>
+      act(() => {
+        store.applyChatEvent(
+          parseChatEvent({ ...envelope, ...event } as never) as never,
+        );
+      });
+    const draft = {
+      name: "gmail_draft",
+      args: { to: "alyssa@example.com", subject: "Hello", body: "Full body" },
+    };
+    const [start, permission, finished, resolved] = frames("denied", draft);
+    const seen: string[] = [];
+    let view: ReturnType<typeof render> | null = null;
+    const snapshot = (label: string) => {
+      const { tools } = render1(store);
+      const element = <AnswerResults tools={tools} />;
+      if (view) view.rerender(element);
+      else view = render(element);
+      seen.push(`${label}: [${view.container.textContent}]`);
+    };
+
+    apply(start);
+    apply(permission);
+    snapshot("pending");
+    apply(finished);
+    snapshot("failed result, no decision yet");
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    snapshot("1.5 seconds later");
+    apply(resolved);
+    snapshot("denied");
+
+    for (const line of seen) {
+      expect(line, line).toBe(line.split(":")[0] + ": []");
+    }
   });
 });
