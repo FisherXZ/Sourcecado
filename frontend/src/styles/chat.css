@@ -506,17 +506,34 @@
   font-size: 13px;
 }
 
-.sourcecado-inspector-table a {
+.sourcecado-inspector-source {
   display: inline-flex;
+  min-width: 0;
   align-items: center;
-  gap: 6px;
-  color: var(--accent-deep);
-  font-weight: 500;
-  text-decoration: none;
+  gap: 8px;
 }
 
-.sourcecado-inspector-table a:hover {
-  text-decoration: underline;
+/* The way out to the original page: an icon button named for screen readers.
+   The 32px width and the 44px touch size are set with the result cards below. */
+.sourcecado-inspector .sourcecado-inspector-external {
+  display: inline-flex;
+  min-height: 32px;
+  flex: none;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent-deep);
+}
+
+.sourcecado-inspector .sourcecado-inspector-external:hover {
+  background: var(--raised);
+}
+
+/* A result card in the Output view. Its footer is empty when its only button
+   would open the item that is already open. */
+.sourcecado-inspector-card .sourcecado-card-footer:empty {
+  display: none;
 }
 
 .sourcecado-inspector-raw {

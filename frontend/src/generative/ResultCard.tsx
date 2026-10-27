@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { useInInspector } from "../chat/inInspector";
 import { useInspector, type InspectorTarget } from "../chat/Inspector";
 import { ToolIcon } from "../chat/ProcessIcons";
 import type { DomainRendererProps, ToolIconKey } from "../chat/toolRegistry";
@@ -203,12 +204,14 @@ export function ResultCard({
   readonly footer?: ReactNode;
 }) {
   const titleId = useId();
+  // The copy in the inspector is not the card a step row scrolls to.
+  const inInspector = useInInspector();
   return (
     <section
-      id={id}
+      id={inInspector ? undefined : id}
       className="sourcecado-card"
       data-state={state}
-      data-card-tools={toolCallIds?.join(" ")}
+      data-card-tools={inInspector ? undefined : toolCallIds?.join(" ")}
       aria-labelledby={titleId}
       aria-busy={state === "loading" ? true : undefined}
     >
@@ -355,7 +358,10 @@ export function CardButton({
 
 /** The footer action every card has: open what the card shows in the inspector. */
 export function InspectButton({ target }: { readonly target: InspectorTarget }) {
-  const { select } = useInspector();
+  const { select, selected } = useInspector();
+  const inInspector = useInInspector();
+  // In the inspector, a button for the item that is already open does nothing.
+  if (inInspector && selected?.id === target.id) return null;
   return (
     <CardButton
       icon="inspect"

@@ -5,6 +5,7 @@ import type { InspectorStep, InspectorTarget } from "./Inspector";
 import { failureOf, stepLabel, type StepState } from "./processState";
 import { domainRendererFor, isEvidenceToolName, toolPresentation } from "./toolRegistry";
 import { EvidenceSetResult } from "../generative/EvidenceSetResult";
+import { CardBoundary, rawToolTarget, UnsupportedCard } from "../generative/ResultCard";
 import { sanitizeApolloNameMasks } from "../personName";
 
 /** What the Output tab says when a step has no result to show. Same words as the step row. */
@@ -32,20 +33,51 @@ export function turnRevision(
 /**
  * The same card the thread shows for this result. It renders only for a
  * finished step: a quiet card must not imply a success the step did not have.
+ * A card that cannot draw itself becomes the unsupported card, as in the
+ * thread. The copy has no anchor id (the thread card has it) and its own
+ * "Open in inspector" button is hidden, because the panel is already open.
  */
 function cardFor(tool: ToolCallMessagePart, state: StepState): ReactNode {
   if (state !== "done" && state !== "partial") return undefined;
-  if (isEvidenceToolName(tool.toolName)) return <EvidenceSetResult tools={[tool]} />;
+  const presentation = toolPresentation(tool.toolName);
+  const props = {
+    toolCallId: tool.toolCallId,
+    toolName: tool.toolName,
+    args: tool.args,
+    result: tool.result,
+    status: "success",
+  } as const;
+  if (isEvidenceToolName(tool.toolName)) {
+    return (
+      <CardBoundary
+        fallback={() => (
+          <UnsupportedCard
+            toolCallIds={[tool.toolCallId]}
+            provider="file"
+            title="Evidence"
+            inspect={rawToolTarget(props, "Evidence")}
+          />
+        )}
+      >
+        <EvidenceSetResult tools={[tool]} />
+      </CardBoundary>
+    );
+  }
   const Renderer = domainRendererFor(tool.toolName);
   if (!Renderer) return undefined;
   return (
-    <Renderer
-      toolCallId={tool.toolCallId}
-      toolName={tool.toolName}
-      args={tool.args}
-      result={tool.result}
-      status="success"
-    />
+    <CardBoundary
+      fallback={() => (
+        <UnsupportedCard
+          toolCallIds={[tool.toolCallId]}
+          provider={presentation.icon}
+          title={presentation.label}
+          inspect={rawToolTarget(props, presentation.label)}
+        />
+      )}
+    >
+      <Renderer {...props} />
+    </CardBoundary>
   );
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 
+import { InInspector } from "./inInspector";
 import type { InspectorTarget } from "./Inspector";
 import { InspectorIcon } from "./InspectorIcons";
 import {
@@ -207,7 +208,9 @@ export function OutputPane({ target }: { readonly target: InspectorTarget }) {
       {showRaw ? (
         <pre className="sourcecado-inspector-raw">{rawJson(target.result)}</pre>
       ) : hasCard ? (
-        <div className="sourcecado-inspector-card">{target.card}</div>
+        <div className="sourcecado-inspector-card">
+          <InInspector value>{target.card}</InInspector>
+        </div>
       ) : target.status === "loading" && target.state === undefined ? (
         <div className="sourcecado-inspector-skeleton" aria-label="Loading detail" />
       ) : (
@@ -223,6 +226,14 @@ export function OutputPane({ target }: { readonly target: InspectorTarget }) {
   );
 }
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
 /** The provider, the source link and the arguments, as a table. */
 export function ContextPane({ target }: { readonly target: InspectorTarget }) {
   const externalUrl = safeExternalUrl(target.externalUrl);
@@ -233,10 +244,19 @@ export function ContextPane({ target }: { readonly target: InspectorTarget }) {
     rows.push({
       label: "Source",
       value: (
-        <a href={externalUrl} target="_blank" rel="noopener noreferrer">
-          <InspectorIcon name="external" />
-          Open externally
-        </a>
+        <span className="sourcecado-inspector-source">
+          <a
+            href={externalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="sourcecado-inspector-external"
+            aria-label="Open externally"
+            title="Open externally"
+          >
+            <InspectorIcon name="external" />
+          </a>
+          <span>{hostOf(externalUrl)}</span>
+        </span>
       ),
     });
   } else if (target.externalUrl) {

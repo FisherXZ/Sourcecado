@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ToolCallMessagePart } from "@assistant-ui/react";
+import type { SourceMessagePart, ToolCallMessagePart } from "@assistant-ui/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import {
   INSPECTOR_DEFAULT_WIDTH,
   INSPECTOR_MAX_WIDTH,
@@ -182,9 +183,7 @@ describe("Inspector panel for a tool step", () => {
       "aria-selected",
       "true",
     );
-    expect(
-      within(panel).getByRole("heading", { name: "Gmail draft ready for review" }),
-    ).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: "Gmail draft" })).toBeInTheDocument();
     expect(panel).not.toHaveTextContent("PRIVATE_RAW_MIME");
 
     const raw = within(panel).getByRole("button", { name: "Raw" });
@@ -192,9 +191,7 @@ describe("Inspector panel for a tool step", () => {
     fireEvent.click(raw);
     expect(raw).toHaveAttribute("aria-pressed", "true");
     expect(panel).toHaveTextContent("PRIVATE_RAW_MIME");
-    expect(
-      within(panel).queryByRole("heading", { name: "Gmail draft ready for review" }),
-    ).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("heading", { name: "Gmail draft" })).not.toBeInTheDocument();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Card" }));
     expect(panel).not.toHaveTextContent("PRIVATE_RAW_MIME");
@@ -405,6 +402,7 @@ describe("Inspector item kinds", () => {
       args: { query: "ML founders" },
       result: { count: 2 },
       externalUrl: "https://example.com/board",
+      steps: [{ id: "tool", label: "Queried Board", icon: "person", state: "done" }],
     },
     {
       kind: "source",
@@ -525,6 +523,89 @@ describe("Inspector item kinds", () => {
     expect(within(panel).getByRole("alert")).toHaveTextContent("This file couldn’t be read.");
     expect(panel.querySelector(".sourcecado-inspector-chip")).toHaveTextContent("Failed");
     expect(within(panel).getByRole("button", { name: "Retry detail" })).toBeInTheDocument();
+  });
+});
+
+describe("Inspector with the result cards and source chips of the thread", () => {
+  const weird = tool({
+    toolCallId: "call-calendar",
+    toolName: "calendar_list",
+    args: { days: 7 },
+    result: { weird: { nested: "PRIVATE_SHAPE" } },
+  });
+
+  function renderThread(tools: ToolCallMessagePart[], sources: SourceMessagePart[] = []) {
+    return render(
+      <InspectorProvider threadId="thread-cards">
+        <ActivityGroup tools={tools} messageState="complete" answerStarted />
+        <AnswerResults tools={tools} sources={sources} messageState="complete" />
+        <Inspector />
+      </InspectorProvider>,
+    );
+  }
+
+  it("shows a copy of the card without the thread card's anchor, and hides a button that would reopen the item", () => {
+    renderThread([weird]);
+    const threadCard = screen.getByRole("region", { name: "Calendar events" });
+    expect(threadCard).toHaveAttribute("id", "sourcecado-card-call-calendar");
+    expect(threadCard).toHaveAttribute("data-card-tools", "call-calendar");
+
+    fireEvent.click(screen.getByRole("button", { name: /^Checked calendar/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Checked calendar" }));
+
+    const panel = inspectorPanel();
+    const copy = within(panel).getByRole("region", { name: "Calendar events" });
+    expect(copy).toHaveAttribute("data-state", "unsupported");
+    expect(copy).not.toHaveAttribute("id");
+    expect(copy).not.toHaveAttribute("data-card-tools");
+    expect(within(panel).queryByRole("button", { name: /^Open in inspector/ })).toBeNull();
+    // The thread card keeps its button and its anchor.
+    expect(screen.getAllByRole("region", { name: "Calendar events" })[0]).toBe(threadCard);
+    expect(within(threadCard).getByRole("button", { name: /^Open in inspector/ })).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("PRIVATE_SHAPE");
+    fireEvent.click(within(panel).getByRole("button", { name: "Raw" }));
+    expect(panel).toHaveTextContent("PRIVATE_SHAPE");
+  });
+
+  it("opens the same panel, with a Progress tab, from a card's Open in inspector button", () => {
+    renderThread([weird]);
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Calendar events" })).getByRole("button", {
+        name: /^Open in inspector/,
+      }),
+    );
+    const panel = inspectorPanel();
+    expect(within(panel).getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Progress",
+      "Output",
+      "Context",
+    ]);
+    expect(panel).toHaveTextContent("Tool result");
+  });
+
+  it("opens a source chip as a Source item with its provider and an icon link", () => {
+    const source: SourceMessagePart = {
+      type: "source",
+      sourceType: "url",
+      id: "s1",
+      url: "https://www.example.com/news/story",
+      title: "A story",
+      providerMetadata: { sourcecado: { provider: "Tavily", stale: false, truncated: true } },
+    };
+    renderThread([], [source]);
+    const chip = screen.getByRole("button", { name: /^Source: A story/ });
+    fireEvent.click(chip);
+
+    const panel = inspectorPanel();
+    expect(within(panel).getByRole("heading", { level: 2 })).toHaveTextContent("A story");
+    expect(panel.querySelector(".sourcecado-inspector-kind")).toHaveTextContent("Source");
+    expect(within(panel).queryByRole("tab")).not.toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Provider.*Tavily/ })).toBeInTheDocument();
+    expect(within(panel).getByText("Truncated")).toBeInTheDocument();
+    const link = within(panel).getByRole("link", { name: "Open externally" });
+    expect(link).toHaveAttribute("href", "https://www.example.com/news/story");
+    expect(link).toHaveTextContent("");
+    expect(within(panel).getByRole("row", { name: /Source.*example\.com/ })).toBeInTheDocument();
   });
 });
 

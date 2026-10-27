@@ -307,7 +307,10 @@ export function Inspector() {
 
   if (!selected) return null;
   const meta = INSPECTOR_KINDS[selected.kind];
-  const tabs = meta.tabs;
+  // Progress lists the steps of a turn. An item opened from a card has none.
+  const tabs = meta.tabs.filter(
+    (id) => id !== "progress" || (selected.steps?.length ?? 0) > 0,
+  );
   const tabbed = tabs.length > 0;
   if (tabbed && openedOnRef.current?.id !== selected.id) {
     openedOnRef.current = { id: selected.id, tab: defaultTab(selected, tabs) };
@@ -397,7 +400,8 @@ export function Inspector() {
   return (
     <aside
       ref={panelRef}
-      className={`sourcecado-inspector sourcecado-inspector-${selected.kind}`}
+      className="sourcecado-inspector"
+      data-kind={selected.kind}
       role="complementary"
       aria-label="Inspector"
       style={{ "--inspector-width": `${width}px` } as CSSProperties}
