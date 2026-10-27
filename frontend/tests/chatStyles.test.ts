@@ -24,6 +24,76 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
+  it("scrolls wide tables and long code lines inside their own block", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-table-scroll\s*\{[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-table-scroll table\s*\{[^}]*width:\s*max-content;[^}]*min-width:\s*100%;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-code\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*overflow:\s*hidden;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-markdown \.sourcecado-code pre\s*\{[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-markdown \.sourcecado-code code\s*\{[^}]*white-space:\s*pre;/,
+    );
+  });
+
+  it("colors syntax with Warm Operator tokens and sets no text under 13px", () => {
+    const answer = styles.slice(
+      styles.indexOf("Answer prose is one type scale"),
+      styles.indexOf(".sourcecado-copy-action {"),
+    );
+
+    expect(answer).toContain(".sourcecado-code-head");
+    // Every code color is a token. A literal hex value would skip the dark theme.
+    expect(answer).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(answer).toMatch(/--code-keyword:\s*var\(--warn\);/);
+    expect(answer).toMatch(/--code-string:\s*var\(--accent-deep\);/);
+    expect(answer).toMatch(/--code-number:\s*var\(--error\);/);
+    expect(answer).toMatch(/--code-comment:\s*var\(--muted\);/);
+    // Token spans change color only, so partial code never shifts the layout.
+    const tokens = answer.slice(
+      answer.indexOf(".sourcecado-code :where(.hljs-comment"),
+      answer.indexOf(".sourcecado-code pre:focus-visible"),
+    );
+    expect(tokens).toContain(".hljs-keyword");
+    expect(tokens).not.toMatch(/font-(size|weight|style)|padding|margin|border/);
+    const sizes = Array.from(answer.matchAll(/font(?:-size)?:\s*(?:[\d.]+ )?(\d+)px/g)).map(
+      (match) => Number(match[1]),
+    );
+    expect(sizes.length).toBeGreaterThan(3);
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(13);
+  });
+
+  it("sizes headings from the answer body so none falls below it at any width", () => {
+    const base = styles.match(
+      /\.sourcecado-markdown :where\(h1, h2, h3, h4, h5, h6\)\s*\{([^}]*)\}/,
+    );
+    const em = (tag: string) =>
+      Number(
+        styles.match(
+          new RegExp(`\\.sourcecado-markdown ${tag}\\s*\\{[^}]*font-size:\\s*([\\d.]+)em;`),
+        )?.[1],
+      );
+
+    // h4 to h6 inherit the body size. h1 to h3 step up from it.
+    expect(base?.[1]).toMatch(/font-size:\s*1em;/);
+    expect(em("h3")).toBeGreaterThan(1);
+    expect(em("h2")).toBeGreaterThan(em("h3"));
+    expect(em("h1")).toBeGreaterThan(em("h2"));
+    // The narrow-screen body is 16px, so a px heading would drop below it.
+    const headings = styles.match(/\.sourcecado-markdown (?::where\(h1[^{]*\)|h[1-6])\s*\{[^}]*\}/g) ?? [];
+    expect(headings).toHaveLength(4);
+    for (const rule of headings) expect(rule).not.toMatch(/font-size:\s*[\d.]+px/);
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-assistant-message\s*\{[^}]*font-size:\s*16px;/,
+    );
+  });
+
   it("uses plain assistant prose and an avocado-tinted user bubble", () => {
     expect(styles).toMatch(
       /\.sourcecado-assistant-message\s*\{[^}]*background:\s*transparent;/,
