@@ -50,6 +50,35 @@ export function safeExternalUrl(value: string | null | undefined): string | null
   }
 }
 
+/** The way out of the inspector to the original page: an icon, named for screen readers. */
+function ExternalLink({ href }: { readonly href: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="sourcecado-inspector-external"
+      aria-label="Open externally"
+      title="Open externally"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path d="M9 2.5h4.5V7M13.5 2.5l-6 6M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" />
+      </svg>
+    </a>
+  );
+}
+
 export function InspectorProvider({
   threadId,
   children,
@@ -139,9 +168,7 @@ export function Inspector() {
             </button>
           ) : null}
           {externalUrl ? (
-            <a href={externalUrl} target="_blank" rel="noopener noreferrer">
-              Open externally
-            </a>
+            <ExternalLink href={externalUrl} />
           ) : selected.externalUrl ? (
             <p>External URL unavailable</p>
           ) : null}
@@ -171,9 +198,7 @@ export function Inspector() {
             </details>
           ) : null}
           {externalUrl ? (
-            <a href={externalUrl} target="_blank" rel="noopener noreferrer">
-              Open externally
-            </a>
+            <ExternalLink href={externalUrl} />
           ) : selected.externalUrl ? (
             <p>External URL unavailable</p>
           ) : null}

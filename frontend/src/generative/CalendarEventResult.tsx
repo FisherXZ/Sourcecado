@@ -1,7 +1,18 @@
-import { useId, useState } from "react";
-
-import { useInspector } from "../chat/Inspector";
 import type { DomainRendererProps } from "../chat/toolRegistry";
+import {
+  CardBadge,
+  CardField,
+  CardRow,
+  CardRows,
+  ExpandableText,
+  Gap,
+  InspectButton,
+  rawToolTarget,
+  ResultCard,
+  SkeletonRows,
+  UnsupportedCard,
+} from "./ResultCard";
+import { useInspector } from "../chat/Inspector";
 
 type CalendarMoment = {
   readonly valid: boolean;
@@ -13,31 +24,6 @@ type CalendarMoment = {
 };
 
 const DESCRIPTION_PREVIEW_LIMIT = 280;
-
-function CalendarDescription({ description }: { readonly description: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const descriptionId = useId();
-  const truncated = description.length > DESCRIPTION_PREVIEW_LIMIT;
-  const visible =
-    truncated && !expanded
-      ? `${description.slice(0, DESCRIPTION_PREVIEW_LIMIT).trimEnd()}…`
-      : description;
-  return (
-    <div className="sourcecado-calendar-description">
-      <p id={descriptionId}>{visible}</p>
-      {truncated ? (
-        <button
-          type="button"
-          aria-controls={descriptionId}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? "Collapse event description" : "Expand event description"}
-        </button>
-      ) : null}
-    </div>
-  );
-}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -241,12 +227,6 @@ function eventTimeLabel(startValue: unknown, endValue: unknown) {
   };
 }
 
-function missingLabel(missing: readonly string[]): string | null {
-  if (missing.length === 0) return null;
-  if (missing.length === 1) return `Missing ${missing[0]} from Google Calendar source.`;
-  return `Missing ${missing.slice(0, -1).join(", ")} and ${missing.at(-1)} from Google Calendar source.`;
-}
-
 function approvalDateLabel(value: unknown, timezone: string | null): string {
   const moment = calendarMoment({ dateTime: value, timeZone: timezone });
   return moment.valid && !moment.allDay
@@ -323,10 +303,27 @@ export function CalendarEventResult({
   status,
   toolCallId,
   toolName,
+  failure,
+  cardId,
 }: DomainRendererProps) {
   const { select } = useInspector();
   const write = toolName === "calendar_create" || toolName === "calendar_update";
   const input = record(args);
+  const common = {
+    id: cardId,
+    toolCallIds: [toolCallId],
+    provider: "calendar" as const,
+  };
+  const failedState = failure?.class === "permission" ? "restricted" : "failed";
+  const unsupported = (title: string) => (
+    <UnsupportedCard
+      cardId={cardId}
+      toolCallIds={[toolCallId]}
+      provider="calendar"
+      title={title}
+      inspect={rawToolTarget({ toolCallId, toolName, args, result }, title)}
+    />
+  );
   if (write && status === "loading") {
     const timezone = text(input?.timezone) ?? "America/Los_Angeles";
     const timing = eventTimeLabel(
@@ -334,38 +331,44 @@ export function CalendarEventResult({
       { dateTime: input?.end, timeZone: timezone },
     );
     const creating = toolName === "calendar_create";
+    const summary = text(input?.summary);
     return (
-      <section className="sourcecado-calendar-result sourcecado-calendar-write-running">
-        <h3>{creating ? "Creating" : "Updating"} Calendar event</h3>
-        <p>{creating ? "Creating · Not yet created" : "Updating · Not yet updated"}</p>
-        {text(input?.summary) ? <strong>{text(input?.summary)}</strong> : null}
-        <p>{timing.label}</p>
-        {timing.timezone ? <p>{timing.timezone}</p> : null}
-      </section>
+      <ResultCard
+        {...common}
+        title="Calendar event"
+        tag={creating ? "Not yet created" : "Not yet updated"}
+        state="loading"
+      >
+        <CardRows label={creating ? "Creating Calendar event" : "Updating Calendar event"}>
+          <CardField icon="doc" label="Event">
+            {summary ?? <Gap>No title</Gap>}
+          </CardField>
+          <CardField icon="clock" label="When">
+            {timing.valid ? <span>{timing.label}</span> : <Gap>{timing.label}</Gap>}
+            {timing.timezone ? <CardBadge tone="neutral">{timing.timezone}</CardBadge> : null}
+          </CardField>
+        </CardRows>
+      </ResultCard>
     );
   }
   if (write && status === "error") {
     return (
-      <p className="sourcecado-calendar-failed">
-        Calendar event was not {toolName === "calendar_create" ? "created" : "updated"}.
-      </p>
+      <ResultCard
+        {...common}
+        title="Calendar event"
+        state={failedState}
+        note={`Calendar event was not ${toolName === "calendar_create" ? "created" : "updated"}.`}
+      />
     );
   }
   if (write && status === "success") {
     const raw = record(result);
     const eventId = text(raw?.id) ?? text(input?.event_id);
-    if (!raw || !eventId) {
-      return (
-        <section className="sourcecado-calendar-result sourcecado-calendar-fallback">
-          <h3>Calendar write result needs review</h3>
-          <p>Sourcecado couldn’t verify the Calendar event. Use Inspect above to review it.</p>
-        </section>
-      );
-    }
+    if (!raw || !eventId) return unsupported("Calendar event");
     const creating = toolName === "calendar_create";
     const timingChanged =
       creating || input?.start !== undefined || input?.end !== undefined;
-    const summary = text(raw.summary) ?? text(input?.summary) ?? "Untitled event";
+    const summary = text(raw.summary) ?? text(input?.summary);
     const timezone = text(input?.timezone) ?? "America/Los_Angeles";
     const timing = eventTimeLabel(
       { dateTime: input?.start, timeZone: timezone },
@@ -373,163 +376,151 @@ export function CalendarEventResult({
     );
     const account = text(raw.accountEmail) ?? text(raw.account_email);
     const description = text(input?.description);
+    const changed = calendarChangedFields(input ?? {});
     const externalUrl =
       text(raw.htmlLink) ?? text(raw.html_link) ?? text(raw.external_url);
     return (
-      <section className="sourcecado-calendar-result sourcecado-calendar-write-result">
-        <header>
-          <div>
-            <h3>Calendar event {creating ? "created" : "updated"}</h3>
-            <strong>{creating ? "Created" : "Updated"}</strong>
-          </div>
-          <p>Event ID: {eventId}</p>
-        </header>
-        <p>{summary}</p>
-        {timingChanged ? <p>{timing.label}</p> : null}
-        {timingChanged && timing.timezone ? <p>{timing.timezone}</p> : null}
-        <p>Changed fields: {calendarChangedFields(input ?? {}).join(", ") || "none"}</p>
-        {description ? <CalendarDescription description={description} /> : null}
-        {account ? (
-          <p>Google Calendar · {account}</p>
-        ) : (
-          <p>Google Calendar account address unavailable; event is still available.</p>
-        )}
-        <div className="sourcecado-calendar-actions">
-          <button
-            type="button"
-            aria-label={`Inspect Calendar event ${eventId}`}
-            onClick={(event) =>
-              select(
-                {
-                  kind: "artifact",
-                  id: `calendar-write:${toolCallId}:${eventId}`,
-                  title: summary,
-                  status: "success",
-                  provider: "Google Calendar",
-                  externalUrl,
-                  preview: timingChanged ? timing.label : `${creating ? "Created" : "Updated"} event`,
-                  result: {
-                    eventId,
-                    action: creating ? "created" : "updated",
-                    changedFields: calendarChangedFields(input ?? {}),
-                    timezone: timing.timezone,
-                  },
-                },
-                event.currentTarget,
-              )
-            }
-          >
-            Event details
-          </button>
-          <button
-            type="button"
-            aria-label="Inspect Calendar source"
-            onClick={(event) =>
-              select(
-                {
-                  kind: "source",
-                  id: `calendar-source:${toolCallId}`,
-                  title: "Google Calendar source",
-                  status: "success",
-                  provider: "Google Calendar",
-                  preview: account ?? "Connected Google Calendar account unavailable",
-                  result: { resource: "primary calendar", account },
-                },
-                event.currentTarget,
-              )
-            }
-          >
-            Source
-          </button>
-        </div>
-      </section>
+      <ResultCard
+        {...common}
+        title="Calendar event"
+        count="1 event"
+        tag={creating ? "Created" : "Updated"}
+        footer={
+          <InspectButton
+            target={{
+              kind: "artifact",
+              id: `calendar-write:${toolCallId}:${eventId}`,
+              title: summary ?? "Untitled event",
+              status: "success",
+              provider: "Google Calendar",
+              externalUrl,
+              preview: timingChanged ? timing.label : `${creating ? "Created" : "Updated"} event`,
+              result: {
+                eventId,
+                action: creating ? "created" : "updated",
+                changedFields: changed,
+                timezone: timing.timezone,
+                account,
+              },
+            }}
+          />
+        }
+      >
+        <CardRows label="Calendar event">
+          <CardField icon="doc" label="Event">
+            {summary ?? <Gap>No title</Gap>}
+          </CardField>
+          {timingChanged ? (
+            <CardField icon="clock" label="When">
+              {timing.valid ? <span>{timing.label}</span> : <Gap>{timing.label}</Gap>}
+              {timing.timezone ? (
+                <CardBadge tone="neutral">{timing.timezone}</CardBadge>
+              ) : null}
+            </CardField>
+          ) : null}
+          <CardField icon="review" label="Changed">
+            {changed.length > 0 ? changed.join(", ") : "none"}
+          </CardField>
+          {description ? (
+            <CardRow tall>
+              <ExpandableText
+                text={description}
+                limit={DESCRIPTION_PREVIEW_LIMIT}
+                expandLabel="Expand event description"
+                collapseLabel="Collapse event description"
+                className="sourcecado-card-body-text"
+              />
+            </CardRow>
+          ) : null}
+          <CardField icon="link" label="Event ID">
+            {eventId}
+          </CardField>
+          <CardField icon="user" label="Account">
+            {account ?? <Gap>Account address unavailable</Gap>}
+          </CardField>
+        </CardRows>
+      </ResultCard>
     );
   }
   if (toolName !== "calendar_list") return null;
   if (status === "error") {
-    return <p className="sourcecado-calendar-failed">Calendar events unavailable.</p>;
+    return (
+      <ResultCard
+        {...common}
+        title="Calendar events"
+        state={failedState}
+        note="Calendar events unavailable."
+      />
+    );
   }
   if (status === "loading") {
     return (
-      <section className="sourcecado-calendar-result sourcecado-calendar-loading">
-        <h3>Loading Calendar events</h3>
-        <ol aria-label="Loading Calendar events" aria-busy="true">
-          {[0, 1, 2].map((row) => (
-            <li key={row}>
-              <span />
-              <span />
-            </li>
-          ))}
-        </ol>
-      </section>
+      <ResultCard {...common} title="Calendar events" state="loading">
+        <SkeletonRows label="Loading Calendar events" />
+      </ResultCard>
     );
   }
   if (status !== "success") return null;
   const raw = record(result);
-  if (!raw || !Array.isArray(raw.events)) {
-    return (
-      <section className="sourcecado-calendar-result sourcecado-calendar-fallback">
-        <h3>Calendar result needs review</h3>
-        <p>Sourcecado couldn’t summarize this Calendar result safely. Use Inspect above to review it.</p>
-      </section>
-    );
-  }
-  const events = Array.isArray(raw?.events) ? raw.events : [];
+  if (!raw || !Array.isArray(raw.events)) return unsupported("Calendar events");
+  const events = raw.events;
   const account = text(raw.accountEmail) ?? text(raw.account_email);
   if (events.length === 0) {
     return (
-      <section className="sourcecado-calendar-result sourcecado-calendar-empty">
-        <h3>No Calendar events</h3>
-        <p>No upcoming events matched this Calendar window.</p>
-      </section>
+      <ResultCard
+        {...common}
+        title="Calendar events"
+        count="0 events"
+        state="empty"
+        note="No upcoming events matched this Calendar window."
+      />
     );
   }
-
+  const rows = events.map((value, index) => {
+    const event = record(value);
+    const summary = text(event?.summary);
+    const eventId = text(event?.id) ?? `calendar-event-${index + 1}`;
+    const timing = eventTimeLabel(event?.start, event?.end);
+    const externalUrl =
+      text(event?.htmlLink) ?? text(event?.html_link) ?? text(event?.url);
+    return { summary, eventId, timing, externalUrl };
+  });
+  const incomplete = rows.filter((row) => !row.summary || !row.timing.valid).length;
   return (
-    <section className="sourcecado-calendar-result" aria-label="Calendar event list">
-      <header>
-        <div>
-          <h3>Upcoming Calendar events</h3>
-          <p>{events.length} events</p>
-        </div>
-        <button
-          type="button"
-          aria-label="Inspect Calendar source"
-          onClick={(event) =>
-            select(
-              {
-                kind: "source",
-                id: `calendar-source:${toolCallId}`,
-                title: "Google Calendar source",
-                status: "success",
-                provider: "Google Calendar",
-                preview: account ?? "Connected Google Calendar account unavailable",
-                result: { eventCount: events.length, account },
-              },
-              event.currentTarget,
-            )
-          }
-        >
-          Source
-        </button>
-      </header>
-      <ol aria-label="Calendar events">
-        {events.map((value, index) => {
-          const event = record(value);
-          const summary = text(event?.summary);
-          const eventId = text(event?.id) ?? `calendar-event-${index + 1}`;
-          const timing = eventTimeLabel(event?.start, event?.end);
-          const externalUrl =
-            text(event?.htmlLink) ?? text(event?.html_link) ?? text(event?.url);
-          const missing = [
-            !summary ? "title" : null,
-            !timing.valid ? "valid date" : null,
-          ].filter((field): field is string => field !== null);
-          return (
-            <li key={eventId}>
+    <ResultCard
+      {...common}
+      title="Upcoming Calendar events"
+      count={`${events.length} ${events.length === 1 ? "event" : "events"}`}
+      state={incomplete > 0 ? "partial" : "ready"}
+      note={
+        incomplete > 0
+          ? `${incomplete} of ${events.length} events lack a title or a valid date.`
+          : undefined
+      }
+      footer={
+        <InspectButton
+          target={{
+            kind: "source",
+            id: `calendar-source:${toolCallId}`,
+            title: "Google Calendar source",
+            status: "success",
+            provider: "Google Calendar",
+            preview: account ?? "Connected Google Calendar account unavailable",
+            result: { eventCount: events.length, account },
+          }}
+        />
+      }
+    >
+      <CardRows label="Calendar events">
+        {rows.map(({ summary, eventId, timing, externalUrl }) => (
+          <CardRow key={eventId}>
+            <span className="sourcecado-card-cell sourcecado-card-cell-when">
+              {timing.valid ? timing.label : <Gap>Date unavailable or invalid</Gap>}
+            </span>
+            <span className="sourcecado-card-cell sourcecado-card-cell-name">
               <button
                 type="button"
-                className="sourcecado-calendar-event-title"
+                className="sourcecado-card-name"
                 aria-label={`Inspect Calendar event ${summary ?? "Untitled event"}`}
                 onClick={(trigger) =>
                   select(
@@ -554,13 +545,16 @@ export function CalendarEventResult({
               >
                 {summary ?? "Untitled event"}
               </button>
-              <p>{timing.label}</p>
-              {timing.timezone ? <p>{timing.timezone}</p> : null}
-              {missingLabel(missing) ? <p>{missingLabel(missing)}</p> : null}
-            </li>
-          );
-        })}
-      </ol>
-    </section>
+              {!summary ? <Gap>No title</Gap> : null}
+            </span>
+            {timing.timezone ? (
+              <span className="sourcecado-card-cell">
+                <CardBadge tone="neutral">{timing.timezone}</CardBadge>
+              </span>
+            ) : null}
+          </CardRow>
+        ))}
+      </CardRows>
+    </ResultCard>
   );
 }

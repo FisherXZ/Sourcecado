@@ -2321,8 +2321,10 @@ describe("ChatPage Warm Operator thread", () => {
     render(<ChatPage sessionId="thread-alpha" />);
 
     const source = await screen.findByRole("button", {
-      name: "Source: Codeology brief",
+      name: "Source: Codeology brief (drive.google.com)",
     });
+    // The source is a chip with the domain, in the row under the answer.
+    expect(source).toHaveTextContent("drive.google.com");
     const transcript = screen.getByRole("log");
     transcript.scrollTop = 96;
     fireEvent.click(source);
@@ -2412,8 +2414,8 @@ describe("ChatPage Warm Operator thread", () => {
         name: /^Searched Apollo/,
       }),
     );
-    const emptyHeading = screen.getByRole("heading", { name: "No Apollo matches" });
-    expect(emptyHeading).toBeInTheDocument();
+    const emptyHeading = screen.getByRole("heading", { name: "Apollo shortlist" });
+    expect(emptyHeading.closest("section")).toHaveAttribute("data-state", "empty");
     // The step row repeats the query, so scope this to the result card.
     expect(
       within(emptyHeading.closest("section")!).getByText("CEO at Apollo", {
@@ -2790,7 +2792,7 @@ describe("ChatPage Warm Operator thread", () => {
         name: /^Prepared Gmail draft/,
       }),
     );
-    expect(screen.getByText("Draft ID: draft-restored")).toBeInTheDocument();
+    expect(screen.getByText("draft-restored")).toBeInTheDocument();
     expect(screen.getByText("Restored body")).toBeInTheDocument();
 
     const live = {
@@ -2821,7 +2823,7 @@ describe("ChatPage Warm Operator thread", () => {
       });
     });
     expect(
-      await screen.findByRole("heading", { name: "Creating Gmail draft" }),
+      await screen.findByRole("list", { name: "Creating Gmail draft preview" }),
     ).toBeInTheDocument();
 
     act(() => {
@@ -2849,9 +2851,9 @@ describe("ChatPage Warm Operator thread", () => {
       });
     });
 
-    expect(await screen.findByText("Draft ID: draft-live")).toBeInTheDocument();
+    expect(await screen.findByText("draft-live")).toBeInTheDocument();
     expect(screen.getByText("Live body")).toBeInTheDocument();
-    const artifacts = screen.getAllByLabelText("Gmail draft artifact");
+    const artifacts = screen.getAllByRole("region", { name: "Gmail draft" });
     expect(artifacts).toHaveLength(2);
     for (const artifact of artifacts) {
       expect(within(artifact).getByText("Not sent")).toBeInTheDocument();
@@ -2943,7 +2945,7 @@ describe("ChatPage Warm Operator thread", () => {
       });
     });
     expect(
-      await screen.findByRole("heading", { name: "Loading Calendar events" }),
+      await screen.findByRole("list", { name: "Loading Calendar events" }),
     ).toBeInTheDocument();
 
     act(() => {
@@ -2981,7 +2983,7 @@ describe("ChatPage Warm Operator thread", () => {
     });
     expect(await screen.findByText("Live calendar event")).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "Loading Calendar events" }),
+      screen.queryByRole("list", { name: "Loading Calendar events" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
   });
@@ -3065,7 +3067,7 @@ describe("ChatPage Warm Operator thread", () => {
       });
     });
     expect(
-      await screen.findByRole("heading", { name: "Loading evidence" }),
+      await screen.findByRole("list", { name: "Loading evidence" }),
     ).toBeInTheDocument();
 
     act(() => {
@@ -3089,7 +3091,7 @@ describe("ChatPage Warm Operator thread", () => {
     expect(await screen.findByText("Granola meeting context")).toBeInTheDocument();
     expect(screen.getByText("Live Granola meeting evidence excerpt")).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "Loading evidence" }),
+      screen.queryByRole("list", { name: "Loading evidence" }),
     ).not.toBeInTheDocument();
   });
 });

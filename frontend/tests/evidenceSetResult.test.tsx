@@ -69,9 +69,10 @@ describe("Evidence set result", () => {
       tool("call-drive-loading", "drive_search", { query: "Q3 sourcing" }, undefined),
     ]);
 
-    expect(
-      screen.getByRole("heading", { name: "Loading evidence" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence" })).toHaveAttribute(
+      "data-state",
+      "loading",
+    );
     const skeleton = screen.getByRole("list", { name: "Loading evidence" });
     expect(skeleton).toHaveAttribute("aria-busy", "true");
     expect(skeleton.querySelectorAll("li")).toHaveLength(3);
@@ -96,9 +97,10 @@ describe("Evidence set result", () => {
       screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "No evidence found" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence" })).toHaveAttribute(
+      "data-state",
+      "empty",
+    );
     expect(
       screen.getByText(
         "No evidence matched Q3 sourcing or hiring across Google Drive and Granola.",
@@ -133,9 +135,10 @@ describe("Evidence set result", () => {
       screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Evidence unavailable" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence" })).toHaveAttribute(
+      "data-state",
+      "failed",
+    );
     expect(
       screen.getByText("Google Drive and Granola evidence unavailable."),
     ).toBeInTheDocument();
@@ -163,9 +166,10 @@ describe("Evidence set result", () => {
       screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Evidence result needs review" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence" })).toHaveAttribute(
+      "data-state",
+      "unsupported",
+    );
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_GRANOLA_PAYLOAD");
     fireEvent.click(screen.getByRole("button", { name: /^Searched Drive/ }));
@@ -333,13 +337,22 @@ describe("Evidence set result", () => {
     expect(
       screen.getByRole("button", { name: "Show 2 more evidence items" }),
     ).toHaveFocus();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Show 2 more evidence items" }),
-    );
+    const lastPage = screen.getByRole("button", { name: "Show 2 more evidence items" });
+    expect(lastPage).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(lastPage, { detail: 0 });
     expect(evidence.querySelectorAll(":scope > li")).toHaveLength(12);
     expect(
       screen.queryByRole("button", { name: /more evidence items/ }),
     ).not.toBeInTheDocument();
+    // The same button stays under focus and now offers to close the list.
+    const fewer = screen.getByRole("button", { name: "Show fewer evidence items" });
+    expect(fewer).toHaveFocus();
+    expect(fewer).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(fewer, { detail: 0 });
+    expect(evidence.querySelectorAll(":scope > li")).toHaveLength(5);
+    expect(
+      screen.getByRole("button", { name: "Show 5 more evidence items" }),
+    ).toHaveAttribute("aria-expanded", "false");
   });
 
   it.each([
@@ -403,7 +416,10 @@ describe("Evidence set result", () => {
         screen.getByRole("button", { name: /^Used 2 sources/ }),
       );
 
-      expect(screen.getByText("Partial evidence")).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Evidence set" })).toHaveAttribute(
+        "data-state",
+        "partial",
+      );
       expect(
         screen.getByText(
           `${failedSource} evidence unavailable. ${successfulSource} evidence remains visible.`,
@@ -471,7 +487,9 @@ describe("Evidence set result", () => {
 
     expect(screen.getByRole("heading", { name: "Evidence set" })).toBeInTheDocument();
     expect(screen.getByText("2 evidence items")).toBeInTheDocument();
-    expect(screen.getByText("Google Drive and Granola")).toBeInTheDocument();
+    expect(container.querySelector(".sourcecado-card-meta")).toHaveTextContent(
+      "Google DriveGranola",
+    );
     expect(screen.getByText("Q3 sourcing plan")).toBeInTheDocument();
     expect(screen.getByText(/Priority roles/)).toBeInTheDocument();
     expect(screen.getByText("Hiring sync")).toBeInTheDocument();

@@ -115,7 +115,6 @@
 
 .sourcecado-inspector button,
 .sourcecado-inspector a,
-.sourcecado-source-citation,
 .sourcecado-artifacts button,
 .sourcecado-inspect-tool {
   min-height: 32px;
@@ -135,16 +134,9 @@
   text-decoration: none;
 }
 
-.sourcecado-source-citation,
 .sourcecado-artifacts button,
 .sourcecado-inspect-tool {
   color: var(--accent-deep);
-}
-
-.sourcecado-source-citation {
-  min-height: 28px;
-  margin: 3px 6px 3px 0;
-  background: var(--accent-tint);
 }
 
 .sourcecado-artifacts {
@@ -268,7 +260,6 @@
 
   .sourcecado-inspector button,
   .sourcecado-inspector a,
-  .sourcecado-source-citation,
   .sourcecado-artifacts button,
   .sourcecado-inspect-tool {
     min-height: 44px;
@@ -1890,68 +1881,663 @@
   margin-top: 0;
 }
 
-.sourcecado-living-brief {
-  display: grid;
-  max-width: 680px;
-  gap: 12px;
-  padding: 14px;
+/* Result cards and source chips (#234). One chrome for every structured
+   result: a header with the provider icon, title and count; rows 36px tall; a
+   footer with icon actions. Rows size to their content, so the card body
+   scrolls sideways at a narrow width and the page never does. */
+.sourcecado-card {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-.sourcecado-living-brief > header,
-.sourcecado-living-brief dl > div {
+.sourcecado-card[data-state="partial"],
+.sourcecado-card[data-state="stale"],
+.sourcecado-card[data-state="restricted"] {
+  border-color: var(--warn);
+}
+
+.sourcecado-card[data-state="failed"] {
+  border-color: var(--error);
+}
+
+.sourcecado-card[data-state="unsupported"],
+.sourcecado-card[data-state="empty"] {
+  border-style: dashed;
+}
+
+.sourcecado-card-header {
+  display: flex;
+  min-height: 40px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 12px;
+}
+
+.sourcecado-card-provider {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--accent-deep);
+}
+
+.sourcecado-card-header h3 {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-card-header h3:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.sourcecado-card-count {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sourcecado-card-tag,
+.sourcecado-card-state,
+.sourcecado-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sourcecado-card-tag,
+.sourcecado-card-state[data-state="partial"],
+.sourcecado-card-state[data-state="stale"],
+.sourcecado-card-state[data-state="restricted"],
+.sourcecado-card-badge[data-tone="warn"] {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.sourcecado-card-state[data-state="failed"],
+.sourcecado-card-badge[data-tone="error"] {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.sourcecado-card-glyph {
+  flex: none;
+}
+
+.sourcecado-card-glyph-loading {
+  animation: sourcecado-card-spin 0.9s linear infinite;
+}
+
+@keyframes sourcecado-card-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sourcecado-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+
+.sourcecado-card-chip {
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: var(--raised);
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-card-note {
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--raised);
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-card-note[data-state="partial"],
+.sourcecado-card-note[data-state="stale"],
+.sourcecado-card-note[data-state="restricted"] {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.sourcecado-card-note[data-state="failed"] {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.sourcecado-card-body {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-card-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sourcecado-card-rows {
   display: grid;
-  gap: 3px;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.sourcecado-living-brief h3,
-.sourcecado-living-brief h4,
-.sourcecado-living-brief p,
-.sourcecado-living-brief dl,
-.sourcecado-living-brief ul {
+.sourcecado-card-row {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-card-rows > .sourcecado-card-row:first-child {
+  border-top: 0;
+}
+
+.sourcecado-card-row-tall,
+.sourcecado-card-row-stack {
+  align-items: flex-start;
+  padding-block: 8px;
+}
+
+.sourcecado-card-row-stack {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sourcecado-card-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sourcecado-card-cell {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 360px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+/* Fixed column widths keep the rows aligned. A long value wraps inside its
+   column and the row grows past 36px for that row only. */
+.sourcecado-card-cell-name {
+  flex: 0 0 232px;
+  flex-wrap: wrap;
+}
+
+.sourcecado-card-cell-role {
+  flex: 0 0 176px;
+}
+
+.sourcecado-card-cell-when {
+  flex: 0 0 196px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-card-cell-email {
+  flex: 1 0 auto;
+}
+
+.sourcecado-card-cell-context {
+  max-width: 240px;
+}
+
+.sourcecado-card-cell-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sourcecado-card-key {
+  display: inline-flex;
+  width: 132px;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.sourcecado-card-value {
+  display: inline-flex;
+  max-width: 520px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-card-gap {
+  display: inline-flex;
+  padding: 0 8px;
+  border: 1px dashed var(--muted);
+  border-radius: 4px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.sourcecado-card-name {
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: underline transparent;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.sourcecado-card-name:hover {
+  text-decoration-color: currentColor;
+}
+
+.sourcecado-card-check {
+  position: relative;
+  display: inline-flex;
+  width: 24px;
+  height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sourcecado-card-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.sourcecado-card-text {
+  display: grid;
+  gap: 4px;
+}
+
+.sourcecado-card-text > p {
+  max-width: 72ch;
+  margin: 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-card-section {
+  display: grid;
+  gap: 6px;
+}
+
+.sourcecado-card-section h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sourcecado-card-section p,
+.sourcecado-card-section ul,
+.sourcecado-card-section dl,
+.sourcecado-card-section dd {
   margin: 0;
 }
 
-.sourcecado-living-brief > header p,
-.sourcecado-living-brief dt {
-  color: var(--muted);
-  font-size: 12px;
+.sourcecado-card-section ul {
+  display: grid;
+  max-width: 72ch;
+  gap: 4px;
+  padding-left: 18px;
 }
 
-.sourcecado-living-brief > dl,
-.sourcecado-living-brief > section > dl {
+.sourcecado-card-section dl {
   display: grid;
+  gap: 4px;
+}
+
+.sourcecado-card-section dt {
+  font-weight: 500;
+}
+
+.sourcecado-card-section dd {
+  max-width: 72ch;
+  white-space: pre-wrap;
+}
+
+.sourcecado-card-skeleton {
+  width: 100%;
+}
+
+.sourcecado-card-skeleton li {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-block: 10px;
+}
+
+.sourcecado-card-skeleton li span {
+  display: block;
+  width: min(220px, 62%);
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
+  background-size: 200% 100%;
+  animation: shell-shimmer 1.4s linear infinite;
+}
+
+.sourcecado-card-skeleton li span:last-child {
+  width: min(320px, 86%);
+}
+
+.sourcecado-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-card-actions,
+.sourcecado-card-curate,
+.sourcecado-card-credit {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
-.sourcecado-living-brief dl > div {
+.sourcecado-card-curate,
+.sourcecado-card-credit {
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
 
-.sourcecado-living-brief dd {
+.sourcecado-card-curate {
+  align-items: flex-end;
+}
+
+.sourcecado-card-curate > label {
+  display: grid;
+  min-width: 220px;
+  flex: 1 1 240px;
+  gap: 4px;
+  font-weight: 500;
+}
+
+.sourcecado-card-curate > label > input {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.sourcecado-card-review,
+.sourcecado-card-receipt {
+  display: grid;
+  flex: 1 0 100%;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.sourcecado-card-review h4,
+.sourcecado-card-review p,
+.sourcecado-card-review ul,
+.sourcecado-card-receipt p,
+.sourcecado-card-receipt ul {
   margin: 0;
-  white-space: pre-wrap;
 }
 
-.sourcecado-living-brief > section {
-  display: grid;
-  gap: 9px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+.sourcecado-card-review h4 {
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.sourcecado-living-brief ul {
-  display: grid;
-  gap: 6px;
+.sourcecado-card-review ul,
+.sourcecado-card-receipt ul {
   padding-left: 18px;
 }
 
-.sourcecado-living-brief-partial {
-  border-color: var(--warn);
-  background: var(--warn-bg);
+.sourcecado-card-review .sourcecado-card-button {
+  justify-self: start;
+}
+
+.sourcecado-card-receipt ul {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-card-receipt li {
+  display: flex;
+  min-height: 36px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sourcecado-card-receipt a {
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.sourcecado-card-failures {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--error);
+  color: var(--error);
+}
+
+.sourcecado-card-failures p {
+  margin: 0;
+}
+
+.sourcecado-card-fact {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+}
+
+.sourcecado-card-fact[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.sourcecado-card-fact[data-tone="error"] {
+  color: var(--error);
+}
+
+.sourcecado-card-button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sourcecado-card-button:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+.sourcecado-card-button[data-tone="primary"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.sourcecado-card-button[data-tone="primary"]:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+.sourcecado-card-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sourcecado-card-button[data-open="true"] .sourcecado-card-glyph {
+  transform: rotate(180deg);
+}
+
+.sourcecado-card :where(button, input, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sourcecado-source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-source-chip {
+  display: inline-flex;
+  min-height: 28px;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sourcecado-source-chip:hover {
+  background: var(--raised);
+}
+
+.sourcecado-source-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sourcecado-source-chip .sourcecado-tool-icon {
+  color: var(--accent-deep);
+}
+
+.sourcecado-source-domain {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-source-more[data-open="true"] .sourcecado-card-glyph {
+  transform: rotate(180deg);
+}
+
+.sourcecado-source-flag {
+  color: var(--warn);
+  font-weight: 500;
+}
+
+.sourcecado-step-actions .sourcecado-show-result {
+  display: inline-flex;
+  width: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-deep);
+  cursor: pointer;
+}
+
+.sourcecado-inspector .sourcecado-inspector-external {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-card-button,
+  .sourcecado-card-name,
+  .sourcecado-card-curate > label > input,
+  .sourcecado-source-chip,
+  .sourcecado-step-actions .sourcecado-show-result {
+    min-height: 44px;
+  }
+
+  .sourcecado-card-button,
+  .sourcecado-step-actions .sourcecado-show-result,
+  .sourcecado-inspector .sourcecado-inspector-external {
+    min-width: 44px;
+  }
+
+  .sourcecado-step-actions .sourcecado-show-result,
+  .sourcecado-inspector .sourcecado-inspector-external {
+    width: 44px;
+  }
+
+  .sourcecado-card-check {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-card-glyph-loading {
+    animation: none;
+  }
 }
 
 /* Process layer (#226): the tool step rows above the answer. One step is one
@@ -2245,277 +2831,18 @@
   }
 }
 
-.sourcecado-apollo-result {
-  max-width: 100%;
-  margin-top: 10px;
-  padding: 12px 0 2px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-}
+/* End of the process layer (#226) */
 
-.sourcecado-apollo-result > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.sourcecado-apollo-result h3,
-.sourcecado-apollo-result p {
-  margin: 0;
-}
-
-.sourcecado-apollo-result h3 {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.sourcecado-apollo-result header p,
-.sourcecado-apollo-result > ol > li > p,
-.sourcecado-apollo-empty > p,
-.sourcecado-apollo-fallback > p {
-  margin-top: 3px;
-  color: var(--muted);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.sourcecado-apollo-result button {
-  min-height: 32px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--accent-deep);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.sourcecado-apollo-result > ol {
-  display: grid;
-  gap: 0;
-  margin: 9px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-apollo-result > ol > li {
-  min-width: 0;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-  background: transparent;
-}
-
-.sourcecado-apollo-result .sourcecado-apollo-candidate-name {
-  max-width: 100%;
-  padding: 0;
-  overflow-wrap: anywhere;
-  border: 0;
-  background: transparent;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-}
-
-.sourcecado-apollo-select {
-  display: flex;
-  min-height: 44px;
-  width: fit-content;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.sourcecado-apollo-select input {
-  width: 20px;
-  height: 20px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.sourcecado-apollo-curation {
-  display: grid;
-  gap: 10px;
-  margin-top: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.sourcecado-apollo-curation > label {
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.sourcecado-apollo-curation > label > input {
-  min-height: 40px;
-  padding: 0 11px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-.sourcecado-apollo-review,
-.sourcecado-apollo-curation-receipt {
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--raised);
-}
-
-.sourcecado-apollo-review h4 {
-  margin: 0 0 7px;
-  font-size: 13px;
-}
-
-.sourcecado-apollo-review ul,
-.sourcecado-apollo-curation-receipt ul {
-  margin: 8px 0;
-  padding-left: 20px;
-}
-
-.sourcecado-apollo-curation-receipt li {
-  display: flex;
-  min-height: 40px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.sourcecado-apollo-curation-receipt a {
-  color: var(--accent-deep);
-  font-weight: 600;
-}
-
-.sourcecado-apollo-curation-failures {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px solid var(--error);
-  color: var(--error);
-}
-
-.sourcecado-apollo-credit-note {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-  color: var(--warn);
-}
-
-.sourcecado-apollo-credit-note p {
-  color: var(--warn);
-}
-
-.sourcecado-apollo-empty,
-.sourcecado-apollo-fallback {
-  padding-bottom: 10px;
-}
-
-.sourcecado-apollo-empty > button {
-  margin-top: 10px;
-}
-
-.sourcecado-apollo-enriched > .sourcecado-apollo-candidate-name {
-  margin-top: 10px;
-}
-
-.sourcecado-apollo-skeleton {
-  display: grid;
-  max-width: 100%;
-  gap: 0;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-apollo-skeleton li {
-  display: grid;
-  gap: 7px;
-  padding: 11px 0;
-  border-top: 1px solid var(--border);
-}
-
-.sourcecado-apollo-skeleton span {
-  display: block;
-  width: min(220px, 62%);
-  height: 11px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
-  background-size: 200% 100%;
-  animation: shell-shimmer 1.4s linear infinite;
-}
-
-.sourcecado-apollo-skeleton span:last-child {
-  width: min(320px, 86%);
-}
-
-@media (max-width: 767px) {
-  .sourcecado-apollo-result button {
-    min-height: 44px;
-  }
-
-  .sourcecado-apollo-result > header,
-  .sourcecado-apollo-credit-note {
-    align-items: stretch;
-    flex-direction: column;
-  }
-}
-
-.sourcecado-gmail-draft {
-  max-width: 100%;
-  margin-top: 10px;
-  padding: 12px 0 2px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-}
-
-.sourcecado-gmail-draft > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.sourcecado-gmail-draft h3,
-.sourcecado-gmail-draft p,
 .sourcecado-gmail-approval-preview p {
   margin: 0;
 }
 
-.sourcecado-gmail-draft h3 {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.sourcecado-gmail-draft > header strong,
 .sourcecado-gmail-approval-preview > strong {
   display: inline-flex;
   margin-top: 4px;
   color: var(--warn);
   font-size: 11px;
   text-transform: uppercase;
-}
-
-.sourcecado-gmail-draft > p,
-.sourcecado-gmail-fallback > p {
-  margin-top: 6px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
 }
 
 .sourcecado-gmail-body-preview {
@@ -2530,7 +2857,6 @@
   overflow-wrap: anywhere;
 }
 
-.sourcecado-gmail-draft button,
 .sourcecado-gmail-approval-preview button {
   min-height: 32px;
   padding: 0 9px;
@@ -2543,15 +2869,6 @@
   cursor: pointer;
 }
 
-.sourcecado-gmail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
 .sourcecado-gmail-approval-preview {
   margin: 10px 0;
   padding: 10px 12px;
@@ -2559,96 +2876,16 @@
   background: var(--surface);
 }
 
-.sourcecado-gmail-failed {
-  margin: 8px 0 0;
-  color: var(--error);
-  font-weight: 600;
-}
-
-.sourcecado-gmail-creating > ol {
-  display: grid;
-  gap: 7px;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-gmail-creating li span {
-  display: block;
-  width: min(360px, 82%);
-  height: 12px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
-  background-size: 200% 100%;
-  animation: shell-shimmer 1.4s linear infinite;
-}
-
 @media (max-width: 767px) {
-  .sourcecado-gmail-draft button,
   .sourcecado-gmail-approval-preview button {
     min-height: 44px;
   }
-
-  .sourcecado-gmail-draft > header {
-    align-items: stretch;
-    flex-direction: column;
-  }
 }
 
-.sourcecado-calendar-result {
-  max-width: 100%;
-  margin-top: 10px;
-  padding: 12px 0 2px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-}
-
-.sourcecado-calendar-result > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.sourcecado-calendar-result h3,
-.sourcecado-calendar-result p,
 .sourcecado-calendar-approval-summary p {
   margin: 0;
 }
 
-.sourcecado-calendar-result h3 {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.sourcecado-calendar-result > p,
-.sourcecado-calendar-result > ol > li > p,
-.sourcecado-calendar-empty > p,
-.sourcecado-calendar-fallback > p {
-  margin-top: 4px;
-  color: var(--muted);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.sourcecado-calendar-result > ol {
-  display: grid;
-  gap: 0;
-  margin: 9px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-calendar-result > ol > li {
-  min-width: 0;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-  background: transparent;
-}
-
-.sourcecado-calendar-result button,
 .sourcecado-calendar-approval-summary button {
   min-height: 32px;
   padding: 0 9px;
@@ -2661,46 +2898,6 @@
   cursor: pointer;
 }
 
-.sourcecado-calendar-result .sourcecado-calendar-event-title {
-  max-width: 100%;
-  padding: 0;
-  overflow-wrap: anywhere;
-  border: 0;
-  background: transparent;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-}
-
-.sourcecado-calendar-write-result > header strong {
-  display: inline-flex;
-  margin-top: 4px;
-  color: var(--accent-deep);
-  font-size: 11px;
-  text-transform: uppercase;
-}
-
-.sourcecado-calendar-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.sourcecado-calendar-description {
-  margin-top: 10px;
-}
-
-.sourcecado-calendar-description > p {
-  padding: 9px 0;
-  color: var(--text);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .sourcecado-calendar-approval-summary {
   margin: 10px 0;
   padding: 10px 12px;
@@ -2708,184 +2905,9 @@
   background: var(--surface);
 }
 
-.sourcecado-calendar-failed {
-  margin: 8px 0 0;
-  color: var(--error);
-  font-weight: 600;
-}
-
-.sourcecado-calendar-loading li {
-  display: grid;
-  gap: 7px;
-}
-
-.sourcecado-calendar-loading li span {
-  display: block;
-  width: min(320px, 76%);
-  height: 11px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
-  background-size: 200% 100%;
-  animation: shell-shimmer 1.4s linear infinite;
-}
-
-.sourcecado-calendar-loading li span:last-child {
-  width: min(220px, 54%);
-}
-
 @media (max-width: 767px) {
-  .sourcecado-calendar-result button,
   .sourcecado-calendar-approval-summary button {
     min-height: 44px;
-  }
-
-  .sourcecado-calendar-result > header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-}
-
-.sourcecado-evidence-set {
-  max-width: 100%;
-  margin-top: 10px;
-  padding: 12px 0 2px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-}
-
-.sourcecado-evidence-set > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.sourcecado-evidence-set h3,
-.sourcecado-evidence-set p {
-  margin: 0;
-}
-
-.sourcecado-evidence-set h3 {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.sourcecado-evidence-set > p,
-.sourcecado-evidence-set > ol > li > p,
-.sourcecado-evidence-empty > p,
-.sourcecado-evidence-fallback > p,
-.sourcecado-evidence-unavailable > p {
-  margin-top: 4px;
-  color: var(--muted);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.sourcecado-evidence-set > ol {
-  display: grid;
-  gap: 0;
-  margin: 9px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-evidence-set > ol > li {
-  min-width: 0;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-  background: transparent;
-}
-
-.sourcecado-evidence-set button {
-  min-height: 32px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--accent-deep);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.sourcecado-evidence-set .sourcecado-evidence-title {
-  max-width: 100%;
-  padding: 0;
-  overflow-wrap: anywhere;
-  border: 0;
-  background: transparent;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-}
-
-.sourcecado-evidence-excerpt {
-  margin-top: 7px;
-}
-
-.sourcecado-evidence-excerpt > p {
-  padding: 8px 0;
-  color: var(--text);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.sourcecado-evidence-badge {
-  display: inline-flex;
-  min-height: 24px;
-  align-items: center;
-  margin: 7px 5px 0 0;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.sourcecado-evidence-partial {
-  margin-top: 10px;
-  padding: 9px 11px;
-  border-left: 2px solid var(--warn);
-  background: var(--warn-bg);
-  color: var(--warn);
-}
-
-.sourcecado-evidence-partial p {
-  margin-top: 3px;
-  color: var(--muted);
-}
-
-.sourcecado-evidence-loading li {
-  display: grid;
-  gap: 7px;
-}
-
-.sourcecado-evidence-loading li span {
-  display: block;
-  width: min(340px, 78%);
-  height: 11px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
-  background-size: 200% 100%;
-  animation: shell-shimmer 1.4s linear infinite;
-}
-
-.sourcecado-evidence-loading li span:last-child {
-  width: min(240px, 58%);
-}
-
-@media (max-width: 767px) {
-  .sourcecado-evidence-set button {
-    min-height: 44px;
-  }
-
-  .sourcecado-evidence-set > header {
-    align-items: stretch;
-    flex-direction: column;
   }
 }
 
@@ -3267,10 +3289,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sourcecado-transcript-skeleton span,
-  .sourcecado-apollo-skeleton span,
-  .sourcecado-gmail-creating li span,
-  .sourcecado-calendar-loading li span,
-  .sourcecado-evidence-loading li span {
+  .sourcecado-card-skeleton li span {
     animation: none;
   }
 }
