@@ -268,9 +268,10 @@ describe("Calendar event result", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Inspect Checked calendar" }),
     );
-    expect(
-      screen.getByRole("complementary", { name: "Inspector" }),
-    ).toHaveTextContent("PRIVATE_LEGACY_CALENDAR_PAYLOAD");
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(inspector).not.toHaveTextContent("PRIVATE_LEGACY_CALENDAR_PAYLOAD");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
+    expect(inspector).toHaveTextContent("PRIVATE_LEGACY_CALENDAR_PAYLOAD");
   });
 
   it("keeps Calendar list failures contextual without exposing provider payloads", () => {

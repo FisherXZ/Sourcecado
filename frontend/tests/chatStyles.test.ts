@@ -349,9 +349,12 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
-  it("uses a 360px desktop inspector, tablet overlay, and narrow full-screen sheet", () => {
+  it("docks a resizable inspector, overlays it on a narrow desktop, and fills a narrow window", () => {
     expect(styles).toMatch(
-      /\.sourcecado-chat-workspace:has\(\.sourcecado-inspector\)\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 360px;/,
+      /\.sourcecado-chat-workspace:has\(\.sourcecado-inspector\)\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-inspector\s*\{[^}]*width:\s*var\(--inspector-width, 400px\);/,
     );
     expect(styles).toMatch(
       /@media \(max-width: 1179px\)[\s\S]*?\.sourcecado-inspector\s*\{[^}]*position:\s*fixed;/,
