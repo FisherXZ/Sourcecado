@@ -206,6 +206,12 @@ export function PersonFileView({ personId }: { personId: string }) {
     try {
       await setPersonSequence(personId, state);
       setFile(await getPerson(personId));
+      // Tell any open view listening for this signal (Contacts, and this page
+      // itself) to refetch, so its status and filter counts reflect the change
+      // without a reload. Only fires after a successful write; a failure falls
+      // through to catch and leaves the previous state in place. Mirrors the
+      // board-changed event ChatPage already dispatches for the same purpose.
+      window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
     } catch {
       setMoveFailed(true);
     } finally {
