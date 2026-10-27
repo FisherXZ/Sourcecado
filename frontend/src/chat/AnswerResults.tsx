@@ -4,6 +4,7 @@ import { failureOf, isWaitingForApproval, stepState } from "./processState";
 import { cardAnchorId } from "./resultCards";
 import { SourceChips } from "./SourceCitation";
 import { domainRendererFor, isEvidenceToolName, toolPresentation } from "./toolRegistry";
+import { citedWebSources, samePage } from "./webSearch";
 import { EvidenceSetResult } from "../generative/EvidenceSetResult";
 import { CardBoundary, rawToolTarget, UnsupportedCard } from "../generative/ResultCard";
 
@@ -35,11 +36,14 @@ export function AnswerResults({
   tools,
   sources = [],
   messageState,
+  answerText = "",
 }: {
   readonly tools: readonly ToolCallMessagePart[];
   readonly sources?: readonly SourceMessagePart[];
   /** The turn's state. It tells a running call from one that never finished. */
   readonly messageState?: unknown;
+  /** The answer text. A web result the answer links becomes a source chip. */
+  readonly answerText?: string;
 }) {
   const shown = tools.filter((tool) => !hasNothingToShow(tool, messageState));
   const evidenceTools = shown.filter((tool) => isEvidenceToolName(tool.toolName));
@@ -49,7 +53,18 @@ export function AnswerResults({
       domainRendererFor(tool.toolName) !== null &&
       !isWaitingForApproval(tool),
   );
-  if (domainTools.length === 0 && evidenceTools.length === 0 && sources.length === 0) {
+  // Web results the answer links are cited sources. The rest stay in the search row.
+  const chips = [
+    ...sources,
+    ...citedWebSources(tools, messageState, answerText).filter(
+      (web) =>
+        !sources.some(
+          (source) =>
+            source.sourceType === "url" && web.sourceType === "url" && samePage(source.url, web.url),
+        ),
+    ),
+  ];
+  if (domainTools.length === 0 && evidenceTools.length === 0 && chips.length === 0) {
     return null;
   }
   return (
@@ -107,7 +122,7 @@ export function AnswerResults({
           <EvidenceSetResult tools={evidenceTools} />
         </CardBoundary>
       ) : null}
-      <SourceChips sources={sources} />
+      <SourceChips sources={chips} />
     </div>
   );
 }

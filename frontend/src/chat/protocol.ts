@@ -102,6 +102,43 @@ export type ProvenanceArtifact = {
   readonly truncated: boolean;
 };
 
+/**
+ * The backend's allowlist record of one piece of external evidence a tool
+ * returned (`Envelope.reference`): where it came from and how well the record
+ * supports it. It has no field for the text of the evidence. `content` is the
+ * backend's own evidence vocabulary (present, partial, absent, missing,
+ * expired, ambiguous, unsupported).
+ */
+export type EvidenceReference = {
+  readonly id: string;
+  readonly provider: string;
+  readonly title: string;
+  readonly url: string | null;
+  readonly sensitivity: string;
+  readonly content: string;
+  readonly truncated: boolean;
+};
+
+/** Copies the known fields one at a time. A row with no id is dropped. */
+export function evidenceReferences(value: unknown): EvidenceReference[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw): EvidenceReference[] => {
+    if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id) return [];
+    return [
+      {
+        id: raw.id,
+        provider: typeof raw.provider === "string" ? raw.provider : "",
+        title: typeof raw.title === "string" ? raw.title : "",
+        url: typeof raw.url === "string" && raw.url ? raw.url : null,
+        sensitivity:
+          typeof raw.sensitivity === "string" ? raw.sensitivity : "standard",
+        content: typeof raw.content === "string" ? raw.content : "present",
+        truncated: raw.truncated === true,
+      },
+    ];
+  });
+}
+
 export type ProtocolChatEvent = ChatEventEnvelope &
   (
     | { readonly type: "turn_start"; readonly state: "running" }
@@ -170,6 +207,7 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly failure?: ToolFailure;
         readonly sources?: readonly ProvenanceSource[];
         readonly artifacts?: readonly ProvenanceArtifact[];
+        readonly evidence?: readonly EvidenceReference[];
       }
     | {
         readonly type: "tool_recovery";
