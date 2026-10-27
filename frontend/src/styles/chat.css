@@ -3202,6 +3202,153 @@
   }
 }
 
+/* Web search (#252): one "Searched the web" row that opens to its queries. A
+   query opens to the results the backend kept for it. All text is 13px or
+   larger in body ink. Only the icons are quiet. */
+.sourcecado-search-detail {
+  max-height: min(320px, 40vh);
+  padding: 0 12px 8px 38px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sourcecado-activity-body .sourcecado-search-detail {
+  max-height: none;
+  overflow: visible;
+}
+
+.sourcecado-search-queries,
+.sourcecado-search-results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-search-query-line,
+.sourcecado-search-result {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+button.sourcecado-search-query-line,
+.sourcecado-search-result {
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button.sourcecado-search-query-line:hover,
+.sourcecado-search-result:hover {
+  background: var(--raised);
+}
+
+button.sourcecado-search-query-line:focus-visible,
+.sourcecado-search-result:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sourcecado-search-query-text,
+.sourcecado-search-result-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-search-query-text {
+  font-weight: 500;
+}
+
+button.sourcecado-search-query-line[aria-expanded="true"] .sourcecado-action-icon-chevron {
+  transform: rotate(90deg);
+}
+
+.sourcecado-search-body {
+  margin: 0 0 4px 7px;
+  padding: 0 0 4px 16px;
+  border-left: 1px solid var(--border);
+}
+
+.sourcecado-search-body > p {
+  margin: 0;
+  padding: 6px 0;
+}
+
+.sourcecado-search-result-meta {
+  display: inline-flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.sourcecado-search-result-domain {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-search-flag {
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--warn-bg);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-search-detail {
+    padding-left: 12px;
+  }
+
+  .sourcecado-search-query-line,
+  .sourcecado-search-result {
+    min-height: 44px;
+  }
+
+  /* A long query or title wraps to two lines instead of being cut at one. */
+  .sourcecado-search-query-text,
+  .sourcecado-search-result-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+
+  /* The domain and the states drop under the title, so the title keeps its width. */
+  .sourcecado-search-result {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    align-content: center;
+    gap: 0 10px;
+    padding: 4px 0;
+  }
+
+  .sourcecado-search-result .sourcecado-tool-icon {
+    grid-row: 1 / span 2;
+    align-self: start;
+    margin-top: 2px;
+  }
+
+  .sourcecado-search-result-meta {
+    flex-wrap: wrap;
+    grid-column: 2;
+  }
+}
+
 /* End of the process layer (#226) */
 
 .sourcecado-gmail-approval-preview p {

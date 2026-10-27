@@ -14,6 +14,8 @@ import {
   stepsSegment,
 } from "./processState";
 import { StepRow, StepStatus } from "./StepRow";
+import { stepItems } from "./webSearch";
+import { WebSearchRow } from "./WebSearchRow";
 
 /**
  * A row that joins the process layer ahead of the tool steps. The thinking
@@ -99,7 +101,8 @@ export function ActivityGroup({
     if (next) sync(next);
   }, [selected, tools, messageState]);
 
-  const rowCount = tools.length + (lead ? 1 : 0);
+  const items = stepItems(tools, states);
+  const rowCount = items.length + (lead ? 1 : 0);
   if (rowCount === 0) return null;
   const now = Date.now();
   const rows = (
@@ -107,16 +110,25 @@ export function ActivityGroup({
       {lead ? (
         <li className="sourcecado-step sourcecado-step-lead">{lead.node}</li>
       ) : null}
-      {tools.map((tool, index) => (
-        <StepRow
-          key={tool.toolCallId}
-          tool={tool}
-          state={states[index]!}
-          now={now}
-          turnFailed={messageState === "failed"}
-          inspect={() => toolInspectorTarget(tools, states, tool.toolCallId)}
-        />
-      ))}
+      {items.map((item) =>
+        item.kind === "search" ? (
+          <WebSearchRow
+            key={`search-${tools[item.indexes[0]!]!.toolCallId}`}
+            tools={item.indexes.map((index) => tools[index]!)}
+            states={item.indexes.map((index) => states[index]!)}
+            now={now}
+          />
+        ) : (
+          <StepRow
+            key={tools[item.index]!.toolCallId}
+            tool={tools[item.index]!}
+            state={states[item.index]!}
+            now={now}
+            turnFailed={messageState === "failed"}
+            inspect={() => toolInspectorTarget(tools, states, tools[item.index]!.toolCallId)}
+          />
+        ),
+      )}
     </ol>
   );
   // The receipt also speaks for the turn: a working mark between steps, and
