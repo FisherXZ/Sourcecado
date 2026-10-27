@@ -141,16 +141,33 @@ describe("Warm Operator thread styles", () => {
     expect(styles).not.toContain("sourcecado-composer-running");
   });
 
-  it("keeps the empty-thread suggestion understated above the composer", () => {
+  it("lays the empty thread out as a greeting, the composer and prompt chips", () => {
     expect(styles).toMatch(
       /\.sourcecado-composer-zone\s*\{[^}]*width:\s*min\(720px, calc\(100% - 40px\)\);/,
     );
+    // The composer zone takes the transcript's row, so nothing moves when the chips load.
     expect(styles).toMatch(
-      /\.sourcecado-suggestion\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/,
+      /\.sourcecado-thread\.is-empty \.sourcecado-transcript,\s*\.sourcecado-thread\.is-empty \.sourcecado-composer-zone\s*\{[^}]*grid-area:\s*2 \/ 1;/,
     );
     expect(styles).toMatch(
-      /\.sourcecado-empty-thread h2\s*\{[^}]*font-size:\s*28px;[^}]*font-weight:\s*500;/,
+      /\.sourcecado-thread\.is-empty \.sourcecado-composer-zone\s*\{[^}]*align-self:\s*start;/,
     );
+    expect(styles).toMatch(
+      /\.sourcecado-empty-greeting\s*\{[^}]*font-size:\s*40px;[^}]*font-weight:\s*500;/,
+    );
+    // A chip is a bordered 44px button in full ink, never muted.
+    expect(styles).toMatch(
+      /\.sourcecado-suggestion\s*\{[^}]*min-height:\s*44px;[^}]*border:\s*1px solid var\(--border\);[^}]*color:\s*var\(--text\);[^}]*font-size:\s*14px;/,
+    );
+  });
+
+  it("shows the owl on wide windows only and never loads it on narrow ones", () => {
+    expect(styles).toMatch(/\.sourcecado-empty-owl\s*\{\s*display:\s*none;\s*\}/);
+    expect(styles).toMatch(
+      /@media \(min-width: 768px\)\s*\{\s*\.sourcecado-empty-owl\s*\{[^}]*display:\s*block;[^}]*url\("\/brand\/mascot\/owl-mapping\.jpg"\)/,
+    );
+    // The image URL appears once, inside that media query.
+    expect(styles.match(/owl-mapping\.jpg/g)).toHaveLength(1);
   });
 
   it("keeps the new composer actions usable on narrow and reduced-motion layouts", () => {
@@ -158,7 +175,10 @@ describe("Warm Operator thread styles", () => {
       /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-composer-zone\s*\{[^}]*width:\s*calc\(100% - 32px\);/,
     );
     expect(styles).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-suggestion\s*\{[^}]*min-height:\s*44px;/,
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-empty-greeting\s*\{[^}]*font-size:\s*28px;/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-suggestions\s*\{[^}]*flex-direction:\s*column;/,
     );
     expect(styles).toMatch(
       /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.sourcecado-suggestion[\s\S]*?\.sourcecado-composer-action,[\s\S]*?\.sourcecado-composer-action-visual\s*\{[^}]*transition:\s*none;/,

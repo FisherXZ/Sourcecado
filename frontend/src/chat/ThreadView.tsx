@@ -1,8 +1,9 @@
-import { ThreadPrimitive, useAui } from "@assistant-ui/react";
+import { ThreadPrimitive, useAui, useAuiState } from "@assistant-ui/react";
 
 import { AssistantMessage } from "./AssistantMessage";
 import { Composer } from "./Composer";
 import { ComposerDraftProvider } from "./ComposerDraftContext";
+import { EmptyGreeting, EmptyPrompts } from "./EmptyThread";
 import { Queue } from "./Queue";
 import { ThreadHeader, type RunStatus } from "./ThreadHeader";
 import { UserMessage } from "./UserMessage";
@@ -31,37 +32,6 @@ type ThreadViewProps = {
   readonly onQueueRemove: (itemId: string) => void;
 };
 
-const SUGGESTED_ACTION = "Review the active contacts that need follow-up this week";
-
-function SuggestedAction({
-  label,
-  prompt,
-  onDraftChange,
-}: {
-  readonly label: string;
-  readonly prompt: string;
-  readonly onDraftChange: (draft: string) => void;
-}) {
-  const aui = useAui();
-  return (
-    <button
-      type="button"
-      className="sourcecado-suggestion"
-      onClick={() => {
-        aui.composer.setText(prompt);
-        onDraftChange(prompt);
-      }}
-    >
-      <span className="sourcecado-suggestion-icon" aria-hidden="true">
-        <svg viewBox="0 0 20 20" focusable="false">
-          <path d="M4 14.5c1.8-3.5 4.2-5.7 7.4-6.8M9.8 4.5l3.8 2.7-2.7 3.8" />
-        </svg>
-      </span>
-      <span>{label}</span>
-    </button>
-  );
-}
-
 export function ThreadView({
   title,
   activePerson,
@@ -83,6 +53,10 @@ export function ThreadView({
   onQueueRemove,
 }: ThreadViewProps) {
   const aui = useAui();
+  // The empty thread is a greeting above the composer and prompt chips under
+  // it, so it lives in the composer zone rather than in the transcript.
+  const showEmptyState =
+    useAuiState((state) => state.thread.isEmpty) && !loading && !loadError;
   const populateComposer = (draft: string) => {
     aui.composer.setText(draft);
     onDraftChange(draft);
@@ -98,7 +72,9 @@ export function ThreadView({
   return (
     <ComposerDraftProvider populate={populateComposer} send={sendMessage}>
     <div className="sourcecado-chat-workspace">
-    <ThreadPrimitive.Root className="sourcecado-thread">
+    <ThreadPrimitive.Root
+      className={showEmptyState ? "sourcecado-thread is-empty" : "sourcecado-thread"}
+    >
       <ThreadHeader
         title={title}
         activePerson={activePerson}
@@ -133,12 +109,6 @@ export function ThreadView({
           </div>
         ) : (
           <>
-            <ThreadPrimitive.Empty>
-              <section className="sourcecado-empty-thread">
-                <h2>What are you sourcing today?</h2>
-                <p>Name a target, review an active sequence, or prepare outreach.</p>
-              </section>
-            </ThreadPrimitive.Empty>
             <ThreadPrimitive.Messages
               components={{
                 UserMessage,
@@ -166,21 +136,14 @@ export function ThreadView({
         onRemove={onQueueRemove}
       />
       <div className="sourcecado-composer-zone">
+        {showEmptyState ? <EmptyGreeting /> : null}
         {usage ? <UsageLine source={usage} /> : null}
-        {!loading && !loadError ? (
-          <ThreadPrimitive.Empty>
-            <SuggestedAction
-              label={SUGGESTED_ACTION}
-              prompt={`${SUGGESTED_ACTION}.`}
-              onDraftChange={onDraftChange}
-            />
-          </ThreadPrimitive.Empty>
-        ) : null}
         <Composer
           initialDraft={initialDraft}
           onDraftChange={onDraftChange}
           boundPerson={activePerson ?? null}
         />
+        {showEmptyState ? <EmptyPrompts onPick={populateComposer} /> : null}
       </div>
     </ThreadPrimitive.Root>
     <Inspector />

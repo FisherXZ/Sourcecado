@@ -675,7 +675,7 @@ describe("ChatPage Warm Operator thread", () => {
     );
   });
 
-  it("moves from a transcript skeleton to one suggestion above the composer", async () => {
+  it("moves from a transcript skeleton to a greeting above the composer", async () => {
     const conversation = deferred<{
       id: string;
       title: string | null;
@@ -691,6 +691,7 @@ describe("ChatPage Warm Operator thread", () => {
       "true",
     );
     expect(screen.getByLabelText("Loading conversation")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^Good (morning|afternoon|evening)$/ })).toBeNull();
 
     await act(async () => {
       conversation.resolve({
@@ -701,42 +702,17 @@ describe("ChatPage Warm Operator thread", () => {
       });
     });
 
-    const suggestion = await screen.findByRole("button", {
-      name: "Review the active contacts that need follow-up this week",
+    const greeting = await screen.findByRole("heading", {
+      name: /^Good (morning|afternoon|evening)$/,
     });
     const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
     expect(
-      suggestion.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING,
+      greeting.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: /follow-up this week/ })).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Build a candidate shortlist" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Find why-now signals" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Prepare outreach for review" })).toBeNull();
-  });
-
-  it("fills only the active thread draft from the suggestion without sending", async () => {
-    api.getSession.mockResolvedValue({
-      id: "thread-alpha",
-      title: null,
-      messages: [],
-      events: [],
-    });
-
-    render(<ChatPage sessionId="thread-alpha" />);
-
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Review the active contacts that need follow-up this week",
-      }),
-    );
-    expect(screen.getByRole("textbox", { name: "Message Sourcecado" })).toHaveValue(
-      "Review the active contacts that need follow-up this week.",
-    );
-    expect(chatSend).not.toHaveBeenCalled();
-    expect(window.localStorage.getItem("sourcecado.chat.draft.v1:thread-alpha")).toBe(
-      "Review the active contacts that need follow-up this week.",
-    );
-    expect(window.localStorage.getItem("sourcecado.chat.draft.v1:thread-beta")).toBeNull();
+    // The old fixed suggestion is gone. These tests give the page no board,
+    // skills or connector problems, so no chip shows. See emptyThread.test.tsx.
+    expect(screen.queryByRole("group", { name: "Suggested prompts" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /follow-up this week/ })).toBeNull();
   });
 
   it("keeps the draft through a contextual load failure and retry", async () => {

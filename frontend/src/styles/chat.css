@@ -915,7 +915,6 @@
   cursor: pointer;
 }
 
-.sourcecado-empty-thread,
 .sourcecado-load-error {
   width: min(620px, 100%);
   margin: auto;
@@ -928,19 +927,6 @@
   background: var(--surface);
 }
 
-.sourcecado-empty-thread {
-  text-align: center;
-}
-
-.sourcecado-empty-thread h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: 28px;
-  font-weight: 500;
-  letter-spacing: -0.025em;
-}
-
-.sourcecado-empty-thread > p,
 .sourcecado-load-error p {
   margin: 7px 0 0;
   color: var(--muted);
@@ -1005,30 +991,93 @@
   padding: 0 0 22px;
 }
 
+/* Empty thread: a greeting above the composer and prompt chips under it, as a
+   stack near the top of the thread. The transcript is empty, so the composer
+   zone takes its row and the chips hang below. Nothing moves when they load. */
+.sourcecado-thread.is-empty .sourcecado-transcript,
+.sourcecado-thread.is-empty .sourcecado-composer-zone {
+  grid-area: 2 / 1;
+}
+
+.sourcecado-thread.is-empty .sourcecado-transcript {
+  padding: 0;
+}
+
+.sourcecado-thread.is-empty .sourcecado-composer-zone {
+  align-self: start;
+  padding-top: clamp(24px, 14vh, 140px);
+}
+
+.sourcecado-empty-greeting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin: 0 0 28px;
+  color: var(--text);
+  font-size: 40px;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  text-align: center;
+}
+
+/* The owl is decoration. It loads only on wide windows: the image is declared
+   inside the media query, so a narrow window never fetches it. */
+.sourcecado-empty-owl {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .sourcecado-empty-owl {
+    display: block;
+    width: 64px;
+    height: 64px;
+    flex: 0 0 64px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--raised) url("/brand/mascot/owl-mapping.jpg") -40px -22px / 132px 132px no-repeat;
+  }
+}
+
+.sourcecado-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* Four chips fit in one row only when the row is wider than the composer. */
+@media (min-width: 1280px) {
+  .sourcecado-suggestions {
+    margin-inline: -100px;
+  }
+}
+
 .sourcecado-suggestion {
   display: flex;
-  width: fit-content;
+  min-width: 0;
   max-width: 100%;
-  min-height: 38px;
+  min-height: 44px;
   align-items: center;
   gap: 10px;
-  margin: 0 0 9px 10px;
-  padding: 0 11px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
+  padding: 0 14px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   text-align: left;
   cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease;
+  transition: background-color 140ms ease, border-color 140ms ease;
 }
 
 .sourcecado-suggestion:hover,
 .sourcecado-suggestion:focus-visible {
+  border-color: var(--accent);
   background: var(--raised);
-  color: var(--text);
 }
 
 .sourcecado-suggestion:focus-visible {
@@ -1036,11 +1085,18 @@
   outline-offset: 2px;
 }
 
+.sourcecado-suggestion-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sourcecado-suggestion-icon {
   display: grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
   border-radius: 6px;
   background: var(--accent-tint);
@@ -1048,8 +1104,8 @@
 }
 
 .sourcecado-suggestion-icon svg {
-  width: 15px;
-  height: 15px;
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentcolor;
   stroke-linecap: round;
@@ -1505,10 +1561,14 @@
     padding-bottom: 12px;
   }
 
-  .sourcecado-suggestion {
-    min-height: 44px;
-    margin-left: 0;
-    padding-block: 3px;
+  .sourcecado-empty-greeting {
+    margin-bottom: 20px;
+    font-size: 28px;
+  }
+
+  .sourcecado-suggestions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .sourcecado-composer textarea {
