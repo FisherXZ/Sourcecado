@@ -75,6 +75,26 @@ def write_default_mcp_json(path: Path) -> None:
     path.chmod(0o600)
 
 
+def _http_status(exc: BaseException) -> int | None:
+    """The HTTP status buried in an exception, its group, or its causes."""
+    seen: set[int] = set()
+    stack: list[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        response = getattr(current, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status
+        stack.extend(getattr(current, "exceptions", None) or ())
+        for linked in (current.__cause__, current.__context__):
+            if linked is not None:
+                stack.append(linked)
+    return None
+
+
 class FakeMcp:
     """In-process MCP stand-in. Tools are named mcp__<server>__<tool>."""
 
@@ -153,24 +173,79 @@ class LiveMcp:
             return {"error": "Granola is not connected."}
         return self._call_live(name, arguments or {})
 
-    def _call_live(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _attempt(
+        self, name: str, arguments: dict[str, Any], timeout: float
+    ) -> tuple[str, dict[str, Any] | None, BaseException | None]:
+        """One MCP call on its own thread: ("ok"|"error"|"timeout", result, error)."""
         import asyncio
         import threading
 
-        result: dict[str, Any] = {}
+        box: dict[str, Any] = {}
 
         def worker() -> None:
             try:
-                result.update(asyncio.run(self._async_call(name, arguments)))
-            except Exception as exc:
-                result["error"] = str(exc)
+                box["result"] = asyncio.run(self._async_call(name, arguments))
+            except Exception as exc:  # including an ExceptionGroup from the MCP task group
+                box["error"] = exc
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
-        thread.join(timeout=30)
+        thread.join(timeout=timeout)
         if thread.is_alive():
+            return "timeout", None, None
+        if "error" in box:
+            return "error", None, box["error"]
+        return "ok", box.get("result"), None
+
+    def _attempt_renewing(
+        self, name: str, arguments: dict[str, Any], timeout: float
+    ) -> tuple[str, dict[str, Any] | None, BaseException | None]:
+        """Call once; if Granola refuses the token, renew once and call once more."""
+        from coworker.connectors.token_renewal import RenewalError
+
+        used = str(self._tokens().get("access_token") or "")
+        outcome, result, error = self._attempt(name, arguments, timeout)
+        if outcome != "error" or _http_status(error) != 401 or self.oauth is None:
+            return outcome, result, error
+        try:
+            self.oauth.renew("granola", rejected=used)
+        except RenewalError as renewal:
+            return "error", None, renewal
+        return self._attempt(name, arguments, timeout)
+
+    def _call_live(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        outcome, result, error = self._attempt_renewing(name, arguments, 30)
+        if outcome == "timeout":
             return {"error": "Granola timed out"}
+        if outcome == "error":
+            return {"error": str(error)}
         return result or {"error": "Granola is not connected."}
+
+    def probe(self, timeout: float = 8.0):
+        """List meetings once and classify the outcome without keeping error text."""
+        from coworker.connector_probe import ProbeResult
+        from coworker.connectors.token_renewal import CredentialRejected, RenewalUnavailable
+
+        if not (self._tokens().get("access_token") or self._tokens().get("refresh_token")):
+            return ProbeResult("unreachable", "Granola is not connected.")
+        outcome, result, error = self._attempt_renewing(
+            "mcp__granola__list_meetings", {}, timeout
+        )
+        if outcome == "timeout":
+            return ProbeResult("unreachable", "Granola did not respond in time.")
+        if outcome == "ok":
+            # A missing SDK comes back as an error payload, not an exception.
+            if isinstance(result, dict) and not result.get("error"):
+                return ProbeResult("ok", "This connection is ready to use.")
+            return ProbeResult("unreachable", "Sourcecado could not reach Granola.")
+        if isinstance(error, CredentialRejected) or _http_status(error) in (401, 403):
+            return ProbeResult(
+                "rejected",
+                "Granola no longer accepts the saved sign-in. Reconnect to restore access.",
+            )
+        if isinstance(error, RenewalUnavailable):
+            return ProbeResult("unreachable", str(error))
+        return ProbeResult("unreachable", "Sourcecado could not reach Granola.")
 
     async def _async_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         tool = name.rsplit("__", 1)[-1]

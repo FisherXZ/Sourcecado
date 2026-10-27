@@ -5,6 +5,7 @@ import { SettingsPage } from "../src/routes/SettingsPage";
 import { connector } from "./connectorFixtures";
 
 const api = vi.hoisted(() => ({
+  checkConnectors: vi.fn(),
   createWorkspaceGrant: vi.fn(),
   exportDiagnosticBundle: vi.fn(),
   previewDiagnosticBundle: vi.fn(),
@@ -18,6 +19,7 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/api", () => ({
+  checkConnectors: api.checkConnectors,
   createWorkspaceGrant: api.createWorkspaceGrant,
   exportDiagnosticBundle: api.exportDiagnosticBundle,
   previewDiagnosticBundle: api.previewDiagnosticBundle,
@@ -33,6 +35,9 @@ vi.mock("../src/api", () => ({
 describe("SettingsPage", () => {
   beforeEach(() => {
     api.createWorkspaceGrant.mockReset();
+    api.checkConnectors.mockReset();
+    // An unresolved live check leaves the saved-credential view in place.
+    api.checkConnectors.mockReturnValue(new Promise(() => {}));
     api.getConnectors.mockReset();
     api.getSettings.mockReset();
     api.pickDirectory.mockReset();

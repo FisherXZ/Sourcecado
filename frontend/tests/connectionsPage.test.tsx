@@ -5,6 +5,7 @@ import { ConnectionsPage } from "../src/routes/ConnectionsPage";
 import { connector } from "./connectorFixtures";
 
 const api = vi.hoisted(() => ({
+  checkConnectors: vi.fn(),
   connectConnector: vi.fn(),
   disconnectConnector: vi.fn(),
   getConnectors: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock("../src/api", async () => {
   const actual = await vi.importActual<typeof import("../src/api")>("../src/api");
   return {
     ...actual,
+    checkConnectors: api.checkConnectors,
     connectConnector: api.connectConnector,
     disconnectConnector: api.disconnectConnector,
     getConnectors: api.getConnectors,
@@ -55,6 +57,9 @@ const granolaAvailable = connector({
 
 describe("ConnectionsPage", () => {
   beforeEach(() => {
+    api.checkConnectors.mockReset();
+    // An unresolved live check leaves the saved-credential view in place.
+    api.checkConnectors.mockReturnValue(new Promise(() => {}));
     api.connectConnector.mockReset();
     api.disconnectConnector.mockReset();
     api.getConnectors.mockReset();
