@@ -189,7 +189,7 @@ describe("Warm Operator thread styles", () => {
   it("keeps process layer text at 13px or larger and out of muted ink", () => {
     const block = styles.slice(
       styles.indexOf("/* Process layer (#226)"),
-      styles.indexOf(".sourcecado-apollo-result {"),
+      styles.indexOf("/* End of the process layer (#226) */"),
     );
     expect(block.length).toBeGreaterThan(0);
     const sizes = [...block.matchAll(/font-size:\s*(\d+)px/g)].map((m) => Number(m[1]));

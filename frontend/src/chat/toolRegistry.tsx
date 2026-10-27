@@ -4,6 +4,7 @@ import { ApolloPeopleResult } from "../generative/ApolloPeopleResult";
 import { CalendarEventResult } from "../generative/CalendarEventResult";
 import { GmailDraftResult } from "../generative/GmailDraftResult";
 import { LivingBriefResult } from "../generative/LivingBriefResult";
+import type { ToolFailure } from "./protocol";
 
 export type DomainRendererSlot =
   | "apollo"
@@ -18,6 +19,10 @@ export type DomainRendererProps = {
   readonly args?: unknown;
   readonly result: unknown;
   readonly status: "loading" | "success" | "error";
+  /** The recorded failure when status is "error". A permission failure is a restricted card. */
+  readonly failure?: ToolFailure | null;
+  /** The DOM id of the card, so a step row can scroll to it. */
+  readonly cardId?: string;
 };
 
 export type DomainRendererRegistry = Partial<
@@ -436,6 +441,27 @@ const DOMAIN_RENDERERS: DomainRendererRegistry = {
   gmail: GmailDraftResult,
   brief: LivingBriefResult,
 };
+
+/**
+ * Tools whose result renders as a card in the answer area. A tool can have a
+ * renderer slot and still draw nothing (Gmail search, Gmail send), so the
+ * list is explicit. The step row uses it to show a "Show result" button only
+ * when there is a card to show.
+ */
+const CARD_TOOLS: ReadonlySet<string> = new Set([
+  "apollo_search_people",
+  "apollo_enrich_contact",
+  "gmail_draft",
+  "gmail_create_draft",
+  "calendar_list",
+  "calendar_create",
+  "calendar_update",
+  "board_get",
+]);
+
+export function toolHasResultCard(toolName: string): boolean {
+  return CARD_TOOLS.has(toolName) || isEvidenceToolName(toolName);
+}
 
 export function domainRendererFor(
   toolName: string,

@@ -512,9 +512,9 @@ describe("Apollo people result", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
-    expect(
-      screen.getByRole("heading", { name: "Apollo result needs review" }),
-    ).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Apollo people search" });
+    expect(card).toHaveAttribute("data-state", "unsupported");
+    expect(within(card).getByText("Unsupported")).toBeInTheDocument();
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_APOLLO_PAYLOAD");
 
     fireEvent.click(
@@ -555,13 +555,23 @@ describe("Apollo people result", () => {
     fireEvent.click(firstPage, { detail: 0 });
     expect(within(candidates).getAllByRole("listitem")).toHaveLength(10);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Show 2 more candidates" }),
-    );
+    const lastPage = screen.getByRole("button", { name: "Show 2 more candidates" });
+    expect(lastPage).toHaveFocus();
+    expect(lastPage).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(lastPage, { detail: 0 });
     expect(within(candidates).getAllByRole("listitem")).toHaveLength(12);
     expect(
       screen.queryByRole("button", { name: /more candidates/ }),
     ).not.toBeInTheDocument();
+    // The same button stays under the operator's focus and now offers to close the list.
+    const fewer = screen.getByRole("button", { name: "Show fewer candidates" });
+    expect(fewer).toHaveFocus();
+    expect(fewer).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(fewer, { detail: 0 });
+    expect(within(candidates).getAllByRole("listitem")).toHaveLength(5);
+    const reopen = screen.getByRole("button", { name: "Show 5 more candidates" });
+    expect(reopen).toHaveFocus();
+    expect(reopen).toHaveAttribute("aria-expanded", "false");
   });
 
   it("opens stable candidate source and credit details in the provenance Inspector", () => {
@@ -582,7 +592,7 @@ describe("Apollo people result", () => {
     );
     expect(within(inspector).getByText("Apollo")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Inspect Apollo source" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open in inspector: Apollo people search" }));
     expect(within(inspector).getByRole("heading", { level: 2 })).toHaveTextContent(
       "Apollo people search",
     );
@@ -614,7 +624,12 @@ describe("Apollo people result", () => {
     expect(
       screen.getByText("Apollo credit used for this approved enrichment."),
     ).toBeInTheDocument();
-    expect(screen.getByText("Missing phone", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Apollo enriched contact" })).toHaveAttribute(
+      "data-state",
+      "partial",
+    );
+    expect(screen.getByText("Apollo did not return: phone.")).toBeInTheDocument();
+    expect(screen.getByText("Not returned by Apollo")).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -657,8 +672,9 @@ describe("Apollo people result", () => {
           name: "Inspect enriched contact Ada (surname hidden by Apollo)",
         }),
       ).toBeInTheDocument();
+      expect(screen.getByText("Surname hidden by Apollo")).toBeInTheDocument();
       expect(
-        screen.getByText("Missing verified full name", { exact: false }),
+        screen.getByText(/Apollo did not return: verified full name/),
       ).toBeInTheDocument();
       expect(container).not.toHaveTextContent(maskedName);
 
@@ -706,9 +722,10 @@ describe("Apollo people result", () => {
     expect(screen.getByText("Surname hidden by Apollo")).toBeInTheDocument();
     expect(screen.getByText("CEO · Apollo.io")).toBeInTheDocument();
     expect(screen.getByText("Email available after enrichment")).toBeInTheDocument();
-    expect(
-      screen.getByText("Missing title and full name", { exact: false }),
-    ).toBeInTheDocument();
+    // Gaps show as gaps. Nothing is invented for a missing title or surname.
+    expect(screen.getByText("No title")).toBeInTheDocument();
+    expect(screen.getByText("No surname")).toBeInTheDocument();
+    expect(screen.getByText("Email availability unknown")).toBeInTheDocument();
     expect(container).not.toHaveTextContent("person-tim");
   });
 });

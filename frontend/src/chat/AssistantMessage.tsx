@@ -2,6 +2,7 @@ import {
   MessagePrimitive,
   useAuiState,
   type TextMessagePartProps,
+  type SourceMessagePart,
   type ToolCallMessagePartProps,
   type ToolCallMessagePart,
 } from "@assistant-ui/react";
@@ -12,7 +13,6 @@ import { ApprovalCard } from "./ApprovalCard";
 import { RunBudgetView } from "./RunBudget";
 import { CompactIcon } from "./UsageLine";
 import { useLastApprovalDelivery } from "./approvalDelivery";
-import { SourceCitation } from "./SourceCitation";
 import { AnswerResults } from "./AnswerResults";
 import { useInspector } from "./Inspector";
 import { answerHasStarted, isLiveMessage } from "./processState";
@@ -117,6 +117,9 @@ export function AssistantMessage() {
   const tools = message.content.filter(
     (part): part is ToolCallMessagePart => part.type === "tool-call",
   );
+  const sources = message.content.filter(
+    (part): part is SourceMessagePart => part.type === "source",
+  );
   const answerStarted = answerHasStarted(message.content);
   const reasoning = reasoningParts(message.content);
   const thinking =
@@ -168,11 +171,10 @@ export function AssistantMessage() {
       <MessagePrimitive.Parts
         components={{
           Text: AssistantText,
-          Source: SourceCitation,
           tools: { Fallback: SafeToolFallback },
         }}
       />
-      <AnswerResults tools={tools} />
+      <AnswerResults tools={tools} sources={sources} messageState={sourcecadoState} />
       <RunBudgetView status={runBudget} messageState={sourcecadoState} />
       {artifacts.length > 0 ? <ArtifactControls artifacts={artifacts} /> : null}
       {sourcecadoState === "cancelled" ? (

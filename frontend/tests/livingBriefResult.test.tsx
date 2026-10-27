@@ -67,7 +67,8 @@ describe("living brief result", () => {
       true,
     );
 
-    const result = screen.getByRole("region", { name: "Partial living brief" });
+    const result = screen.getByRole("region", { name: "Living brief" });
+    expect(result).toHaveAttribute("data-state", "partial");
     expect(result).toHaveTextContent("Board is unavailable");
     expect(result).toHaveTextContent(
       "Evidence already gathered remains available in this conversation.",
@@ -85,10 +86,10 @@ describe("living brief result", () => {
       },
     });
 
-    const result = screen.getByRole("region", { name: "Legacy person-file receipt" });
-    expect(result).toHaveTextContent("Person file read completed");
+    const result = screen.getByRole("region", { name: "Person file read" });
+    expect(result).toHaveAttribute("data-state", "unsupported");
     expect(result).toHaveTextContent(
-      "This earlier receipt predates the complete living-brief view.",
+      "This earlier receipt has no living brief to show.",
     );
     expect(result).not.toHaveTextContent("Board is unavailable");
   });
@@ -120,8 +121,38 @@ describe("living brief result", () => {
       brief: { who: "Alyssa Lee" },
     });
 
-    const result = screen.getByRole("region", { name: "Legacy person-file receipt" });
-    expect(result).toHaveTextContent("Person file read completed");
+    const result = screen.getByRole("region", { name: "Person file read" });
+    expect(result).toHaveAttribute("data-state", "unsupported");
     expect(result).not.toHaveTextContent("Board is unavailable");
+  });
+
+  it("marks a brief restricted when sources were withheld, and stale when the handoff is old", () => {
+    const withheld = livingBrief({ restricted_source_count: 2 });
+    const { unmount } = renderBoardResult({
+      status: "complete",
+      partial: false,
+      person_id: "person one",
+      brief: withheld,
+    });
+    const restricted = screen.getByRole("region", { name: "Living brief for Alyssa Lee" });
+    expect(restricted).toHaveAttribute("data-state", "restricted");
+    expect(restricted).toHaveTextContent("2 restricted sources are not shown.");
+    unmount();
+
+    renderBoardResult({
+      status: "complete",
+      partial: false,
+      person_id: "person one",
+      brief: livingBrief({
+        handoff: {
+          ...livingBrief().handoff,
+          stale: true,
+          stale_fields: ["happened"],
+        },
+      }),
+    });
+    const stale = screen.getByRole("region", { name: "Living brief for Alyssa Lee" });
+    expect(stale).toHaveAttribute("data-state", "stale");
+    expect(stale).toHaveTextContent("Successor handoff is out of date: What happened.");
   });
 });
