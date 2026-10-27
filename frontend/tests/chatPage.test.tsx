@@ -760,7 +760,10 @@ describe("ChatPage Warm Operator thread", () => {
     expect(composer).toHaveValue("Preserve this next instruction");
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop run" })).toBeEnabled();
-    expect(screen.getByText("You can keep drafting while Sourcecado works.")).toBeInTheDocument();
+    expect(
+      screen.queryByText("You can keep drafting while Sourcecado works."),
+    ).not.toBeInTheDocument();
+    expect(composer).toHaveAttribute("placeholder", "Queue another message");
 
     act(() => {
       onChatEvent?.({
@@ -810,12 +813,10 @@ describe("ChatPage Warm Operator thread", () => {
     const composerRoot = idleAction.closest(".sourcecado-composer");
     expect(idleAction).toHaveClass("sourcecado-composer-action");
     expect(composerRoot?.querySelectorAll(".sourcecado-composer-action")).toHaveLength(1);
-    const runningNote = screen.getByText(
-      "You can keep drafting while Sourcecado works.",
-    );
-    expect(runningNote).toHaveAttribute("aria-hidden", "true");
-    expect(runningNote.closest(".sourcecado-composer")).toBeNull();
-    expect(runningNote.parentElement).toHaveClass("sourcecado-composer-zone");
+    expect(
+      screen.queryByText("You can keep drafting while Sourcecado works."),
+    ).not.toBeInTheDocument();
+    expect(composer).not.toHaveAttribute("placeholder", "Queue another message");
     expect(
       idleAction.querySelector(".sourcecado-composer-action-visual"),
     ).toBeInTheDocument();
@@ -837,7 +838,7 @@ describe("ChatPage Warm Operator thread", () => {
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
     expect(stop).toHaveClass("sourcecado-composer-action");
     expect(composerRoot?.querySelectorAll(".sourcecado-composer-action")).toHaveLength(1);
-    expect(runningNote).toHaveAttribute("aria-hidden", "false");
+    expect(composer).toHaveAttribute("placeholder", "Queue another message");
     expect(
       stop.querySelector(".sourcecado-composer-action-visual .sourcecado-stop-icon"),
     ).toBeInTheDocument();

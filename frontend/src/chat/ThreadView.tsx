@@ -172,7 +172,11 @@ export function ThreadView({
             />
           </ThreadPrimitive.Empty>
         ) : null}
-        <Composer initialDraft={initialDraft} onDraftChange={onDraftChange} />
+        <Composer
+          initialDraft={initialDraft}
+          onDraftChange={onDraftChange}
+          boundPerson={activePerson ?? null}
+        />
       </div>
     </ThreadPrimitive.Root>
     <Inspector />
