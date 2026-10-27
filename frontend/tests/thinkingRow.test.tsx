@@ -156,7 +156,8 @@ describe("Thinking row", () => {
       return found!;
     });
     expect(toggle).toHaveTextContent("Thinking…");
-    expect(toggle).toHaveTextContent("0s");
+    // A live count under one second reads "<1s", never "0s" (the #260 rule).
+    expect(toggle).toHaveTextContent("<1s");
     expect(toggle).toHaveTextContent("Model reasoning");
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(
@@ -226,6 +227,7 @@ describe("Thinking row", () => {
     const { container, emit } = await openLive();
     emit({ type: "turn_start", event_id: "k-1", state: "running" });
     emit({ type: "reasoning_delta", event_id: "k-2", step: 1, at: at(0), delta: THOUGHT });
+    emit({ type: "reasoning_delta", event_id: "k-2b", step: 1, at: at(5), delta: "\nGo." });
     // The operator closes the row while the model is still thinking.
     fireEvent.click(thinkingToggle(container)!);
     expect(thinkingToggle(container)).toHaveAttribute("aria-expanded", "false");
@@ -239,6 +241,11 @@ describe("Thinking row", () => {
     });
 
     await screen.findByText("Searching Drive");
+    // While the step runs the receipt carries both segments: the thinking
+    // time first, then the working form of the step count.
+    expect(container.querySelector(".sourcecado-activity-receipt")).toHaveTextContent(
+      /^Thought for 5s · Using 1 source/,
+    );
     expect(thinkingToggle(container)).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(thinkingToggle(container)!);
     expect(thinkingToggle(container)).toHaveAttribute("aria-expanded", "true");
@@ -252,9 +259,13 @@ describe("Thinking row", () => {
       finished_at: at(3),
     });
     // The answer closes the receipt. Opening it again shows the row as the
-    // operator left it.
-    emit({ type: "assistant_delta", event_id: "k-5", delta: "Found it." });
-    await screen.findByText("Found it.");
+    // operator left it. A one-line lead-in would not close it (#260 rule), so
+    // the answer is a full paragraph.
+    const answer =
+      "Found one Q3 plan in Drive. It covers hiring, the budget and the sourcing targets for the quarter, " +
+      "and it names the owner of each target.";
+    emit({ type: "assistant_delta", event_id: "k-5", delta: answer });
+    await screen.findByText(answer);
     expect(thinkingToggle(container)).toBeNull();
     fireEvent.click(container.querySelector(".sourcecado-activity-receipt")!);
     expect(thinkingToggle(container)).toHaveAttribute("aria-expanded", "true");

@@ -261,6 +261,60 @@ describe("reload in the middle of a reasoning stream", () => {
   });
 });
 
+describe("reasoning beside the text segments of a multi-step turn", () => {
+  const turn = () => [
+    event({ type: "turn_start", state: "running" }),
+    event({ type: "reasoning_delta", step: 1, at: at(0), delta: "Plan." }),
+    event({ type: "assistant_delta", delta: "I will look in Drive." }),
+    event({ type: "tool_started", id: "call-1", name: "drive_search", arguments: {} }),
+    event({
+      type: "tool_finished",
+      id: "call-1",
+      name: "drive_search",
+      ok: true,
+      result: { files: [] },
+    }),
+    event({ type: "reasoning_delta", step: 2, at: at(4), delta: "Read it." }),
+    event({ type: "assistant_delta", delta: "Here is the answer." }),
+  ];
+
+  it("keeps each block and each text segment in order", () => {
+    const store = newStore();
+    store.replayChatEvents(turn());
+
+    expect(parts(store).map((part) => [part.type, part.id])).toEqual([
+      ["reasoning", "part-1:reasoning:1"],
+      ["text", "part-1"],
+      ["tool", "call-1"],
+      ["reasoning", "part-1:reasoning:2"],
+      ["text", "part-1~1"],
+    ]);
+  });
+
+  it("settles the second block when the answer segment starts", () => {
+    const store = newStore();
+    for (const item of turn()) store.applyChatEvent(item);
+
+    const states = parts(store).flatMap((part) =>
+      part.type === "reasoning" ? [part.state] : [],
+    );
+    expect(states).toEqual(["complete", "complete"]);
+  });
+
+  it("runs the second block again when a reload lands inside it", () => {
+    const events = turn().slice(0, 6);
+    const store = newStore();
+    store.replayChatEvents(events);
+
+    store.applyChatEvent(events[0]);
+
+    const states = parts(store).flatMap((part) =>
+      part.type === "reasoning" ? [part.id.slice(-1), part.state] : [],
+    );
+    expect(states).toEqual(["1", "complete", "2", "running"]);
+  });
+});
+
 describe("a failed provider attempt", () => {
   it("settles the running block so the count stops, and the retry opens a new one", () => {
     const store = newStore();
