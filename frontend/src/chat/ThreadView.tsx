@@ -9,6 +9,7 @@ import { ThreadHeader, type RunStatus } from "./ThreadHeader";
 import { UserMessage } from "./UserMessage";
 import type { ActivePerson, QueueItem } from "../api";
 import { Inspector } from "./Inspector";
+import { JumpToLatest, ScrollOnOwnSend } from "./JumpToLatest";
 import { UsageLine, type UsageSource } from "./UsageLine";
 
 type ThreadViewProps = {
@@ -72,6 +73,7 @@ export function ThreadView({
   return (
     <ComposerDraftProvider populate={populateComposer} send={sendMessage}>
     <div className="sourcecado-chat-workspace">
+    <ThreadPrimitive.ViewportProvider>
     <ThreadPrimitive.Root
       className={showEmptyState ? "sourcecado-thread is-empty" : "sourcecado-thread"}
     >
@@ -92,6 +94,9 @@ export function ThreadView({
         // below, so the transcript itself must be explicitly non-live.
         aria-live="off"
         tabIndex={0}
+        // A queued message that starts while the operator reads must not pull
+        // the thread down. ScrollOnOwnSend scrolls for the operator's own send.
+        scrollToBottomOnRunStart={false}
       >
         {loading ? (
           <div className="sourcecado-transcript-skeleton" aria-label="Loading conversation">
@@ -126,6 +131,8 @@ export function ThreadView({
       >
         {announcement}
       </p>
+      <ScrollOnOwnSend />
+      <JumpToLatest />
       <Queue
         items={queueItems}
         paused={queuePaused}
@@ -146,6 +153,7 @@ export function ThreadView({
         {showEmptyState ? <EmptyPrompts onPick={populateComposer} /> : null}
       </div>
     </ThreadPrimitive.Root>
+    </ThreadPrimitive.ViewportProvider>
     <Inspector />
     </div>
     </ComposerDraftProvider>
