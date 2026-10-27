@@ -6,7 +6,7 @@ import {
 } from "@assistant-ui/react";
 
 import { ActionIcon, StatusIcon } from "./ProcessIcons";
-import { failureOf, stepState } from "./processState";
+import { turnRetryBlock } from "./retrySafety";
 
 const PROVIDER_NAMES: Readonly<Record<string, string>> = {
   deepseek: "DeepSeek",
@@ -37,34 +37,6 @@ function textOf(content: ThreadMessage["content"]): string {
   return content
     .map((part) => (part.type === "text" ? part.text : ""))
     .join("\n");
-}
-
-/**
- * Why Retry is off for a failed turn, or null when it may run.
- *
- * Retry sends the operator's message again as a new turn, so the model starts
- * over and may call the same tools. Reading data is safe to repeat. A step
- * that carried an approval (a send, a paid call, a write), a step with no
- * recorded result, and a failed step the backend does not call retry-safe may
- * already have acted. The operator decides those on purpose, with a new
- * message, not with one click here.
- */
-export function failedTurnRetryBlock(
-  tools: readonly ToolCallMessagePart[],
-  messageState: unknown,
-): string | null {
-  if (tools.some((part) => part.approval !== undefined)) {
-    return "This turn used an approval. Retry could repeat the action.";
-  }
-  const open = tools.some((part) => {
-    const state = stepState(part, messageState);
-    return state === "running" || state === "waiting" || state === "unknown" || state === "interrupted";
-  });
-  if (open) return "A step has no recorded result. Check it before you retry.";
-  if (tools.some((part) => failureOf(part)?.retry_safe === false)) {
-    return "A failed step is not safe to repeat.";
-  }
-  return null;
 }
 
 /**
@@ -106,7 +78,7 @@ export function TurnNoticeHead({
         earlier?.role === "assistant" &&
         earlier.metadata.custom?.sourcecadoNotice !== true
       ) {
-        return failedTurnRetryBlock(
+        return turnRetryBlock(
           earlier.content.filter(
             (part): part is ToolCallMessagePart => part.type === "tool-call",
           ),

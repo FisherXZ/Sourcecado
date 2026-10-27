@@ -46,11 +46,12 @@ export function useRecoveryActions(): RecoveryContextValue {
  */
 export type RecoveryChoices = {
   /**
-   * Run the step again. `asksApproval` is true when the tool is not
-   * retry-safe: the backend then parks a fresh approval instead of running
-   * it, so a send or a paid call is never replayed silently.
+   * Run the step again. Offered only for a step the backend calls
+   * retry-safe: a tool that reads. A send, a paid call, a write or a command
+   * is never offered here. The operator asks for it again in a new message,
+   * and the new request asks for its own approval.
    */
-  readonly retry: { readonly asksApproval: boolean } | null;
+  readonly retry: boolean;
   /** Where the connection can be repaired, when the backend names a place. */
   readonly repairRoute: string | null;
   /** Skip this source and keep the work that already finished. */
@@ -64,6 +65,8 @@ export function recoveryChoices(
   state: StepState,
   failure: ToolFailure | null,
   recovery: Record<string, unknown> | null,
+  /** The turn ended in a provider failure. Its notice carries the one Retry. */
+  turnFailed = false,
 ): RecoveryChoices | null {
   if ((state !== "failed" && state !== "blocked") || failure === null) return null;
   const status = recovery?.status ? String(recovery.status) : null;
@@ -71,15 +74,12 @@ export function recoveryChoices(
   return {
     // A refusal by policy ("Not allowed") is not a fault to retry. A rejected
     // request would fail the same way again, and its summary already says the
-    // request details need correcting first. A fresh approval is already
-    // waiting when the status is approval_required, so a second click would
-    // park a second one.
+    // request details need correcting first.
     retry:
       state === "failed" &&
+      failure.retry_safe === true &&
       failure.class !== "validation" &&
-      status !== "approval_required"
-        ? { asksApproval: !failure.retry_safe }
-        : null,
+      !turnFailed,
     repairRoute: failure.repair_route,
     continueWithout: true,
   };

@@ -101,6 +101,7 @@ export function ActivityGroup({
           tool={tool}
           state={states[index]!}
           now={now}
+          turnFailed={messageState === "failed"}
         />
       ))}
     </ol>

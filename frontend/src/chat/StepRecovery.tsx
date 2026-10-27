@@ -164,9 +164,7 @@ export function StepRecovery({
     else if (event.key === "End") move(items.length - 1);
   }
 
-  const retryName = choices.retry?.asksApproval
-    ? `Retry ${label}. Asks for approval first.`
-    : `Retry ${label}`;
+  const retryName = `Retry ${label}`;
 
   return (
     <div className="sourcecado-step-recover">
@@ -221,11 +219,7 @@ export function StepRecovery({
                   <MenuRow
                     icon={<ActionIcon name="retry" />}
                     title="Retry"
-                    detail={
-                      choices.retry.asksApproval
-                        ? "Asks for approval first"
-                        : "Run this step again"
-                    }
+                    detail="Run this step again"
                   />
                 </MenuButton>
               ) : null}

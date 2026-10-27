@@ -75,15 +75,18 @@ export function StepRow({
   tool,
   state,
   now,
+  turnFailed = false,
 }: {
   readonly tool: ToolCallMessagePart;
   readonly state: StepState;
   readonly now: number;
+  /** The turn ended in a provider failure. Its notice carries the one Retry. */
+  readonly turnFailed?: boolean;
 }) {
   const presentation = toolPresentation(tool.toolName);
   const failure = failureOf(tool);
   const recovery = recoveryOf(tool);
-  const choices = recoveryChoices(state, failure, recovery);
+  const choices = recoveryChoices(state, failure, recovery, turnFailed);
   const { select } = useInspector();
   const [showFailureDetail, setShowFailureDetail] = useState(false);
   // The operator's open or close choice wins. Until they make one, a step
@@ -165,8 +168,8 @@ export function StepRow({
           {(state === "failed" || state === "blocked") && failure ? (
             <p role="alert">{failure.summary}</p>
           ) : null}
-          {choices?.retry?.asksApproval ? (
-            <p>Retry asks for approval first.</p>
+          {state === "failed" && failure && !failure.retry_safe ? (
+            <p>Retry is off. This step is not safe to repeat.</p>
           ) : null}
           {recovery?.outcome ? <p>{String(recovery.outcome)}</p> : null}
           {elapsedMs !== null && state !== "running" ? (

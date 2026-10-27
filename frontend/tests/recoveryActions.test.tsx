@@ -272,35 +272,45 @@ describe("which recovery actions appear", () => {
     expect(screen.queryByRole("menuitem", { name: /^Retry/ })).not.toBeInTheDocument();
   });
 
-  it("says that a retry of a tool that is not retry-safe asks for approval first", () => {
+  it("offers no Retry for a step that is not retry-safe, such as a send, and says why", () => {
     renderStep(
-      failedStep(failure({ class: "unknown", retry_safe: false, idempotent: false, source: "Gmail", summary: "Gmail failed. Review the details before choosing what to do next." }), undefined, {
-        toolName: "gmail_send",
-      }),
-    );
-
-    expect(
-      screen.getByRole("button", { name: /^Retry Sending Gmail draft\. Asks for approval first\./ }),
-    ).toBeInTheDocument();
-    // The step opens itself, and the same fact is on the page as text.
-    expect(screen.getByText("Retry asks for approval first.")).toBeInTheDocument();
-    fireEvent.click(overflow());
-    expect(screen.getByRole("menuitem", { name: /^Retry/ })).toHaveTextContent("Asks for approval first");
-  });
-
-  it("does not offer a second Retry while a retry approval is waiting", () => {
-    renderStep(
-      failedStep(failure({ retry_safe: false }), {
-        commandId: "cmd-1",
-        status: "approval_required",
-        outcome: "Unsafe retry requires a fresh approval.",
-      }),
+      failedStep(
+        failure({
+          class: "unknown",
+          retry_safe: false,
+          idempotent: false,
+          source: "Gmail",
+          summary: "Gmail failed. Review the details before choosing what to do next.",
+        }),
+        undefined,
+        { toolName: "gmail_send" },
+      ),
     );
 
     expect(retryButton()).toBeNull();
-    expect(screen.getByText("Unsafe retry requires a fresh approval.")).toBeInTheDocument();
+    // The step opens itself, and the reason is on the page as text.
+    expect(screen.getByText("Retry is off. This step is not safe to repeat.")).toBeInTheDocument();
     fireEvent.click(overflow());
     expect(screen.queryByRole("menuitem", { name: /^Retry/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Continue without this source/ })).toBeInTheDocument();
+  });
+
+  it("offers no Retry when the failure carries no retry-safe flag, for any tool", () => {
+    for (const toolName of ["apollo_enrich_contact", "gmail_draft", "board_upsert", "shell_exec", "mcp__granola__create_note"]) {
+      const { unmount } = renderStep(
+        failedStep({ ...failure(), retry_safe: undefined as unknown as boolean }, undefined, { toolName } as never),
+      );
+      expect(retryButton(), toolName).toBeNull();
+      unmount();
+    }
+  });
+
+  it("offers no Retry on a step of a turn that ended in a provider failure", () => {
+    // The failed-turn notice carries that turn's one Retry.
+    renderStep(failedStep(failure()), vi.fn(), "failed");
+
+    expect(retryButton()).toBeNull();
+    expect(screen.getByRole("button", { name: /^More recovery options/ })).toBeInTheDocument();
   });
 
   it("offers nothing once the backend has settled the step", () => {

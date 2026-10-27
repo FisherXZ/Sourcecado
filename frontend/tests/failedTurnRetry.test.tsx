@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { convertStructuredMessage } from "../src/chat/messageAdapter";
 import { SourcecadoChatStore } from "../src/chat/store";
-import { failedTurnRetryBlock, providerLine } from "../src/chat/TurnNotice";
+import { READ_ONLY_TOOLS, turnRetryBlock } from "../src/chat/retrySafety";
+import { providerLine } from "../src/chat/TurnNotice";
 import { ChatPage } from "../src/routes/ChatPage";
 
 const api = vi.hoisted(() => ({
@@ -208,6 +210,25 @@ describe("failed turn notice", () => {
     expect(chatSend).not.toHaveBeenCalled();
   });
 
+  it("allows Retry after steps that only read, and turns it off after a step that writes", async () => {
+    const step = (id: string, name: string, eventId: string) => [
+      { type: "tool_started", event_id: `${eventId}-s`, id, name, arguments: {} },
+      { type: "tool_finished", event_id: `${eventId}-f`, id, name, ok: true, result: { ok: true } },
+    ];
+    const reading = await openLive();
+    for (const event of step("call-read", "board_query", "read")) reading.emit(event);
+    reading.emit(failedEvent);
+    expect(await screen.findByRole("button", { name: "Retry this turn" })).not.toHaveAttribute("aria-disabled");
+    reading.unmount();
+
+    const writing = await openLive();
+    for (const event of step("call-keep", "people_keep", "keep")) writing.emit(event);
+    writing.emit(failedEvent);
+    expect(await screen.findByRole("button", { name: /^Retry unavailable/ })).toHaveAccessibleName(
+      "Retry unavailable. This turn ran a step that can change data. Retry could repeat it.",
+    );
+  });
+
   it("turns Retry off when no operator message came before the failure", async () => {
     const { emit } = await openLive([]);
     emit(failedEvent);
@@ -308,18 +329,18 @@ describe("failed turn rules", () => {
     }) as never;
 
   it("allows Retry after steps that only read", () => {
-    expect(failedTurnRetryBlock([tool()], "failed")).toBeNull();
-    expect(failedTurnRetryBlock([], "failed")).toBeNull();
+    expect(turnRetryBlock([tool()], "failed")).toBeNull();
+    expect(turnRetryBlock([], "failed")).toBeNull();
   });
 
   it("blocks Retry when a step carried an approval", () => {
-    expect(failedTurnRetryBlock([tool({ approval: { id: "a", approved: true } })], "failed")).toBe(
+    expect(turnRetryBlock([tool({ approval: { id: "a", approved: true } })], "failed")).toBe(
       "This turn used an approval. Retry could repeat the action.",
     );
   });
 
   it("blocks Retry when a step has no recorded result", () => {
-    expect(failedTurnRetryBlock([tool({ result: undefined })], "failed")).toBe(
+    expect(turnRetryBlock([tool({ result: undefined })], "failed")).toBe(
       "A step has no recorded result. Check it before you retry.",
     );
   });
@@ -330,7 +351,44 @@ describe("failed turn rules", () => {
       isError: true,
       providerMetadata: { sourcecado: { failure: { class: "unknown", retry_safe: false } } },
     });
-    expect(failedTurnRetryBlock([step], "failed")).toBe("A failed step is not safe to repeat.");
+    expect(turnRetryBlock([step], "failed")).toBe(
+      "This turn ran a step that can change data. Retry could repeat it.",
+    );
+  });
+
+  it("blocks Retry when any step is a send, a paid enrichment, a write, a command or an unknown tool", () => {
+    for (const toolName of [
+      "gmail_send",
+      "gmail_draft",
+      "apollo_enrich_contact",
+      "people_keep",
+      "board_upsert",
+      "board_delete",
+      "calendar_create",
+      "shell_exec",
+      "fs_trash",
+      "remember",
+      "mcp__granola__create_note",
+      "a_tool_nobody_has_heard_of",
+    ]) {
+      expect(turnRetryBlock([tool(), tool({ toolName })], "failed"), toolName).toBe(
+        "This turn ran a step that can change data. Retry could repeat it.",
+      );
+    }
+  });
+
+  it("allows Retry only when every step is a known read-only tool", () => {
+    for (const toolName of READ_ONLY_TOOLS) {
+      expect(turnRetryBlock([tool({ toolName })], "failed"), toolName).toBeNull();
+    }
+  });
+
+  it("keeps the read-only list equal to RETRY_SAFE in the backend", () => {
+    const source = readFileSync("../backend/coworker/permissions.py", "utf8");
+    const list = source.match(/RETRY_SAFE = frozenset\(\s*\{([^}]*)\}/)?.[1] ?? "";
+    const backend = [...list.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]).sort();
+    expect(backend.length).toBeGreaterThan(5);
+    expect([...READ_ONLY_TOOLS].sort()).toEqual(backend);
   });
 
   it("names providers in words", () => {
