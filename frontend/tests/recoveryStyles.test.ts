@@ -6,7 +6,9 @@ import { styles } from "./cssBundle";
 // failed-turn notice and the reconnect chip. These checks read the stylesheet
 // text, so they guard the declarations, not the rendered boxes.
 const start = styles.indexOf("Failed step and failed turn recovery (#236)");
-const block = styles.slice(start, styles.indexOf("@media (max-width: 767px) {\n  .sourcecado-approval-card > button,", start));
+// The block ends with its last narrow-screen rule.
+const endAt = styles.indexOf(".sourcecado-step-failed .sourcecado-step-status", start);
+const block = styles.slice(start, styles.indexOf("}", endAt) + 1);
 
 describe("recovery styles", () => {
   it("finds its own block", () => {
