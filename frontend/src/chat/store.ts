@@ -411,6 +411,26 @@ export class SourcecadoChatStore {
     ]);
   }
 
+  /**
+   * Marks every turn still running on a thread as interrupted. For a run the
+   * backend lost: its process ended, so no terminal event will ever arrive.
+   */
+  interruptRunning(threadId: string): void {
+    for (const message of this.messagesFor(threadId)) {
+      if (
+        message.role === "assistant" &&
+        (message.state === "running" || message.state === "stopping")
+      ) {
+        this.apply({
+          type: "message_state_changed",
+          threadId,
+          messageId: message.id,
+          state: "interrupted",
+        });
+      }
+    }
+  }
+
   replayChatEvents(events: readonly unknown[]): void {
     const touched = new Map<string, Set<string>>();
     for (const value of events) {

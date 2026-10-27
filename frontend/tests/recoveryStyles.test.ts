@@ -16,11 +16,14 @@ describe("recovery styles", () => {
     expect(block).toContain(".sourcecado-connection");
   });
 
-  it("keeps every size at 13px or more and uses no muted ink", () => {
+  it("keeps every size at 13px or more and uses muted ink only on a button that is off", () => {
     const sizes = [...block.matchAll(/font-size:\s*(\d+(?:\.\d+)?)px/g)].map((m) => Number(m[1]));
     expect(sizes.length).toBeGreaterThan(0);
     expect(Math.min(...sizes)).toBeGreaterThanOrEqual(13);
-    expect(block).not.toMatch(/var\(--muted\)/);
+    // Muted ink is allowed on a control that is off, which is not information.
+    for (const [, selector] of block.matchAll(/([^{}]+)\{[^}]*\bcolor:\s*var\(--muted\)[^}]*\}/g)) {
+      expect(selector).toMatch(/aria-disabled/);
+    }
   });
 
   it("gives the icon buttons a 44px touch target on narrow screens", () => {
@@ -56,5 +59,49 @@ describe("recovery styles", () => {
     expect(styles).toMatch(
       /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-step-failed \.sourcecado-step-toggle\s*\{[^}]*flex-wrap:\s*wrap;/,
     );
+  });
+
+  it("shows an off Retry as off: muted ink on a raised ground with a dashed edge, not a faded icon", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-message-action\[aria-disabled="true"\],\s*\.sourcecado-message-action\[aria-disabled="true"\]:hover\s*\{[^}]*border:\s*1px dashed var\(--muted\);[^}]*background:\s*var\(--raised\);[^}]*color:\s*var\(--muted\);/,
+    );
+    expect(styles).not.toMatch(/\[aria-disabled="true"\] \.sourcecado-icon\s*\{[^}]*opacity/);
+    expect(styles).toMatch(
+      /\.sourcecado-notice-head \.sourcecado-step-icon-button\[aria-disabled="true"\],[^{]*\{[^}]*border:\s*1px dashed var\(--muted\);[^}]*color:\s*var\(--muted\);/,
+    );
+  });
+
+  it("keeps that muted ink at 4.5:1 or better on the raised ground, in both themes", () => {
+    const luminance = (hex: string) => {
+      const channels = [1, 3, 5].map((at) => {
+        const value = parseInt(hex.slice(at, at + 2), 16) / 255;
+        return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+    };
+    const ratio = (a: string, b: string) => {
+      const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (light! + 0.05) / (dark! + 0.05);
+    };
+    const light = styles.match(/:root\s*\{([^}]*)\}/)?.[1] ?? "";
+    const dark = styles.match(/:root\[data-theme="dark"\]\s*\{([^}]*)\}/)?.[1] ?? "";
+    const token = (block: string, name: string) =>
+      block.match(new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`))?.[1] ?? "";
+    expect(ratio(token(light, "muted"), token(light, "raised"))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(token(dark, "muted"), token(dark, "raised"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("shows the reason line in 13px body ink, with the bar on hover and always on touch", () => {
+    const line = styles.match(/\.sourcecado-retry-reason\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(line).toMatch(/font-size:\s*13px;/);
+    expect(line).toMatch(/color:\s*var\(--text\);/);
+    expect(styles).toMatch(
+      /\.sourcecado-assistant-message:is\(:hover, :focus-within\)\s*\.sourcecado-message-actions\s*\+ \.sourcecado-retry-reason\s*\{[^}]*opacity:\s*1;/,
+    );
+    // The touch rule comes after the hidden default, so it wins.
+    const hidden = styles.indexOf(".sourcecado-message-actions + .sourcecado-retry-reason {\n  opacity: 0;");
+    const touch = styles.indexOf("@media (hover: none), (max-width: 767px) {\n  .sourcecado-message-actions + .sourcecado-retry-reason");
+    expect(hidden).toBeGreaterThan(0);
+    expect(touch).toBeGreaterThan(hidden);
   });
 });

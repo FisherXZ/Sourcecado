@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { usePopulateComposer } from "./ComposerDraftContext";
 import { CheckIcon, EditIcon, Icon, RetryIcon } from "./icons";
+import { RetryReason } from "./RetryReason";
 import { turnRetryBlock } from "./retrySafety";
 
 const COPIED_MS = 1800;
@@ -127,32 +128,18 @@ function CopyAction({ text }: { readonly text: string }) {
   );
 }
 
-function RetryAction({
-  tools,
-  messageState,
-}: {
-  readonly tools: readonly ToolCallMessagePart[];
-  readonly messageState: unknown;
-}) {
+/**
+ * Sends a message again as a new turn. It is shared by the Retry under an
+ * answer and the Retry on a failed-turn notice, so both send the same way:
+ * the saved composer draft stays, and focus goes to the composer.
+ */
+export function useResend(): (prompt: string) => void {
   const aui = useAui();
-  // The operator message this answer replied to. Sent as it was written,
-  // including any attached-context lines, so the new turn sees the same input.
-  const prompt = useAuiState((state) => {
-    for (let at = state.message.index - 1; at >= 0; at -= 1) {
-      const earlier = state.thread.messages[at];
-      if (earlier?.role === "user") return textOf(earlier.content);
-    }
-    return "";
-  });
-  const reason =
-    prompt.trim() === ""
-      ? "There is no earlier message to send again."
-      : turnRetryBlock(tools, messageState);
   const sent = useRef(false);
   const guard = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(guard.current), []);
 
-  const resend = () => {
+  return (prompt: string) => {
     // A second activation before the button leaves would queue a second turn.
     if (sent.current) return;
     sent.current = true;
@@ -171,9 +158,31 @@ function RetryAction({
     // instead of falling to the page.
     focusComposer();
   };
+}
 
+/** The operator message that the message at this index replied to, as it was written. */
+export function useRepliedPrompt(): string {
+  // Sent as it was written, including any attached-context lines, so the new
+  // turn sees the same input.
+  return useAuiState((state) => {
+    for (let at = state.message.index - 1; at >= 0; at -= 1) {
+      const earlier = state.thread.messages[at];
+      if (earlier?.role === "user") return textOf(earlier.content);
+    }
+    return "";
+  });
+}
+
+function RetryAction({
+  prompt,
+  reason,
+}: {
+  readonly prompt: string;
+  readonly reason: string | null;
+}) {
+  const resend = useResend();
   return (
-    <ActionButton label="Retry" reason={reason} onClick={resend}>
+    <ActionButton label="Retry" reason={reason} onClick={() => resend(prompt)}>
       <RetryIcon />
     </ActionButton>
   );
@@ -224,17 +233,26 @@ export function AssistantActions({
   readonly messageState: unknown;
 }) {
   const isLast = useAuiState((state) => state.message.isLast);
+  const prompt = useRepliedPrompt();
+  const retryReason =
+    prompt.trim() === ""
+      ? "There is no earlier message to send again."
+      : turnRetryBlock(tools, messageState);
   return (
-    <div className="sourcecado-message-actions" role="group" aria-label="Response actions">
-      <CopyAction text={prose} />
-      {isLast ? <RetryAction tools={tools} messageState={messageState} /> : null}
-      <FeedbackActions />
-    </div>
+    <>
+      <div className="sourcecado-message-actions" role="group" aria-label="Response actions">
+        <CopyAction text={prose} />
+        {isLast ? <RetryAction prompt={prompt} reason={retryReason} /> : null}
+        <FeedbackActions />
+      </div>
+      {/* The reason shows wherever the bar shows, so a touch screen reads it too. */}
+      {isLast && retryReason ? <RetryReason reason={retryReason} /> : null}
+    </>
   );
 }
 
 /** Focus the composer. The caret goes to `at`, or to the end of what is there. */
-function focusComposer(at?: number) {
+export function focusComposer(at?: number) {
   window.requestAnimationFrame(() => {
     const input = document.querySelector<HTMLTextAreaElement>(
       ".sourcecado-composer textarea",

@@ -159,6 +159,50 @@ describe("failed turn notice", () => {
     );
   });
 
+  it("sends like the Retry under an answer: the draft stays and focus goes to the composer", async () => {
+    const { emit } = await openLive();
+    emit(failedEvent);
+    const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(composer, { target: { value: "Half a thought" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry this turn" }));
+
+    await waitFor(() => expect(chatSend).toHaveBeenCalledTimes(1));
+    expect(composer).toHaveValue("Half a thought");
+    expect(window.localStorage.getItem("sourcecado.chat.draft.v1:thread-alpha")).toBe("Half a thought");
+    await waitFor(() => expect(composer).toHaveFocus());
+  });
+
+  it("sends one turn when the notice Retry is activated twice at once", async () => {
+    const { emit } = await openLive();
+    emit(failedEvent);
+    const retry = await screen.findByRole("button", { name: "Retry this turn" });
+
+    act(() => {
+      fireEvent.click(retry);
+      fireEvent.click(retry);
+    });
+
+    await waitFor(() => expect(chatSend).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows why Retry is off in a visible line, and shows no line while it is on", async () => {
+    const on = await openLive();
+    on.emit(failedEvent);
+    await screen.findByRole("button", { name: "Retry this turn" });
+    expect(screen.queryByText(/Retry is off\./)).not.toBeInTheDocument();
+    on.unmount();
+
+    const off = await openLive([]);
+    off.emit(failedEvent);
+    const line = (await screen.findByText(/Retry is off\./)).closest("p")!;
+    expect(line).toHaveTextContent("Retry is off. There is no earlier message to send again.");
+    expect(line).toHaveClass("sourcecado-retry-reason");
+    // It sits inside the notice, beside the button that it explains.
+    expect(screen.getByRole("note")).toContainElement(line);
+    expect(screen.getByRole("button", { name: /^Retry unavailable/ })).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("says nothing about a provider when the backend names none", async () => {
     const { emit } = await openLive();
     const { failure: _failure, ...withoutProvider } = failedEvent;
@@ -541,5 +585,93 @@ describe("reconnect chip", () => {
     expect(chips()[0]).toHaveTextContent("The backend rejected the connection token.");
     const reload = screen.getByRole("button", { name: "Reload Sourcecado" });
     expect(reload.querySelector("svg")).not.toBeNull();
+  });
+
+  describe("a run the backend lost", () => {
+    const startRun = () => {
+      act(() => {
+        onChatEvent?.({ ...envelope, type: "turn_start", event_id: "run-start", state: "running" });
+        onChatEvent?.({ ...envelope, type: "assistant_delta", event_id: "run-delta", delta: "Working on it." });
+      });
+    };
+    const settle = async () => {
+      await act(async () => {
+        vi.advanceTimersByTime(1600);
+      });
+    };
+
+    async function openRunning(currentRun: Record<string, unknown> | null) {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      render(<ChatPage sessionId="thread-alpha" />);
+      await screen.findByRole("heading", { level: 1, name: "Alpha" });
+      startRun();
+      expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+      api.getCurrentRunTelemetry.mockResolvedValue({
+        version: 1,
+        session_id: "thread-alpha",
+        current_run: currentRun,
+      });
+    }
+
+    it("settles the header and the composer after a reconnect when no run is alive", async () => {
+      await openRunning(null);
+      expect(screen.getByRole("banner")).not.toHaveTextContent("Idle");
+
+      change("reconnecting", 1);
+      change("connected", 0, "Connected to the backend.");
+      await settle();
+
+      await waitFor(() => expect(screen.getByRole("banner")).toHaveTextContent("Idle"));
+      expect(screen.queryByRole("button", { name: "Stop run" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("Run interrupted. The connection was lost.");
+    });
+
+    it("leaves a live run alone when the backend says it is still running", async () => {
+      await openRunning({ run_id: "run-1", status: "running", elapsed_ms: 9000 });
+
+      change("reconnecting", 1);
+      change("connected", 0, "Connected to the backend.");
+      await settle();
+
+      expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+      expect(screen.getByRole("banner")).not.toHaveTextContent("Idle");
+    });
+
+    it("leaves a running turn alone when the socket was never down", async () => {
+      await openRunning(null);
+
+      change("connected", 0, "Connected to the backend.");
+      await settle();
+
+      expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+      expect(screen.getByRole("banner")).not.toHaveTextContent("Idle");
+    });
+
+    it("leaves the run as it was when the backend cannot answer", async () => {
+      await openRunning(null);
+      api.getCurrentRunTelemetry.mockRejectedValue(new Error("offline"));
+
+      change("reconnecting", 1);
+      change("connected", 0, "Connected to the backend.");
+      await settle();
+
+      expect(screen.getByRole("button", { name: "Stop run" })).toBeInTheDocument();
+    });
+
+    it("skips a run that a replayed terminal event already settled", async () => {
+      await openRunning(null);
+
+      change("reconnecting", 1);
+      change("connected", 0, "Connected to the backend.");
+      act(() => {
+        onChatEvent?.({ ...envelope, type: "turn_end", event_id: "run-end", state: "complete", text: "Working on it." });
+      });
+      api.getCurrentRunTelemetry.mockClear();
+      await settle();
+
+      expect(api.getCurrentRunTelemetry).not.toHaveBeenCalled();
+      expect(screen.getByRole("banner")).toHaveTextContent("Idle");
+    });
   });
 });

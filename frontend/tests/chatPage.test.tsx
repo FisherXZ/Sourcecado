@@ -2231,7 +2231,7 @@ describe("ChatPage Warm Operator thread", () => {
       ),
     ).toBeInTheDocument();
     expect(container).not.toHaveTextContent("PRIVATE_RAW_TRANSPORT_ERROR");
-    fireEvent.click(screen.getByRole("button", { name: /^Retry Searching Drive/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Retry failed step: Searching Drive/ }));
     expect(chatRecover.mock.calls[0]?.[0]).toMatchObject({
       type: "retry_failed_step",
       session_id: "thread-alpha",

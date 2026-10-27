@@ -193,7 +193,7 @@ describe("ActivityGroup step rows", () => {
     expect(container).not.toHaveTextContent("Failed");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /^Retry|More recovery options/ }),
+      screen.queryByRole("button", { name: /^Retry failed step|More recovery options/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -252,7 +252,7 @@ describe("ActivityGroup step rows", () => {
     expect(container).not.toHaveTextContent("Failed");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /^Retry|More recovery options/ }),
+      screen.queryByRole("button", { name: /^Retry failed step|More recovery options/ }),
     ).not.toBeInTheDocument();
 
     rerender(
@@ -371,7 +371,7 @@ describe("ActivityGroup step rows", () => {
       "Drive could not be reached. Retry is safe.",
     );
     expect(document.body).not.toHaveTextContent("PRIVATE_TRANSPORT_ERROR");
-    fireEvent.click(screen.getByRole("button", { name: /^Retry Searching Drive/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Retry failed step: Searching Drive/ }));
     expect(act).toHaveBeenCalledWith("retry", expect.objectContaining({ source: "Drive" }));
   });
 

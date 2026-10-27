@@ -41,6 +41,9 @@ import { InspectorProvider } from "../chat/Inspector";
 const FINAL_READ_RETRIES = 2;
 const FINAL_READ_RETRY_MS = 400;
 
+/** How long after a reconnect the page waits before it asks which runs are alive. */
+const RUN_CHECK_DELAY_MS = 1500;
+
 function appendText(message: AppendMessage): string {
   return message.content
     .filter((part) => part.type === "text")
@@ -78,6 +81,7 @@ export function ChatPage({
   const nextLegacyIndexRef = useRef(new Map<string, number>());
   const connectionStatusRef = useRef<ConnectionStatus>("connected");
   const connectionRef = useRef<ConnectionChangeEvent | null>(null);
+  const wasDownRef = useRef(false);
   const lastApprovalDeliveryRef = useRef<CommandDelivery | null>(null);
   const [activeThreadId, setActiveThreadId] = useState(initialThreadId);
   const [title, setTitle] = useState<string | null>(null);
@@ -248,6 +252,34 @@ export function ChatPage({
 
   useEffect(() => {
     if (!hasToken()) return;
+    let settleTimer: number | undefined;
+    // A run the backend lost (it restarted) never sends a terminal event, so
+    // the thread would keep showing "Thinking" and the Stop button. After the
+    // socket returns, ask the backend which runs are alive. The socket's own
+    // re-sync has had time to replay a terminal event for a run that ended
+    // while it was down. Whatever it settled is skipped here.
+    const settleLostRuns = () => {
+      for (const threadId of [...runningThreadsRef.current]) {
+        // No run id yet: the message has not started a run, so there is
+        // nothing to have lost.
+        if (!activeRunsRef.current.has(threadId)) continue;
+        void getCurrentRunTelemetry(threadId)
+          .then((payload) => {
+            if (!runningThreadsRef.current.has(threadId)) return;
+            if (payload.current_run?.status === "running") return;
+            storeRef.current.interruptRunning(threadId);
+            runningThreadsRef.current.delete(threadId);
+            activeRunsRef.current.delete(threadId);
+            if (threadId === activeThreadRef.current) {
+              setAnnouncement("Run interrupted. The connection was lost.");
+            }
+            refresh();
+          })
+          .catch(() => {
+            // Unknown stays as it was. The next reconnect asks again.
+          });
+      }
+    };
     const chat = openChat((event: SourcecadoSocketEvent) => {
       if (event.type === "queue_snapshot") {
         threadQueuesRef.current.set(event.session_id, {
@@ -270,6 +302,13 @@ export function ChatPage({
       if (applied.type === "connection_change") {
         connectionStatusRef.current = applied.status;
         connectionRef.current = applied;
+        if (applied.status !== "connected") {
+          wasDownRef.current = true;
+        } else if (wasDownRef.current) {
+          wasDownRef.current = false;
+          window.clearTimeout(settleTimer);
+          settleTimer = window.setTimeout(settleLostRuns, RUN_CHECK_DELAY_MS);
+        }
       } else if ("version" in applied) {
         const threadId = applied.session_id;
         if (applied.type === "turn_start") {
@@ -334,6 +373,7 @@ export function ChatPage({
     });
     chatRef.current = chat;
     return () => {
+      window.clearTimeout(settleTimer);
       chat.close();
       if (chatRef.current === chat) chatRef.current = null;
     };

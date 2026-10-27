@@ -66,6 +66,7 @@ export function StepRecovery({
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [sentKey, setSentKey] = useState<string | null>(null);
+  const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   // Where the button was when the menu opened. A menu is stale once it moves.
@@ -79,6 +80,21 @@ export function StepRecovery({
     const timer = window.setTimeout(() => setSentKey(null), SENT_RESET_MS);
     return () => window.clearTimeout(timer);
   }, [sending]);
+
+  // When these buttons go away (the backend settled the step) while focus is on
+  // one of them, the browser would drop focus to the page. Hand it to the row's
+  // own disclosure button, which stays. This runs before the buttons leave the page.
+  useLayoutEffect(() => {
+    const own = root.current;
+    const row = own?.previousElementSibling as HTMLElement | null;
+    return () => {
+      const active = document.activeElement;
+      if (!own || !active) return;
+      if (own.contains(active) || document.getElementById(menuId)?.contains(active)) {
+        row?.focus({ preventScroll: true });
+      }
+    };
+  }, [menuId]);
 
   function retry() {
     if (sending || !choices.retry) return;
@@ -147,7 +163,11 @@ export function StepRecovery({
       return;
     }
     if (event.key === "Tab") {
-      close(false);
+      // The menu is in a portal at the end of the page, so Tab from its last
+      // item would leave the row. Put focus back on the button first. The
+      // browser then moves on from there, to the next control after the row's
+      // buttons (or the one before them for Shift+Tab).
+      close(true);
       return;
     }
     const items = Array.from(
@@ -164,10 +184,10 @@ export function StepRecovery({
     else if (event.key === "End") move(items.length - 1);
   }
 
-  const retryName = `Retry ${label}`;
+  const retryName = `Retry failed step: ${label}`;
 
   return (
-    <div className="sourcecado-step-recover">
+    <div className="sourcecado-step-recover" ref={root}>
       {choices.retry ? (
         <button
           type="button"

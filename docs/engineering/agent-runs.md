@@ -305,6 +305,16 @@ ends `complete` has the message Retry under its answer. A turn that ends
 `partial` has a failed step, so it has the step Retry and no answer bar. A turn
 that ends `failed` has the notice Retry.
 
+A Retry that is off stays on the screen, looks off (muted ink, dashed edge), and
+has a line beside it that says why. The answer Retry and the notice Retry work
+the same way. The reason is also the button's accessible name and its tooltip.
+
+When the chat socket returns after a drop, the page waits a moment for the
+socket to replay events it missed. Then it asks the backend which runs are still
+alive. A run the backend lost (a restart) never sends a terminal event, so the
+page marks its turn interrupted. That settles the header and the composer. A run
+the backend still reports as running is left alone.
+
 ## Extension points
 
 The following are named seams, not implementations.

@@ -53,7 +53,7 @@ function renderStep(
   return { ...view, onAction };
 }
 
-const retryButton = () => screen.queryByRole("button", { name: /^Retry / });
+const retryButton = () => screen.queryByRole("button", { name: /^Retry failed step/ });
 const overflow = () =>
   screen.getByRole("button", { name: /^More recovery options for/ });
 
@@ -72,7 +72,7 @@ describe("failed step row", () => {
     expect(row.querySelector(".sourcecado-status-icon-failed")).not.toBeNull();
 
     const retry = screen.getByRole("button", {
-      name: "Retry Searching Drive for “Codeology”",
+      name: "Retry failed step: Searching Drive for “Codeology”",
     });
     // An icon button: no visible text, one icon.
     expect(retry).toHaveTextContent("");
@@ -234,6 +234,99 @@ describe("failed step overflow menu", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("puts focus back on its button when Tab leaves the menu, so Tab does not jump to the page top", () => {
+    renderStep(failedStep(failure({ class: "connector_auth", repair_route: "#/connections/drive" })));
+
+    const trigger = overflow();
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "End" });
+    expect(screen.getAllByRole("menuitem")[2]).toHaveFocus();
+
+    // The portal sits at the end of the page. Focus returns to the button
+    // before the browser moves on, so the next stop is next to the row.
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Tab" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Tab", shiftKey: true });
+    expect(trigger).toHaveFocus();
+  });
+
+  it("hands focus to the row when Continue settles the step and the buttons leave", () => {
+    const onAction = vi.fn();
+    const { rerender } = renderStep(failedStep(failure()), onAction);
+
+    const trigger = overflow();
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Continue without this source/ }));
+    expect(trigger).toHaveFocus();
+
+    // The backend answers: the source is skipped, so the buttons are gone.
+    rerender(
+      <RecoveryProvider onAction={onAction}>
+        <ActivityGroup
+          tools={[failedStep(failure(), { commandId: "cmd-1", status: "skipped", outcome: "Continued without Google Drive." })]}
+          messageState="complete"
+        />
+      </RecoveryProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: /More recovery options/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Searching Drive/ })).toHaveFocus();
+  });
+
+  it("hands focus to the row when a successful retry removes the Retry button", () => {
+    const onAction = vi.fn();
+    const { rerender } = renderStep(failedStep(failure()), onAction);
+
+    retryButton()!.focus();
+    fireEvent.click(retryButton()!);
+
+    rerender(
+      <RecoveryProvider onAction={onAction}>
+        <ActivityGroup
+          tools={[
+            {
+              type: "tool-call",
+              toolCallId: "call-1",
+              toolName: "drive_search",
+              args: { query: "Codeology" },
+              argsText: "{}",
+              result: { files: [] },
+            },
+          ]}
+          messageState="complete"
+        />
+      </RecoveryProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Searched Drive/ })).toHaveFocus();
+  });
+
+  it("does not take focus when the buttons leave while focus is somewhere else", () => {
+    const onAction = vi.fn();
+    const { rerender } = renderStep(failedStep(failure()), onAction);
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    rerender(
+      <RecoveryProvider onAction={onAction}>
+        <ActivityGroup
+          tools={[failedStep(failure(), { commandId: "cmd-1", status: "skipped" })]}
+          messageState="complete"
+        />
+      </RecoveryProvider>,
+    );
+
+    expect(outside).toHaveFocus();
+    outside.remove();
   });
 
   it("closes on a click outside", () => {

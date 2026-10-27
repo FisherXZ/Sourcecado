@@ -1,11 +1,8 @@
-import {
-  useAui,
-  useAuiState,
-  type ThreadMessage,
-  type ToolCallMessagePart,
-} from "@assistant-ui/react";
+import { useAuiState, type ToolCallMessagePart } from "@assistant-ui/react";
 
+import { useRepliedPrompt, useResend } from "./MessageActions";
 import { ActionIcon, StatusIcon } from "./ProcessIcons";
+import { RetryReason } from "./RetryReason";
 import { turnRetryBlock } from "./retrySafety";
 
 const PROVIDER_NAMES: Readonly<Record<string, string>> = {
@@ -33,12 +30,6 @@ export function providerLine(
     : name;
 }
 
-function textOf(content: ThreadMessage["content"]): string {
-  return content
-    .map((part) => (part.type === "text" ? part.text : ""))
-    .join("\n");
-}
-
 /**
  * The first lines of a failed-turn notice: the x icon, the title, the provider
  * that failed, and a Retry icon button on the right.
@@ -58,17 +49,11 @@ export function TurnNoticeHead({
   readonly provider?: unknown;
   readonly model?: unknown;
 }) {
-  const aui = useAui();
+  const resend = useResend();
   const isLast = useAuiState((state) => state.message.isLast);
   const running = useAuiState((state) => state.thread.isRunning);
   // The operator message the failed turn answered: the nearest one before this notice.
-  const prompt = useAuiState((state) => {
-    for (let at = state.message.index - 1; at >= 0; at -= 1) {
-      const earlier = state.thread.messages[at];
-      if (earlier?.role === "user") return textOf(earlier.content);
-    }
-    return "";
-  });
+  const prompt = useRepliedPrompt();
   // The failed turn is the assistant message between that operator message and this notice.
   const block = useAuiState((state) => {
     for (let at = state.message.index - 1; at >= 0; at -= 1) {
@@ -107,13 +92,7 @@ export function TurnNoticeHead({
             aria-label={reason ? `Retry unavailable. ${reason}` : "Retry this turn"}
             aria-disabled={reason ? true : undefined}
             title={reason ?? "Retry this turn"}
-            onClick={
-              reason
-                ? undefined
-                : // thread().append starts the turn the way the composer does,
-                  // without touching a draft the operator is typing.
-                  () => aui.thread().append(prompt)
-            }
+            onClick={reason ? undefined : () => resend(prompt)}
           >
             <ActionIcon name="retry" />
           </button>
@@ -124,6 +103,7 @@ export function TurnNoticeHead({
           <span>Provider</span> {failedProvider}
         </p>
       ) : null}
+      {isLast && reason ? <RetryReason reason={reason} /> : null}
     </>
   );
 }

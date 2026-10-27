@@ -911,13 +911,15 @@
   color: var(--error);
 }
 
-.sourcecado-message-action[aria-disabled="true"] {
+/* A button that is off looks off. It keeps full ink strength, so the icon still
+   meets contrast, and loses its hover. The reason is a visible line beside it
+   (.sourcecado-retry-reason), and also the tooltip and the accessible name. */
+.sourcecado-message-action[aria-disabled="true"],
+.sourcecado-message-action[aria-disabled="true"]:hover {
+  border: 1px dashed var(--muted);
+  background: var(--raised);
+  color: var(--muted);
   cursor: not-allowed;
-}
-
-/* Only the icon fades. The tooltip is the reason, and it stays at full strength. */
-.sourcecado-message-action[aria-disabled="true"] .sourcecado-icon {
-  opacity: 0.5;
 }
 
 .sourcecado-message-action::after {
@@ -3368,6 +3370,52 @@
 
 .sourcecado-notice-provider > span {
   font-weight: 600;
+}
+
+/* The visible reason a Retry is off. Under an answer it shows with the action
+   bar (hover, focus, and always on touch). On a failure notice it always shows. */
+.sourcecado-retry-reason {
+  max-width: 620px;
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sourcecado-message-actions + .sourcecado-retry-reason {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.sourcecado-assistant-message:is(:hover, :focus-within)
+  .sourcecado-message-actions
+  + .sourcecado-retry-reason {
+  opacity: 1;
+}
+
+/* Where there is no hover the bar stays shown, so its reason does too. */
+@media (hover: none), (max-width: 767px) {
+  .sourcecado-message-actions + .sourcecado-retry-reason {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-message-actions + .sourcecado-retry-reason {
+    transition: none;
+  }
+}
+
+.sourcecado-notice-failed .sourcecado-retry-reason {
+  margin: 0 0 6px 24px;
+}
+
+/* The notice Retry, when off, looks like the answer bar Retry when off. */
+.sourcecado-notice-head .sourcecado-step-icon-button[aria-disabled="true"],
+.sourcecado-notice-head .sourcecado-step-icon-button[aria-disabled="true"]:hover {
+  border: 1px dashed var(--muted);
+  background: var(--raised);
+  color: var(--muted);
 }
 
 .sourcecado-connection {
