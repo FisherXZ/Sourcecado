@@ -271,6 +271,10 @@ export class SourcecadoChatStore {
   // lands so `replaceThread` can re-apply the tail the snapshot missed.
   private readonly liveEvents = new Map<string, LiveEntry[]>();
   private readonly hydratedThreads = new Set<string>();
+  // The queued message the backend is running now, per thread, from its latest
+  // queue snapshot. The run's own `turn_start` does not say which message it is.
+  private readonly queuedRuns = new Map<string, { id: string; text: string }>();
+  private readonly shownQueuedRuns = new Set<string>();
   private noticeNumber = 0;
   private sentNumber = 0;
   private activeThreadId: string;
@@ -373,6 +377,40 @@ export class SourcecadoChatStore {
     ]);
   }
 
+  /**
+   * Tell the store which queued message, if any, the backend has taken to run
+   * next for this thread. Call it with every queue snapshot. The message gets
+   * its bubble when that run starts.
+   */
+  noteQueue(
+    threadId: string,
+    items: readonly { id: string; text: string; state: string }[],
+  ): void {
+    const running = items.find((item) => item.state === "sending");
+    if (running) this.queuedRuns.set(threadId, { id: running.id, text: running.text });
+    else this.queuedRuns.delete(threadId);
+  }
+
+  // A queued message never went through the composer, so the page has no
+  // bubble for it. Add one just before its run opens, so it sits above the
+  // answer, and note it in the live buffer like any message sent before the
+  // restore snapshot lands.
+  private showQueuedMessage(threadId: string): void {
+    const queued = this.queuedRuns.get(threadId);
+    if (!queued || this.shownQueuedRuns.has(queued.id)) return;
+    this.shownQueuedRuns.add(queued.id);
+    const messageId = `${threadId}:queued:${queued.id}`;
+    this.apply({ type: "message_started", threadId, messageId, role: "user" });
+    this.apply({
+      type: "text_delta",
+      threadId,
+      messageId,
+      partId: `${messageId}:text:0`,
+      delta: queued.text,
+    });
+    this.apply({ type: "message_finished", threadId, messageId, state: "complete" });
+  }
+
   applyChatEvent(value: unknown): ChatEvent | ConnectionChangeEvent {
     if (isConnectionChange(value)) return value;
     if (isTransportError(value)) {
@@ -393,6 +431,11 @@ export class SourcecadoChatStore {
       return event;
     }
     this.seenEventIds.add(event.event_id);
+    if (event.type === "turn_start") this.showQueuedMessage(event.session_id);
+    // A queued message has one run. Once any run ends, the claim is spent.
+    if (["turn_end", "turn_stopped", "error"].includes(event.type)) {
+      this.queuedRuns.delete(event.session_id);
+    }
     this.bufferLive(event.session_id, event);
     this.applyProtocolEvent(event);
     return event;
