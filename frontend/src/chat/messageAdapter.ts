@@ -1,5 +1,10 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { ApprovalResource, RunBudgetStatus, ToolFailure } from "./protocol";
+import type {
+  ApprovalResource,
+  EvidenceReference,
+  RunBudgetStatus,
+  ToolFailure,
+} from "./protocol";
 import type { ProvenanceArtifact, ProvenanceSource } from "./protocol";
 
 export type LegacyStoredMessage = {
@@ -56,6 +61,8 @@ export type SourcecadoToolPart = {
   readonly startedAt?: number;
   readonly completedAt?: number;
   readonly failure?: ToolFailure;
+  /** What the backend recorded about the external results this call returned. */
+  readonly evidence?: readonly EvidenceReference[];
   readonly recovery?: {
     readonly commandId: string;
     readonly action: "retry" | "repair" | "continue";
@@ -372,11 +379,12 @@ export function convertStructuredMessage(
               },
             }
           : {}),
-        ...(part.failure || part.recovery || part.approval
+        ...(part.failure || part.recovery || part.approval || part.evidence
           ? {
               providerMetadata: {
                 sourcecado: {
                   failure: part.failure ?? null,
+                  ...(part.evidence ? { evidence: part.evidence } : {}),
                   recovery: part.recovery ?? null,
                   approvalState: part.approval?.state ?? null,
                   actor: part.approval?.actor ?? null,

@@ -1,6 +1,8 @@
 import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
+import { useInspector } from "./Inspector";
+import { toolInspectorTarget, turnRevision } from "./inspectorTargets";
 import { ActionIcon } from "./ProcessIcons";
 import {
   formatElapsed,
@@ -12,6 +14,8 @@ import {
   stepsSegment,
 } from "./processState";
 import { StepRow, StepStatus } from "./StepRow";
+import { searchInspectorTarget, stepItems } from "./webSearch";
+import { WebSearchRow } from "./WebSearchRow";
 
 /**
  * A row that joins the process layer ahead of the tool steps. The thinking
@@ -87,7 +91,25 @@ export function ActivityGroup({
     }
   }, [open, live, tools.length]);
 
-  const rowCount = tools.length + (lead ? 1 : 0);
+  // An open inspector item follows its step: when the step or the turn
+  // changes, the panel shows the new state, not the state at the click.
+  const { selected, sync } = useInspector();
+  // The inspector item for one step. A web search shows its raw result without
+  // a withheld excerpt and without a password in a URL (#252).
+  const inspectTarget = (toolCallId: string) => {
+    const target = toolInspectorTarget(tools, states, toolCallId);
+    const tool = tools.find((step) => step.toolCallId === toolCallId);
+    return target && tool ? searchInspectorTarget(target, tool) : target;
+  };
+  useEffect(() => {
+    if (!selected || !tools.some((tool) => tool.toolCallId === selected.id)) return;
+    if (selected.revision === turnRevision(tools, states)) return;
+    const next = inspectTarget(selected.id);
+    if (next) sync(next);
+  }, [selected, tools, messageState]);
+
+  const items = stepItems(tools, states);
+  const rowCount = items.length + (lead ? 1 : 0);
   if (rowCount === 0) return null;
   const now = Date.now();
   const rows = (
@@ -95,15 +117,26 @@ export function ActivityGroup({
       {lead ? (
         <li className="sourcecado-step sourcecado-step-lead">{lead.node}</li>
       ) : null}
-      {tools.map((tool, index) => (
-        <StepRow
-          key={tool.toolCallId}
-          tool={tool}
-          state={states[index]!}
-          now={now}
-          turnFailed={messageState === "failed"}
-        />
-      ))}
+      {items.map((item) =>
+        item.kind === "search" ? (
+          <WebSearchRow
+            key={`search-${tools[item.indexes[0]!]!.toolCallId}`}
+            tools={item.indexes.map((index) => tools[index]!)}
+            states={item.indexes.map((index) => states[index]!)}
+            now={now}
+            inspect={inspectTarget}
+          />
+        ) : (
+          <StepRow
+            key={tools[item.index]!.toolCallId}
+            tool={tools[item.index]!}
+            state={states[item.index]!}
+            now={now}
+            turnFailed={messageState === "failed"}
+            inspect={() => inspectTarget(tools[item.index]!.toolCallId)}
+          />
+        ),
+      )}
     </ol>
   );
   // The receipt also speaks for the turn: a working mark between steps, and

@@ -149,9 +149,10 @@ describe("Gmail draft result", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Inspect Prepared Gmail draft" }),
     );
-    expect(
-      screen.getByRole("complementary", { name: "Inspector" }),
-    ).toHaveTextContent("PRIVATE_LEGACY_GMAIL_MIME");
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(inspector).not.toHaveTextContent("PRIVATE_LEGACY_GMAIL_MIME");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
+    expect(inspector).toHaveTextContent("PRIVATE_LEGACY_GMAIL_MIME");
   });
 
   it("still says Not sent on an unreadable record that does not claim a send", () => {

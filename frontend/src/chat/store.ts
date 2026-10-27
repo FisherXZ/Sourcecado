@@ -1,5 +1,6 @@
 import {
   compactionNoticeText,
+  evidenceReferences,
   parseChatEvent,
   type ChatEvent,
   type ConnectionChangeEvent,
@@ -14,6 +15,7 @@ import {
 } from "./messageAdapter";
 import type {
   ApprovalResource,
+  EvidenceReference,
   ProvenanceArtifact,
   ProvenanceSource,
   RunBudgetStatus,
@@ -159,6 +161,7 @@ export type SourcecadoEvent =
       readonly failure?: ToolFailure;
       readonly sources?: readonly ProvenanceSource[];
       readonly artifacts?: readonly ProvenanceArtifact[];
+      readonly evidence?: readonly EvidenceReference[];
     }
   | {
       readonly type: "tool_recovery";
@@ -673,6 +676,9 @@ export class SourcecadoChatStore {
         ...(event.failure ? { failure: event.failure } : {}),
         ...(event.sources ? { sources: event.sources } : {}),
         ...(event.artifacts ? { artifacts: event.artifacts } : {}),
+        ...(Array.isArray(event.evidence)
+          ? { evidence: evidenceReferences(event.evidence) }
+          : {}),
       });
       return;
     }
@@ -979,6 +985,7 @@ export class SourcecadoChatStore {
                         ...part,
                         result: event.result,
                         failure: event.failure,
+                        ...(event.evidence ? { evidence: event.evidence } : {}),
                         state: event.isError
                           ? ("error" as const)
                           : ("complete" as const),

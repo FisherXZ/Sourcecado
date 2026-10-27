@@ -3,8 +3,10 @@ import { useId, useState } from "react";
 
 import { Glyph } from "../generative/ResultCard";
 import { useInspector } from "./Inspector";
+import { safeExternalUrl } from "./inspectorFormat";
 import { ToolIcon } from "./ProcessIcons";
 import type { ToolIconKey } from "./toolRegistry";
+import { webResultTarget, type WebResult } from "./webSearch";
 
 const VISIBLE_CHIPS = 8;
 
@@ -41,6 +43,17 @@ export function sourceDomain(part: SourceMessagePart): string {
   return providerOf(part);
 }
 
+function isWebResult(value: unknown): value is WebResult {
+  const candidate = value as Partial<WebResult> | null | undefined;
+  return (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    typeof candidate.id === "string" &&
+    typeof candidate.title === "string" &&
+    Array.isArray(candidate.flags)
+  );
+}
+
 function SourceChip({ part }: { readonly part: SourceMessagePart }) {
   const { select } = useInspector();
   const title = part.title || "Source";
@@ -51,6 +64,14 @@ function SourceChip({ part }: { readonly part: SourceMessagePart }) {
     | undefined;
   const stale = metadata?.stale === true;
   const truncated = metadata?.truncated === true;
+  // A cited web result carries the retained result it came from (#252). The
+  // chip opens that result and shows its states. It never fetches the page.
+  const web = isWebResult(metadata?.web) ? metadata.web : null;
+  const flags = [
+    ...(stale ? ["Stale"] : []),
+    ...(truncated ? ["Truncated"] : []),
+    ...(web ? web.flags.filter((flag) => flag !== "Truncated") : []),
+  ];
   const icon: ToolIconKey =
     PROVIDER_ICONS[provider.toLowerCase()] ??
     (part.sourceType === "url" ? "web" : "file");
@@ -58,29 +79,35 @@ function SourceChip({ part }: { readonly part: SourceMessagePart }) {
     <button
       type="button"
       className="sourcecado-source-chip"
-      aria-label={`Source: ${title} (${domain})`}
+      aria-label={`Source: ${title} (${domain})${flags.length > 0 ? `, ${flags.join(", ")}` : ""}`}
       title={title}
       onClick={(event) =>
         select(
-          {
-            kind: "source",
-            id: part.id,
-            title,
-            status: "success",
-            provider,
-            externalUrl: part.sourceType === "url" ? part.url : null,
-            preview: part.sourceType === "url" ? part.url : null,
-            stale,
-            truncated,
-          },
+          web
+            ? webResultTarget(web)
+            : {
+                kind: "source",
+                id: part.id,
+                title,
+                status: "success",
+                provider,
+                externalUrl: part.sourceType === "url" ? part.url : null,
+                // An address with a password in it is not shown, as text or as a link.
+                preview: part.sourceType === "url" ? safeExternalUrl(part.url) : null,
+                stale,
+                truncated,
+              },
           event.currentTarget,
         )
       }
     >
       <ToolIcon name={icon} />
       <span className="sourcecado-source-domain">{domain}</span>
-      {stale ? <span className="sourcecado-source-flag">Stale</span> : null}
-      {truncated ? <span className="sourcecado-source-flag">Truncated</span> : null}
+      {flags.map((flag) => (
+        <span key={flag} className="sourcecado-source-flag">
+          {flag}
+        </span>
+      ))}
     </button>
   );
 }

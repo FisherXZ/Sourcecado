@@ -2,7 +2,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { useId, useState } from "react";
 
 import { Glyph } from "../generative/ResultCard";
-import { useInspector } from "./Inspector";
+import { useInspector, type InspectorTarget } from "./Inspector";
 import { ActionIcon, StatusIcon, ToolIcon } from "./ProcessIcons";
 import {
   failureOf,
@@ -16,7 +16,6 @@ import { failureReason, recoveryChoices } from "./recovery";
 import { showResultCard, stepHasResultCard } from "./resultCards";
 import { StepRecovery } from "./StepRecovery";
 import { toolPresentation } from "./toolRegistry";
-import { sanitizeApolloNameMasks } from "../personName";
 
 /** Words for every state except the two that read fine as an icon alone. */
 const STATE_WORDS: Readonly<Partial<Record<StepState, string>>> = {
@@ -76,12 +75,15 @@ export function StepRow({
   state,
   now,
   turnFailed = false,
+  inspect,
 }: {
   readonly tool: ToolCallMessagePart;
   readonly state: StepState;
   readonly now: number;
   /** The turn ended in a provider failure. Its notice carries the one Retry. */
   readonly turnFailed?: boolean;
+  /** Builds the inspector item for this step when the operator opens it. */
+  readonly inspect: () => InspectorTarget | null;
 }) {
   const presentation = toolPresentation(tool.toolName);
   const failure = failureOf(tool);
@@ -104,12 +106,6 @@ export function StepRow({
   const summary = presentation.argsSummary?.(tool.args) ?? null;
   const count = finished ? (presentation.resultCount?.(tool.result) ?? null) : null;
   const elapsedMs = stepElapsedMs(tool, state, now);
-  const inspectorArgs = tool.toolName.startsWith("apollo_")
-    ? sanitizeApolloNameMasks(tool.args)
-    : tool.args;
-  const inspectorResult = tool.toolName.startsWith("apollo_")
-    ? sanitizeApolloNameMasks(tool.result)
-    : tool.result;
 
   return (
     <li
@@ -192,20 +188,10 @@ export function StepRow({
               className="sourcecado-inspect-tool"
               aria-label={`Inspect ${presentation.label}`}
               title="Inspect"
-              onClick={(event) =>
-                select(
-                  {
-                    kind: "tool",
-                    id: tool.toolCallId,
-                    title: presentation.label,
-                    status: "success",
-                    args: inspectorArgs,
-                    result: inspectorResult,
-                    timing: tool.timing,
-                  },
-                  event.currentTarget,
-                )
-              }
+              onClick={(event) => {
+                const target = inspect();
+                if (target) select(target, event.currentTarget);
+              }}
             >
               <ActionIcon name="inspect" />
             </button>

@@ -176,9 +176,10 @@ describe("Evidence set result", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Inspect Searched Drive" }),
     );
-    expect(
-      screen.getByRole("complementary", { name: "Inspector" }),
-    ).toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
+    const legacyInspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(legacyInspector).not.toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
+    fireEvent.click(within(legacyInspector).getByRole("button", { name: "Raw" }));
+    expect(legacyInspector).toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
   });
 
   it("clamps excerpts and opens exact stale truncated source provenance safely", () => {

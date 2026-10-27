@@ -2331,9 +2331,12 @@ describe("ChatPage Warm Operator thread", () => {
     expect(source).toHaveTextContent("drive.google.com");
     const transcript = screen.getByRole("log");
     transcript.scrollTop = 96;
+    const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    fireEvent.change(composer, { target: { value: "Draft that must survive" } });
     fireEvent.click(source);
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
     expect(transcript.scrollTop).toBe(96);
+    expect(composer).toHaveValue("Draft that must survive");
     expect(within(inspector).getByRole("heading", { level: 2 })).toHaveTextContent(
       "Codeology brief",
     );
@@ -2345,6 +2348,7 @@ describe("ChatPage Warm Operator thread", () => {
     fireEvent.click(within(inspector).getByRole("button", { name: "Close inspector" }));
     await waitFor(() => expect(source).toHaveFocus());
     expect(transcript.scrollTop).toBe(96);
+    expect(composer).toHaveValue("Draft that must survive");
 
     fireEvent.click(source);
     const reopenedInspector = screen.getByRole("complementary", { name: "Inspector" });
@@ -2361,8 +2365,9 @@ describe("ChatPage Warm Operator thread", () => {
     expect(within(reopenedInspector).getByRole("heading", { level: 2 })).toHaveTextContent(
       "Searched Drive",
     );
+    expect(within(reopenedInspector).getByRole("tab", { name: "Output" })).toBeInTheDocument();
+    fireEvent.click(within(reopenedInspector).getByRole("tab", { name: "Context" }));
     expect(within(reopenedInspector).getByText("Arguments")).toBeInTheDocument();
-    expect(within(reopenedInspector).getByText("Result")).toBeInTheDocument();
   });
 
   it("restores an empty Apollo search and retains its query when adjusting criteria", async () => {

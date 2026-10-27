@@ -187,7 +187,12 @@ export function AssistantMessage() {
           tools: { Fallback: SafeToolFallback },
         }}
       />
-      <AnswerResults tools={tools} sources={sources} messageState={sourcecadoState} />
+      <AnswerResults
+        tools={tools}
+        sources={sources}
+        messageState={sourcecadoState}
+        answerText={prose}
+      />
       <RunBudgetView status={runBudget} messageState={sourcecadoState} />
       {artifacts.length > 0 ? <ArtifactControls artifacts={artifacts} /> : null}
       {sourcecadoState === "cancelled" ? (
