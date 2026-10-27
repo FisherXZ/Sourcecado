@@ -360,6 +360,7 @@ export class SourcecadoChatStore {
     code: string,
     message: string,
     recoverable = true,
+    provider?: { readonly provider: string; readonly model: string },
   ): void {
     let messages = this.messagesFor(threadId);
     let occurrences = 1;
@@ -403,10 +404,31 @@ export class SourcecadoChatStore {
                 : message,
             recoverable,
             ...(occurrences > 1 ? { occurrences } : {}),
+            ...provider,
           },
         ],
       },
     ]);
+  }
+
+  /**
+   * Marks every turn still running on a thread as interrupted. For a run the
+   * backend lost: its process ended, so no terminal event will ever arrive.
+   */
+  interruptRunning(threadId: string): void {
+    for (const message of this.messagesFor(threadId)) {
+      if (
+        message.role === "assistant" &&
+        (message.state === "running" || message.state === "stopping")
+      ) {
+        this.apply({
+          type: "message_state_changed",
+          threadId,
+          messageId: message.id,
+          state: "interrupted",
+        });
+      }
+    }
   }
 
   replayChatEvents(events: readonly unknown[]): void {
@@ -658,6 +680,9 @@ export class SourcecadoChatStore {
             : "error"),
           event.message,
           false,
+          event.failure
+            ? { provider: event.failure.provider, model: event.failure.model }
+            : undefined,
         );
       }
     }

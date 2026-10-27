@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import type { ActivePerson } from "../api";
+import { ConnectionChip } from "./ConnectionChip";
 import { ContextChips } from "./ContextChips";
 import { ContextMenu } from "./ContextMenu";
 import { SendIcon } from "./icons";
@@ -103,6 +104,8 @@ export function Composer({
   }
 
   return (
+    <>
+    <ConnectionChip />
     <ComposerPrimitive.Root className="sourcecado-composer" onSubmit={sendWithContext}>
       <ContextChips
         chips={chips}
@@ -194,5 +197,6 @@ export function Composer({
         )}
       </div>
     </ComposerPrimitive.Root>
+    </>
   );
 }

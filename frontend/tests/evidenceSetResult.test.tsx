@@ -142,7 +142,7 @@ describe("Evidence set result", () => {
     expect(
       screen.getByText("Google Drive and Granola evidence unavailable."),
     ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Retry failed step" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Retry failed step/ })).toHaveLength(2);
     expect(container).not.toHaveTextContent("PRIVATE_Google Drive_ERROR");
     expect(container).not.toHaveTextContent("PRIVATE_Granola_ERROR");
   });
@@ -428,7 +428,7 @@ describe("Evidence set result", () => {
       expect(
         screen.getByText(`Successful ${successfulSource} evidence`),
       ).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Retry failed step" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Retry failed step/ })).toBeInTheDocument();
       expect(container).not.toHaveTextContent("PRIVATE_EVIDENCE_TRANSPORT_ERROR");
     },
   );

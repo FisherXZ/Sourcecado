@@ -92,6 +92,9 @@ export type SourcecadoNoticePart = {
   readonly message: string;
   readonly recoverable: boolean;
   readonly occurrences?: number;
+  /** The model provider that failed the turn, when the backend names one. */
+  readonly provider?: string;
+  readonly model?: string;
 };
 
 export type SourcecadoSourcePart = ProvenanceSource & {
@@ -426,7 +429,19 @@ export function convertStructuredMessage(
             (part): part is SourcecadoNoticePart => part.type === "notice",
           );
           return notice
-            ? { sourcecadoNotice: true, sourcecadoNoticeCode: notice.code }
+            ? {
+                sourcecadoNotice: true,
+                sourcecadoNoticeCode: notice.code,
+                // A failed turn is the only notice the store adds as not
+                // recoverable. Connection and history notices are recoverable.
+                sourcecadoNoticeFailedTurn: !notice.recoverable,
+                ...(notice.provider
+                  ? {
+                      sourcecadoNoticeProvider: notice.provider,
+                      sourcecadoNoticeModel: notice.model,
+                    }
+                  : {}),
+              }
             : {};
         })(),
         ...(message.parts.some((part) => part.type === "artifact")

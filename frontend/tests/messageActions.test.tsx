@@ -350,6 +350,37 @@ describe("Message actions", () => {
       expect(chatSend).not.toHaveBeenCalled();
     });
 
+    it("says why it is off in a visible line, not only in the tooltip", async () => {
+      open(exchange(1, "Draft a note to Alyssa", "Draft ready for review.", approvedDraft));
+
+      await screen.findByText("Draft ready for review.");
+      const line = screen.getByText(/Retry is off\./).closest("p")!;
+      expect(line).toHaveTextContent(
+        "Retry is off. This turn used an approval. Retry could repeat the action.",
+      );
+      expect(line).toHaveClass("sourcecado-retry-reason");
+      // The bar's button carries the same reason, and the line is not read twice.
+      expect(line).toHaveAttribute("aria-hidden", "true");
+      expect(retryButton()).toHaveAccessibleName(expect.stringContaining("used an approval"));
+    });
+
+    it("shows no reason line while Retry is on", async () => {
+      open(exchange(1, "Find ML founders", "Two founders found.", [...read("call-1", "board_query", { people: [] })]));
+
+      await screen.findByText("Two founders found.");
+      expect(screen.queryByText(/Retry is off\./)).not.toBeInTheDocument();
+    });
+
+    it("shows the reason on the newest answer only", async () => {
+      open(
+        exchange(1, "Draft a note", "Draft ready.", approvedDraft),
+        exchange(2, "Find ML founders", "Two founders found.", [...read("call-2", "board_query", { people: [] })]),
+      );
+
+      await screen.findByText("Two founders found.");
+      expect(screen.queryByText(/Retry is off\./)).not.toBeInTheDocument();
+    });
+
     it("is off when a step has no recorded result", async () => {
       open(
         exchange(1, "Find ML founders", "Two founders found.", [
