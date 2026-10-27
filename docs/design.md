@@ -28,6 +28,7 @@
   - General Sans: `https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap`
   - Geist Mono: `https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&display=swap` (or self-host via `geist` npm package)
 - **Scale (px):** display 40–52 / h1 24 / h2 18 / body 14 / dense-body 13 / metadata 12 / micro-label 11. Tracking: tight on display (-.025em), near-zero on body, +.04–.1em on uppercase mono labels.
+- **Chat answers:** one prose scale. Body 15 / h1 22 / h2 19 / h3 16 / h4 and below 15 semibold. Code and table text stay at 13–14. Fenced code uses Geist Mono 13 under a header with the language and a Copy icon button. Syntax colors reuse tokens, so both themes work: keyword `--warn`, string `--accent-deep`, number and literal `--error`, comment `--muted`. Token spans change color only.
 
 ## Color
 - **Approach:** Balanced — warm neutrals + one disciplined avocado accent + a terracotta "pit" secondary. Color is reserved and meaningful; the accent is not decoration.

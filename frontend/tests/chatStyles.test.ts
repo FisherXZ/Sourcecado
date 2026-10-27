@@ -24,6 +24,51 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
+  it("scrolls wide tables and long code lines inside their own block", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-table-scroll\s*\{[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-table-scroll table\s*\{[^}]*width:\s*max-content;[^}]*min-width:\s*100%;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-code\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*overflow:\s*hidden;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-markdown \.sourcecado-code pre\s*\{[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-markdown \.sourcecado-code code\s*\{[^}]*white-space:\s*pre;/,
+    );
+  });
+
+  it("colors syntax with Warm Operator tokens and sets no text under 13px", () => {
+    const answer = styles.slice(
+      styles.indexOf("Answer prose is one type scale"),
+      styles.indexOf(".sourcecado-copy-action {"),
+    );
+
+    expect(answer).toContain(".sourcecado-code-head");
+    // Every code color is a token. A literal hex value would skip the dark theme.
+    expect(answer).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(answer).toMatch(/--code-keyword:\s*var\(--warn\);/);
+    expect(answer).toMatch(/--code-string:\s*var\(--accent-deep\);/);
+    expect(answer).toMatch(/--code-number:\s*var\(--error\);/);
+    expect(answer).toMatch(/--code-comment:\s*var\(--muted\);/);
+    // Token spans change color only, so partial code never shifts the layout.
+    const tokens = answer.slice(
+      answer.indexOf(".sourcecado-code :where(.hljs-comment"),
+      answer.indexOf(".sourcecado-code pre:focus-visible"),
+    );
+    expect(tokens).toContain(".hljs-keyword");
+    expect(tokens).not.toMatch(/font-(size|weight|style)|padding|margin|border/);
+    const sizes = Array.from(answer.matchAll(/font(?:-size)?:\s*(?:[\d.]+ )?(\d+)px/g)).map(
+      (match) => Number(match[1]),
+    );
+    expect(sizes.length).toBeGreaterThan(5);
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(13);
+  });
+
   it("uses plain assistant prose and an avocado-tinted user bubble", () => {
     expect(styles).toMatch(
       /\.sourcecado-assistant-message\s*\{[^}]*background:\s*transparent;/,
