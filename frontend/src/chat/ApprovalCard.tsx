@@ -160,7 +160,10 @@ export function ApprovalCard({
   useEffect(() => {
     if (!pending || operatorIsTyping()) return;
     mountFocus.current = true;
-    headingRef.current?.focus();
+    // Focus alone must not scroll: a card that mounts while the operator
+    // reads earlier output would pull the thread to the bottom. At the
+    // bottom the thread already follows the new card.
+    headingRef.current?.focus({ preventScroll: true });
     mountFocus.current = false;
   }, [pending]);
 

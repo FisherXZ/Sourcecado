@@ -903,6 +903,69 @@
   scroll-padding-bottom: 40px;
 }
 
+/* Jump to latest (#251). It shows only while newer output is below. The
+   anchor has no height, so it takes no room in the thread grid. */
+.sourcecado-jump-anchor {
+  position: relative;
+  z-index: 3;
+  height: 0;
+  min-width: 0;
+}
+
+.sourcecado-jump-latest {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--text) 14%, transparent);
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.sourcecado-jump-latest:hover {
+  background: var(--raised);
+}
+
+.sourcecado-jump-latest:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sourcecado-jump-latest {
+    animation: sourcecado-jump-in 160ms ease-out;
+  }
+}
+
+@keyframes sourcecado-jump-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-jump-latest {
+    transition: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .sourcecado-jump-latest {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 .sourcecado-assistant-message {
   width: 100%;
   min-width: 0;
