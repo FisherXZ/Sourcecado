@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 
 const api = vi.hoisted(() => ({
@@ -82,6 +83,7 @@ function renderApollo(tool = apolloSearch()) {
   return render(
     <InspectorProvider threadId="thread-apollo">
       <ActivityGroup tools={[tool]} messageState="complete" />
+      <AnswerResults tools={[tool]} />
       <Inspector />
     </InspectorProvider>,
   );
@@ -109,7 +111,7 @@ describe("Apollo people result", () => {
   it("shows an honest incomplete name without rendering Apollo's mask", () => {
     const { container } = renderApollo();
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     expect(screen.getByText("Tim")).toBeInTheDocument();
@@ -127,7 +129,7 @@ describe("Apollo people result", () => {
   it("lets the director select several candidates and review before keeping", async () => {
     renderApollo();
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
@@ -194,7 +196,7 @@ describe("Apollo people result", () => {
       },
     });
     renderApollo();
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
       target: { value: "Director-authored target" },
@@ -229,7 +231,7 @@ describe("Apollo people result", () => {
         },
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
 
     expect(screen.getAllByRole("checkbox", { name: "Select Tim" })).toHaveLength(1);
     expect(screen.getByText("1 candidate")).toBeInTheDocument();
@@ -283,7 +285,7 @@ describe("Apollo people result", () => {
       active_person: { person_id: "person-tim-file", version: 1, label: "Tim" },
     });
     renderApollo();
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
@@ -343,7 +345,7 @@ describe("Apollo people result", () => {
     });
     api.openPersonSourcingChat.mockRejectedValueOnce(new Error("stale person version"));
     renderApollo();
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
       target: { value: "Director-authored target" },
@@ -420,7 +422,7 @@ describe("Apollo people result", () => {
         },
       });
     renderApollo();
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
@@ -459,7 +461,7 @@ describe("Apollo people result", () => {
   it("keeps the original search query beside the result count", () => {
     renderApollo();
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     expect(screen.getByText("2 candidates")).toBeInTheDocument();
@@ -492,9 +494,9 @@ describe("Apollo people result", () => {
       }),
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Failed" }),
-    );
+    expect(
+      screen.getByRole("button", { name: /^Searching Apollo/ }),
+    ).toHaveTextContent("Failed");
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Apollo couldn’t complete this people search.",
@@ -508,7 +510,7 @@ describe("Apollo people result", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
     expect(
       screen.getByRole("heading", { name: "Apollo result needs review" }),
@@ -539,7 +541,7 @@ describe("Apollo people result", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
     const candidates = screen.getByRole("list", { name: "Apollo candidates" });
     expect(within(candidates).getAllByRole("listitem")).toHaveLength(5);
@@ -565,7 +567,7 @@ describe("Apollo people result", () => {
   it("opens stable candidate source and credit details in the provenance Inspector", () => {
     renderApollo();
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     expect(
@@ -599,7 +601,7 @@ describe("Apollo people result", () => {
     renderApollo(apolloEnrich());
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Enriched contact with Apollo · Completed",
+        name: /^Enriched contact with Apollo/,
       }),
     );
 
@@ -646,7 +648,7 @@ describe("Apollo people result", () => {
       );
       fireEvent.click(
         screen.getByRole("button", {
-          name: "Enriched contact with Apollo · Completed",
+          name: /^Enriched contact with Apollo/,
         }),
       );
 
@@ -693,7 +695,7 @@ describe("Apollo people result", () => {
     const { container } = renderApollo();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     expect(

@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 
 function gmailDraft(
@@ -34,6 +35,7 @@ function renderDraft(tool = gmailDraft()) {
   return render(
     <InspectorProvider threadId="thread-gmail">
       <ActivityGroup tools={[tool]} messageState="complete" />
+      <AnswerResults tools={[tool]} />
       <Inspector />
     </InspectorProvider>,
   );
@@ -42,8 +44,8 @@ function renderDraft(tool = gmailDraft()) {
 describe("Gmail draft result", () => {
   it.each([
     ["denied", { approved: false }, "Denied"],
-    ["cancelled", { resolution: "cancelled" }, "Partial"],
-    ["expired", { resolution: "expired" }, "Partial"],
+    ["cancelled", { resolution: "cancelled" }, "Interrupted"],
+    ["expired", { resolution: "expired" }, "Interrupted"],
   ] as const)(
     "never presents a %s approval as a successful Gmail draft",
     (_approvalState, resolution, activityState) => {
@@ -58,11 +60,9 @@ describe("Gmail draft result", () => {
         }),
       );
 
-      expect(
-        screen.getByRole("button", {
-          name: `Prepared Gmail draft · ${activityState}`,
-        }),
-      ).toBeInTheDocument();
+      const step = screen.getByRole("button", { name: /^Preparing Gmail draft/ });
+      expect(step).toHaveTextContent(activityState);
+      expect(step).not.toHaveTextContent("Completed");
       expect(
         screen.queryByRole("heading", { name: "Gmail draft ready for review" }),
       ).not.toBeInTheDocument();
@@ -107,9 +107,9 @@ describe("Gmail draft result", () => {
       }),
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Prepared Gmail draft · Failed" }),
-    );
+    expect(
+      screen.getByRole("button", { name: /^Preparing Gmail draft/ }),
+    ).toHaveTextContent("Failed");
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Gmail couldn’t create this draft.",
@@ -134,7 +134,7 @@ describe("Gmail draft result", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Prepared Gmail draft · Completed",
+        name: /^Prepared Gmail draft/,
       }),
     );
     expect(
@@ -168,7 +168,7 @@ describe("Gmail draft result", () => {
     );
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Prepared Gmail draft · Completed",
+        name: /^Prepared Gmail draft/,
       }),
     );
 
@@ -197,7 +197,7 @@ describe("Gmail draft result", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Prepared Gmail draft · Completed",
+        name: /^Prepared Gmail draft/,
       }),
     );
 

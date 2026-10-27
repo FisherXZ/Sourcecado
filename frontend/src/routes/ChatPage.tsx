@@ -5,7 +5,6 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  getPersona,
   getCurrentRunTelemetry,
   getSession,
   getSessions,
@@ -26,6 +25,7 @@ import {
   createQueueCommandId,
 } from "../chat/persistedQueue";
 import { SourcecadoChatStore } from "../chat/store";
+import { runStatusOf } from "../chat/ThreadHeader";
 import { ThreadView } from "../chat/ThreadView";
 import { readDraft, writeDraft } from "../chat/draftStorage";
 import {
@@ -78,7 +78,6 @@ export function ChatPage({
   const [loadError, setLoadError] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [announcement, setAnnouncement] = useState("");
-  const [personaName, setPersonaName] = useState<string | null>(null);
   const [activePerson, setActivePerson] = useState<ActivePerson | null>(null);
   const [runMetrics, setRunMetrics] = useState<CurrentRunMetrics | null>(null);
   const [, setRevision] = useState(0);
@@ -112,19 +111,16 @@ export function ChatPage({
     };
   }, [activeThreadId, currentRunIsActive]);
 
+  // A rename made elsewhere (the sidebar) changes the open thread's title.
   useEffect(() => {
-    if (!hasToken()) return;
-    let active = true;
-    getPersona()
-      .then((persona) => {
-        if (active) setPersonaName(persona.name);
-      })
-      .catch(() => {
-        // Persona is a header nicety; leave the header without it on failure.
-      });
-    return () => {
-      active = false;
+    const onRenamed = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: unknown; title?: unknown }>).detail;
+      if (typeof detail?.id !== "string" || typeof detail.title !== "string") return;
+      threadTitlesRef.current.set(detail.id, detail.title);
+      if (detail.id === activeThreadRef.current) setTitle(detail.title);
     };
+    window.addEventListener("sourcecado:session-renamed", onRenamed);
+    return () => window.removeEventListener("sourcecado:session-renamed", onRenamed);
   }, []);
 
   useEffect(() => {
@@ -442,6 +438,41 @@ export function ChatPage({
 
   const messages = storeRef.current.messagesFor(activeThreadId);
   const running = runningThreadsRef.current.has(activeThreadId);
+  // No status until the thread has loaded: a restored thread may be waiting
+  // for approval, and Idle would be wrong for a moment.
+  const runStatus = loading || loadError ? null : runStatusOf(messages, running);
+  const elapsedMs =
+    runMetrics?.status === "running" ? runMetrics.elapsed_ms : null;
+
+  // The backend names a thread when it saves the first message. No event
+  // announces that, so ask for the name once output starts and once more when
+  // the run ends, instead of waiting for a reload.
+  const untitled = !title;
+  const hasMessages = messages.length > 0;
+  const outputStarted = messages.some(
+    (message) => message.role === "assistant" && message.parts.length > 0,
+  );
+  useEffect(() => {
+    if (!untitled || !hasMessages || loading || !activeThreadId || !hasToken()) {
+      return;
+    }
+    let active = true;
+    getSessions()
+      .then(({ sessions }) => {
+        const named = sessions
+          .find((row) => row.session_id === activeThreadId)
+          ?.title?.trim();
+        if (!active || !named) return;
+        threadTitlesRef.current.set(activeThreadId, named);
+        setTitle(named);
+      })
+      .catch(() => {
+        // The title is a nicety; the next change of state asks again.
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeThreadId, untitled, hasMessages, loading, running, outputStarted]);
   const queue = threadQueuesRef.current.get(activeThreadId) ?? {
     items: [],
     paused: false,
@@ -475,8 +506,8 @@ export function ChatPage({
         <ThreadView
           title={title}
           activePerson={activePerson}
-          personaName={personaName}
-          runMetrics={runMetrics}
+          runStatus={runStatus}
+          elapsedMs={elapsedMs}
           loading={loading}
           loadError={loadError}
           onRetry={() => setLoadAttempt((attempt) => attempt + 1)}

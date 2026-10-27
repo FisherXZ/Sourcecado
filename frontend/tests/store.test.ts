@@ -600,6 +600,84 @@ describe("SourcecadoChatStore live/restored parity", () => {
   });
 });
 
+describe("SourcecadoChatStore text around steps", () => {
+  const base = {
+    version: 2,
+    session_id: "thread-alpha",
+    run_id: "run-1",
+    message_id: "message-answer-1",
+    part_id: "part-answer-1",
+  } as const;
+  const delta = (id: number, text: string) =>
+    ({ ...base, type: "assistant_delta", event_id: `delta-${id}`, delta: text }) as const;
+  const step = (id: number) =>
+    [
+      {
+        ...base,
+        type: "tool_started",
+        event_id: `start-${id}`,
+        id: `call-${id}`,
+        name: "now",
+        arguments: {},
+      },
+      {
+        ...base,
+        type: "tool_finished",
+        event_id: `finish-${id}`,
+        id: `call-${id}`,
+        name: "now",
+        ok: true,
+        result: {},
+      },
+    ] as const;
+
+  it("splits the turn's text at each step so lead-ins and the answer stay apart and in order", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    store.replayChatEvents([
+      { ...base, type: "turn_start", event_id: "start", state: "running" },
+      delta(1, "I will check the "),
+      delta(2, "time first."),
+      ...step(1),
+      delta(3, "Now the Board."),
+      ...step(2),
+      delta(4, "## Final"),
+      delta(5, " answer"),
+    ]);
+
+    const parts = store.messagesFor("thread-alpha")[0]!.parts;
+    expect(parts.map((part) => part.type)).toEqual([
+      "text",
+      "tool",
+      "text",
+      "tool",
+      "text",
+    ]);
+    expect(
+      parts.filter((part) => part.type === "text").map((part) => part.type === "text" && part.text),
+    ).toEqual(["I will check the time first.", "Now the Board.", "## Final answer"]);
+    const ids = parts.map((part) => part.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids[0]).toBe("part-answer-1");
+  });
+
+  it("keeps one part when no step comes between the deltas", () => {
+    const store = new SourcecadoChatStore(
+      [{ id: "thread-alpha", messages: [] }],
+      "thread-alpha",
+    );
+    store.replayChatEvents([
+      { ...base, type: "turn_start", event_id: "start", state: "running" },
+      delta(1, "One "),
+      delta(2, "part."),
+    ]);
+
+    expect(store.messagesFor("thread-alpha")[0]!.parts).toHaveLength(1);
+  });
+});
+
 describe("SourcecadoChatStore thread routing", () => {
   it("routes a delta to the selected fixture and never the inactive thread", () => {
     const message = (text: string) => ({

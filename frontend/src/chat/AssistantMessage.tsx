@@ -5,39 +5,29 @@ import {
   type ToolCallMessagePartProps,
   type ToolCallMessagePart,
 } from "@assistant-ui/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useState } from "react";
 import { ActivityGroup } from "./ActivityGroup";
+import { AnswerMarkdown } from "./AnswerMarkdown";
 import { ApprovalCard } from "./ApprovalCard";
 import { RunBudgetView } from "./RunBudget";
 import { useLastApprovalDelivery } from "./approvalDelivery";
 import { SourceCitation } from "./SourceCitation";
+import { AnswerResults } from "./AnswerResults";
 import { useInspector } from "./Inspector";
+import { answerHasStarted, isLiveMessage } from "./processState";
+import { ThinkingRow } from "./ThinkingRow";
+import {
+  joinReasoning,
+  reasoningParts,
+  reasoningTiming,
+  thinkingElapsedMs,
+  thoughtLabel,
+} from "./thinking";
 import { resolveInbox } from "../api";
 import type { RunBudgetStatus } from "./protocol";
 
 function AssistantText({ text }: TextMessagePartProps) {
-  return (
-    <div className="sourcecado-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children, ...props }) => (
-            <a {...props} target="_blank" rel="noreferrer noopener">
-              {children}
-            </a>
-          ),
-          table: ({ children, ...props }) => (
-            <div className="sourcecado-table-scroll">
-              <table {...props}>{children}</table>
-            </div>
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
+  return <AnswerMarkdown text={text} />;
 }
 
 function noticeFrame(code: unknown): {
@@ -107,6 +97,9 @@ function SafeToolFallback(part: ToolCallMessagePartProps) {
 
 export function AssistantMessage() {
   const message = useAuiState((state) => state.message);
+  // The operator's own open or close choice for the thinking row. It lives
+  // here so it survives the row moving between the one-row and receipt layouts.
+  const [thinkingChoice, setThinkingChoice] = useState<boolean | null>(null);
   const sourcecadoState = message.metadata.custom?.sourcecadoState;
   const runBudget = message.metadata.custom?.sourcecadoRunBudget as
     | RunBudgetStatus
@@ -124,6 +117,29 @@ export function AssistantMessage() {
   const tools = message.content.filter(
     (part): part is ToolCallMessagePart => part.type === "tool-call",
   );
+  const answerStarted = answerHasStarted(message.content);
+  const reasoning = reasoningParts(message.content);
+  const thinking =
+    isLiveMessage(sourcecadoState) &&
+    reasoning.some((part) => part.status?.type === "running");
+  const timing = reasoningTiming(reasoning);
+  const lead =
+    reasoning.length > 0
+      ? {
+          summary: thinking
+            ? "Thinking…"
+            : thoughtLabel(thinkingElapsedMs(timing, Date.now())),
+          node: (
+            <ThinkingRow
+              text={joinReasoning(reasoning)}
+              thinking={thinking}
+              timing={timing}
+              chosen={thinkingChoice}
+              onChoose={setThinkingChoice}
+            />
+          ),
+        }
+      : undefined;
   const artifacts = Array.isArray(
     message.metadata.custom?.sourcecadoArtifacts,
   )
@@ -140,6 +156,12 @@ export function AssistantMessage() {
       {frame ? (
         <p className="sourcecado-notice-title">{frame.title}</p>
       ) : null}
+      <ActivityGroup
+        tools={tools}
+        messageState={sourcecadoState}
+        answerStarted={answerStarted}
+        {...(lead ? { lead } : {})}
+      />
       <MessagePrimitive.Parts
         components={{
           Text: AssistantText,
@@ -147,7 +169,7 @@ export function AssistantMessage() {
           tools: { Fallback: SafeToolFallback },
         }}
       />
-      <ActivityGroup tools={tools} messageState={sourcecadoState} />
+      <AnswerResults tools={tools} />
       <RunBudgetView status={runBudget} messageState={sourcecadoState} />
       {artifacts.length > 0 ? <ArtifactControls artifacts={artifacts} /> : null}
       {sourcecadoState === "cancelled" ? (

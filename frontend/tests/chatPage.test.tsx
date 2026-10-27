@@ -117,7 +117,7 @@ describe("ChatPage Warm Operator thread", () => {
     });
   });
 
-  it("shows compact allowlisted measurements for the current run", async () => {
+  it("keeps run measurements out of the header", async () => {
     api.getSession.mockResolvedValue({
       id: "thread-alpha",
       title: "Measured run",
@@ -150,18 +150,185 @@ describe("ChatPage Warm Operator thread", () => {
     });
 
     const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Measured run" });
+    await waitFor(() => expect(api.getCurrentRunTelemetry).toHaveBeenCalled());
 
-    const metrics = await screen.findByRole("region", {
-      name: "Current run metrics",
-    });
-    expect(metrics).toHaveTextContent("100 tokens");
-    expect(metrics).toHaveTextContent("Context 8%");
-    expect(metrics).toHaveTextContent("1.3s");
-    expect(metrics).toHaveTextContent("1 retry");
-    expect(metrics).toHaveTextContent("2 compactions");
-    expect(metrics).toHaveTextContent("$0.0042 est.");
+    const header = screen.getByRole("banner");
+    expect(
+      screen.queryByRole("region", { name: "Current run metrics" }),
+    ).not.toBeInTheDocument();
+    for (const gone of ["tokens", "Context", "retry", "compaction", "$", "est."]) {
+      expect(header).not.toHaveTextContent(gone);
+    }
     expect(container).not.toHaveTextContent("PLANTED");
     expect(container).not.toHaveTextContent("private error");
+  });
+
+  it("shows the thread title, the status chip and nothing else in the header", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Find Maya Chen at Acme",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Find Maya Chen at Acme" });
+    await waitFor(() => expect(api.getCurrentRunTelemetry).toHaveBeenCalled());
+
+    const header = screen.getByRole("banner");
+    expect(header).not.toHaveTextContent("Sourcing workspace");
+    expect(header).not.toHaveTextContent("Sourcing Operator");
+    expect(api.getPersona).not.toHaveBeenCalled();
+    expect(header).toHaveTextContent("Find Maya Chen at Acme");
+    expect(header).toHaveTextContent("Idle");
+  });
+
+  it("names the thread in the header as soon as the backend does, without a reload", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: null,
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "New sourcing conversation" }),
+    ).toBeInTheDocument();
+
+    // The backend saves the first message, names the thread, then streams.
+    api.getSessions.mockResolvedValue({
+      sessions: [
+        {
+          session_id: "thread-alpha",
+          title: "Find Maya Chen at Acme",
+          n_msgs: 1,
+          pinned: false,
+          opened_at: null,
+          updated_at: "2026-10-26T12:00:00Z",
+        },
+      ],
+      open_id: "thread-alpha",
+    });
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      message_id: "assistant-1",
+      part_id: "assistant-part-1",
+    } as const;
+    act(() => {
+      onChatEvent?.({ ...envelope, type: "turn_start", event_id: "e1", state: "running" });
+    });
+    act(() => {
+      onChatEvent?.({ ...envelope, type: "assistant_delta", event_id: "e2", delta: "Looking" });
+    });
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Find Maya Chen at Acme" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "New sourcing conversation" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Thinking, Working, Needs approval and Idle with the elapsed time while a run is live", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    api.getCurrentRunTelemetry.mockResolvedValue({
+      version: 1,
+      session_id: "thread-alpha",
+      current_run: {
+        run_id: "run-1",
+        status: "running",
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        cache_hit_input_tokens: null,
+        cache_miss_input_tokens: null,
+        cache_write_input_tokens: null,
+        reasoning_tokens: null,
+        current_context_tokens: null,
+        context_window_tokens: null,
+        context_use_ratio: null,
+        elapsed_ms: 12400,
+        estimated_cost_usd: null,
+        retry_count: 0,
+        compaction_count: 0,
+      },
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+    const header = screen.getByRole("banner");
+    expect(header).toHaveTextContent("Idle");
+    expect(header).not.toHaveTextContent("12s");
+
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      message_id: "assistant-1",
+      part_id: "assistant-part-1",
+    } as const;
+    const send = (event: Record<string, unknown>) =>
+      act(() => {
+        onChatEvent?.({ ...envelope, ...event });
+      });
+
+    send({ type: "turn_start", event_id: "e1", state: "running" });
+    await waitFor(() => expect(header).toHaveTextContent("Thinking12s"));
+
+    send({ type: "tool_started", event_id: "e2", id: "call-1", name: "apollo_people_search", arguments: {} });
+    await waitFor(() => expect(header).toHaveTextContent("Working12s"), { timeout: 3000 });
+
+    send({
+      type: "permission_required",
+      event_id: "e3",
+      id: "call-2",
+      name: "gmail_draft",
+      arguments: { to: "maya@example.com" },
+      reason: "Creating a Gmail draft changes an external account.",
+    });
+    await waitFor(() => expect(header).toHaveTextContent("Needs approval12s"));
+
+    send({ type: "turn_end", event_id: "e4", state: "complete", text: "Done" });
+    await waitFor(() => expect(header).toHaveTextContent("Idle"), { timeout: 3000 });
+    expect(header).not.toHaveTextContent("12s");
+  });
+
+  it("shows Needs approval for a restored thread that still has a pending approval", async () => {
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-pending",
+      message_id: "assistant-pending",
+      part_id: "assistant-pending-part",
+    } as const;
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Pending approval",
+      messages: [],
+      queue: [],
+      queue_paused: false,
+      events: [
+        { ...envelope, type: "turn_start", event_id: "p1", state: "running" },
+        {
+          ...envelope,
+          type: "permission_required",
+          event_id: "p2",
+          id: "pending-draft",
+          name: "gmail_draft",
+          arguments: { to: "alyssa@example.com" },
+          reason: "Creating a Gmail draft changes an external account.",
+        },
+      ],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Pending approval" });
+    expect(screen.getByRole("banner")).toHaveTextContent("Needs approval");
   });
 
   it("shows the route-verified active person without replacing the chat title", async () => {
@@ -227,65 +394,138 @@ describe("ChatPage Warm Operator thread", () => {
     expect(api.getSession).toHaveBeenCalledWith("thread-alpha", "person two");
   });
 
-  it("does not carry measurements across threads while the next run loads", async () => {
-    const betaMetrics = deferred<{
-      version: 1;
-      session_id: string;
-      current_run: null;
-    }>();
+  it("shows no status chip while the thread loads, then the restored state, never Idle first", async () => {
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-pending",
+      message_id: "assistant-pending",
+      part_id: "assistant-pending-part",
+    } as const;
+    const session = deferred<Record<string, unknown>>();
+    api.getSession.mockReturnValue(session.promise);
+
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    const chipTexts: string[] = [];
+    const watcher = new MutationObserver(() => {
+      const chip = container.querySelector(".sourcecado-run-status");
+      if (chip) chipTexts.push(chip.textContent ?? "");
+    });
+    watcher.observe(container, { childList: true, subtree: true, characterData: true });
+    expect(container.querySelector(".sourcecado-run-status")).toBeNull();
+
+    await act(async () => {
+      session.resolve({
+        id: "thread-alpha",
+        title: "Pending approval",
+        messages: [],
+        queue: [],
+        queue_paused: false,
+        events: [
+          { ...envelope, type: "turn_start", event_id: "r1", state: "running" },
+          {
+            ...envelope,
+            type: "permission_required",
+            event_id: "r2",
+            id: "pending-draft",
+            name: "gmail_draft",
+            arguments: { to: "alyssa@example.com" },
+            reason: "Creating a Gmail draft changes an external account.",
+          },
+        ],
+      });
+    });
+    await screen.findByRole("heading", { level: 1, name: "Pending approval" });
+    watcher.disconnect();
+
+    expect(screen.getByRole("banner")).toHaveTextContent("Needs approval");
+    expect(chipTexts.length).toBeGreaterThan(0);
+    expect(chipTexts.some((text) => text.includes("Idle"))).toBe(false);
+  });
+
+  it("follows a rename of the open thread, and ignores a rename of another thread", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("sourcecado:session-renamed", {
+          detail: { id: "thread-other", title: "Not this one" },
+        }),
+      );
+    });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Alpha");
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("sourcecado:session-renamed", {
+          detail: { id: "thread-alpha", title: "Renamed Alpha" },
+        }),
+      );
+    });
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Renamed Alpha" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not carry a running status or its time across threads", async () => {
     api.getSession.mockImplementation(async (id: string) => ({
       id,
       title: id,
       messages: [],
       events: [],
     }));
-    api.getCurrentRunTelemetry.mockImplementation((id: string) =>
-      id === "thread-alpha"
-        ? Promise.resolve({
-            version: 1,
-            session_id: id,
-            current_run: {
-              run_id: "run-alpha",
-              status: "success",
-              input_tokens: 8,
-              output_tokens: 2,
-              total_tokens: 10,
-              cache_hit_input_tokens: 0,
-              cache_miss_input_tokens: 8,
-              cache_write_input_tokens: 0,
-              reasoning_tokens: 0,
-              current_context_tokens: 8,
-              context_window_tokens: null,
-              context_use_ratio: null,
-              elapsed_ms: 100,
-              estimated_cost_usd: null,
-              retry_count: 0,
-              compaction_count: 0,
-            },
-          })
-        : betaMetrics.promise,
-    );
+    api.getCurrentRunTelemetry.mockImplementation(async (id: string) => ({
+      version: 1,
+      session_id: id,
+      current_run: {
+        run_id: `run-${id}`,
+        status: "running",
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        cache_hit_input_tokens: null,
+        cache_miss_input_tokens: null,
+        cache_write_input_tokens: null,
+        reasoning_tokens: null,
+        current_context_tokens: null,
+        context_window_tokens: null,
+        context_use_ratio: null,
+        elapsed_ms: 7000,
+        estimated_cost_usd: null,
+        retry_count: 0,
+        compaction_count: 0,
+      },
+    }));
 
     const view = render(<ChatPage sessionId="thread-alpha" />);
-    const alphaMetrics = await screen.findByRole("region", {
-      name: "Current run metrics",
+    await screen.findByRole("heading", { level: 1, name: "thread-alpha" });
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        type: "turn_start",
+        session_id: "thread-alpha",
+        run_id: "run-alpha",
+        event_id: "alpha-start",
+        message_id: "assistant-alpha",
+        part_id: "assistant-alpha-part",
+        state: "running",
+      });
     });
-    expect(alphaMetrics).toHaveTextContent("10 tokens");
-    expect(alphaMetrics).toHaveTextContent("0 retries");
+    await waitFor(() =>
+      expect(screen.getByRole("banner")).toHaveTextContent("Thinking7s"),
+    );
 
     view.rerender(<ChatPage sessionId="thread-beta" />);
     await screen.findByRole("heading", { level: 1, name: "thread-beta" });
-    expect(
-      screen.queryByRole("region", { name: "Current run metrics" }),
-    ).not.toBeInTheDocument();
-
-    await act(async () => {
-      betaMetrics.resolve({
-        version: 1,
-        session_id: "thread-beta",
-        current_run: null,
-      });
-    });
+    expect(screen.getByRole("banner")).toHaveTextContent("Idle");
+    expect(screen.getByRole("banner")).not.toHaveTextContent("7s");
   });
 
   it("notifies the Board when a live person-file tool changes it", async () => {
@@ -1212,7 +1452,7 @@ describe("ChatPage Warm Operator thread", () => {
     const { container } = render(<ChatPage sessionId="thread-alpha" />);
 
     const activity = await screen.findByRole("button", {
-      name: "Searched Drive · Completed",
+      name: /^Searched Drive/,
     });
     expect(activity).toHaveAttribute("aria-expanded", "false");
     expect(container).not.toHaveTextContent("DO_NOT_RENDER_ARGUMENT");
@@ -1636,7 +1876,7 @@ describe("ChatPage Warm Operator thread", () => {
     const { container } = render(<ChatPage sessionId="thread-alpha" />);
 
     const disclosure = await screen.findByRole("button", {
-      name: /Checked 2 sources · 2s · Completed/,
+      name: /^Used 2 sources in 2s/,
     });
     expect(disclosure).toHaveAttribute("aria-expanded", "false");
     expect(container).not.toHaveTextContent("DO_NOT_RENDER");
@@ -1773,24 +2013,6 @@ describe("ChatPage Warm Operator thread", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Sourcecado needs your approval to continue.",
     );
-  });
-
-  it("shows the active persona in the conversation header and reflects a persisted change on the next mount", async () => {
-    api.getSession.mockResolvedValue({
-      id: "thread-alpha",
-      title: "Alpha",
-      messages: [],
-      events: [],
-    });
-    const { unmount } = render(<ChatPage sessionId="thread-alpha" />);
-    await screen.findByRole("heading", { level: 1, name: "Alpha" });
-    expect(await screen.findByText("Sourcing Operator")).toBeInTheDocument();
-    unmount();
-
-    api.getPersona.mockResolvedValue({ id: "buddy", name: "Club", tools: [] });
-    render(<ChatPage sessionId="thread-alpha" />);
-    await screen.findByRole("heading", { level: 1, name: "Alpha" });
-    expect(await screen.findByText("Club")).toBeInTheDocument();
   });
 
   it("shows a progressive pending approval and waits for durable resolution", async () => {
@@ -1959,7 +2181,7 @@ describe("ChatPage Warm Operator thread", () => {
 
     const { container } = render(<ChatPage sessionId="thread-alpha" />);
     const activity = await screen.findByRole("button", {
-      name: /Checked 2 sources · Partial/,
+      name: /^Used 2 sources/,
     });
     fireEvent.click(activity);
 
@@ -2089,7 +2311,7 @@ describe("ChatPage Warm Operator thread", () => {
     expect(within(reopenedInspector).queryByText("Google Drive")).not.toBeInTheDocument();
     expect(within(reopenedInspector).getByText("Truncated")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Searched Drive · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Drive/ }));
     fireEvent.click(screen.getByRole("button", { name: "Inspect Searched Drive" }));
     expect(within(reopenedInspector).getByRole("heading", { level: 2 })).toHaveTextContent(
       "Searched Drive",
@@ -2148,18 +2370,200 @@ describe("ChatPage Warm Operator thread", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Searched Apollo · Completed",
+        name: /^Searched Apollo/,
       }),
     );
+    const emptyHeading = screen.getByRole("heading", { name: "No Apollo matches" });
+    expect(emptyHeading).toBeInTheDocument();
+    // The step row repeats the query, so scope this to the result card.
     expect(
-      screen.getByRole("heading", { name: "No Apollo matches" }),
+      within(emptyHeading.closest("section")!).getByText("CEO at Apollo", {
+        exact: false,
+      }),
     ).toBeInTheDocument();
-    expect(screen.getByText("CEO at Apollo", { exact: false })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Adjust criteria" }));
     expect(screen.getByRole("textbox", { name: "Message Sourcecado" })).toHaveValue(
       "Adjust the Apollo people search for CEO at Apollo.",
     );
+  });
+
+  it("shows step rows above the answer while a turn runs and leaves one receipt line after it", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Process layer",
+      messages: [],
+      queue: [],
+      queue_paused: false,
+      events: [],
+    });
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+    const receiptLine = () => container.querySelector(".sourcecado-activity-receipt");
+    const live = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-process",
+      message_id: "message-process",
+      part_id: "part-process",
+    } as const;
+    const emit = (event: Record<string, unknown>) =>
+      act(() => onChatEvent?.({ ...live, ...event }));
+    const before = (first: Element, second: Element) =>
+      Boolean(
+        first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+
+    emit({ type: "turn_start", event_id: "process-1", state: "running" });
+    emit({
+      type: "tool_started",
+      event_id: "process-2",
+      id: "process-drive",
+      name: "drive_search",
+      arguments: { query: "Q3 plan" },
+      started_at: "2026-10-26T12:00:00.000Z",
+    });
+    // A step row exists as soon as the tool starts, before any answer text.
+    const driveRow = (await screen.findByText("Searching Drive")).closest("button");
+    expect(driveRow).toHaveTextContent("Searching Drive for “Q3 plan”");
+    expect(driveRow).toHaveTextContent("Running");
+
+    emit({
+      type: "tool_finished",
+      event_id: "process-3",
+      id: "process-drive",
+      name: "drive_search",
+      ok: true,
+      result: { files: [{ id: "doc-1", name: "Q3 plan" }] },
+      finished_at: "2026-10-26T12:00:00.300Z",
+    });
+    emit({
+      type: "tool_started",
+      event_id: "process-4",
+      id: "process-apollo",
+      name: "apollo_search_people",
+      arguments: { organizationName: "Acme", personTitles: ["VP Talent"] },
+      started_at: "2026-10-26T12:00:00.300Z",
+    });
+    await screen.findByText("Searching Apollo");
+    expect(receiptLine()).toHaveTextContent("Using 2 sources");
+    expect(receiptLine()).toHaveAttribute("aria-expanded", "true");
+
+    emit({
+      type: "tool_finished",
+      event_id: "process-5",
+      id: "process-apollo",
+      name: "apollo_search_people",
+      ok: true,
+      result: {
+        people: [
+          {
+            apolloId: "p-1",
+            firstName: "Maya",
+            lastNameObfuscated: "Ch***",
+            title: "VP Talent",
+            organizationName: "Acme",
+            hasEmail: true,
+          },
+        ],
+      },
+      finished_at: "2026-10-26T12:00:03.100Z",
+    });
+    emit({
+      type: "assistant_delta",
+      event_id: "process-6",
+      delta:
+        "Found one VP Talent at Acme. She is the only match for this search, " +
+        "and her email is on file for review.",
+    });
+    // The answer has started, so the layer closes by itself.
+    const answer = await screen.findByText(/^Found one VP Talent at Acme\./);
+    expect(receiptLine()).toHaveTextContent("Used 2 sources in 3s");
+    expect(receiptLine()).toHaveAttribute("aria-expanded", "false");
+    emit({ type: "turn_end", event_id: "process-7", state: "complete", text: "" });
+
+    // After the turn: the layer is above the answer, the result card is below
+    // it, and neither needs an expansion to be visible.
+    const card = screen.getByText("Surname hidden by Apollo");
+    const receipt = receiptLine()!;
+    expect(receipt).toHaveAttribute("aria-expanded", "false");
+    expect(before(receipt, answer)).toBe(true);
+    expect(before(answer, card)).toBe(true);
+    expect(container.querySelector(".sourcecado-activity-body")).toBeNull();
+  });
+
+  it("keeps the layer open through lead-in sentences and closes it when the final answer streams", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Lead-ins",
+      messages: [],
+      queue: [],
+      queue_paused: false,
+      events: [],
+    });
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+    const live = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-lead",
+      message_id: "message-lead",
+      part_id: "part-lead",
+    } as const;
+    const emit = (event: Record<string, unknown>) =>
+      act(() => onChatEvent?.({ ...live, ...event }));
+    const receipt = () => container.querySelector(".sourcecado-activity-receipt");
+    const step = (n: number) => {
+      emit({
+        type: "tool_started",
+        event_id: `lead-start-${n}`,
+        id: `lead-call-${n}`,
+        name: "board_query",
+        arguments: {},
+        started_at: `2026-10-26T12:00:0${n}.000Z`,
+      });
+      emit({
+        type: "tool_finished",
+        event_id: `lead-finish-${n}`,
+        id: `lead-call-${n}`,
+        name: "board_query",
+        ok: true,
+        result: { people: [] },
+        finished_at: `2026-10-26T12:00:0${n}.020Z`,
+      });
+    };
+
+    emit({ type: "turn_start", event_id: "lead-0", state: "running" });
+    emit({ type: "assistant_delta", event_id: "lead-d1", delta: "I will check the Board first." });
+    step(1);
+    emit({ type: "assistant_delta", event_id: "lead-d2", delta: "Now I will check it again." });
+    step(2);
+    emit({ type: "assistant_delta", event_id: "lead-d3", delta: "One more look." });
+    // Text follows the last step, but it is a lead-in sentence: the layer stays open.
+    await screen.findByText("One more look.");
+    expect(receipt()).toHaveAttribute("aria-expanded", "true");
+    step(3);
+    expect(receipt()).toHaveAttribute("aria-expanded", "true");
+    expect(receipt()).toHaveTextContent("Using 3 sources");
+
+    emit({
+      type: "assistant_delta",
+      event_id: "lead-d4",
+      delta: "\n\n## Final answer\n\n- The Board has no matching people yet.",
+    });
+    // The final answer is streaming and the turn has not ended: the layer closes.
+    await screen.findByText("Final answer");
+    expect(receipt()).toHaveAttribute("aria-expanded", "false");
+    expect(receipt()).toHaveTextContent("Used 3 sources");
+    // Lead-ins and the answer are separate blocks, so they do not run together.
+    const blocks = [...container.querySelectorAll(".sourcecado-markdown")].map(
+      (block) => block.textContent,
+    );
+    expect(blocks).toHaveLength(4);
+    expect(blocks[2]).toBe("One more look.");
+    expect(blocks[3]).toContain("Final answer");
+    emit({ type: "turn_end", event_id: "lead-end", state: "complete", text: "" });
+    expect(receipt()).toHaveAttribute("aria-expanded", "false");
   });
 
   it("renders equivalent Apollo shortlist states from restored and live events", async () => {
@@ -2221,7 +2625,7 @@ describe("ChatPage Warm Operator thread", () => {
 
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Searched Apollo · Completed",
+        name: /^Searched Apollo/,
       }),
     );
     expect(screen.getByText("Restored")).toBeInTheDocument();
@@ -2344,7 +2748,7 @@ describe("ChatPage Warm Operator thread", () => {
     render(<ChatPage sessionId="thread-alpha" />);
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Prepared Gmail draft · Completed",
+        name: /^Prepared Gmail draft/,
       }),
     );
     expect(screen.getByText("Draft ID: draft-restored")).toBeInTheDocument();
@@ -2472,7 +2876,7 @@ describe("ChatPage Warm Operator thread", () => {
 
     render(<ChatPage sessionId="thread-alpha" />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Checked calendar · Completed" }),
+      await screen.findByRole("button", { name: /^Checked calendar/ }),
     );
     expect(screen.getByText("Restored calendar event")).toBeInTheDocument();
 
@@ -2593,7 +2997,7 @@ describe("ChatPage Warm Operator thread", () => {
 
     render(<ChatPage sessionId="thread-alpha" />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Read Drive evidence · Completed" }),
+      await screen.findByRole("button", { name: /^Read Drive evidence/ }),
     );
     expect(screen.getByText("Restored Drive evidence")).toBeInTheDocument();
     expect(screen.getByText("Restored evidence excerpt")).toBeInTheDocument();

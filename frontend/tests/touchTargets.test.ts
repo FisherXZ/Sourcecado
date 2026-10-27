@@ -28,9 +28,12 @@ describe("44px touch targets on narrow viewports (M4 regression guard)", () => {
     );
   });
 
-  it("sizes the activity trace disclosure", () => {
+  it("sizes the process layer receipt, step rows and inspect icon button", () => {
     expect(styles).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-activity > button\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/,
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-activity-receipt,\s*\.sourcecado-step-toggle\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-step-actions \.sourcecado-inspect-tool\s*\{[^}]*width:\s*44px;/,
     );
   });
 
@@ -49,6 +52,12 @@ describe("44px touch targets on narrow viewports (M4 regression guard)", () => {
   it("sizes the copy-response action", () => {
     expect(styles).toMatch(
       /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-copy-action\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/,
+    );
+  });
+
+  it("sizes the code-block Copy icon button", () => {
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-code-copy\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px;/,
     );
   });
 

@@ -8,6 +8,7 @@ import random
 import threading
 import uuid
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Any, Awaitable, Callable
 
 from coworker.agent_run_dispatch import (
@@ -76,6 +77,72 @@ _APOLLO_TOOLS = frozenset({"apollo_search_people", "apollo_enrich_contact"})
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# One reasoning event per this many seconds, not one per streamed token. A
+# long thought is thousands of tokens, and every event is a line in the
+# presentation log that the thread reloads from.
+_REASONING_BATCH_SECONDS = 0.15
+
+
+class _ReasoningFeed:
+    """Raw model reasoning for the thread, in a few events instead of many.
+
+    The first delta of a block goes out at once, so the thinking row shows
+    without delay. Later deltas wait until a batch is old enough, or until the
+    provider moves on to text or a tool call. A block is one provider attempt
+    that streamed reasoning; `step` tells the thread which block a delta joins.
+
+    The text leaves through `send` and nowhere else. It is never added to the
+    model's history, the run ledger, telemetry or a compaction summary.
+    """
+
+    def __init__(
+        self,
+        send: Callable[[dict[str, Any]], Awaitable[None]],
+        *,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        self._send = send
+        self._clock = clock
+        self._step = 0
+        self._open = False
+        self._pending: list[str] = []
+        self._last_sent: float | None = None
+
+    async def add(self, delta: str) -> None:
+        if not self._open:
+            self._open = True
+            self._step += 1
+            self._last_sent = None
+        self._pending.append(delta)
+        if (
+            self._last_sent is None
+            or self._clock() - self._last_sent >= _REASONING_BATCH_SECONDS
+        ):
+            await self._flush()
+
+    async def end_block(self) -> None:
+        """The provider stopped reasoning: send what is waiting."""
+        if not self._open:
+            return
+        self._open = False
+        await self._flush()
+
+    async def _flush(self) -> None:
+        if not self._pending:
+            return
+        text = "".join(self._pending)
+        self._pending.clear()
+        self._last_sent = self._clock()
+        await self._send(
+            {
+                "type": "reasoning_delta",
+                "delta": text,
+                "step": self._step,
+                "at": _now_iso(),
+            }
+        )
 
 
 def _safe_apollo_json(value: object) -> str:
@@ -813,6 +880,8 @@ async def run_turn(
     async def _emit(event: dict[str, Any]) -> None:
         await events.send(event)
 
+    reasoning = _ReasoningFeed(_emit)
+
     def _stamp(message: dict[str, Any]) -> dict[str, Any]:
         """Identity for restore merges; stripped before the model sees it."""
         message["message_id"] = events.identity.message_id
@@ -1171,7 +1240,10 @@ async def run_turn(
                             _ensure_provider_span(chunk.start)
                             continue
                         if chunk.kind is StreamKind.REASONING:
+                            if chunk.transient_reasoning_delta:
+                                await reasoning.add(chunk.transient_reasoning_delta)
                             continue
+                        await reasoning.end_block()
                         if chunk.kind is not None:
                             meaningful_stream = True
                         active_provider_span = _ensure_provider_span()
@@ -1220,7 +1292,9 @@ async def run_turn(
                                     provider_cost = None
                         if chunk.finish_reason is not None:
                             provider_finish_reason = chunk.finish_reason
+                    await reasoning.end_block()
                 except ProviderRequestCancelled:
+                    await reasoning.end_block()
                     _ensure_provider_span().cancel(
                         usage=provider_usage,
                         cost=provider_cost,
@@ -1236,6 +1310,7 @@ async def run_turn(
                     turn_span.cancel()
                     raise
                 except Exception as exc:
+                    await reasoning.end_block()
                     error_kind = _telemetry_provider_error_kind(exc)
                     _ensure_provider_span().fail(
                         error_kind,
