@@ -266,6 +266,31 @@ Three consequences follow, and each is a test.
   the call. A caller that supplied no run store was never fenced, which is the
   legacy and test path. The two are different values, not the same `None`.
 
+## Recovery controls in the chat
+
+A failed tool step carries a `failure` record: its class, `retry_safe`,
+`repair_route`, and the last recovery status. The chat reads those four facts and
+offers an action only where the backend can carry it out. The chat adds no
+permission of its own. The commands are `retry_failed_step`, `repair_connection`
+and `continue_without_source`, and their backend behavior does not change.
+
+| Step or turn | Retry | Repair connection | Continue without this source |
+| --- | --- | --- | --- |
+| Failed, `retry_safe` | Runs the step again | Only with a `repair_route` | Yes |
+| Failed, not `retry_safe` | Asks for a fresh approval first. The step does not run until the operator allows it. | Only with a `repair_route` | Yes |
+| Failed, class `validation` | No. The same request would fail the same way. | No | Yes |
+| Not allowed (a refusal by policy) | No | No | Yes |
+| Retry approval waiting | No. One approval is already waiting. | Only with a `repair_route` | Yes |
+| Recovery settled (`succeeded`, `skipped`, `denied`, `interrupted`) | No | No | No |
+| Outcome unknown, held, denied, interrupted | No | No | No |
+
+A failed turn (a model provider failure) has its own Retry. It sends the last
+operator message again as a new turn. It is off when that turn used an approval,
+has a step with no recorded result, or has a failed step that is not
+`retry_safe`. A held turn has no failure notice and no Retry: its outcome is
+unknown until a person settles it. The message-level Retry under a finished
+answer is a separate control and never shows on a failed turn.
+
 ## Extension points
 
 The following are named seams, not implementations.
