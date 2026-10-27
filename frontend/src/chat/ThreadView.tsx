@@ -8,12 +8,14 @@ import { ThreadHeader, type RunStatus } from "./ThreadHeader";
 import { UserMessage } from "./UserMessage";
 import type { ActivePerson, QueueItem } from "../api";
 import { Inspector } from "./Inspector";
+import { UsageLine, type UsageSource } from "./UsageLine";
 
 type ThreadViewProps = {
   readonly title: string | null;
   readonly activePerson?: ActivePerson | null;
   readonly runStatus: RunStatus | null;
   readonly elapsedMs: number | null;
+  readonly usage: UsageSource | null;
   readonly loading: boolean;
   readonly loadError: boolean;
   readonly onRetry: () => void;
@@ -65,6 +67,7 @@ export function ThreadView({
   activePerson,
   runStatus,
   elapsedMs,
+  usage,
   loading,
   loadError,
   onRetry,
@@ -163,6 +166,7 @@ export function ThreadView({
         onRemove={onQueueRemove}
       />
       <div className="sourcecado-composer-zone">
+        {usage ? <UsageLine source={usage} /> : null}
         {!loading && !loadError ? (
           <ThreadPrimitive.Empty>
             <SuggestedAction

@@ -10,6 +10,7 @@ import { ActivityGroup } from "./ActivityGroup";
 import { AnswerMarkdown } from "./AnswerMarkdown";
 import { ApprovalCard } from "./ApprovalCard";
 import { RunBudgetView } from "./RunBudget";
+import { CompactIcon } from "./UsageLine";
 import { useLastApprovalDelivery } from "./approvalDelivery";
 import { SourceCitation } from "./SourceCitation";
 import { AnswerResults } from "./AnswerResults";
@@ -41,10 +42,7 @@ function noticeFrame(code: unknown): {
     };
   }
   if (code === "compacted") {
-    return {
-      title: "Older context was compacted.",
-      detail: "Available messages are shown.",
-    };
+    return { title: "Context compacted", detail: null };
   }
   if (code === "unsupported_version" || code === "malformed_event") {
     return {
@@ -105,6 +103,8 @@ export function AssistantMessage() {
     | RunBudgetStatus
     | undefined;
   const notice = message.metadata.custom?.sourcecadoNotice === true;
+  const compacted =
+    notice && message.metadata.custom?.sourcecadoNoticeCode === "compacted";
   const frame = notice
     ? noticeFrame(message.metadata.custom?.sourcecadoNoticeCode)
     : null;
@@ -150,11 +150,14 @@ export function AssistantMessage() {
 
   return (
     <MessagePrimitive.Root
-      className={`sourcecado-assistant-message${notice ? " sourcecado-notice" : ""}`}
+      className={`sourcecado-assistant-message${notice ? " sourcecado-notice" : ""}${compacted ? " sourcecado-compaction-receipt" : ""}`}
       {...(notice ? { role: "note" } : {})}
     >
       {frame ? (
-        <p className="sourcecado-notice-title">{frame.title}</p>
+        <p className="sourcecado-notice-title">
+          {compacted ? <CompactIcon /> : null}
+          {frame.title}
+        </p>
       ) : null}
       <ActivityGroup
         tools={tools}

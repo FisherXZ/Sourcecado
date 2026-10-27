@@ -27,6 +27,7 @@ import {
 import { SourcecadoChatStore } from "../chat/store";
 import { runStatusOf } from "../chat/ThreadHeader";
 import { ThreadView } from "../chat/ThreadView";
+import { pickUsage } from "../chat/UsageLine";
 import { readDraft, writeDraft } from "../chat/draftStorage";
 import {
   RecoveryProvider,
@@ -85,12 +86,14 @@ export function ChatPage({
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
   const currentRunIsActive = runningThreadsRef.current.has(activeThreadId);
 
+  // The usage line keeps the last run's numbers once the run ends, so the
+  // measurements are cleared only when the thread changes.
   useEffect(() => {
-    if (!hasToken() || !activeThreadId) {
-      setRunMetrics(null);
-      return;
-    }
     setRunMetrics(null);
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    if (!hasToken() || !activeThreadId) return;
     let active = true;
     const refreshMetrics = () => {
       void getCurrentRunTelemetry(activeThreadId)
@@ -443,6 +446,8 @@ export function ChatPage({
   const runStatus = loading || loadError ? null : runStatusOf(messages, running);
   const elapsedMs =
     runMetrics?.status === "running" ? runMetrics.elapsed_ms : null;
+  const usage =
+    loading || loadError ? null : pickUsage(messages, runMetrics, running);
 
   // The backend names a thread when it saves the first message. No event
   // announces that, so ask for the name once output starts and once more when
@@ -508,6 +513,7 @@ export function ChatPage({
           activePerson={activePerson}
           runStatus={runStatus}
           elapsedMs={elapsedMs}
+          usage={usage}
           loading={loading}
           loadError={loadError}
           onRetry={() => setLoadAttempt((attempt) => attempt + 1)}

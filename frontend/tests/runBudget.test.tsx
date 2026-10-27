@@ -220,7 +220,7 @@ describe("ChatPage run budget", () => {
     });
   });
 
-  it("shows what the run is doing and warns before a budget is exhausted", async () => {
+  it("warns before a budget is exhausted and leaves the numbers to the usage line", async () => {
     render(<ChatPage sessionId="thread-alpha" />);
     await waitFor(() => expect(onChatEvent).toBeDefined());
 
@@ -255,18 +255,16 @@ describe("ChatPage run budget", () => {
       );
     });
 
-    // Current activity is named, and the run's spend sits beside it.
-    const strip = await screen.findByRole("region", { name: "Run budget" });
+    // The warning is a sentence. The spend moved to the usage line.
     const activity = document.querySelector(".sourcecado-activity");
     expect(activity).toHaveTextContent("Searching Drive");
     expect(activity).toHaveTextContent("Running");
-    expect(strip).toHaveTextContent("Step 33 of 40");
-    expect(strip).toHaveTextContent("61 of 120 tool calls");
-    expect(strip).toHaveTextContent("3m 34s of 15m 00s");
-    expect(strip).toHaveTextContent("$0.12 of $2.00 est.");
     expect(
-      screen.getByText(/used 83% of its model turns budget/i),
-    ).toBeInTheDocument();
+      screen.queryByRole("region", { name: "Run budget" }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByRole("group", { name: "Usage, this run" })).toHaveTextContent(
+      "33/40 steps",
+    );
     // The warning arrives before the stop, not with it.
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
@@ -374,5 +372,134 @@ describe("ChatPage run budget", () => {
         "thread-alpha",
       ),
     );
+  });
+
+  it("keeps the usage line after the run ends and labels it as the last run", async () => {
+    const telemetry = {
+      run_id: "run-budget",
+      status: "success",
+      input_tokens: 5200,
+      output_tokens: 190,
+      total_tokens: 5390,
+      cache_hit_input_tokens: null,
+      cache_miss_input_tokens: null,
+      cache_write_input_tokens: null,
+      reasoning_tokens: null,
+      current_context_tokens: 34000,
+      context_window_tokens: 100000,
+      context_use_ratio: 0.34,
+      elapsed_ms: 12400,
+      estimated_cost_usd: 0.04,
+      retry_count: 1,
+      compaction_count: 0,
+    };
+    api.getCurrentRunTelemetry.mockResolvedValue({
+      version: 1,
+      session_id: "thread-alpha",
+      current_run: telemetry,
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+    // An empty thread has no run to describe.
+    expect(screen.queryByRole("group", { name: /^Usage/ })).not.toBeInTheDocument();
+
+    act(() => {
+      onChatEvent?.(envelope("turn_start", { state: "running" }));
+      onChatEvent?.(envelope("assistant_delta", { delta: "Here is the shortlist." }));
+      onChatEvent?.(
+        envelope("turn_end", {
+          text: "Here is the shortlist.",
+          state: "complete",
+          run_budget: {
+            ...EXHAUSTED_BUDGET,
+            state: "finished",
+            stopped_by: null,
+            exhausted: [],
+            consumed: { ...EXHAUSTED_BUDGET.consumed, model_turns: 6 },
+            remaining: { requested_tools: [], final_answer: true },
+            continue_available: false,
+          },
+        }),
+      );
+    });
+
+    const usage = await screen.findByRole("group", { name: "Usage, last run" });
+    await waitFor(() => expect(usage).toHaveTextContent("34%"));
+    expect(usage).toHaveTextContent("Last run");
+    expect(usage).toHaveTextContent("$0.04 est.");
+    expect(usage).toHaveTextContent("6/40 steps");
+    expect(usage).toHaveTextContent("1 retry");
+    expect(screen.queryByRole("region", { name: "Run budget" })).not.toBeInTheDocument();
+  });
+
+  it("restores the steps of a past run when its telemetry is gone, without inventing the rest", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Budgeted run",
+      messages: [
+        { role: "user", content: "Build the shortlist." },
+        { role: "assistant", content: "Three names so far." },
+      ],
+      events: [
+        envelope("turn_start", { state: "running" }),
+        envelope("assistant_delta", { delta: "Three names so far." }),
+        envelope("turn_end", {
+          text: "Three names so far.",
+          state: "stopped",
+          run_budget: EXHAUSTED_BUDGET,
+        }),
+      ],
+    });
+
+    render(<ChatPage sessionId="thread-alpha" />);
+
+    const usage = await screen.findByRole("group", { name: "Usage, last run" });
+    expect(usage).toHaveTextContent("40/40 steps");
+    expect(usage).toHaveTextContent("Context window unavailable");
+    expect(usage).toHaveTextContent("Estimated cost unavailable");
+    expect(usage).not.toHaveTextContent("$0");
+  });
+
+  it("shows a compaction as a receipt in the thread and keeps the whole conversation", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Long run",
+      messages: [
+        { role: "user", content: "First question of the day." },
+        { role: "assistant", content: "First answer of the day." },
+      ],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+
+    act(() => {
+      onChatEvent?.(envelope("turn_start", { state: "running" }));
+      onChatEvent?.(envelope("assistant_delta", { delta: "Latest answer." }));
+      onChatEvent?.(
+        envelope("turn_end", {
+          text: "Latest answer.",
+          state: "complete",
+          compaction: {
+            generation: 1,
+            summarized: true,
+            compacted_messages: 42,
+            retained_director_messages: 12,
+            omitted_director_messages: 0,
+            measurement: "provider",
+            rejected_summaries: 0,
+          },
+        }),
+      );
+    });
+
+    const receipt = await screen.findByRole("note");
+    expect(receipt).toHaveTextContent("Context compacted");
+    expect(receipt).toHaveTextContent("The 42 earliest messages are no longer sent to the model.");
+    expect(receipt).toHaveTextContent("The full conversation is still saved on this machine.");
+    // Compaction changes what the model is sent, not what the operator can read.
+    expect(screen.getByText("First question of the day.")).toBeInTheDocument();
+    expect(screen.getByText("First answer of the day.")).toBeInTheDocument();
+    expect(screen.getByText("Latest answer.")).toBeInTheDocument();
   });
 });
