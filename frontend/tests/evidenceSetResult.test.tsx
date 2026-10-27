@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 
 function tool(
@@ -27,6 +28,7 @@ function renderEvidence(tools: readonly ToolCallMessagePart[]) {
   return render(
     <InspectorProvider threadId="thread-evidence">
       <ActivityGroup tools={tools} messageState="complete" />
+      <AnswerResults tools={tools} />
       <Inspector />
     </InspectorProvider>,
   );
@@ -53,7 +55,7 @@ describe("Evidence set result", () => {
     ]);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Listed Drive folder · Completed" }),
+      screen.getByRole("button", { name: /^Listed Drive folder/ }),
     );
 
     expect(
@@ -91,7 +93,7 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 2 sources · Completed" }),
+      screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
     expect(
@@ -128,7 +130,7 @@ describe("Evidence set result", () => {
       failed("call-granola-failed", "mcp__granola__list_meetings", "Granola"),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 2 sources · Failed" }),
+      screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
     expect(
@@ -158,7 +160,7 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 2 sources · Completed" }),
+      screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
     expect(
@@ -166,6 +168,7 @@ describe("Evidence set result", () => {
     ).toBeInTheDocument();
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_GRANOLA_PAYLOAD");
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Drive/ }));
     fireEvent.click(
       screen.getByRole("button", { name: "Inspect Searched Drive" }),
     );
@@ -192,7 +195,7 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Read Drive evidence · Completed" }),
+      screen.getByRole("button", { name: /^Read Drive evidence/ }),
     );
 
     expect(screen.getByText("Cached stale")).toBeInTheDocument();
@@ -260,7 +263,7 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 3 sources · Completed" }),
+      screen.getByRole("button", { name: /^Used 3 sources/ }),
     );
 
     expect(screen.getByText("Metadata only")).toBeInTheDocument();
@@ -294,7 +297,7 @@ describe("Evidence set result", () => {
     ]);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Listed Drive folder · Completed" }),
+      screen.getByRole("button", { name: /^Listed Drive folder/ }),
     );
 
     expect(screen.getByText("Target list")).toBeInTheDocument();
@@ -317,7 +320,7 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Drive · Completed" }),
+      screen.getByRole("button", { name: /^Searched Drive/ }),
     );
     const evidence = screen.getByRole("list", { name: "Evidence items" });
     expect(evidence.querySelectorAll(":scope > li")).toHaveLength(5);
@@ -397,7 +400,7 @@ describe("Evidence set result", () => {
       const { container } = renderEvidence([success, failed]);
 
       fireEvent.click(
-        screen.getByRole("button", { name: "Checked 2 sources · Partial" }),
+        screen.getByRole("button", { name: /^Used 2 sources/ }),
       );
 
       expect(screen.getByText("Partial evidence")).toBeInTheDocument();
@@ -463,7 +466,7 @@ describe("Evidence set result", () => {
     ]);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 3 sources · Completed" }),
+      screen.getByRole("button", { name: /^Used 3 sources/ }),
     );
 
     expect(screen.getByRole("heading", { name: "Evidence set" })).toBeInTheDocument();

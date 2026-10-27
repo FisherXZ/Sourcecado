@@ -11,6 +11,8 @@ import { ApprovalCard } from "./ApprovalCard";
 import { RunBudgetView } from "./RunBudget";
 import { useLastApprovalDelivery } from "./approvalDelivery";
 import { SourceCitation } from "./SourceCitation";
+import { AnswerResults } from "./AnswerResults";
+import { answerHasStarted } from "./processState";
 import { useInspector } from "./Inspector";
 import { resolveInbox } from "../api";
 import type { RunBudgetStatus } from "./protocol";
@@ -103,6 +105,7 @@ export function AssistantMessage() {
   const tools = message.content.filter(
     (part): part is ToolCallMessagePart => part.type === "tool-call",
   );
+  const answerStarted = answerHasStarted(message.content);
   const artifacts = Array.isArray(
     message.metadata.custom?.sourcecadoArtifacts,
   )
@@ -119,6 +122,11 @@ export function AssistantMessage() {
       {frame ? (
         <p className="sourcecado-notice-title">{frame.title}</p>
       ) : null}
+      <ActivityGroup
+        tools={tools}
+        messageState={sourcecadoState}
+        answerStarted={answerStarted}
+      />
       <MessagePrimitive.Parts
         components={{
           Text: AssistantText,
@@ -126,7 +134,7 @@ export function AssistantMessage() {
           tools: { Fallback: SafeToolFallback },
         }}
       />
-      <ActivityGroup tools={tools} messageState={sourcecadoState} />
+      <AnswerResults tools={tools} />
       <RunBudgetView status={runBudget} messageState={sourcecadoState} />
       {artifacts.length > 0 ? <ArtifactControls artifacts={artifacts} /> : null}
       {sourcecadoState === "cancelled" ? (

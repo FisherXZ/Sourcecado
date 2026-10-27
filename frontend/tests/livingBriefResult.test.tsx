@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { InspectorProvider } from "../src/chat/Inspector";
 import { livingBrief } from "./livingBrief";
 
@@ -19,6 +20,7 @@ function renderBoardResult(result: unknown, isError = false) {
   return render(
     <InspectorProvider threadId="thread-brief">
       <ActivityGroup tools={[tool]} messageState="complete" />
+      <AnswerResults tools={[tool]} />
     </InspectorProvider>,
   );
 }

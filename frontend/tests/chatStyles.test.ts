@@ -163,12 +163,37 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
-  it("styles grouped activity as a subtle disclosure instead of stacked cards", () => {
+  it("styles the process layer as one bordered group with a bounded, internally scrolling body", () => {
     expect(styles).toMatch(
-      /\.sourcecado-activity\s*\{[^}]*border-top:\s*1px solid var\(--border\);[^}]*background:\s*transparent;/,
+      /\.sourcecado-activity\s*\{[^}]*border:\s*1px solid var\(--border\);[^}]*border-radius:\s*8px;/,
     );
     expect(styles).toMatch(
-      /\.sourcecado-activity > button\s*\{[^}]*background:\s*transparent;/,
+      /\.sourcecado-activity-body\s*\{[^}]*max-height:\s*min\(320px, 40vh\);[^}]*overflow-y:\s*auto;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-step-detail\s*\{[^}]*max-height:\s*240px;[^}]*overflow-y:\s*auto;/,
+    );
+  });
+
+  it("keeps process layer text at 13px or larger and out of muted ink", () => {
+    const block = styles.slice(
+      styles.indexOf("/* Process layer (#226)"),
+      styles.indexOf(".sourcecado-apollo-result {"),
+    );
+    expect(block.length).toBeGreaterThan(0);
+    const sizes = [...block.matchAll(/font-size:\s*(\d+)px/g)].map((m) => Number(m[1]));
+    expect(sizes.length).toBeGreaterThan(0);
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(13);
+    // Muted ink is allowed only on decorative icons.
+    const mutedRules = [...block.matchAll(/([^{}]+)\{[^}]*color:\s*var\(--muted\)[^}]*\}/g)];
+    for (const [, selector] of mutedRules) {
+      expect(selector).toMatch(/icon/);
+    }
+  });
+
+  it("stops the running spinner for reduced motion", () => {
+    expect(styles).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.sourcecado-status-icon-running\s*\{\s*animation:\s*none;/,
     );
   });
 
