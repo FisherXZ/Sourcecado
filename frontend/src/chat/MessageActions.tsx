@@ -8,9 +8,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { usePopulateComposer } from "./ComposerDraftContext";
 import { CheckIcon, EditIcon, Icon, RetryIcon } from "./icons";
-import { retryBlock } from "./retryPolicy";
+import { turnRetryBlock } from "./retrySafety";
 
 const COPIED_MS = 1800;
+// Long enough to cover two activations of the same button, short enough that a
+// dropped send does not leave Retry dead.
+const RESEND_GUARD_MS = 1000;
 
 const CopyIcon = () => (
   <Icon>
@@ -144,23 +147,33 @@ function RetryAction({
   const reason =
     prompt.trim() === ""
       ? "There is no earlier message to send again."
-      : retryBlock(tools, messageState);
+      : turnRetryBlock(tools, messageState);
+  const sent = useRef(false);
+  const guard = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(guard.current), []);
+
+  const resend = () => {
+    // A second activation before the button leaves would queue a second turn.
+    if (sent.current) return;
+    sent.current = true;
+    guard.current = window.setTimeout(() => {
+      sent.current = false;
+    }, RESEND_GUARD_MS);
+    // thread().append starts the turn the way the composer does, without
+    // touching a draft the operator is typing. The mark tells the page this
+    // send did not come from the composer, so the saved draft stays.
+    aui.thread().append({
+      role: "user",
+      content: [{ type: "text", text: prompt }],
+      metadata: { custom: { sourcecadoResend: true } },
+    });
+    // The button leaves when the new turn starts. Focus goes to the composer
+    // instead of falling to the page.
+    focusComposer();
+  };
 
   return (
-    <ActionButton
-      label="Retry"
-      reason={reason}
-      // thread().append starts the turn the way the composer does, without
-      // touching a draft the operator is typing. The mark tells the page this
-      // send did not come from the composer, so the saved draft stays.
-      onClick={() =>
-        aui.thread().append({
-          role: "user",
-          content: [{ type: "text", text: prompt }],
-          metadata: { custom: { sourcecadoResend: true } },
-        })
-      }
-    >
+    <ActionButton label="Retry" reason={reason} onClick={resend}>
       <RetryIcon />
     </ActionButton>
   );
@@ -220,14 +233,16 @@ export function AssistantActions({
   );
 }
 
-function focusComposer(length: number) {
+/** Focus the composer. The caret goes to `at`, or to the end of what is there. */
+function focusComposer(at?: number) {
   window.requestAnimationFrame(() => {
     const input = document.querySelector<HTMLTextAreaElement>(
       ".sourcecado-composer textarea",
     );
     if (!input) return;
     input.focus();
-    input.setSelectionRange(length, length);
+    const caret = at ?? input.value.length;
+    input.setSelectionRange(caret, caret);
   });
 }
 

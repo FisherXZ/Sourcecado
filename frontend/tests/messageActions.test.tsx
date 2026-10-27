@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatPage } from "../src/routes/ChatPage";
@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
 }));
 const writeText = vi.fn();
 const chatSend = vi.fn();
+const chatQueue = vi.fn();
 
 vi.mock("../src/api", () => ({
   connectCalendar: vi.fn(),
@@ -106,6 +107,25 @@ function open(...exchanges: ReturnType<typeof exchange>[]) {
   return render(<ChatPage sessionId="thread-alpha" />);
 }
 
+/**
+ * A thread restored from the stored transcript alone, with no events. There is
+ * no permission record in it, as in a thread from before approvals were kept.
+ */
+function legacy(prompt: string, answer: string, toolName: string) {
+  return {
+    messages: [
+      { role: "user", content: prompt },
+      {
+        role: "assistant",
+        content: answer,
+        tool_calls: [{ id: "call-legacy", function: { name: toolName, arguments: "{}" } }],
+      },
+      { role: "tool", tool_call_id: "call-legacy", content: JSON.stringify({ ok: true }) },
+    ],
+    events: [],
+  };
+}
+
 const read = (id: string, name: string, result: Record<string, unknown>) => [
   { type: "tool_started", id, name, arguments: {} },
   { type: "tool_finished", id, name, ok: true, result },
@@ -159,6 +179,7 @@ describe("Message actions", () => {
     window.localStorage.clear();
     writeText.mockReset();
     chatSend.mockReset();
+    chatQueue.mockReset();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
@@ -189,7 +210,7 @@ describe("Message actions", () => {
       send: chatSend,
       approve: vi.fn(),
       cancel: vi.fn(),
-      queue: vi.fn(),
+      queue: chatQueue,
       recover: vi.fn(),
       close: vi.fn(),
     }));
@@ -346,32 +367,189 @@ describe("Message actions", () => {
       expect(chatSend).not.toHaveBeenCalled();
     });
 
-    it("follows the backend's retry_safe flag for a failed step", async () => {
+    it("follows the backend's retry_safe flag for a failed read", async () => {
       const failed = (id: string, retrySafe: boolean) => [
-        { type: "tool_started", id, name: "board_upsert", arguments: {} },
+        { type: "tool_started", id, name: "drive_search", arguments: {} },
         {
           type: "tool_finished",
           id,
-          name: "board_upsert",
+          name: "drive_search",
           ok: false,
           result: { error: "PRIVATE_RAW_DETAIL" },
           failure: { ...failure, call_id: id, retry_safe: retrySafe, idempotent: retrySafe },
         },
       ];
       const first = open(
-        exchange(1, "Update the board", "The board change failed.", failed("call-1", false)),
+        exchange(1, "Search Drive", "The search failed.", failed("call-1", false)),
       );
-      await screen.findByText("The board change failed.");
+      await screen.findByText("The search failed.");
       expect(retryButton()).toHaveAttribute("aria-disabled", "true");
       expect(retryButton()).toHaveAttribute(
         "data-tooltip",
-        expect.stringContaining("not safe to repeat"),
+        expect.stringContaining("can change data"),
       );
       first.unmount();
 
-      open(exchange(1, "Update the board", "The board change failed.", failed("call-2", true)));
-      await screen.findByText("The board change failed.");
+      open(exchange(1, "Search Drive", "The search failed.", failed("call-2", true)));
+      await screen.findByText("The search failed.");
       expect(retryButton()).not.toHaveAttribute("aria-disabled");
+    });
+
+    describe("allows only read-only tools", () => {
+      const WRITE_REASON = "This turn ran a step that can change data. Retry could repeat it.";
+      const ran = (name: string) => [
+        { type: "tool_started", id: "call-1", name, arguments: {} },
+        { type: "tool_finished", id: "call-1", name, ok: true, result: { ok: true } },
+      ];
+
+      it.each([
+        "now",
+        "load_skill",
+        "board_get",
+        "board_query",
+        "drive_index_query",
+        "drive_search",
+        "drive_list_folder",
+        "drive_read",
+        "gmail_search",
+        "gmail_read",
+        "calendar_list",
+        "apollo_search_people",
+      ])("stays on after %s", async (name) => {
+        open(exchange(1, "Look it up", "Found it.", ran(name)));
+
+        await screen.findByText("Found it.");
+        expect(retryButton()).not.toHaveAttribute("aria-disabled");
+      });
+
+      it.each([
+        // Approval gated tools, run with no approval record in the turn.
+        "gmail_draft",
+        "gmail_send",
+        "apollo_enrich_contact",
+        "calendar_create",
+        "calendar_update",
+        "board_delete",
+        // Auto tools that write inside Sourcecado.
+        "board_upsert",
+        "board_mutate",
+        "people_keep",
+        "remember",
+        "memory_update",
+        "memory_forget",
+        // Workspace tools that change files or run commands.
+        "shell_exec",
+        "shell_write_stdin",
+        "shell_kill",
+        "shell_poll",
+        "fs_mkdir",
+        "fs_write",
+        "fs_patch",
+        "fs_copy",
+        "fs_move",
+        "fs_trash",
+        "request_directory",
+        // A tool the list has never seen.
+        "mcp__granola__list_meetings",
+        "some_new_tool",
+      ])("is off after %s, even with no approval record", async (name) => {
+        open(exchange(1, "Do the thing", "Done.", ran(name)));
+
+        await screen.findByText("Done.");
+        const retry = retryButton();
+        expect(retry).toHaveAttribute("aria-disabled", "true");
+        expect(retry).toHaveAttribute("data-tooltip", expect.stringContaining(WRITE_REASON));
+        fireEvent.click(retry);
+        expect(chatSend).not.toHaveBeenCalled();
+      });
+
+      it("is off for a shell command that ran after Always allow", async () => {
+        // The operator allowed this exact command earlier, so this turn has a
+        // finished shell step and no permission event at all.
+        open(
+          exchange(1, "Run the script", "The script ran.", [
+            {
+              type: "tool_started",
+              id: "call-1",
+              name: "shell_exec",
+              arguments: { command: "python3 run.py", cwd: "." },
+            },
+            {
+              type: "tool_finished",
+              id: "call-1",
+              name: "shell_exec",
+              ok: true,
+              result: { status: "completed", exit_code: 0 },
+            },
+          ]),
+        );
+
+        await screen.findByText("The script ran.");
+        expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+        expect(retryButton()).toHaveAttribute("aria-disabled", "true");
+        expect(retryButton()).toHaveAttribute("data-tooltip", expect.stringContaining(WRITE_REASON));
+        fireEvent.click(retryButton());
+        expect(chatSend).not.toHaveBeenCalled();
+      });
+
+      it("is off for a completed gmail_send restored from a transcript with no permission record", async () => {
+        open(legacy("Send the note to Maya", "The note was sent.", "gmail_send"));
+
+        await screen.findByText("The note was sent.");
+        expect(retryButton()).toHaveAttribute("aria-disabled", "true");
+        expect(retryButton()).toHaveAttribute("data-tooltip", expect.stringContaining(WRITE_REASON));
+        fireEvent.click(retryButton());
+        expect(chatSend).not.toHaveBeenCalled();
+      });
+
+      it("is off when one write sits among reads", async () => {
+        open(
+          exchange(1, "Find and keep", "Kept two people.", [
+            ...read("call-1", "apollo_search_people", { people: [] }),
+            ...read("call-2", "people_keep", { kept: 2 }),
+          ]),
+        );
+
+        await screen.findByText("Kept two people.");
+        expect(retryButton()).toHaveAttribute("aria-disabled", "true");
+      });
+
+      it("stays on for a turn with no tool steps", async () => {
+        open(exchange(1, "Hello", "Hello."));
+
+        await screen.findByText("Hello.");
+        expect(retryButton()).not.toHaveAttribute("aria-disabled");
+      });
+    });
+
+    it("moves focus to the composer after a keyboard Retry", async () => {
+      open(exchange(1, "Find ML founders", "Two founders found."));
+      const retry = await screen.findByRole("button", { name: "Retry" });
+      retry.focus();
+      expect(retry).toHaveFocus();
+
+      // A keyboard Enter or Space on a button is a click.
+      fireEvent.click(retry);
+
+      await waitFor(() => expect(composerBox()).toHaveFocus());
+    });
+
+    it("sends one turn when Retry is activated twice at once", async () => {
+      open(exchange(1, "Find ML founders", "Two founders found."));
+      const retry = await screen.findByRole("button", { name: "Retry" });
+
+      // Both clicks land before the button leaves the page. jsdom updates the
+      // message list at once, so the page also drops a second send here. In a
+      // browser the second send reaches the queue, which a live check covers.
+      act(() => {
+        retry.click();
+        retry.click();
+      });
+
+      await waitFor(() => expect(chatSend).toHaveBeenCalledTimes(1));
+      // The second activation must not queue a second turn behind the first.
+      expect(chatQueue).not.toHaveBeenCalled();
+      expect(screen.getAllByText("Find ML founders")).toHaveLength(2);
     });
   });
 
@@ -499,6 +677,12 @@ describe("Message actions", () => {
       );
       const tooltip = rule("\\.sourcecado-message-action::after");
       expect(Number(tooltip.match(/font-size:\s*(\d+)px/)?.[1])).toBeGreaterThanOrEqual(13);
+    });
+
+    it("opens the Edit tooltip below, so the first message does not cut it off", () => {
+      const edit = rule("\\.sourcecado-user-actions \\.sourcecado-message-action::after");
+      expect(edit).toMatch(/top:\s*calc\(100% \+ 8px\);/);
+      expect(edit).toMatch(/bottom:\s*auto;/);
     });
 
     it("sets no text under 13px in the action rules", () => {

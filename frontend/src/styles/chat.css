@@ -967,8 +967,12 @@
   background: transparent;
 }
 
+/* Its tooltip opens below. The first message sits at the top of the thread,
+   where a tooltip that opens upward would be cut off by the scroll area. */
 .sourcecado-user-actions .sourcecado-message-action::after {
+  top: calc(100% + 8px);
   right: 0;
+  bottom: auto;
   left: auto;
 }
 
