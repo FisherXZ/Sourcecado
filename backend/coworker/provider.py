@@ -353,6 +353,26 @@ _PROVIDER_CAPABILITIES = {
     "openai": ProviderCapabilities(True, True, True, True, True, True),
 }
 
+# Providers whose chat API takes an image inside a user message. A
+# Sourcecado-owned table like the one above: a provider not listed here is
+# treated as text-only, so an image is never sent to a model that cannot read it.
+_IMAGE_INPUT_PROVIDERS = frozenset({"openai", "anthropic"})
+
+
+def provider_accepts_images(provider: Any) -> bool:
+    """True when this provider can read an image attached to a message.
+
+    A provider object may declare ``accepts_images`` itself (tests do). Without
+    it, the provider id decides, and anything unknown is text-only.
+    """
+    if provider is None:
+        return False
+    declared = getattr(provider, "accepts_images", None)
+    if isinstance(declared, bool):
+        return declared
+    return str(getattr(provider, "provider_id", "")) in _IMAGE_INPUT_PROVIDERS
+
+
 # Verified against provider catalogs on 2026-08-27. Unknown or newly priced
 # models stay unavailable until this Sourcecado-owned table is revalidated.
 _MODEL_METADATA: dict[tuple[str, str], tuple[int, ModelPricing]] = {
@@ -637,6 +657,31 @@ class AnthropicProvider:
             wire.append(item)
         return wire
 
+    def _wire_user_content(self, content: Any) -> Any:
+        """Chat-style image parts become Anthropic image blocks."""
+        if not isinstance(content, list):
+            return deepcopy(content)
+        blocks: list[Any] = []
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "image_url":
+                blocks.append(deepcopy(part))
+                continue
+            url = str((part.get("image_url") or {}).get("url") or "")
+            match = re.fullmatch(r"data:([^;,]+);base64,(.+)", url, flags=re.DOTALL)
+            if match is None:
+                raise self._protocol_error("image part is not a base64 data URL")
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": match.group(1),
+                        "data": match.group(2),
+                    },
+                }
+            )
+        return blocks
+
     def _wire_messages(
         self, messages: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -669,7 +714,12 @@ class AnthropicProvider:
             flush_results()
             if role == "user":
                 wire.append(
-                    {"role": "user", "content": deepcopy(original.get("content") or "")}
+                    {
+                        "role": "user",
+                        "content": self._wire_user_content(
+                            original.get("content") or ""
+                        ),
+                    }
                 )
                 continue
             if role != "assistant":
