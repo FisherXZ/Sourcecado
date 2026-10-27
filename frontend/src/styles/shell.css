@@ -200,6 +200,17 @@ img.app-mark {
   flex: 0 0 auto;
 }
 
+/* Read aloud with the link, never shown. */
+.rail-badge-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .new-chat-button,
 .rail-search-button {
   border: 1px solid var(--border);
@@ -281,6 +292,13 @@ img.app-mark {
   color: var(--text);
   font-size: 13px;
   text-decoration: none;
+}
+
+/* Ellipsis needs a block of its own. A flex container does not clip its own
+   text, so the title sits in a span. */
+.thread-title {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -332,11 +350,12 @@ img.app-mark {
 .thread-actions {
   position: absolute;
   top: 0;
-  right: 2px;
+  right: 0;
   bottom: 0;
   display: flex;
   align-items: center;
   padding-left: 14px;
+  border-radius: 0 7px 7px 0;
   background: linear-gradient(90deg, transparent, var(--accent-tint) 14px);
   opacity: 0;
   transition: opacity 100ms ease-out;
@@ -373,6 +392,12 @@ img.app-mark {
 .thread-action:hover {
   background: var(--surface);
   color: var(--accent-deep);
+}
+
+/* The strip is flush to the row edge and the list clips overflow, so the
+   focus ring sits inside the button. */
+.thread-action:focus-visible {
+  outline-offset: -2px;
 }
 
 .thread-rename {
@@ -676,14 +701,29 @@ img.app-mark {
     padding-inline: 0;
   }
 
+  /* A count does not fit beside a 16px icon in a 48px column, and 99+ least
+     of all. The column shows a dot in the row's corner, clear of the icon.
+     The count is in the tooltip and the accessible name. */
   .is-collapsed .rail-inbox-badge {
     position: absolute;
-    top: -6px;
-    right: -6px;
-    min-width: 20px;
-    min-height: 20px;
-    padding: 0 4px;
-    line-height: 1;
+    top: 0;
+    right: 0;
+    width: 8px;
+    height: 8px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    background: var(--pit);
+  }
+
+  .is-collapsed .rail-badge-count {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .is-collapsed [data-tooltip]:is(:hover, :focus-visible)::after {

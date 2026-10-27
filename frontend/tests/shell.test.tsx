@@ -1317,4 +1317,234 @@ describe("App shell routing", () => {
       await waitFor(() => expect(footer).toHaveTextContent("Research Analyst"));
     });
   });
+  describe("sidebar keyboard flow, badge cap and titles", () => {
+    const alpha = {
+      session_id: "alpha",
+      title: "Alpha",
+      n_msgs: 2,
+      pinned: false,
+      opened_at: "1",
+      updated_at: "1",
+    };
+
+    function twoThreads(pinned = false) {
+      api.getSessions.mockResolvedValue({
+        sessions: [{ ...alpha, pinned }],
+        open_id: "alpha",
+        last_destination: "#/skills",
+      });
+      api.pinSession.mockResolvedValue({ id: "alpha", title: "Alpha", pinned: !pinned });
+    }
+
+    async function startRename(title = "Alpha") {
+      const rename = await screen.findByRole("button", { name: `Rename ${title}` });
+      rename.focus();
+      fireEvent.click(rename);
+      return screen.getByRole("textbox", { name: "Conversation title" });
+    }
+
+    it("returns focus to the rename button after Save", async () => {
+      twoThreads();
+      render(<App />);
+
+      const input = await startRename();
+      fireEvent.change(input, { target: { value: "Renamed Alpha" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save Alpha" }));
+
+      const rename = await screen.findByRole("button", { name: "Rename Renamed Alpha" });
+      await waitFor(() => expect(rename).toHaveFocus());
+    });
+
+    it("returns focus to the rename button after Cancel", async () => {
+      twoThreads();
+      render(<App />);
+
+      await startRename();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel renaming Alpha" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Rename Alpha" })).toHaveFocus(),
+      );
+      expect(api.renameSession).not.toHaveBeenCalled();
+    });
+
+    it("cancels the rename on Escape, discards the draft and returns focus", async () => {
+      twoThreads();
+      render(<App />);
+
+      const input = await startRename();
+      fireEvent.change(input, { target: { value: "Half typed" } });
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Rename Alpha" })).toHaveFocus(),
+      );
+      expect(screen.queryByRole("textbox", { name: "Conversation title" })).not.toBeInTheDocument();
+      expect(api.renameSession).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Rename Alpha" }));
+      expect(screen.getByRole("textbox", { name: "Conversation title" })).toHaveValue("Alpha");
+    });
+
+    it("keeps the open edge sheet open when Escape cancels a rename", async () => {
+      twoThreads();
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("max-width"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      try {
+        render(<App />);
+        fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+        const input = await startRename();
+
+        fireEvent.keyDown(input, { key: "Escape" });
+
+        await waitFor(() =>
+          expect(screen.getByRole("button", { name: "Rename Alpha" })).toHaveFocus(),
+        );
+        expect(document.getElementById("app-rail")).toHaveAttribute("data-open", "true");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("moves focus to the pin button in the Pinned group after a keyboard pin", async () => {
+      twoThreads(false);
+      render(<App />);
+
+      const pin = await screen.findByRole("button", { name: "Pin Alpha" });
+      pin.focus();
+      fireEvent.click(pin);
+
+      const unpin = await screen.findByRole("button", { name: "Unpin Alpha" });
+      expect(within(screen.getByRole("group", { name: "Pinned threads" })).getByRole("button", { name: "Unpin Alpha" })).toBe(unpin);
+      await waitFor(() => expect(unpin).toHaveFocus());
+    });
+
+    it("moves focus to the pin button in the Recent group after a keyboard unpin", async () => {
+      twoThreads(true);
+      render(<App />);
+
+      const unpin = await screen.findByRole("button", { name: "Unpin Alpha" });
+      unpin.focus();
+      fireEvent.click(unpin);
+
+      const pin = await screen.findByRole("button", { name: "Pin Alpha" });
+      expect(within(screen.getByRole("group", { name: "Recent threads" })).getByRole("button", { name: "Pin Alpha" })).toBe(pin);
+      await waitFor(() => expect(pin).toHaveFocus());
+    });
+
+    it("leaves focus where the operator moved it while a pin was in flight", async () => {
+      twoThreads(false);
+      const pending = deferred<{ id: string; title: string; pinned: boolean }>();
+      api.pinSession.mockReturnValue(pending.promise);
+      render(<App />);
+
+      const pin = await screen.findByRole("button", { name: "Pin Alpha" });
+      pin.focus();
+      fireEvent.click(pin);
+      const search = screen.getByRole("button", { name: "Search conversations and destinations" });
+      search.focus();
+      pending.resolve({ id: "alpha", title: "Alpha", pinned: true });
+
+      await screen.findByRole("button", { name: "Unpin Alpha" });
+      expect(search).toHaveFocus();
+    });
+
+    it("caps a large badge at 99+ and keeps the exact count in the accessible name", async () => {
+      api.getMemoryBacklog.mockResolvedValue({ needs_review: 1003, classified: 0, items: [] });
+      api.getQuarantinedEffects.mockResolvedValue(Array.from({ length: 99 }, (_, i) => ({ id: `e${i}` })));
+
+      render(<App />);
+
+      const memory = await screen.findByRole("link", { name: "Memory" });
+      await waitFor(() => expect(memory.querySelector(".rail-inbox-badge")).not.toBeNull());
+      const badge = memory.querySelector(".rail-inbox-badge")!;
+      expect(badge).toHaveTextContent(/^99\+$/);
+      expect(badge).toHaveAttribute("aria-label", "Saved memory: 1003 waiting for review");
+      expect(memory).toHaveAccessibleDescription("Saved memory: 1003 waiting for review");
+      const inbox = screen.getByRole("link", { name: "Inbox" });
+      await waitFor(() => expect(inbox.querySelector(".rail-inbox-badge")).not.toBeNull());
+      expect(inbox.querySelector(".rail-inbox-badge")).toHaveTextContent(/^99$/);
+    });
+
+    it("keeps a long thread title in an ellipsis-capable span", async () => {
+      const long = "Find every founder at a seed stage robotics company in the Bay Area";
+      api.getSessions.mockResolvedValue({
+        sessions: [{ ...alpha, title: long }],
+        open_id: "alpha",
+        last_destination: "#/skills",
+      });
+
+      render(<App />);
+
+      const link = await screen.findByRole("link", { name: long });
+      expect(link.querySelector("span.thread-title")).toHaveTextContent(long);
+    });
+
+    it("names an untitled thread in the rail when its run starts or ends", async () => {
+      window.location.hash = "#/chat/fresh";
+      api.getSessions
+        .mockResolvedValueOnce({
+          sessions: [{ ...alpha, session_id: "fresh", title: null, n_msgs: 0 }],
+          open_id: "fresh",
+          last_destination: "#/chat/fresh",
+        })
+        .mockResolvedValue({
+          sessions: [{ ...alpha, session_id: "fresh", title: "Founders at Acme", n_msgs: 2 }],
+          open_id: "fresh",
+          last_destination: "#/chat/fresh",
+        });
+      api.getSession.mockResolvedValue({ id: "fresh", title: null, messages: [] });
+
+      render(<App />);
+      const rail = document.getElementById("app-rail")!;
+      expect(await within(rail).findByRole("link", { name: "New conversation" })).toBeInTheDocument();
+
+      window.dispatchEvent(new Event("sourcecado:sessions-changed"));
+
+      expect(await within(rail).findByRole("link", { name: "Founders at Acme" })).toBeInTheDocument();
+      expect(within(rail).queryByRole("link", { name: "New conversation" })).not.toBeInTheDocument();
+    });
+
+    it("never overwrites a title the rail already has when the list refreshes", async () => {
+      api.getSessions.mockResolvedValue({
+        sessions: [
+          { ...alpha, title: "Local name" },
+          { ...alpha, session_id: "fresh", title: null, n_msgs: 0 },
+        ],
+        open_id: "alpha",
+        last_destination: "#/skills",
+      });
+      render(<App />);
+      await screen.findByRole("link", { name: "Local name" });
+      api.getSessions.mockResolvedValue({
+        sessions: [
+          { ...alpha, title: "Backend name" },
+          { ...alpha, session_id: "fresh", title: "Named later", n_msgs: 2 },
+        ],
+        open_id: "alpha",
+        last_destination: "#/skills",
+      });
+
+      window.dispatchEvent(new Event("sourcecado:sessions-changed"));
+
+      expect(await screen.findByRole("link", { name: "Named later" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Local name" })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Backend name" })).not.toBeInTheDocument();
+    });
+
+    it("does not ask for the list again when every thread already has a title", async () => {
+      twoThreads();
+      render(<App />);
+      await screen.findByRole("link", { name: "Alpha" });
+      const before = api.getSessions.mock.calls.length;
+
+      window.dispatchEvent(new Event("sourcecado:sessions-changed"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(api.getSessions.mock.calls.length).toBe(before);
+    });
+  });
 });

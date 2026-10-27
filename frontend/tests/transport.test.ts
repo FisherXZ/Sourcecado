@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { openChat, type SourcecadoSocketEvent } from "../src/api";
+import { SESSIONS_CHANGED, openChat, type SourcecadoSocketEvent } from "../src/api";
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -571,5 +571,39 @@ describe("openChat queue visibility during disconnects", () => {
     events.length = 0;
     FakeWebSocket.instances[1]!.open();
     expect(queueStates(events)).toEqual([["waiting", "failed"]]);
+  });
+});
+
+describe("openChat sessions-changed signal", () => {
+  let heard: number;
+  const onChanged = () => {
+    heard += 1;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    heard = 0;
+    window.addEventListener(SESSIONS_CHANGED, onChanged);
+  });
+
+  afterEach(() => {
+    window.removeEventListener(SESSIONS_CHANGED, onChanged);
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("tells the shell when a run starts and when it ends, and stays quiet for output", () => {
+    openChat(() => {});
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.message(envelopeEvent(1, { type: "turn_start", state: "running" }));
+    expect(heard).toBe(1);
+    socket.message(envelopeEvent(2, { type: "assistant_delta", delta: "Working" }));
+    expect(heard).toBe(1);
+    socket.message(envelopeEvent(3, { type: "turn_end", text: "Done.", state: "complete" }));
+    expect(heard).toBe(2);
   });
 });

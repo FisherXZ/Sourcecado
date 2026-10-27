@@ -228,3 +228,37 @@ describe("GlobalRail footer", () => {
     expect(footer.querySelector(".operator-persona")).toBeNull();
   });
 });
+
+describe("GlobalRail count tooltips", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("puts the exact count in the icon column tooltip and the description, never a dot-only signal", () => {
+    stubMatchMedia(false);
+    render(
+      <GlobalRail
+        open={false}
+        collapsed
+        operator={null}
+        route={route}
+        sessions={[]}
+        scheduledApprovalCount={0}
+        memoryReviewCount={1003}
+        heldEffectCount={0}
+        onToggleCollapsed={vi.fn()}
+        onNewChat={vi.fn()}
+        onOpenSession={vi.fn()}
+        onPin={vi.fn()}
+        onRename={vi.fn().mockResolvedValue(undefined)}
+        onSearch={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const memory = screen.getByRole("link", { name: "Memory" });
+    expect(memory).toHaveAttribute("data-tooltip", "Memory (1003)");
+    expect(memory).toHaveAccessibleDescription("Saved memory: 1003 waiting for review");
+    expect(screen.getByRole("link", { name: "Skills" })).toHaveAttribute("data-tooltip", "Skills");
+  });
+});

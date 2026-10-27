@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import type { SessionRow } from "../api";
 import { RailIcon, type RailIconName } from "./RailIcon";
@@ -73,6 +73,10 @@ export function GlobalRail({ open, collapsed, operator, route, sessions, schedul
   const pinned = sessions?.filter((session) => session.pinned) || [];
   const recent = sessions?.filter((session) => !session.pinned) || [];
   const railRef = useRef<HTMLElement>(null);
+  // Pinning moves a row to the other group. That remounts the row, so the
+  // button the operator pressed disappears. Remember which row was pinned and
+  // put focus on its pin button once it exists in the new group.
+  const pinFocusRef = useRef<{ id: string; wasPinned: boolean } | null>(null);
   const narrow = useNarrowRail();
   const offScreen = narrow && !open;
   // The icon column is a wide-window choice. The narrow edge sheet always
@@ -94,6 +98,25 @@ export function GlobalRail({ open, collapsed, operator, route, sessions, schedul
     if (offScreen) node.setAttribute("inert", "");
     else node.removeAttribute("inert");
   }, [offScreen]);
+
+  useEffect(() => {
+    const pending = pinFocusRef.current;
+    if (!pending) return;
+    const row = sessions?.find((session) => session.session_id === pending.id);
+    if (!row || row.pinned === pending.wasPinned) return;
+    pinFocusRef.current = null;
+    // Focus fell to the page when the old button went away. If it is
+    // anywhere else, the operator has moved on and keeps their place.
+    if (document.activeElement && document.activeElement !== document.body) return;
+    Array.from(railRef.current?.querySelectorAll<HTMLElement>("[data-thread-pin]") || [])
+      .find((button) => button.dataset.threadPin === pending.id)
+      ?.focus();
+  }, [sessions]);
+
+  function pinThread(session: SessionRow) {
+    pinFocusRef.current = { id: session.session_id, wasPinned: session.pinned };
+    onPin(session);
+  }
 
   function trapFocus(event: KeyboardEvent<HTMLElement>) {
     if (!open || event.key !== "Tab") return;
@@ -201,7 +224,7 @@ export function GlobalRail({ open, collapsed, operator, route, sessions, schedul
         </div>
         <div className="thread-groups">
           {pinned.length > 0 && (
-            <ThreadGroup label="Pinned threads" sessions={pinned} route={route} onOpenSession={onOpenSession} onPin={onPin} onRename={onRename} />
+            <ThreadGroup label="Pinned threads" sessions={pinned} route={route} onOpenSession={onOpenSession} onPin={pinThread} onRename={onRename} />
           )}
           {sessions === null ? (
             <div className="thread-skeleton" aria-label="Loading conversations">
@@ -210,7 +233,7 @@ export function GlobalRail({ open, collapsed, operator, route, sessions, schedul
               <span />
             </div>
           ) : (
-            <ThreadGroup label="Recent threads" sessions={recent} route={route} onOpenSession={onOpenSession} onPin={onPin} onRename={onRename} />
+            <ThreadGroup label="Recent threads" sessions={recent} route={route} onOpenSession={onOpenSession} onPin={pinThread} onRename={onRename} />
           )}
         </div>
         <div className="rail-spacer" />
@@ -288,18 +311,43 @@ function ThreadRow({
   const title = session.title || "New conversation";
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
+  const renameButtonRef = useRef<HTMLButtonElement>(null);
+  const refocusRenameRef = useRef(false);
+
+  // The editor and the row are different elements. Closing the editor removes
+  // the control that had focus, so hand focus back to the rename button.
+  useEffect(() => {
+    if (editing || !refocusRenameRef.current) return;
+    refocusRenameRef.current = false;
+    renameButtonRef.current?.focus();
+  }, [editing]);
+
+  function closeEditor() {
+    refocusRenameRef.current = true;
+    setEditing(false);
+  }
 
   async function submitRename(event: FormEvent) {
     event.preventDefault();
     const cleaned = draft.trim();
     if (!cleaned) return;
     await onRename(session, cleaned);
-    setEditing(false);
+    closeEditor();
   }
 
   if (editing) {
     return (
-      <form className="thread-rename" onSubmit={(event) => void submitRename(event)}>
+      <form
+        className="thread-rename"
+        onSubmit={(event) => void submitRename(event)}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          // Cancels the editor only. The open edge sheet must stay open.
+          event.preventDefault();
+          event.stopPropagation();
+          closeEditor();
+        }}
+      >
         <input
           aria-label="Conversation title"
           value={draft}
@@ -309,7 +357,7 @@ function ThreadRow({
         <button type="submit" className="thread-action" aria-label={`Save ${title}`}>
           <RailIcon name="check" />
         </button>
-        <button type="button" className="thread-action" aria-label={`Cancel renaming ${title}`} onClick={() => setEditing(false)}>
+        <button type="button" className="thread-action" aria-label={`Cancel renaming ${title}`} onClick={closeEditor}>
           <RailIcon name="close" />
         </button>
       </form>
@@ -324,15 +372,25 @@ function ThreadRow({
         aria-current={active ? "page" : undefined}
         onClick={() => onOpenSession(session)}
       >
-        {title}
+        <span className="thread-title">{title}</span>
       </a>
       <span className="thread-actions">
-        <button type="button" className="thread-action" aria-label={`Rename ${title}`} onClick={() => setEditing(true)}>
+        <button
+          ref={renameButtonRef}
+          type="button"
+          className="thread-action"
+          aria-label={`Rename ${title}`}
+          onClick={() => {
+            setDraft(title);
+            setEditing(true);
+          }}
+        >
           <RailIcon name="rename" />
         </button>
         <button
           type="button"
           className="thread-action"
+          data-thread-pin={session.session_id}
           aria-label={`${session.pinned ? "Unpin" : "Pin"} ${title}`}
           onClick={() => onPin(session)}
         >
@@ -360,23 +418,32 @@ function RailLink({
   badge?: number;
   badgeLabel?: string;
 }) {
+  const descriptionId = useId();
+  const countLabel =
+    badgeLabel || `Inbox: ${badge} waiting approval${badge === 1 ? "" : "s"}`;
   return (
     <a
       className="rail-link"
       href={href}
       aria-label={children}
       aria-current={current ? "page" : undefined}
-      data-tooltip={tooltip}
+      aria-describedby={badge > 0 ? descriptionId : undefined}
+      data-tooltip={tooltip && badge > 0 ? `${tooltip} (${badge})` : tooltip}
     >
       <RailIcon name={icon} />
       <span className="rail-label">{children}</span>
       {badge > 0 && (
-        <span
-          className="rail-inbox-badge"
-          aria-label={badgeLabel || `Inbox: ${badge} waiting approval${badge === 1 ? "" : "s"}`}
-        >
-          {badge}
-        </span>
+        <>
+          {/* The sighted count stops at 99+. The exact count stays in the
+              accessible name and the description. The icon column shows a dot
+              and the tooltip. */}
+          <span className="rail-inbox-badge" aria-label={countLabel}>
+            <span className="rail-badge-count">{badge > 99 ? "99+" : badge}</span>
+          </span>
+          <span id={descriptionId} className="rail-badge-description">
+            {countLabel}
+          </span>
+        </>
       )}
     </a>
   );

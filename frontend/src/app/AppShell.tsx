@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  SESSIONS_CHANGED,
   createSession,
   getInbox,
   getMemoryBacklog,
   getQuarantinedEffects,
+  getSessions,
   getSettings,
   pinSession,
   renameSession,
@@ -51,6 +53,8 @@ export function AppShell() {
   const [scheduledApprovalCount, setScheduledApprovalCount] = useState(0);
   const [memoryReviewCount, setMemoryReviewCount] = useState(0);
   const [heldEffectCount, setHeldEffectCount] = useState(0);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const railTriggerRef = useRef<HTMLButtonElement>(null);
   const railFocusTimerRef = useRef<number | null>(null);
   const railWasOpenedRef = useRef(false);
@@ -171,6 +175,39 @@ export function AppShell() {
       window.removeEventListener("focus", refreshMemory);
     };
   }, [route]);
+  useEffect(() => {
+    let active = true;
+    // A new thread is untitled until its first message. When a run starts or
+    // ends, ask for the list again and fill in names the rail is missing.
+    // Rows that already have a title are left alone, so a rename in flight is
+    // never overwritten.
+    const refreshTitles = () => {
+      if (!sessionsRef.current?.some((row) => !row.title)) return;
+      getSessions().then(
+        ({ sessions: fresh }) => {
+          if (!active) return;
+          setSessions((current) => {
+            if (!current) return current;
+            let changed = false;
+            const next = current.map((row) => {
+              if (row.title) return row;
+              const title = fresh.find((item) => item.session_id === row.session_id)?.title;
+              if (!title) return row;
+              changed = true;
+              return { ...row, title };
+            });
+            return changed ? next : current;
+          });
+        },
+        () => {},
+      );
+    };
+    window.addEventListener(SESSIONS_CHANGED, refreshTitles);
+    return () => {
+      active = false;
+      window.removeEventListener(SESSIONS_CHANGED, refreshTitles);
+    };
+  }, []);
   useEffect(() => {
     let active = true;
     // The rail footer names the operator and the on-duty persona. Both come
