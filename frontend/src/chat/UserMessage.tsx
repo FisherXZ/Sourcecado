@@ -4,6 +4,7 @@ import {
 } from "@assistant-ui/react";
 
 import { ContextChips } from "./ContextChips";
+import { EditMessageAction } from "./MessageActions";
 import { splitContext } from "./messageContext";
 
 function UserText({ text }: TextMessagePartProps) {
@@ -22,6 +23,7 @@ export function UserMessage() {
   return (
     <MessagePrimitive.Root className="sourcecado-user-message">
       <MessagePrimitive.Parts components={{ Text: UserText }} />
+      <EditMessageAction />
     </MessagePrimitive.Root>
   );
 }

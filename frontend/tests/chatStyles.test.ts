@@ -45,7 +45,7 @@ describe("Warm Operator thread styles", () => {
   it("colors syntax with Warm Operator tokens and sets no text under 13px", () => {
     const answer = styles.slice(
       styles.indexOf("Answer prose is one type scale"),
-      styles.indexOf(".sourcecado-copy-action {"),
+      styles.indexOf(".sourcecado-message-actions {"),
     );
 
     expect(answer).toContain(".sourcecado-code-head");

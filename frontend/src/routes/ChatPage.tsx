@@ -324,7 +324,11 @@ export function ChatPage({
       // once the message has somewhere to actually go right now. Otherwise
       // it is sitting in the transport's retry buffer, not "sent".
       runningThreadsRef.current.add(threadId);
-      writeDraft(threadId, "");
+      // A resend (Retry) does not come from the composer. The draft saved for
+      // the composer is not what was sent, so it stays.
+      if (message.metadata?.custom?.sourcecadoResend !== true) {
+        writeDraft(threadId, "");
+      }
       setAnnouncement("Run started.");
     } else {
       setAnnouncement(
