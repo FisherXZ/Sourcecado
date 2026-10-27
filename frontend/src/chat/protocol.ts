@@ -97,6 +97,18 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly message: string;
       }
     | { readonly type: "assistant_delta"; readonly delta: string }
+    /**
+     * Raw model reasoning, shown in the thread as model reasoning and kept in
+     * the conversation transcript only. `step` says which reasoning block of
+     * the turn the text joins. `at` (ISO 8601) gives the thinking time. Both
+     * are optional so a log written without them still restores.
+     */
+    | {
+        readonly type: "reasoning_delta";
+        readonly delta: string;
+        readonly step?: number;
+        readonly at?: string;
+      }
     | {
         readonly type: "permission_required";
         readonly id: string;
@@ -722,6 +734,7 @@ export function parseChatEvent(value: unknown): ChatEvent {
   if (isRecord(value) && hasEnvelope(value)) {
     const valid =
       (value.type === "assistant_delta" && typeof value.delta === "string") ||
+      (value.type === "reasoning_delta" && typeof value.delta === "string") ||
       (value.type === "turn_start" && value.state === "running") ||
       (value.type === "turn_stopping" &&
         value.state === "stopping" &&
