@@ -63,6 +63,11 @@ button.sourcecado-attachment-chip:hover {
   background: var(--raised);
 }
 
+/* A failure is a sentence, so its chip takes the full row. */
+.sourcecado-attachment-chips > li:has(> [data-state="failed"]) {
+  flex: 1 1 100%;
+}
+
 .sourcecado-attachment-chip[data-state="failed"] {
   border-color: var(--error);
   background: var(--error-bg);
@@ -114,7 +119,7 @@ button.sourcecado-attachment-chip:hover {
 
 /* A failure is a sentence the director must read, so it wraps. */
 .sourcecado-attachment-chip[data-state="failed"] .sourcecado-attachment-meta {
-  max-width: 340px;
+  max-width: none;
   overflow-wrap: anywhere;
 }
 
@@ -156,6 +161,11 @@ button.sourcecado-attachment-chip:hover {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* The "Attach a file" row carries the limits, so its detail may take two lines. */
+.sourcecado-context-menu .sourcecado-menu-detail {
+  white-space: normal;
 }
 
 /* Why Send is held back, or a note about the files. */
