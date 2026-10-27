@@ -1126,4 +1126,195 @@ describe("App shell routing", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
   });
+  describe("rebuilt sidebar", () => {
+    const threads = {
+      sessions: [
+        { session_id: "alpha", title: "Alpha", n_msgs: 2, pinned: true, opened_at: "2", updated_at: "2" },
+        { session_id: "beta", title: "Beta", n_msgs: 1, pinned: false, opened_at: "1", updated_at: "1" },
+      ],
+      open_id: "beta",
+      last_destination: "#/skills",
+    };
+
+    it("gives every destination row, the search row and New chat an icon", async () => {
+      render(<App />);
+
+      const nav = await screen.findByRole("navigation", { name: "Sourcecado" });
+      for (const name of ["Contacts", "Scheduled", "Connections", "Skills", "Memory", "Inbox", "Settings"]) {
+        expect(
+          within(nav).getByRole("link", { name }).querySelector("svg.rail-icon[aria-hidden='true']"),
+          name,
+        ).not.toBeNull();
+      }
+      expect(within(nav).getByRole("button", { name: "New chat" }).querySelector("svg.rail-icon")).not.toBeNull();
+      expect(within(nav).getByRole("button", { name: /Search/ }).querySelector("svg.rail-icon")).not.toBeNull();
+    });
+
+    it("shows a count badge on Inbox, Scheduled and Memory from the existing endpoints", async () => {
+      api.getInbox.mockResolvedValue({
+        items: [
+          { id: "a1", state: "pending", session_id: "sched-4" },
+          { id: "a2", state: "pending", session_id: "sched-7" },
+          { id: "a3", state: "pending", session_id: "thread-alpha" },
+        ],
+      });
+      api.getMemoryBacklog.mockResolvedValue({ needs_review: 5, classified: 0, items: [] });
+      api.getQuarantinedEffects.mockResolvedValue([{ id: "e1" }, { id: "e2" }, { id: "e3" }]);
+
+      render(<App />);
+
+      const nav = await screen.findByRole("navigation", { name: "Sourcecado" });
+      const badgeIn = async (name: string) => {
+        const link = within(nav).getByRole("link", { name });
+        await waitFor(() => expect(link.querySelector(".rail-inbox-badge")).not.toBeNull());
+        return link.querySelector(".rail-inbox-badge")!.textContent;
+      };
+      expect(await badgeIn("Inbox")).toBe("3");
+      expect(await badgeIn("Scheduled")).toBe("2");
+      expect(await badgeIn("Memory")).toBe("5");
+      expect(within(nav).getByRole("link", { name: "Contacts" }).querySelector(".rail-inbox-badge")).toBeNull();
+    });
+
+    it("shows no badge when nothing is pending", async () => {
+      render(<App />);
+
+      const nav = await screen.findByRole("navigation", { name: "Sourcecado" });
+      await waitFor(() => expect(api.getMemoryBacklog).toHaveBeenCalled());
+      expect(nav.querySelector(".rail-inbox-badge")).toBeNull();
+    });
+
+    it("offers rename and pin as icon buttons with no glyph characters", async () => {
+      api.getSessions.mockResolvedValue(threads);
+
+      render(<App />);
+
+      const rename = await screen.findByRole("button", { name: "Rename Beta" });
+      const pin = screen.getByRole("button", { name: "Pin Beta" });
+      const unpin = screen.getByRole("button", { name: "Unpin Alpha" });
+      for (const button of [rename, pin, unpin]) {
+        expect(button.querySelector("svg.rail-icon[aria-hidden='true']")).not.toBeNull();
+        expect(button.textContent).toBe("");
+      }
+      expect(pin.querySelector("svg")).not.toHaveAttribute("data-filled");
+      expect(unpin.querySelector("svg")).toHaveAttribute("data-filled", "true");
+      const rail = document.getElementById("app-rail")!;
+      for (const glyph of ["✎", "●", "○", "☰", "×", "＋"]) {
+        expect(rail.textContent).not.toContain(glyph);
+      }
+      expect(document.querySelector(".rail-trigger")!.textContent).toBe("");
+    });
+
+    it("collapses the rail to an icon column, remembers it, and expands again", async () => {
+      api.getSessions.mockResolvedValue(threads);
+      const first = render(<App />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Collapse sidebar" }));
+
+      const rail = document.getElementById("app-rail")!;
+      expect(rail).toHaveClass("is-collapsed");
+      expect(screen.getByRole("link", { name: "Contacts" })).toHaveAttribute("data-tooltip", "Contacts");
+      expect(window.localStorage.getItem("sourcecado.shell.rail-collapsed.v1")).toBe("1");
+      first.unmount();
+
+      render(<App />);
+      expect(document.getElementById("app-rail")).toHaveClass("is-collapsed");
+
+      fireEvent.click(await screen.findByRole("button", { name: "Expand sidebar" }));
+      expect(document.getElementById("app-rail")).not.toHaveClass("is-collapsed");
+      expect(window.localStorage.getItem("sourcecado.shell.rail-collapsed.v1")).toBe("0");
+    });
+
+    it("starts expanded when the stored choice is unreadable", async () => {
+      window.localStorage.setItem("sourcecado.shell.rail-collapsed.v1", "garbage");
+
+      render(<App />);
+
+      await screen.findByRole("navigation", { name: "Sourcecado" });
+      expect(document.getElementById("app-rail")).not.toHaveClass("is-collapsed");
+    });
+
+    it("keeps the hamburger and focus trap working at narrow width with a collapsed choice stored", async () => {
+      window.localStorage.setItem("sourcecado.shell.rail-collapsed.v1", "1");
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("max-width"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      try {
+        render(<App />);
+
+        const rail = document.getElementById("app-rail")!;
+        expect(rail).toHaveAttribute("data-open", "false");
+        expect(rail).toHaveAttribute("inert");
+        expect(rail).not.toHaveClass("is-collapsed");
+        const trigger = screen.getByRole("button", { name: "Open navigation" });
+        fireEvent.click(trigger);
+        const close = await screen.findByRole("button", { name: "Close navigation" });
+        expect(close).toHaveFocus();
+        expect(rail).not.toHaveAttribute("inert");
+        const settings = within(rail).getByRole("link", { name: "Settings" });
+        settings.focus();
+        fireEvent.keyDown(settings, { key: "Tab" });
+        expect(close).toHaveFocus();
+        fireEvent.keyDown(window, { key: "Escape" });
+        await waitFor(() => expect(trigger).toHaveFocus());
+        expect(rail).toHaveAttribute("inert");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("shows the connected account and the persona name from settings in the footer", async () => {
+      api.getSettings.mockResolvedValue({
+        persona: { id: "analyst", name: "Research Analyst" },
+        model: "test",
+        gmail: { connected: true, email: "dana@codeology.club" },
+        apollo: { configured: false },
+      });
+
+      render(<App />);
+
+      const footer = await screen.findByRole("group", { name: "Signed-in operator" });
+      await waitFor(() => expect(footer).toHaveTextContent("Research Analyst"));
+      expect(footer).toHaveTextContent("dana@codeology.club");
+      expect(footer).not.toHaveTextContent("Sourcing Director");
+    });
+
+    it("falls back to the operator label and omits the persona when settings fail", async () => {
+      api.getSettings.mockRejectedValue(new Error("settings 500"));
+
+      render(<App />);
+
+      const footer = await screen.findByRole("group", { name: "Signed-in operator" });
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+      expect(footer).toHaveTextContent("Operator");
+      expect(footer).not.toHaveTextContent("Sourcing Director");
+      expect(footer.querySelector(".operator-persona")).toBeNull();
+    });
+
+    it("refreshes the footer persona when settings change", async () => {
+      api.getSettings
+        .mockResolvedValueOnce({
+          persona: { id: "sourcing", name: "Sourcing Director" },
+          model: "test",
+          gmail: { connected: false, email: null },
+          apollo: { configured: false },
+        })
+        .mockResolvedValue({
+          persona: { id: "analyst", name: "Research Analyst" },
+          model: "test",
+          gmail: { connected: false, email: null },
+          apollo: { configured: false },
+        });
+
+      render(<App />);
+      const footer = await screen.findByRole("group", { name: "Signed-in operator" });
+      await waitFor(() => expect(footer).toHaveTextContent("Sourcing Director"));
+
+      window.dispatchEvent(new Event("sourcecado:settings-changed"));
+
+      await waitFor(() => expect(footer).toHaveTextContent("Research Analyst"));
+    });
+  });
 });

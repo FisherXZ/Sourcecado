@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
 import type { SessionRow } from "../api";
+import { RailIcon, type RailIconName } from "./RailIcon";
 import type { AppRoute } from "./route";
 
 // Mirrors the off-canvas breakpoint in styles/shell.css's
@@ -44,13 +45,22 @@ function useNarrowRail(): boolean {
   return narrow;
 }
 
+export type RailOperator = {
+  // The connected Google account, the only sign-in identity Sourcecado has.
+  email: string | null;
+  persona: string;
+};
+
 type Props = {
   open: boolean;
+  collapsed: boolean;
+  operator: RailOperator | null;
   route: AppRoute;
   sessions: SessionRow[] | null;
   scheduledApprovalCount: number;
   memoryReviewCount: number;
   heldEffectCount: number;
+  onToggleCollapsed: () => void;
   onNewChat: () => void;
   onOpenSession: (session: SessionRow) => void;
   onPin: (session: SessionRow) => void;
@@ -59,12 +69,21 @@ type Props = {
   onClose: () => void;
 };
 
-export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memoryReviewCount, heldEffectCount, onNewChat, onOpenSession, onPin, onRename, onSearch, onClose }: Props) {
+export function GlobalRail({ open, collapsed, operator, route, sessions, scheduledApprovalCount, memoryReviewCount, heldEffectCount, onToggleCollapsed, onNewChat, onOpenSession, onPin, onRename, onSearch, onClose }: Props) {
   const pinned = sessions?.filter((session) => session.pinned) || [];
   const recent = sessions?.filter((session) => !session.pinned) || [];
   const railRef = useRef<HTMLElement>(null);
   const narrow = useNarrowRail();
   const offScreen = narrow && !open;
+  // The icon column is a wide-window choice. The narrow edge sheet always
+  // shows full labels, whatever the stored choice says.
+  const iconColumn = collapsed && !narrow;
+  // Labels are hidden in the icon column, so each control names itself with a
+  // tooltip. The expanded rail already shows the label.
+  const tip = (label: string) => (iconColumn ? label : undefined);
+  const operatorName = operator?.email || "Operator";
+  const operatorTitle = operator?.persona ? `${operatorName} · ${operator.persona}` : operatorName;
+  const operatorInitial = operator?.email ? operator.email.charAt(0).toUpperCase() : null;
 
   // `inert` isn't in @types/react's HTMLAttributes yet, so it's set as a
   // real DOM attribute rather than a JSX prop. This removes the closed
@@ -98,44 +117,71 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
     <aside
       ref={railRef}
       id="app-rail"
-      className={`app-rail ${open ? "is-open" : ""}`}
+      className={`app-rail ${open ? "is-open" : ""} ${iconColumn ? "is-collapsed" : ""}`}
       data-open={open ? "true" : "false"}
+      data-collapsed={iconColumn ? "true" : "false"}
       onKeyDown={trapFocus}
     >
       <nav aria-label="Sourcecado" className="app-rail-nav">
         <button id="app-rail-close" type="button" className="rail-close" aria-label="Close navigation" onClick={onClose}>
-          <span aria-hidden="true">×</span>
+          <RailIcon name="close" size={20} />
         </button>
-        <div className="app-identity" aria-label="Sourcecado home">
-          <img className="app-mark" src="/favicon.png" alt="" width={28} height={28} />
-          <span>Sourcecado</span>
+        <div className="rail-header">
+          <div className="app-identity" aria-label="Sourcecado home">
+            <img className="app-mark" src="/favicon.png" alt="" width={28} height={28} />
+            <span className="rail-label">Sourcecado</span>
+          </div>
+          {!narrow && (
+            <button
+              type="button"
+              className="rail-collapse-toggle"
+              aria-label={iconColumn ? "Expand sidebar" : "Collapse sidebar"}
+              aria-expanded={!iconColumn}
+              data-tooltip={tip("Expand sidebar")}
+              onClick={onToggleCollapsed}
+            >
+              <RailIcon name="collapse" />
+            </button>
+          )}
         </div>
-        <button type="button" className="new-chat-button" onClick={onNewChat}>
-          <span aria-hidden="true">＋</span>
-          New chat
-        </button>
         <button
           type="button"
           className="rail-search-button"
           aria-label="Search conversations and destinations"
+          data-tooltip={tip("Search")}
           onClick={onSearch}
         >
-          <span>Search</span>
-          <kbd>⌘K</kbd>
+          <RailIcon name="search" />
+          <span className="rail-label">Search</span>
+          <kbd className="rail-label">⌘K</kbd>
+        </button>
+        <button
+          type="button"
+          className="new-chat-button"
+          aria-label="New chat"
+          data-tooltip={tip("New chat")}
+          onClick={onNewChat}
+        >
+          <RailIcon name="newChat" />
+          <span className="rail-label">New chat</span>
         </button>
         <div className="destination-links">
-          <RailLink href="#/board" current={route.kind === "board" || route.kind === "person"}>Contacts</RailLink>
+          <RailLink href="#/board" icon="contacts" tooltip={tip("Contacts")} current={route.kind === "board" || route.kind === "person"}>Contacts</RailLink>
           <RailLink
             href="#/scheduled"
+            icon="scheduled"
+            tooltip={tip("Scheduled")}
             current={route.kind === "scheduled"}
             badge={scheduledApprovalCount}
           >
             Scheduled
           </RailLink>
-          <RailLink href="#/connections" current={route.kind === "connections"}>Connections</RailLink>
-          <RailLink href="#/skills" current={route.kind === "skills"}>Skills</RailLink>
+          <RailLink href="#/connections" icon="connections" tooltip={tip("Connections")} current={route.kind === "connections"}>Connections</RailLink>
+          <RailLink href="#/skills" icon="skills" tooltip={tip("Skills")} current={route.kind === "skills"}>Skills</RailLink>
           <RailLink
             href="#/memory"
+            icon="memory"
+            tooltip={tip("Memory")}
             current={route.kind === "memory"}
             badge={memoryReviewCount}
             badgeLabel={`Saved memory: ${memoryReviewCount} waiting for review`}
@@ -144,6 +190,8 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
           </RailLink>
           <RailLink
             href="#/quarantine"
+            icon="inbox"
+            tooltip={tip("Inbox")}
             current={route.kind === "quarantine"}
             badge={heldEffectCount}
             badgeLabel={`Held actions: ${heldEffectCount} waiting for your answer`}
@@ -166,10 +214,21 @@ export function GlobalRail({ open, route, sessions, scheduledApprovalCount, memo
           )}
         </div>
         <div className="rail-spacer" />
-        <RailLink href="#/settings" current={route.kind === "settings"}>Settings</RailLink>
-        <div className="operator-identity">
-          <span className="operator-avatar" aria-hidden="true">SD</span>
-          <span><strong>Operator</strong><small>Sourcing Director</small></span>
+        <RailLink href="#/settings" icon="settings" tooltip={tip("Settings")} current={route.kind === "settings"}>Settings</RailLink>
+        <div
+          className="operator-identity"
+          role="group"
+          aria-label="Signed-in operator"
+          title={iconColumn ? undefined : operatorTitle}
+          data-tooltip={tip(operatorTitle)}
+        >
+          <span className="operator-avatar" aria-hidden="true">
+            {operatorInitial ?? <RailIcon name="user" />}
+          </span>
+          <span className="operator-text rail-label">
+            <strong className="operator-name">{operatorName}</strong>
+            {operator?.persona && <span className="operator-persona">{operator.persona}</span>}
+          </span>
         </div>
       </nav>
     </aside>
@@ -247,14 +306,18 @@ function ThreadRow({
           onChange={(event) => setDraft(event.target.value)}
           autoFocus
         />
-        <button type="submit" aria-label={`Save ${title}`}>Save</button>
-        <button type="button" aria-label={`Cancel renaming ${title}`} onClick={() => setEditing(false)}>Cancel</button>
+        <button type="submit" className="thread-action" aria-label={`Save ${title}`}>
+          <RailIcon name="check" />
+        </button>
+        <button type="button" className="thread-action" aria-label={`Cancel renaming ${title}`} onClick={() => setEditing(false)}>
+          <RailIcon name="close" />
+        </button>
       </form>
     );
   }
 
   return (
-    <div className="thread-row">
+    <div className="thread-row" data-active={active ? "true" : undefined}>
       <a
         className="thread-link"
         href={`#/chat/${encodeURIComponent(session.session_id)}`}
@@ -263,29 +326,35 @@ function ThreadRow({
       >
         {title}
       </a>
-      <button type="button" className="thread-action" aria-label={`Rename ${title}`} onClick={() => setEditing(true)}>
-        <span aria-hidden="true">✎</span>
-      </button>
-      <button
-        type="button"
-        className="thread-action"
-        aria-label={`${session.pinned ? "Unpin" : "Pin"} ${title}`}
-        onClick={() => onPin(session)}
-      >
-        <span aria-hidden="true">{session.pinned ? "●" : "○"}</span>
-      </button>
+      <span className="thread-actions">
+        <button type="button" className="thread-action" aria-label={`Rename ${title}`} onClick={() => setEditing(true)}>
+          <RailIcon name="rename" />
+        </button>
+        <button
+          type="button"
+          className="thread-action"
+          aria-label={`${session.pinned ? "Unpin" : "Pin"} ${title}`}
+          onClick={() => onPin(session)}
+        >
+          <RailIcon name="pin" filled={session.pinned} />
+        </button>
+      </span>
     </div>
   );
 }
 
 function RailLink({
   href,
+  icon,
+  tooltip,
   current,
   children,
   badge = 0,
   badgeLabel,
 }: {
   href: string;
+  icon: RailIconName;
+  tooltip?: string;
   current: boolean;
   children: string;
   badge?: number;
@@ -297,8 +366,10 @@ function RailLink({
       href={href}
       aria-label={children}
       aria-current={current ? "page" : undefined}
+      data-tooltip={tooltip}
     >
-      <span>{children}</span>
+      <RailIcon name={icon} />
+      <span className="rail-label">{children}</span>
       {badge > 0 && (
         <span
           className="rail-inbox-badge"
