@@ -243,6 +243,30 @@ describe("Inspector panel for a tool step", () => {
     await waitFor(() => expect(inspect).toHaveFocus());
   });
 
+  it("leaves Escape to a control that already used it, such as an open menu", () => {
+    render(
+      <InspectorProvider threadId="thread-1">
+        <ActivityGroup tools={[tool()]} messageState="complete" />
+        <input
+          aria-label="Menu field"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") event.preventDefault();
+          }}
+        />
+        <Inspector />
+      </InspectorProvider>,
+    );
+    openInspector(/^Queried Board/, "Inspect Queried Board");
+
+    const field = screen.getByRole("textbox", { name: "Menu field" });
+    field.focus();
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(inspectorPanel()).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByRole("complementary", { name: "Inspector" })).not.toBeInTheDocument();
+  });
+
   it("moves between tabs with the arrow keys", () => {
     renderTurn([tool()]);
     openInspector(/^Queried Board/, "Inspect Queried Board");
