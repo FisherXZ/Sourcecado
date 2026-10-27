@@ -7,6 +7,7 @@ import {
   isLiveMessage,
   layerElapsedMs,
   layerState,
+  receiptState,
   stepState,
   stepsSegment,
 } from "./processState";
@@ -104,12 +105,15 @@ export function ActivityGroup({
       ))}
     </ol>
   );
-  const className = `sourcecado-activity sourcecado-activity-${state}`;
+  // The receipt also speaks for the turn: a working mark between steps, and
+  // Interrupted after a stop even when every step finished.
+  const shown = receiptState(state, messageState, answerStarted);
+  const className = `sourcecado-activity sourcecado-activity-${shown}`;
   if (rowCount === 1) return <section className={className}>{rows}</section>;
 
   const elapsedMs = layerElapsedMs(tools, states, now);
   const stepSummary = [
-    stepsSegment(tools, running),
+    stepsSegment(tools, shown === "running"),
     elapsedMs !== null ? `in ${formatElapsed(elapsedMs, running)}` : null,
   ]
     .filter(Boolean)
@@ -127,7 +131,7 @@ export function ActivityGroup({
         onClick={() => setChosen(!open)}
       >
         <span className="sourcecado-activity-summary">{receipt}</span>{" "}
-        <StepStatus state={state} />{" "}
+        <StepStatus state={shown} />{" "}
         <ActionIcon name="chevron" />
       </button>
       {open ? (

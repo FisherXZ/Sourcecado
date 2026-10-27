@@ -1138,6 +1138,7 @@
   border-radius: 9999px;
   background: var(--raised);
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .sourcecado-status-icon-running,
@@ -1151,6 +1152,7 @@
 }
 
 .sourcecado-status-icon-waiting,
+.sourcecado-status-icon-blocked,
 .sourcecado-status-icon-partial,
 .sourcecado-status-icon-interrupted,
 .sourcecado-status-icon-unknown {
@@ -1165,10 +1167,12 @@
 }
 
 .sourcecado-step-waiting .sourcecado-step-state,
+.sourcecado-step-blocked .sourcecado-step-state,
 .sourcecado-step-partial .sourcecado-step-state,
 .sourcecado-step-interrupted .sourcecado-step-state,
 .sourcecado-step-unknown .sourcecado-step-state,
 .sourcecado-activity-waiting > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-blocked > .sourcecado-activity-receipt .sourcecado-step-state,
 .sourcecado-activity-partial > .sourcecado-activity-receipt .sourcecado-step-state,
 .sourcecado-activity-interrupted > .sourcecado-activity-receipt .sourcecado-step-state,
 .sourcecado-activity-unknown > .sourcecado-activity-receipt .sourcecado-step-state {
@@ -1206,6 +1210,12 @@
 .sourcecado-activity-body:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/* A step splits the turn's text into lead-in sentences and the answer. Each is
+   its own block, and they need a gap so they do not run together. */
+.sourcecado-assistant-message .sourcecado-markdown + .sourcecado-markdown {
+  margin-top: 12px;
 }
 
 .sourcecado-steps {
@@ -1256,6 +1266,15 @@
 
   .sourcecado-step-actions .sourcecado-inspect-tool {
     width: 44px;
+  }
+
+  /* The state word stays whole. The summary gives way: two lines, then an
+     ellipsis, inside the 44px target. */
+  .sourcecado-activity-summary {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
   }
 
   .sourcecado-step-detail {

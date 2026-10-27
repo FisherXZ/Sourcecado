@@ -604,9 +604,22 @@ export class SourcecadoChatStore {
         event.threadId,
         messages.map((message) => {
           if (message.id !== event.messageId) return message;
-          const current = message.parts.find(
-            (part) => part.type === "text" && part.id === event.partId,
+          // The backend sends every text delta of a turn under one part id. A
+          // step in between splits the text into segments, so text before a
+          // step (a lead-in) and text after it (the answer) stay separate and
+          // keep their order relative to the steps.
+          const segmentIds = message.parts.filter(
+            (part) =>
+              part.type === "text" &&
+              (part.id === event.partId ||
+                part.id.startsWith(`${event.partId}~`)),
           );
+          const last = message.parts[message.parts.length - 1];
+          const current =
+            last?.type === "text" &&
+            (last.id === event.partId || last.id.startsWith(`${event.partId}~`))
+              ? last
+              : undefined;
           // A live delta to an "interrupted" restore proves the run is
           // still streaming; put the message and its part back to running.
           const revived = message.state === "interrupted";
@@ -615,7 +628,7 @@ export class SourcecadoChatStore {
             ...(revived ? { state: "running" as const } : {}),
             parts: current
               ? message.parts.map((part) =>
-                  part.type === "text" && part.id === event.partId
+                  part === current
                     ? {
                         ...part,
                         text: part.text + event.delta,
@@ -627,7 +640,10 @@ export class SourcecadoChatStore {
                   ...message.parts,
                   {
                     type: "text" as const,
-                    id: event.partId,
+                    id:
+                      segmentIds.length === 0
+                        ? event.partId
+                        : `${event.partId}~${segmentIds.length}`,
                     text: event.delta,
                     state: "running" as const,
                   },

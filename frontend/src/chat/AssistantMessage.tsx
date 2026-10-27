@@ -13,6 +13,7 @@ import { RunBudgetView } from "./RunBudget";
 import { useLastApprovalDelivery } from "./approvalDelivery";
 import { SourceCitation } from "./SourceCitation";
 import { AnswerResults } from "./AnswerResults";
+import { answerHasStarted } from "./processState";
 import { useInspector } from "./Inspector";
 import { resolveInbox } from "../api";
 import type { RunBudgetStatus } from "./protocol";
@@ -125,17 +126,7 @@ export function AssistantMessage() {
   const tools = message.content.filter(
     (part): part is ToolCallMessagePart => part.type === "tool-call",
   );
-  // The answer has started once text streams in after the last step. Text
-  // before a step is a lead-in, not the answer.
-  let lastToolIndex = -1;
-  message.content.forEach((part, index) => {
-    if (part.type === "tool-call") lastToolIndex = index;
-  });
-  const answerStarted =
-    lastToolIndex >= 0 &&
-    message.content
-      .slice(lastToolIndex + 1)
-      .some((part) => part.type === "text" && part.text.trim().length > 0);
+  const answerStarted = answerHasStarted(message.content);
   const artifacts = Array.isArray(
     message.metadata.custom?.sourcecadoArtifacts,
   )

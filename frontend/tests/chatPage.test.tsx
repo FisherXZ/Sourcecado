@@ -2249,10 +2249,12 @@ describe("ChatPage Warm Operator thread", () => {
     emit({
       type: "assistant_delta",
       event_id: "process-6",
-      delta: "Found one VP Talent at Acme.",
+      delta:
+        "Found one VP Talent at Acme. She is the only match for this search, " +
+        "and her email is on file for review.",
     });
     // The answer has started, so the layer closes by itself.
-    const answer = await screen.findByText("Found one VP Talent at Acme.");
+    const answer = await screen.findByText(/^Found one VP Talent at Acme\./);
     expect(receiptLine()).toHaveTextContent("Used 2 sources in 3s");
     expect(receiptLine()).toHaveAttribute("aria-expanded", "false");
     emit({ type: "turn_end", event_id: "process-7", state: "complete", text: "" });
@@ -2265,6 +2267,80 @@ describe("ChatPage Warm Operator thread", () => {
     expect(before(receipt, answer)).toBe(true);
     expect(before(answer, card)).toBe(true);
     expect(container.querySelector(".sourcecado-activity-body")).toBeNull();
+  });
+
+  it("keeps the layer open through lead-in sentences and closes it when the final answer streams", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Lead-ins",
+      messages: [],
+      queue: [],
+      queue_paused: false,
+      events: [],
+    });
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    await waitFor(() => expect(onChatEvent).toBeDefined());
+    const live = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-lead",
+      message_id: "message-lead",
+      part_id: "part-lead",
+    } as const;
+    const emit = (event: Record<string, unknown>) =>
+      act(() => onChatEvent?.({ ...live, ...event }));
+    const receipt = () => container.querySelector(".sourcecado-activity-receipt");
+    const step = (n: number) => {
+      emit({
+        type: "tool_started",
+        event_id: `lead-start-${n}`,
+        id: `lead-call-${n}`,
+        name: "board_query",
+        arguments: {},
+        started_at: `2026-10-26T12:00:0${n}.000Z`,
+      });
+      emit({
+        type: "tool_finished",
+        event_id: `lead-finish-${n}`,
+        id: `lead-call-${n}`,
+        name: "board_query",
+        ok: true,
+        result: { people: [] },
+        finished_at: `2026-10-26T12:00:0${n}.020Z`,
+      });
+    };
+
+    emit({ type: "turn_start", event_id: "lead-0", state: "running" });
+    emit({ type: "assistant_delta", event_id: "lead-d1", delta: "I will check the Board first." });
+    step(1);
+    emit({ type: "assistant_delta", event_id: "lead-d2", delta: "Now I will check it again." });
+    step(2);
+    emit({ type: "assistant_delta", event_id: "lead-d3", delta: "One more look." });
+    // Text follows the last step, but it is a lead-in sentence: the layer stays open.
+    await screen.findByText("One more look.");
+    expect(receipt()).toHaveAttribute("aria-expanded", "true");
+    step(3);
+    expect(receipt()).toHaveAttribute("aria-expanded", "true");
+    expect(receipt()).toHaveTextContent("Using 3 sources");
+
+    emit({
+      type: "assistant_delta",
+      event_id: "lead-d4",
+      delta: "\n\n## Final answer\n\n- The Board has no matching people yet.",
+    });
+    // The final answer is streaming and the turn has not ended: the layer closes.
+    await screen.findByText("Final answer");
+    expect(receipt()).toHaveAttribute("aria-expanded", "false");
+    expect(receipt()).toHaveTextContent("Used 3 sources");
+    // Lead-ins and the answer are separate blocks, so they do not run together.
+    const blocks = [...container.querySelectorAll(".sourcecado-markdown")].map(
+      (block) => block.textContent,
+    );
+    expect(blocks).toHaveLength(4);
+    expect(blocks[2]).toBe("One more look.");
+    expect(blocks[3]).toContain("Final answer");
+    emit({ type: "turn_end", event_id: "lead-end", state: "complete", text: "" });
+    expect(receipt()).toHaveAttribute("aria-expanded", "false");
   });
 
   it("renders equivalent Apollo shortlist states from restored and live events", async () => {

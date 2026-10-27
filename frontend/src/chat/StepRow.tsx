@@ -20,6 +20,7 @@ const STATE_WORDS: Readonly<Partial<Record<StepState, string>>> = {
   waiting: "Needs approval",
   partial: "Partial",
   failed: "Failed",
+  blocked: "Not allowed",
   denied: "Denied",
   interrupted: "Interrupted",
   unknown: "Outcome unknown",
@@ -73,7 +74,7 @@ export function StepRow({
   const recovery = recoveryOf(tool);
   const recoveryStatus = recovery?.status ? String(recovery.status) : null;
   const canRecover =
-    state === "failed" &&
+    (state === "failed" || state === "blocked") &&
     failure !== null &&
     recoveryStatus !== "succeeded" &&
     recoveryStatus !== "skipped" &&
@@ -86,7 +87,9 @@ export function StepRow({
   // that needs a decision from them opens by itself and the rest stay shut.
   const [chosen, setChosen] = useState<boolean | null>(null);
   const needsAttention =
-    state === "failed" ? failure !== null : state === "unknown";
+    state === "failed"
+      ? failure !== null
+      : state === "blocked" || state === "unknown";
   const open = chosen ?? needsAttention;
   const detailId = useId();
 
@@ -145,7 +148,9 @@ export function StepRow({
           {state === "unknown" ? (
             <p>No result was recorded. The step may have run. Check it before you repeat it.</p>
           ) : null}
-          {state === "failed" && failure ? <p role="alert">{failure.summary}</p> : null}
+          {(state === "failed" || state === "blocked") && failure ? (
+            <p role="alert">{failure.summary}</p>
+          ) : null}
           {recovery?.outcome ? <p>{String(recovery.outcome)}</p> : null}
           {elapsedMs !== null && state !== "running" ? (
             <p>Took {formatElapsed(elapsedMs)}</p>
@@ -175,10 +180,12 @@ export function StepRow({
             </button>
             {canRecover && failure ? (
               <div className="sourcecado-recovery-actions">
-                <button type="button" onClick={() => act("retry", failure)}>
-                  <ActionIcon name="retry" />
-                  Retry failed step
-                </button>
+                {state === "failed" ? (
+                  <button type="button" onClick={() => act("retry", failure)}>
+                    <ActionIcon name="retry" />
+                    Retry failed step
+                  </button>
+                ) : null}
                 {failure.repair_route ? (
                   <a
                     href={failure.repair_route}

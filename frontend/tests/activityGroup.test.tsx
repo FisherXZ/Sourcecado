@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActivityGroup } from "../src/chat/ActivityGroup";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 import { RecoveryProvider } from "../src/chat/recovery";
+import { styles } from "./cssBundle";
 
 const tool = (
   overrides: Partial<ToolCallMessagePart> = {},
@@ -24,6 +25,21 @@ const sources = (count: number): ToolCallMessagePart[] =>
   );
 
 const row = (name: RegExp | string) => screen.getByRole("button", { name });
+
+const permissionFailure = {
+  class: "permission",
+  connector_id: null,
+  source: "Board",
+  retry_safe: false,
+  idempotent: false,
+  summary: "Board was not allowed to complete this action.",
+  repair_route: null,
+  detail: "refused",
+  call_id: "call-drive",
+  run_id: "run-1",
+  session_id: "thread-1",
+  state: "failed",
+};
 
 describe("ActivityGroup step rows", () => {
   afterEach(() => {
@@ -111,6 +127,16 @@ describe("ActivityGroup step rows", () => {
         "interrupted",
       ],
       ["unknown", "Outcome unknown", tool({ result: undefined }), "held"],
+      [
+        "blocked",
+        "Not allowed",
+        tool({
+          result: { error: "no" },
+          isError: true,
+          providerMetadata: { sourcecado: { failure: permissionFailure } },
+        }),
+        "complete",
+      ],
     ];
     for (const [state, word, part, messageState] of cases) {
       const { container, unmount } = render(
@@ -184,6 +210,86 @@ describe("ActivityGroup step rows", () => {
     // An unknown outcome opens itself: the operator should not have to hunt for it.
     expect(
       screen.getByText(/No result was recorded\. The step may have run\./),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a retried step that waits for approval in a finished turn as Needs approval", () => {
+    render(
+      <ActivityGroup
+        tools={[
+          tool({ toolCallId: "first", result: { error: "x" }, isError: true }),
+          tool({
+            toolCallId: "retry",
+            result: undefined,
+            approval: { id: "approval-2", reason: "Retrying needs approval." },
+          }),
+        ]}
+        messageState="complete"
+        answerStarted
+      />,
+    );
+
+    const receipt = row(/Needs approval/);
+    expect(receipt).not.toHaveTextContent("Outcome unknown");
+    fireEvent.click(receipt);
+    expect(screen.queryByText(/No result was recorded/)).not.toBeInTheDocument();
+  });
+
+  it("never draws Failed for a denied step while its denial is in flight", () => {
+    // tool_finished (failed) reaches the browser before approval_resolved.
+    const inFlight = tool({
+      toolName: "gmail_send",
+      result: { error: "approval denied" },
+      isError: true,
+      approval: { id: "approval-1" },
+      providerMetadata: { sourcecado: { failure: permissionFailure } },
+    });
+    const { container, rerender } = render(
+      <ActivityGroup tools={[inFlight]} messageState="running" />,
+    );
+
+    expect(row(/Needs approval/)).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("Failed");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Retry failed step|Continue without/ }),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <ActivityGroup
+        tools={[{ ...inFlight, approval: { id: "approval-1", approved: false } }]}
+        messageState="running"
+      />,
+    );
+    expect(row(/Denied/)).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("Failed");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a refusal with no approval record as Not allowed, with no retry", () => {
+    render(
+      <ActivityGroup
+        tools={[
+          tool({
+            toolName: "board_upsert",
+            result: { error: "blocked" },
+            isError: true,
+            providerMetadata: { sourcecado: { failure: permissionFailure } },
+          }),
+        ]}
+        messageState="complete"
+      />,
+    );
+
+    expect(row(/Not allowed/)).not.toHaveTextContent("Failed");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Board was not allowed to complete this action.",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Retry failed step" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Continue without Board" }),
     ).toBeInTheDocument();
   });
 
@@ -280,7 +386,7 @@ describe("ActivityGroup step rows", () => {
         messageState="running"
       />,
     );
-    expect(row(/Searching Drive/)).toHaveTextContent("0s");
+    expect(row(/Searching Drive/)).toHaveTextContent("<1s");
 
     act(() => {
       vi.advanceTimersByTime(3000);
@@ -427,11 +533,11 @@ describe("ActivityGroup process layer", () => {
     const { rerender } = render(
       <ActivityGroup tools={sources(2)} messageState="running" />,
     );
-    fireEvent.click(row(/Used 2 sources/));
-    expect(row(/Used 2 sources/)).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(row(/Using 2 sources/));
+    expect(row(/Using 2 sources/)).toHaveAttribute("aria-expanded", "false");
 
     rerender(<ActivityGroup tools={sources(3)} messageState="running" />);
-    expect(row(/Used 3 sources/)).toHaveAttribute("aria-expanded", "false");
+    expect(row(/Using 3 sources/)).toHaveAttribute("aria-expanded", "false");
   });
 
   it("keeps the layer open through completion when the operator opened it", () => {
@@ -444,6 +550,71 @@ describe("ActivityGroup process layer", () => {
 
     rerender(<ActivityGroup tools={sources(2)} messageState="complete" answerStarted />);
     expect(row(/Used 2 sources/)).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("counts the time the steps ran, not the model time between them", () => {
+    const startedAt = 1_000_000;
+    const tools = [
+      tool({ toolCallId: "a", timing: { startedAt, completedAt: startedAt + 30 } }),
+      tool({
+        toolCallId: "b",
+        timing: { startedAt: startedAt + 8000, completedAt: startedAt + 8030 },
+      }),
+    ];
+    render(<ActivityGroup tools={tools} messageState="complete" />);
+
+    expect(row(/Used 2 sources in <1s/)).toBeInTheDocument();
+  });
+
+  it("shows a working mark, not a success check, between steps while the turn works", () => {
+    const { container, rerender } = render(
+      <ActivityGroup tools={sources(2)} messageState="running" />,
+    );
+    let receipt = container.querySelector(".sourcecado-activity-receipt");
+    expect(receipt).toHaveTextContent("Using 2 sources");
+    expect(receipt?.querySelector(".sourcecado-status-icon-running")).not.toBeNull();
+    expect(receipt?.querySelector(".sourcecado-status-icon-done")).toBeNull();
+
+    rerender(<ActivityGroup tools={sources(2)} messageState="running" answerStarted />);
+    receipt = container.querySelector(".sourcecado-activity-receipt");
+    expect(receipt).toHaveTextContent("Used 2 sources");
+    expect(receipt?.querySelector(".sourcecado-status-icon-done")).not.toBeNull();
+
+    rerender(<ActivityGroup tools={sources(2)} messageState="complete" />);
+    receipt = container.querySelector(".sourcecado-activity-receipt");
+    expect(receipt?.querySelector(".sourcecado-status-icon-done")).not.toBeNull();
+  });
+
+  it("says Interrupted on the receipt after a stop, even when every step finished", () => {
+    const { container } = render(
+      <ActivityGroup tools={sources(3)} messageState="cancelled" />,
+    );
+
+    const receipt = container.querySelector(".sourcecado-activity-receipt");
+    expect(receipt).toHaveTextContent("Interrupted");
+    expect(receipt?.querySelector(".sourcecado-status-icon-done")).toBeNull();
+  });
+
+  it("keeps the state word whole and truncates the summary", () => {
+    const { container } = render(
+      <ActivityGroup
+        tools={[tool(), tool({ toolCallId: "b", result: undefined })]}
+        messageState="held"
+      />,
+    );
+
+    const receipt = container.querySelector(".sourcecado-activity-receipt");
+    expect(receipt?.querySelector(".sourcecado-activity-summary")).not.toBeNull();
+    expect(
+      receipt?.querySelector(".sourcecado-step-status .sourcecado-step-state"),
+    ).toHaveTextContent("Outcome unknown");
+    expect(styles).toMatch(
+      /\.sourcecado-activity-summary,\s*\.sourcecado-step-label\s*\{[^}]*text-overflow:\s*ellipsis;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-step-state\s*\{[^}]*white-space:\s*nowrap;/,
+    );
+    expect(styles).toMatch(/\.sourcecado-step-status\s*\{[^}]*flex:\s*none;/);
   });
 
   it("bounds the open layer and makes it a keyboard-scrollable region", () => {
