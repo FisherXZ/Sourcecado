@@ -75,6 +75,9 @@ export function ChatPage({
   const threadQueuesRef = useRef(
     new Map<string, { items: readonly QueueItem[]; paused: boolean }>(),
   );
+  // Threads whose restore is in flight, and whether a live queue snapshot came
+  // in meanwhile. The restore's own queue is older than that snapshot.
+  const queueHeardDuringRestoreRef = useRef(new Map<string, boolean>());
   const runningThreadsRef = useRef(new Set<string>());
   const activeRunsRef = useRef(new Map<string, string>());
   const pendingCancelsRef = useRef(new Set<string>());
@@ -203,6 +206,7 @@ export function ChatPage({
         }
       }
       setLoading(true);
+      queueHeardDuringRestoreRef.current.set(threadId, false);
       const conversation = personId
         ? await getSession(threadId, personId)
         : await getSession(threadId);
@@ -218,10 +222,17 @@ export function ChatPage({
         throw new Error("conversation person binding mismatch");
       }
       storeRef.current.replaceThread(threadId, restoreConversation(conversation));
-      threadQueuesRef.current.set(threadId, {
-        items: conversation.queue ?? [],
-        paused: conversation.queue_paused ?? false,
-      });
+      if (queueHeardDuringRestoreRef.current.get(threadId) !== true) {
+        threadQueuesRef.current.set(threadId, {
+          items: conversation.queue ?? [],
+          paused: conversation.queue_paused ?? false,
+        });
+      }
+      queueHeardDuringRestoreRef.current.delete(threadId);
+      storeRef.current.noteQueue(
+        threadId,
+        threadQueuesRef.current.get(threadId)?.items ?? [],
+      );
       loadedThreadsRef.current.add(threadId);
       threadTitlesRef.current.set(threadId, conversation.title);
       threadPeopleRef.current.set(threadId, loadedPerson);
@@ -282,6 +293,10 @@ export function ChatPage({
     };
     const chat = openChat((event: SourcecadoSocketEvent) => {
       if (event.type === "queue_snapshot") {
+        if (queueHeardDuringRestoreRef.current.has(event.session_id)) {
+          queueHeardDuringRestoreRef.current.set(event.session_id, true);
+        }
+        storeRef.current.noteQueue(event.session_id, event.items);
         threadQueuesRef.current.set(event.session_id, {
           items: event.items,
           paused: event.paused,

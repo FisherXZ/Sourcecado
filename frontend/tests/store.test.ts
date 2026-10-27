@@ -1093,6 +1093,136 @@ describe("SourcecadoChatStore send while restoring", () => {
   });
 });
 
+describe("SourcecadoChatStore queued messages", () => {
+  const threadId = "thread-alpha";
+  const run = (turn: number) =>
+    ({
+      version: 2,
+      session_id: threadId,
+      run_id: `run-${turn}`,
+      message_id: `answer-${turn}`,
+      part_id: `answer-${turn}-part`,
+    }) as const;
+  const start = (turn: number) =>
+    ({ ...run(turn), event_id: `start-${turn}`, type: "turn_start", state: "running" }) as const;
+  const say = (turn: number, delta: string) =>
+    ({ ...run(turn), event_id: `say-${turn}`, type: "assistant_delta", delta }) as const;
+  const end = (turn: number, text: string) =>
+    ({ ...run(turn), event_id: `end-${turn}`, type: "turn_end", state: "complete", text }) as const;
+  const item = (id: string, text: string, state: string) => ({ id, text, state });
+  const fresh = () => new SourcecadoChatStore([{ id: threadId, messages: [] }], threadId);
+  const lines = (store: SourcecadoChatStore) =>
+    store.messagesFor(threadId).map((message) => {
+      const text = message.parts.map((part) => (part.type === "text" ? part.text : "")).join("");
+      return `${message.role}: ${text}`;
+    });
+  const loaded = (store: SourcecadoChatStore) =>
+    store.replaceThread(
+      threadId,
+      restoreConversation({
+        id: threadId,
+        title: null,
+        messages: [
+          { role: "user", content: "Earlier question" },
+          { role: "assistant", content: "Earlier answer." },
+        ],
+        events: [],
+      }),
+    );
+
+  it("adds the queued message in front of its answer when the run starts", () => {
+    const store = fresh();
+    loaded(store);
+
+    store.noteQueue(threadId, [item("queue-1", "Beta queued", "sending")]);
+    store.applyChatEvent(start(1));
+    store.applyChatEvent(say(1, "Beta answer."));
+    store.applyChatEvent(end(1, "Beta answer."));
+
+    expect(lines(store)).toEqual([
+      "user: Earlier question",
+      "assistant: Earlier answer.",
+      "user: Beta queued",
+      "assistant: Beta answer.",
+    ]);
+  });
+
+  it("adds nothing for a run that no queued message started", () => {
+    const store = fresh();
+    loaded(store);
+    store.noteQueue(threadId, [item("queue-1", "Beta queued", "waiting")]);
+
+    store.applyChatEvent(start(1));
+
+    expect(lines(store)).toEqual([
+      "user: Earlier question",
+      "assistant: Earlier answer.",
+      "assistant: ",
+    ]);
+  });
+
+  it("adds the message once, and not for the run after it", () => {
+    const store = fresh();
+    loaded(store);
+    store.noteQueue(threadId, [item("queue-1", "Beta queued", "sending")]);
+    store.applyChatEvent(start(1));
+    // A replay of the same start, and the next run with the claim still noted.
+    store.applyChatEvent(start(1));
+    store.applyChatEvent(end(1, "Done."));
+    store.applyChatEvent(start(2));
+
+    expect(lines(store).filter((line) => line.startsWith("user: Beta"))).toHaveLength(1);
+    expect(lines(store).at(-1)).toBe("assistant: ");
+  });
+
+  it("drops the claim when the queue no longer shows the message as running", () => {
+    const store = fresh();
+    loaded(store);
+    store.noteQueue(threadId, [item("queue-1", "Beta queued", "sending")]);
+    store.noteQueue(threadId, [item("queue-1", "Beta queued", "waiting")]);
+
+    store.applyChatEvent(start(1));
+
+    expect(lines(store).some((line) => line.startsWith("user: Beta"))).toBe(false);
+  });
+
+  it("keeps the bubble when the run starts before the restore snapshot lands", () => {
+    const store = fresh();
+    store.noteQueue(threadId, [item("queue-1", "Beta queued", "sending")]);
+    store.applyChatEvent(start(1));
+    store.applyChatEvent(say(1, "Beta answer."));
+
+    // The snapshot was taken before the queue drained.
+    loaded(store);
+
+    expect(lines(store)).toEqual([
+      "user: Earlier question",
+      "assistant: Earlier answer.",
+      "user: Beta queued",
+      "assistant: Beta answer.",
+    ]);
+  });
+
+  it("shows the queued message once when the snapshot already holds it and its run", () => {
+    const store = fresh();
+    store.noteQueue(threadId, [item("queue-1", "Beta queued", "sending")]);
+    store.applyChatEvent(start(1));
+    store.applyChatEvent(say(1, "Beta"));
+
+    store.replaceThread(
+      threadId,
+      restoreConversation({
+        id: threadId,
+        title: null,
+        messages: [{ role: "user", content: "Beta queued" }],
+        events: [start(1), say(1, "Beta")],
+      }),
+    );
+
+    expect(lines(store)).toEqual(["user: Beta queued", "assistant: Beta"]);
+  });
+});
+
 describe("SourcecadoChatStore transport events", () => {
   it("passes a connection_change through without adding a transcript message", () => {
     const store = new SourcecadoChatStore(
