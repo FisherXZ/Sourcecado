@@ -1,5 +1,12 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+} from "react";
 
 import { ApprovalIcon } from "./approvalIcons";
 import {
@@ -17,26 +24,36 @@ import {
 } from "./approvalModel";
 import { CalendarApprovalSummary } from "../generative/CalendarEventResult";
 
-const BODY_CLAMP = 280;
+/**
+ * A value longer than this is cut and offered behind an expand control, so a
+ * long write or message cannot push Allow and Deny out of reach.
+ */
+const VALUE_CLAMP = 280;
 
-function ReviewedBody({ body }: { readonly body: string }) {
+function ClampedValue({
+  text,
+  noun,
+}: {
+  readonly text: string;
+  readonly noun: string;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const bodyId = useId();
-  const truncated = body.length > BODY_CLAMP;
+  const valueId = useId();
+  const truncated = text.length > VALUE_CLAMP;
   const visible =
-    truncated && !expanded ? `${body.slice(0, BODY_CLAMP).trimEnd()}…` : body;
+    truncated && !expanded ? `${text.slice(0, VALUE_CLAMP).trimEnd()}…` : text;
   return (
     <div className="sourcecado-approval-body">
-      <p id={bodyId}>{visible}</p>
+      <p id={valueId}>{visible}</p>
       {truncated ? (
         <button
           type="button"
           aria-expanded={expanded}
-          aria-controls={bodyId}
+          aria-controls={valueId}
           onClick={() => setExpanded((current) => !current)}
         >
           <ApprovalIcon name={expanded ? "chevron-down" : "chevron-right"} />
-          {expanded ? "Collapse draft body" : "Expand draft body"}
+          {expanded ? `Collapse ${noun}` : `Expand ${noun}`}
         </button>
       ) : null}
     </div>
@@ -47,35 +64,66 @@ function RowValue({ row }: { readonly row: ApprovalRow }) {
   if (row.value === null) {
     return <span className="sourcecado-approval-unavailable">{row.unavailable}</span>;
   }
-  if (row.variant === "body") return <ReviewedBody body={row.value} />;
+  // A command is shown whole: cutting it could hide what will run. The table
+  // scrolls inside a bounded region instead.
   if (row.variant === "code") return <code>{row.value}</code>;
-  return <>{row.value}</>;
+  return (
+    <ClampedValue
+      text={row.value}
+      noun={row.variant === "body" ? "draft body" : row.label.toLowerCase()}
+    />
+  );
 }
 
 function ApprovalTable({ rows }: { readonly rows: readonly ApprovalRow[] }) {
   return (
-    <table className="sourcecado-approval-table">
-      <thead>
-        <tr>
-          <th scope="col">Field</th>
-          <th scope="col">Value</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.key}>
-            <th scope="row">
-              <ApprovalIcon name={row.icon} />
-              <span>{row.label}</span>
-            </th>
-            <td>
-              <RowValue row={row} />
-            </td>
+    <div
+      className="sourcecado-approval-table-scroll"
+      role="region"
+      aria-label="Request fields"
+      tabIndex={0}
+    >
+      <table className="sourcecado-approval-table">
+        <thead>
+          <tr>
+            <th scope="col">Field</th>
+            <th scope="col">Value</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.key}>
+              <th scope="row">
+                <ApprovalIcon name={row.icon} />
+                <span>{row.label}</span>
+              </th>
+              <td>
+                <RowValue row={row} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
+}
+
+/**
+ * True while the operator is typing: a text field has focus, or the composer
+ * holds a draft. A card that appears then must not take focus.
+ */
+function operatorIsTyping(): boolean {
+  const active = document.activeElement;
+  if (
+    active instanceof HTMLElement &&
+    active.matches('input, textarea, select, [contenteditable=""], [contenteditable="true"]')
+  ) {
+    return true;
+  }
+  const composer = document.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Message Sourcecado"]',
+  );
+  return Boolean(composer && composer.value.trim());
 }
 
 export function ApprovalCard({
@@ -97,14 +145,23 @@ export function ApprovalCard({
   const [showDetails, setShowDetails] = useState(false);
   const [showReceipt, setShowReceipt] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  // Command-Enter works only after the operator has moved focus into the card
+  // on purpose. Focus that the card gave itself on mount never counts.
+  const armed = useRef(false);
+  const mountFocus = useRef(false);
   const previousState = useRef<ApprovalState>(audit.approvalState);
   const detailsId = useId();
   const pending = audit.approvalState === "pending";
   const alwaysOffered = canOfferAlways(part.toolName, view.shell);
   const reason = visibleReason(part.approval?.reason, part.toolName);
 
+  // The thread's live region announces that an approval is needed. Take focus
+  // only when nobody is typing; otherwise the card would swallow keystrokes.
   useEffect(() => {
-    if (pending) headingRef.current?.focus();
+    if (!pending || operatorIsTyping()) return;
+    mountFocus.current = true;
+    headingRef.current?.focus();
+    mountFocus.current = false;
   }, [pending]);
 
   useEffect(() => {
@@ -208,11 +265,22 @@ export function ApprovalCard({
     );
   }
 
-  // Command-Enter allows once, only while focus is inside this card and the
-  // decision is not already in flight. Escape is not handled: it never denies,
-  // never allows, and never closes the card.
+  function onFocus() {
+    if (!mountFocus.current) armed.current = true;
+  }
+
+  function onBlur(event: FocusEvent<HTMLElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      armed.current = false;
+    }
+  }
+
+  // Command-Enter allows once, only after the operator moved focus into this
+  // card on purpose and while the decision is not already in flight. Escape is
+  // not handled: it never denies, never allows, and never closes the card.
   function onKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (
+      !armed.current ||
       event.key !== "Enter" ||
       !(event.metaKey || event.ctrlKey) ||
       event.repeat ||
@@ -232,6 +300,11 @@ export function ApprovalCard({
         (submitting && !submitOutcomeUnknown && !submitQueued) || undefined
       }
       onKeyDown={onKeyDown}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      onPointerDown={() => {
+        armed.current = true;
+      }}
     >
       <header className="sourcecado-approval-head">
         <ApprovalIcon name={view.icon} className="sourcecado-approval-action" />

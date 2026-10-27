@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canOfferAlways,
+  cleanApolloText,
   executionText,
   receiptOf,
   visibleReason,
@@ -73,6 +74,21 @@ describe("visible reason", () => {
     expect(
       visibleReason("Spends 1 Apollo credit to look up Fisher Zh***g.", "apollo_enrich_contact"),
     ).toBe("Spends 1 Apollo credit to look up Fisher (surname hidden by Apollo)");
+  });
+});
+
+describe("masked Apollo surname", () => {
+  it("replaces the mask with words and does not repeat the phrase the backend adds", () => {
+    expect(cleanApolloText("Maya C***n (surname hidden by Apollo)")).toBe(
+      "Maya (surname hidden by Apollo)",
+    );
+  });
+
+  it("leaves a name with no mask alone", () => {
+    expect(cleanApolloText("Maya Chen")).toBe("Maya Chen");
+    expect(cleanApolloText("Maya (surname hidden by Apollo)")).toBe(
+      "Maya (surname hidden by Apollo)",
+    );
   });
 });
 

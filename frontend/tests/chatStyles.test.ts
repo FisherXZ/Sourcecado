@@ -285,6 +285,15 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
+  it("bounds the approval field table so Allow and Deny stay reachable", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-approval-table-scroll\s*\{[^}]*max-height:\s*min\(50vh, 420px\);[^}]*overflow-y:\s*auto;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-approval-details pre\s*\{[^}]*max-height:\s*240px;[^}]*overflow:\s*auto;/,
+    );
+  });
+
   it("keeps approval text at 13px or larger and the decision readable", () => {
     for (const selector of [
       "\\.sourcecado-approval-card",

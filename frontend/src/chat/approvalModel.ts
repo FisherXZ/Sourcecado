@@ -40,6 +40,19 @@ export type ApprovalAudit = {
 
 type Args = Readonly<Record<string, unknown>>;
 
+const SURNAME_HIDDEN = "(surname hidden by Apollo)";
+
+/**
+ * Replaces a masked Apollo surname with words. The backend already appends
+ * "(surname hidden by Apollo)" to the person it names, so a replaced mask would
+ * leave the phrase twice. Collapse the repeat.
+ */
+export function cleanApolloText(text: string): string {
+  return withoutApolloNameMasks(text)
+    .replace(/\(surname hidden by Apollo\)(\s*\(surname hidden by Apollo\))+/g, SURNAME_HIDDEN)
+    .trim();
+}
+
 function sourcecadoMetadata(
   part: ToolCallMessagePartProps,
 ): Record<string, unknown> | undefined {
@@ -178,8 +191,9 @@ const MATCH_LABELS: Readonly<Record<string, string>> = {
 function enrichFactsOf(part: ToolCallMessagePartProps, args: Args): EnrichFacts {
   const record = resourceRecord(part);
   if (record && record.kind === "apollo_enrichment") {
+    const person = str(record.person);
     return {
-      person: str(record.person),
+      person: person ? cleanApolloText(person) : null,
       title: str(record.title),
       company: str(record.company),
       matchedOn: MATCH_LABELS[String(record.matched_on)] ?? null,
@@ -483,9 +497,7 @@ export function visibleReason(
 ): string | null {
   const text = reason?.trim();
   if (!text || /^consequential\b/i.test(text)) return null;
-  return toolName === "apollo_enrich_contact"
-    ? withoutApolloNameMasks(text)
-    : text;
+  return toolName === "apollo_enrich_contact" ? cleanApolloText(text) : text;
 }
 
 export function displayedArguments(toolName: string, args: Args): Args {
@@ -499,7 +511,14 @@ export function rawRequestText(part: ToolCallMessagePartProps): string {
   const resource =
     record && record.kind !== "shell_command"
       ? Object.fromEntries(
-          Object.entries(record).filter(([key]) => key !== "body"),
+          Object.entries(record)
+            .filter(([key]) => key !== "body")
+            .map(([key, value]) => [
+              key,
+              key === "person" && typeof value === "string"
+                ? cleanApolloText(value)
+                : value,
+            ]),
         )
       : null;
   return JSON.stringify(

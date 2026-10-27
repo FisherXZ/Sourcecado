@@ -321,16 +321,25 @@ export function convertStructuredMessage(
             }];
       }
       if (part.type === "artifact") return [];
+      // The backend closes a denied call with ok=false (tool_finished) a few
+      // milliseconds before it writes the approval receipt. A failed result
+      // with no decision yet is the operator's pending choice, not a failure.
+      // After the decision, a denial is also not a failure.
+      const approvalState = part.approval?.state;
+      const undecided =
+        approvalState === "pending" ||
+        approvalState === "submitting" ||
+        approvalState === "failed-submit";
+      const waiting = undecided && part.state === "error";
+      const hideFailure = waiting || approvalState === "denied";
       return [{
         type: "tool-call" as const,
         toolCallId: part.id,
         toolName: part.name,
         args: part.arguments as never,
         argsText: JSON.stringify(part.arguments),
-        ...(part.result !== undefined ? { result: part.result } : {}),
-        // A denial is the operator's decision. The backend closes the denied
-        // call with ok=false, which must not surface as a Failed step.
-        isError: part.state === "error" && part.approval?.state !== "denied",
+        ...(part.result !== undefined && !waiting ? { result: part.result } : {}),
+        isError: part.state === "error" && !hideFailure,
         ...(part.startedAt !== undefined
           ? {
               timing: {
@@ -345,10 +354,7 @@ export function convertStructuredMessage(
           ? {
               providerMetadata: {
                 sourcecado: {
-                  failure:
-                    part.approval?.state === "denied"
-                      ? null
-                      : (part.failure ?? null),
+                  failure: hideFailure ? null : (part.failure ?? null),
                   recovery: part.recovery ?? null,
                   approvalState: part.approval?.state ?? null,
                   actor: part.approval?.actor ?? null,

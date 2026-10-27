@@ -2015,6 +2015,69 @@ describe("ChatPage Warm Operator thread", () => {
     );
   });
 
+  it("keeps focus and typed text in the composer when an approval appears, and Command-Enter there allows nothing", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+    const composer = screen.getByRole("textbox", { name: "Message Sourcecado" });
+    act(() => composer.focus());
+    fireEvent.change(composer, { target: { value: "my fo" } });
+
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        type: "turn_start",
+        session_id: "thread-alpha",
+        run_id: "run-typing",
+        event_id: "typing-1",
+        message_id: "assistant-typing",
+        part_id: "assistant-typing-part",
+        state: "running",
+      });
+      onChatEvent?.({
+        version: 2,
+        type: "permission_required",
+        session_id: "thread-alpha",
+        run_id: "run-typing",
+        event_id: "typing-2",
+        message_id: "assistant-typing",
+        part_id: "assistant-typing-part",
+        id: "approval-typing",
+        name: "board_delete",
+        arguments: { person_id: "person_qa_does_not_exist" },
+        reason: "consequential: waits for Allow or Deny",
+      });
+    });
+
+    const title = await screen.findByRole("heading", {
+      level: 2,
+      name: "Delete person file",
+    });
+    expect(composer).toHaveFocus();
+    expect(composer).toHaveValue("my fo");
+    expect(title).not.toHaveFocus();
+    // The card is announced through the thread's live region instead.
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Sourcecado needs your approval to continue.",
+    );
+
+    // The operator finishes typing and presses Command-Enter from habit.
+    fireEvent.change(composer, { target: { value: "my follow up draft" } });
+    fireEvent.keyDown(composer, { key: "Enter", metaKey: true });
+
+    expect(chatApprove).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: /^Allowed/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows a progressive pending approval and waits for durable resolution", async () => {
     const envelope = {
       version: 2,
