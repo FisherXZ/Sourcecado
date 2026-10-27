@@ -102,6 +102,11 @@ async function openChat(conversation: Record<string, unknown> = {}) {
   });
   render(<ChatPage sessionId="thread-alpha" />);
   await screen.findByRole("heading", { level: 1, name: "Alpha" });
+  // An empty thread reads skills and the Board once, for its prompt chips
+  // (#231). Forget those reads so each test counts only the composer's own.
+  await act(async () => {});
+  api.getSkills.mockClear();
+  api.getBoard.mockClear();
   return screen.getByRole("textbox", { name: "Message Sourcecado" });
 }
 
@@ -281,8 +286,8 @@ describe("Composer", () => {
     });
 
     it("says so when skills do not load, and loads them on retry", async () => {
-      api.getSkills.mockRejectedValueOnce(new Error("skills 500"));
       const box = await openChat();
+      api.getSkills.mockRejectedValueOnce(new Error("skills 500"));
       fireEvent.change(box, { target: { value: "/" } });
       expect(await screen.findByText("Skills did not load.")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Try again" }));
@@ -429,8 +434,8 @@ describe("Composer", () => {
     });
 
     it("says so when the Board is empty or does not load", async () => {
-      api.getBoard.mockResolvedValueOnce({ backlog: [], open: [], in_conversation: [], done: [] });
       await openChat();
+      api.getBoard.mockResolvedValueOnce({ backlog: [], open: [], in_conversation: [], done: [] });
       fireEvent.click(screen.getByRole("button", { name: "Add context" }));
       fireEvent.click(await screen.findByRole("menuitem", { name: /Attach a person/ }));
       expect(await screen.findByText("No people are on your Board yet.")).toBeInTheDocument();

@@ -364,6 +364,8 @@ export type BoardPerson = {
   last_name_status?: "known" | "hidden_by_apollo" | "missing";
   title: string | null;
   company: string | null;
+  /** The director's own description of whom they want to find and why. */
+  target?: string | null;
   sequence_state: string | null;
   board_lane?: "backlog" | "open" | "in_conversation" | "done";
   last_contact_at?: string | null;
