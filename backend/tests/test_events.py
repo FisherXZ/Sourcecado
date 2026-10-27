@@ -117,6 +117,18 @@ def test_contract_rejects_a_text_delta_without_string_content():
             },
             "tool_started.arguments must be an object",
         ),
+        (
+            {"type": "reasoning_delta", "delta": "", "step": 1, "at": "t"},
+            "reasoning_delta.delta must be a non-empty string",
+        ),
+        (
+            {"type": "reasoning_delta", "delta": "x", "step": 0, "at": "t"},
+            "reasoning_delta.step must be a positive integer",
+        ),
+        (
+            {"type": "reasoning_delta", "delta": "x", "step": 1},
+            "reasoning_delta.at must be a non-empty string",
+        ),
     ],
 )
 def test_contract_enforces_event_specific_payload_shapes(payload, problem):
@@ -131,3 +143,34 @@ def test_contract_enforces_event_specific_payload_shapes(payload, problem):
     }
 
     assert validate_event(event) == problem
+
+
+def test_reasoning_delta_uses_the_canonical_v2_event_envelope():
+    identity = TurnIdentity(
+        session_id="session-alpha",
+        run_id="run-1",
+        message_id="message-1",
+        part_id="part-1",
+    )
+
+    event = build_event(
+        identity,
+        "reasoning_delta",
+        event_id="event-1",
+        delta="Checking the shortlist.",
+        step=1,
+        at="2026-10-26T12:00:00+00:00",
+    )
+
+    assert event == {
+        "version": 2,
+        "type": "reasoning_delta",
+        "session_id": "session-alpha",
+        "run_id": "run-1",
+        "event_id": "event-1",
+        "message_id": "message-1",
+        "part_id": "part-1",
+        "delta": "Checking the shortlist.",
+        "step": 1,
+        "at": "2026-10-26T12:00:00+00:00",
+    }

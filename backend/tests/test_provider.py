@@ -750,6 +750,24 @@ def test_deepseek_continuity_survives_a_system_prompt_refresh(monkeypatch):
     assert requests[1]["messages"][2]["reasoning_content"] == "private"
 
 
+def _durable_without_thread_reasoning(store, sid):
+    """The model's history and every event except the thread's reasoning.
+
+    Raw reasoning is shown in the thread (#225), so the event log keeps it as
+    `reasoning_delta` events. It must not be anywhere else.
+    """
+    return json.dumps(
+        {
+            "messages": store.load(sid),
+            "events": [
+                event
+                for event in store.load_events(sid)
+                if event["type"] != "reasoning_delta"
+            ],
+        }
+    )
+
+
 def test_turn_binds_deepseek_transient_context_without_persisting_reasoning(
     tmp_path, monkeypatch
 ):
@@ -856,12 +874,17 @@ def test_turn_binds_deepseek_transient_context_without_persisting_reasoning(
     assert result == {"status": "ok", "text": "It is noon."}
     assert len(requests) == 2
     assert requests[1]["messages"][2]["reasoning_content"] == private_reasoning
-    durable = json.dumps(
-        {"messages": store.load(sid), "events": store.load_events(sid)}
-    )
+    durable = _durable_without_thread_reasoning(store, sid)
     assert private_reasoning not in durable
     assert "second private step" not in durable
     assert "reasoning_content" not in durable
+    shown = "".join(
+        event["delta"]
+        for event in store.load_events(sid)
+        if event["type"] == "reasoning_delta"
+    )
+    assert private_reasoning in shown
+    assert "second private step" in shown
 
 
 def test_turn_continues_after_workspace_read_without_persisting_reasoning(
@@ -1021,9 +1044,7 @@ def test_turn_continues_after_workspace_read_without_persisting_reasoning(
     follow_messages = requests[2]["messages"]
     assert follow_messages[2]["reasoning_content"] == private_first
     assert follow_messages[4]["reasoning_content"] == private_final
-    durable = json.dumps(
-        {"messages": store.load(sid), "events": store.load_events(sid)}
-    )
+    durable = _durable_without_thread_reasoning(store, sid)
     assert file_body not in durable
     assert private_first not in durable
     assert private_final not in durable
@@ -1171,9 +1192,7 @@ def test_turn_continues_after_workspace_shell_without_persisting_reasoning(
     follow_messages = requests[2]["messages"]
     assert follow_messages[2]["reasoning_content"] == private_first
     assert follow_messages[4]["reasoning_content"] == private_final
-    durable = json.dumps(
-        {"messages": store.load(sid), "events": store.load_events(sid)}
-    )
+    durable = _durable_without_thread_reasoning(store, sid)
     assert command_output not in durable
     assert "[COMMAND REDACTED]" in durable
     assert private_first not in durable

@@ -5,6 +5,7 @@ import {
   type ToolCallMessagePartProps,
   type ToolCallMessagePart,
 } from "@assistant-ui/react";
+import { useState } from "react";
 import { ActivityGroup } from "./ActivityGroup";
 import { AnswerMarkdown } from "./AnswerMarkdown";
 import { ApprovalCard } from "./ApprovalCard";
@@ -12,8 +13,16 @@ import { RunBudgetView } from "./RunBudget";
 import { useLastApprovalDelivery } from "./approvalDelivery";
 import { SourceCitation } from "./SourceCitation";
 import { AnswerResults } from "./AnswerResults";
-import { answerHasStarted } from "./processState";
 import { useInspector } from "./Inspector";
+import { answerHasStarted, isLiveMessage } from "./processState";
+import { ThinkingRow } from "./ThinkingRow";
+import {
+  joinReasoning,
+  reasoningParts,
+  reasoningTiming,
+  thinkingElapsedMs,
+  thoughtLabel,
+} from "./thinking";
 import { resolveInbox } from "../api";
 import type { RunBudgetStatus } from "./protocol";
 
@@ -88,6 +97,9 @@ function SafeToolFallback(part: ToolCallMessagePartProps) {
 
 export function AssistantMessage() {
   const message = useAuiState((state) => state.message);
+  // The operator's own open or close choice for the thinking row. It lives
+  // here so it survives the row moving between the one-row and receipt layouts.
+  const [thinkingChoice, setThinkingChoice] = useState<boolean | null>(null);
   const sourcecadoState = message.metadata.custom?.sourcecadoState;
   const runBudget = message.metadata.custom?.sourcecadoRunBudget as
     | RunBudgetStatus
@@ -106,6 +118,28 @@ export function AssistantMessage() {
     (part): part is ToolCallMessagePart => part.type === "tool-call",
   );
   const answerStarted = answerHasStarted(message.content);
+  const reasoning = reasoningParts(message.content);
+  const thinking =
+    isLiveMessage(sourcecadoState) &&
+    reasoning.some((part) => part.status?.type === "running");
+  const timing = reasoningTiming(reasoning);
+  const lead =
+    reasoning.length > 0
+      ? {
+          summary: thinking
+            ? "Thinking…"
+            : thoughtLabel(thinkingElapsedMs(timing, Date.now())),
+          node: (
+            <ThinkingRow
+              text={joinReasoning(reasoning)}
+              thinking={thinking}
+              timing={timing}
+              chosen={thinkingChoice}
+              onChoose={setThinkingChoice}
+            />
+          ),
+        }
+      : undefined;
   const artifacts = Array.isArray(
     message.metadata.custom?.sourcecadoArtifacts,
   )
@@ -126,6 +160,7 @@ export function AssistantMessage() {
         tools={tools}
         messageState={sourcecadoState}
         answerStarted={answerStarted}
+        {...(lead ? { lead } : {})}
       />
       <MessagePrimitive.Parts
         components={{

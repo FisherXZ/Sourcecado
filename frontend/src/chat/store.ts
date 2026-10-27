@@ -7,7 +7,10 @@ import {
   type RecoverableChatNotice,
   type TransportChatError,
 } from "./protocol";
-import type { SourcecadoStructuredMessage } from "./messageAdapter";
+import type {
+  SourcecadoPart,
+  SourcecadoStructuredMessage,
+} from "./messageAdapter";
 import type {
   ApprovalResource,
   ProvenanceArtifact,
@@ -97,6 +100,14 @@ export type SourcecadoEvent =
       readonly delta: string;
     }
   | {
+      readonly type: "reasoning_delta";
+      readonly threadId: string;
+      readonly messageId: string;
+      readonly partId: string;
+      readonly delta: string;
+      readonly at?: number;
+    }
+  | {
       readonly type: "tool_started";
       readonly threadId: string;
       readonly messageId: string;
@@ -181,6 +192,33 @@ export type SourcecadoEvent =
     };
 
 const LIVE_EVENT_BUFFER_LIMIT = 1000;
+
+/**
+ * Reasoning is over once the answer text or a tool call starts, or the turn
+ * ends. The thread collapses the thinking row at that point.
+ */
+function settleReasoning(
+  parts: readonly SourcecadoPart[],
+): readonly SourcecadoPart[] {
+  return parts.some((part) => part.type === "reasoning" && part.state === "running")
+    ? parts.map((part) =>
+        part.type === "reasoning" && part.state === "running"
+          ? { ...part, state: "complete" as const }
+          : part,
+      )
+    : parts;
+}
+
+function settleReasoningIn(
+  messages: readonly SourcecadoStructuredMessage[],
+  messageId: string,
+): readonly SourcecadoStructuredMessage[] {
+  return messages.map((message) =>
+    message.id === messageId
+      ? { ...message, parts: settleReasoning(message.parts) }
+      : message,
+  );
+}
 
 export class SourcecadoChatStore {
   private readonly threads = new Map<
@@ -287,10 +325,14 @@ export class SourcecadoChatStore {
           ? {
               ...message,
               state: "running" as const,
-              parts: message.parts.map((part) =>
+              parts: message.parts.map((part, index) =>
                 part.type === "text" && part.state === "interrupted"
                   ? { ...part, state: "running" as const }
-                  : part,
+                  : // The snapshot settled a block the model was still in.
+                    part.type === "reasoning" &&
+                      index === message.parts.length - 1
+                    ? { ...part, state: "running" as const }
+                    : part,
               ),
             }
           : message,
@@ -396,6 +438,27 @@ export class SourcecadoChatStore {
         partId: event.part_id,
         delta: event.delta,
       });
+      return;
+    }
+    if (event.type === "reasoning_delta") {
+      const at = event.at ? Date.parse(event.at) : undefined;
+      this.apply({
+        type: "reasoning_delta",
+        threadId: event.session_id,
+        messageId: event.message_id,
+        partId: `${event.part_id}:reasoning:${event.step ?? 1}`,
+        delta: event.delta,
+        ...(at !== undefined && Number.isFinite(at) ? { at } : {}),
+      });
+      return;
+    }
+    if (event.type === "provider_recovery") {
+      // The attempt that was reasoning has failed. Its block is over, so the
+      // live count stops here. The retry opens a new block if it reasons.
+      this.threads.set(
+        event.session_id,
+        settleReasoningIn(this.messagesFor(event.session_id), event.message_id),
+      );
       return;
     }
     if (event.type === "turn_stopping") {
@@ -623,11 +686,12 @@ export class SourcecadoChatStore {
           // A live delta to an "interrupted" restore proves the run is
           // still streaming; put the message and its part back to running.
           const revived = message.state === "interrupted";
+          const settled = settleReasoning(message.parts);
           return {
             ...message,
             ...(revived ? { state: "running" as const } : {}),
             parts: current
-              ? message.parts.map((part) =>
+              ? settled.map((part) =>
                   part === current
                     ? {
                         ...part,
@@ -637,7 +701,7 @@ export class SourcecadoChatStore {
                     : part,
                 )
               : [
-                  ...message.parts,
+                  ...settled,
                   {
                     type: "text" as const,
                     id:
@@ -654,10 +718,56 @@ export class SourcecadoChatStore {
       return;
     }
 
+    if (event.type === "reasoning_delta") {
+      this.threads.set(
+        event.threadId,
+        messages.map((message) => {
+          if (message.id !== event.messageId) return message;
+          const known = message.parts.some(
+            (part) => part.type === "reasoning" && part.id === event.partId,
+          );
+          return {
+            ...message,
+            ...(message.state === "interrupted"
+              ? { state: "running" as const }
+              : {}),
+            parts: known
+              ? message.parts.map((part) =>
+                  part.type === "reasoning" && part.id === event.partId
+                    ? {
+                        ...part,
+                        text: part.text + event.delta,
+                        // A delta means the model is still reasoning. A part
+                        // restored from a run that is still going was settled
+                        // by the snapshot, so it runs again here.
+                        state: "running" as const,
+                        ...(event.at !== undefined ? { endedAt: event.at } : {}),
+                      }
+                    : part,
+                )
+              : [
+                  // A new block means the earlier one is over.
+                  ...settleReasoning(message.parts),
+                  {
+                    type: "reasoning" as const,
+                    id: event.partId,
+                    text: event.delta,
+                    state: "running" as const,
+                    ...(event.at !== undefined
+                      ? { startedAt: event.at, endedAt: event.at }
+                      : {}),
+                  },
+                ],
+          };
+        }),
+      );
+      return;
+    }
+
     if (event.type === "tool_started") {
       this.threads.set(
         event.threadId,
-        messages.map((message) =>
+        settleReasoningIn(messages, event.messageId).map((message) =>
           message.id === event.messageId
             ? {
                 ...message,
@@ -880,7 +990,7 @@ export class SourcecadoChatStore {
                 ...message,
                 state: event.state,
                 parts: terminalTextState
-                  ? message.parts.map((part) =>
+                  ? settleReasoning(message.parts).map((part) =>
                       part.type === "text" && part.state === "running"
                         ? { ...part, state: terminalTextState }
                         : part,
@@ -900,7 +1010,7 @@ export class SourcecadoChatStore {
           ? {
               ...message,
               state: event.state,
-              parts: message.parts.map((part) =>
+              parts: settleReasoning(message.parts).map((part) =>
                 part.type === "text" && part.state === "running"
                   ? { ...part, state: "complete" as const }
                   : part,

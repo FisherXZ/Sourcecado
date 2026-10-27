@@ -32,6 +32,20 @@ export type SourcecadoTextPart = {
     | "interrupted";
 };
 
+/**
+ * Raw model reasoning for one block of a turn. Never a record of an action:
+ * only tool parts mean recorded actions. Times are epoch milliseconds from
+ * the backend's own clock.
+ */
+export type SourcecadoReasoningPart = {
+  readonly type: "reasoning";
+  readonly id: string;
+  readonly text: string;
+  readonly state: "running" | "complete";
+  readonly startedAt?: number;
+  readonly endedAt?: number;
+};
+
 export type SourcecadoToolPart = {
   readonly type: "tool";
   readonly id: string;
@@ -90,6 +104,7 @@ export type SourcecadoArtifactPart = ProvenanceArtifact & {
 
 export type SourcecadoPart =
   | SourcecadoTextPart
+  | SourcecadoReasoningPart
   | SourcecadoToolPart
   | SourcecadoNoticePart
   | SourcecadoSourcePart
@@ -241,6 +256,29 @@ export function convertStructuredMessage(
           text: part.text,
           parentId: part.id,
           status: textPartStatus(part.state),
+        }];
+      }
+      if (part.type === "reasoning") {
+        return [{
+          type: "reasoning" as const,
+          text: part.text,
+          parentId: part.id,
+          status:
+            part.state === "running"
+              ? { type: "running" as const }
+              : { type: "complete" as const },
+          ...(part.startedAt !== undefined
+            ? {
+                providerMetadata: {
+                  sourcecado: {
+                    startedAt: part.startedAt,
+                    ...(part.endedAt !== undefined
+                      ? { endedAt: part.endedAt }
+                      : {}),
+                  },
+                },
+              }
+            : {}),
         }];
       }
       if (part.type === "notice") {
