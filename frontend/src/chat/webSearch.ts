@@ -82,6 +82,24 @@ export function webDomain(value: string | null | undefined): string | null {
 }
 
 /**
+ * A copy of a stored value with the user name and password taken out of every
+ * http(s) URL in its text. It is for display only. The stored event is not
+ * changed. A page can carry credentials in a link, and no view of a search
+ * should hand them back.
+ */
+export function withoutUserInfo<T>(value: T): T {
+  if (typeof value === "string") {
+    return value.replace(/(https?:\/\/)[^/\s@?#]*@/gi, "$1") as T;
+  }
+  if (Array.isArray(value)) return value.map(withoutUserInfo) as T;
+  const fields = record(value);
+  if (fields === null) return value;
+  return Object.fromEntries(
+    Object.entries(fields).map(([key, entry]) => [key, withoutUserInfo(entry)]),
+  ) as T;
+}
+
+/**
  * The words the operator reads for each evidence state the backend can record.
  * `present` says nothing. An unknown value is shown as Unverified, so a state
  * this build does not know never reads as a clean result.
@@ -185,14 +203,14 @@ function resultsOf(tool: ToolCallMessagePart, query: string): WebResult[] | null
   return dicts.map((row, index) => {
     const { reference, withheld, unverified } = paired[index]!;
     const url = text(row.url) || null;
-    const snippet = text(row.snippet);
+    const snippet = withoutUserInfo(text(row.snippet));
     const excerpt = withheld || !snippet ? null : snippet;
     const flags = flagsOf(reference, withheld || snippet !== "");
     if (unverified && !flags.includes("Unverified")) flags.push("Unverified");
     const domain = webDomain(url);
     return {
       id: reference?.id ?? `${tool.toolCallId}:result:${index}`,
-      title: text(row.title) || reference?.title || domain || "Web result",
+      title: withoutUserInfo(text(row.title) || reference?.title || domain || "Web result"),
       url,
       domain,
       excerpt,
@@ -204,21 +222,21 @@ function resultsOf(tool: ToolCallMessagePart, query: string): WebResult[] | null
 }
 
 /**
- * The stored result for the raw Inspect view, with the snippet of every
- * withheld result taken out. The row, the chip and the inspector withhold that
- * excerpt, so the raw view must not hand it back.
+ * The stored result for the raw Inspect view: the snippet of every withheld
+ * result taken out, and the user name and password taken out of every URL.
+ * The row, the chip and the inspector withhold that excerpt and never show
+ * credentials, so the raw view must not hand either back.
  */
 export function inspectableResult(tool: ToolCallMessagePart): unknown {
   const raw = record(tool.result);
   const rows = raw?.results;
-  if (!raw || !Array.isArray(rows)) return tool.result;
+  if (!raw || !Array.isArray(rows)) return withoutUserInfo(tool.result);
   const paired = reconcile(
     tool,
     rows.filter((row): row is Record<string, unknown> => record(row) !== null),
   );
-  if (!paired.some((entry) => entry.withheld)) return tool.result;
   let next = 0;
-  return {
+  return withoutUserInfo({
     ...raw,
     results: rows.map((row) => {
       if (record(row) === null) return row;
@@ -226,7 +244,12 @@ export function inspectableResult(tool: ToolCallMessagePart): unknown {
         ? { ...(row as Record<string, unknown>), snippet: "(withheld: not shown)" }
         : row;
     }),
-  };
+  });
+}
+
+/** The call's arguments for the raw Inspect view, without credentials in a URL. */
+export function inspectableArgs(tool: ToolCallMessagePart): unknown {
+  return withoutUserInfo(tool.args);
 }
 
 /**
@@ -258,7 +281,7 @@ export function stepItems(
 
 /** One query for each `web_search` call, with its retained results. */
 export function webQueryOf(tool: ToolCallMessagePart, state: StepState): WebQuery {
-  const query = text(record(tool.args)?.query);
+  const query = withoutUserInfo(text(record(tool.args)?.query));
   return {
     toolCallId: tool.toolCallId,
     query,

@@ -7,6 +7,7 @@ import { formatElapsed, layerElapsedMs, layerState, type StepState } from "./pro
 import { StepStatus } from "./StepRow";
 import { toolPresentation } from "./toolRegistry";
 import {
+  inspectableArgs,
   inspectableResult,
   resultsLabel,
   webQueryOf,
@@ -117,7 +118,7 @@ function SearchQuery({
                     id: tool.toolCallId,
                     title: toolPresentation(tool.toolName).label,
                     status: "success",
-                    args: tool.args,
+                    args: inspectableArgs(tool),
                     result: inspectableResult(tool),
                     timing: tool.timing,
                   },

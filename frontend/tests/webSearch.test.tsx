@@ -409,6 +409,33 @@ describe("web search row", () => {
     expect(screen.queryByRole("list", { name: "Sources" })).toBeNull();
   });
 
+  it("never shows a password from a stored URL in the raw Inspect view, in a row or in an excerpt", () => {
+    const secret: Row = {
+      title: "Page at https://bob:hunter2@site.example.com/a",
+      url: "https://admin:hunter2@creds.example.com/secret/page?email=a@b.example#frag",
+      snippet: "Log in at http://root:hunter2@intranet.example.org/login or see https://ok.example.com/x?u=a@b.example.",
+    };
+    const tool = search("call-a", "find https://me:hunter2@host.example.com/q", [secret]);
+    const stored = JSON.stringify(tool);
+    const { container } = renderLayer([tool]);
+    fireEvent.click(button(/^Searched the web/));
+    // The row, the query line and the label show no password.
+    expect(container).not.toHaveTextContent("hunter2");
+    fireEvent.click(button("Inspect search for find https://host.example.com/q"));
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    for (const name of ["Arguments", "Result"]) {
+      fireEvent.click(within(inspector).getByText(name));
+    }
+    expect(inspector).not.toHaveTextContent("hunter2");
+    expect(inspector).not.toHaveTextContent("admin:");
+    // Only the user info goes. The rest of the URL, and an "@" in a query, stay.
+    expect(inspector).toHaveTextContent("https://creds.example.com/secret/page?email=a@b.example#frag");
+    expect(inspector).toHaveTextContent("https://ok.example.com/x?u=a@b.example");
+    // The stored call is not changed.
+    expect(JSON.stringify(tool)).toBe(stored);
+    expect(stored).toContain("hunter2");
+  });
+
   it("shows an evidence state this build does not know as Unverified, never as clean", () => {
     renderLayer([
       search("call-a", "q", [STORY, PROFILE], [{ content: "constructor" }, { content: "ambiguous" }]),
