@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { InInspector } from "./inInspector";
 import type { InspectorTarget } from "./Inspector";
@@ -8,6 +8,7 @@ import {
   formatDuration,
   formatTiming,
   humanizeKey,
+  maskUrlCredentials,
   safeExternalUrl,
 } from "./inspectorFormat";
 import { StatusIcon, ToolIcon } from "./ProcessIcons";
@@ -276,6 +277,9 @@ export function hasContext(target: InspectorTarget): boolean {
 /** The result as the thread's card first, and the raw JSON behind a toggle. */
 export function OutputPane({ target }: { readonly target: InspectorTarget }) {
   const [view, setView] = useState<"card" | "raw">("card");
+  // A password in an address never shows here, in the summary or in Raw.
+  const result = useMemo(() => maskUrlCredentials(target.result), [target.result]);
+  const preview = maskUrlCredentials(target.preview) as string | null | undefined;
   const hasResult = target.result !== undefined;
   const hasCard = target.card !== undefined && target.card !== null;
   const showRaw = hasResult && view === "raw";
@@ -300,7 +304,7 @@ export function OutputPane({ target }: { readonly target: InspectorTarget }) {
         </div>
       ) : null}
       {showRaw ? (
-        <pre className="sourcecado-inspector-raw">{rawJson(target.result)}</pre>
+        <pre className="sourcecado-inspector-raw">{rawJson(result)}</pre>
       ) : hasCard ? (
         <div className="sourcecado-inspector-card">
           <InInspector value>{target.card}</InInspector>
@@ -309,9 +313,9 @@ export function OutputPane({ target }: { readonly target: InspectorTarget }) {
         <div className="sourcecado-inspector-skeleton" aria-label="Loading detail" />
       ) : (
         <>
-          {target.preview ? <p className="sourcecado-inspector-text">{target.preview}</p> : null}
+          {preview ? <p className="sourcecado-inspector-text">{preview}</p> : null}
           {hasResult || target.facts?.length ? (
-            <SummaryTable value={target.result} skip={target.preview} facts={target.facts} />
+            <SummaryTable value={result} skip={preview} facts={target.facts} />
           ) : null}
           {!target.preview && !hasResult && !target.facts?.length ? (
             <p className="sourcecado-inspector-empty">{target.note ?? "No output recorded."}</p>
@@ -379,7 +383,7 @@ export function ContextPane({ target }: { readonly target: InspectorTarget }) {
       {hasArgs ? (
         <>
           <h3>Arguments</h3>
-          <ValueTable value={target.args} />
+          <ValueTable value={maskUrlCredentials(target.args)} />
         </>
       ) : null}
     </div>

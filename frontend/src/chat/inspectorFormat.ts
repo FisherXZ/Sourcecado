@@ -79,3 +79,22 @@ export function safeExternalUrl(value: string | null | undefined): string | null
     return null;
   }
 }
+
+/**
+ * Shows an address that has a user name or a password in it without them:
+ * `https://alice:pw@host/x` reads `https://***@host/x`. The user info ends at
+ * the first `/`, `?` or `#`, so a path or query that holds an `@` is left
+ * alone. This is for display only. The stored value does not change.
+ */
+export function maskUrlCredentials(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replace(/(https?:\/\/)[^\s/?#@]*@/gi, "$1***@");
+  }
+  if (Array.isArray(value)) return value.map(maskUrlCredentials);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, maskUrlCredentials(item)]),
+    );
+  }
+  return value;
+}

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
 import { AnswerResults } from "../src/chat/AnswerResults";
+import { RecoveryProvider } from "../src/chat/recovery";
 import {
   INSPECTOR_DEFAULT_WIDTH,
   INSPECTOR_MAX_WIDTH,
@@ -14,7 +15,13 @@ import {
   useInspector,
   type InspectorTarget,
 } from "../src/chat/Inspector";
-import { formatClock, formatDuration, formatTiming, humanizeKey } from "../src/chat/inspectorFormat";
+import {
+  formatClock,
+  formatDuration,
+  formatTiming,
+  humanizeKey,
+  maskUrlCredentials,
+} from "../src/chat/inspectorFormat";
 
 const WIDTH_KEY = "sourcecado.inspector.width.v1";
 
@@ -709,6 +716,50 @@ describe("Inspector panel follow-ups from verification", () => {
     );
   });
 
+  it("shows an address with a password as https://***@host in Context, Summary and Raw, and keeps the stored event", () => {
+    const step = tool({
+      args: {
+        endpoint: "https://alice:SECRETPW123@api.example.com/v1?token=abc",
+        note: "Use https://carol@mail.example.org/inbox, not http://dave:SECRETPW123@plain.example.net.",
+        mirrors: ["https://erin:SECRETPW123@m1.example.com/a"],
+      },
+      result: {
+        link: "https://bob:SECRETPW123@files.example.com/report.pdf",
+        count: 2,
+        nested: { url: "https://frank:SECRETPW123@deep.example.com/x" },
+        // An @ in a path or a query is not user info.
+        contact: "https://example.com/team?email=lee@example.com",
+      },
+    });
+    renderTurn([step]);
+    openInspector(/^Queried Board/, "Inspect Queried Board");
+    const panel = inspectorPanel();
+
+    // Output, Summary view.
+    expect(within(panel).getByRole("row", { name: /Link.*https:\/\/\*\*\*@files\.example\.com\/report\.pdf/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Nested · Url.*https:\/\/\*\*\*@deep\.example\.com\/x/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Contact.*email=lee@example\.com/ })).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("SECRETPW123");
+
+    // Output, Raw view.
+    fireEvent.click(within(panel).getByRole("button", { name: "Raw" }));
+    expect(panel).toHaveTextContent("https://***@files.example.com/report.pdf");
+    expect(panel).not.toHaveTextContent("SECRETPW123");
+    expect(panel).not.toHaveTextContent("bob:");
+
+    // Context arguments.
+    fireEvent.click(within(panel).getByRole("tab", { name: "Context" }));
+    expect(within(panel).getByRole("row", { name: /Endpoint.*https:\/\/\*\*\*@api\.example\.com\/v1\?token=abc/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Note.*Use https:\/\/\*\*\*@mail\.example\.org\/inbox, not http:\/\/\*\*\*@plain\.example\.net\./ })).toBeInTheDocument();
+    expect(within(panel).getByRole("row", { name: /Mirrors.*https:\/\/\*\*\*@m1\.example\.com\/a/ })).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("SECRETPW123");
+    expect(panel.innerHTML).not.toContain("SECRETPW123");
+
+    // Display only: the stored tool call keeps its own values.
+    expect((step.args as { endpoint: string }).endpoint).toContain("SECRETPW123");
+    expect((step.result as { link: string }).link).toContain("SECRETPW123");
+  });
+
   it("holds a stored width to the room the workspace has, on load", () => {
     window.localStorage.setItem(WIDTH_KEY, String(INSPECTOR_MAX_WIDTH));
     // A 900px workspace leaves 460px for the panel and keeps 440px for the thread.
@@ -833,6 +884,74 @@ describe("Inspector panel follow-ups from verification", () => {
   });
 });
 
+describe("Inspector with a failed step's Retry and overflow menu", () => {
+  const failed = (): ToolCallMessagePart =>
+    tool({
+      toolCallId: "call-fail",
+      toolName: "drive_search",
+      args: { query: "Codeology" },
+      result: { error: "PRIVATE_DETAIL" },
+      isError: true,
+      providerMetadata: {
+        sourcecado: {
+          failure: {
+            class: "timeout_network",
+            connector_id: "drive",
+            source: "Google Drive",
+            retry_safe: true,
+            idempotent: true,
+            summary: "Google Drive could not be reached. Retry is safe.",
+            repair_route: null,
+            detail: "PRIVATE_DETAIL",
+            call_id: "call-fail",
+            run_id: "run-1",
+            session_id: "thread-1",
+            state: "failed",
+          },
+          recovery: null,
+        },
+      },
+    });
+
+  it("keeps Inspect, Retry, the overflow menu and Escape working together", async () => {
+    const onAction = vi.fn();
+    render(
+      <RecoveryProvider onAction={onAction}>
+        <InspectorProvider threadId="thread-1">
+          <ActivityGroup tools={[failed()]} messageState="complete" />
+          <Inspector />
+        </InspectorProvider>
+      </RecoveryProvider>,
+    );
+
+    // The failed step opens by itself. Inspect opens the panel.
+    const inspect = screen.getByRole("button", { name: "Inspect Searched Drive" });
+    fireEvent.click(inspect);
+    expect(within(inspectorPanel()).getByRole("alert")).toHaveTextContent(
+      "Google Drive could not be reached.",
+    );
+    expect(inspectorPanel()).not.toHaveTextContent("PRIVATE_DETAIL");
+
+    // Retry sends one command and does not close the panel.
+    fireEvent.click(screen.getByRole("button", { name: /^Retry failed step/ }));
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onAction).toHaveBeenCalledWith("retry", expect.objectContaining({ call_id: "call-fail" }));
+    expect(inspectorPanel()).toBeInTheDocument();
+
+    // The first Escape closes the open menu. The second closes the panel.
+    const more = screen.getByRole("button", { name: /^More recovery options for/ });
+    fireEvent.click(more);
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(document.activeElement ?? more, { key: "Escape" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(inspectorPanel()).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByRole("complementary", { name: "Inspector" })).not.toBeInTheDocument();
+    await waitFor(() => expect(inspect).toHaveFocus());
+  });
+});
+
 describe("Inspector shows a result card read only", () => {
   const apollo = tool({
     toolCallId: "call-apollo",
@@ -920,6 +1039,17 @@ describe("Inspector formatting", () => {
     expect(formatTiming({ startedAt }, true, startedAt + 3_000)).toBe("Started 14:02:11 · 3.0s");
     expect(formatTiming({ startedAt }, false, startedAt + 3_000)).toBe("Started 14:02:11");
     expect(formatTiming(undefined, false, 0)).toBeNull();
+  });
+
+  it("masks user info in an address and leaves everything else alone", () => {
+    expect(maskUrlCredentials("https://u:SECRETPW123@host.example/p")).toBe("https://***@host.example/p");
+    expect(maskUrlCredentials("HTTP://u@host.example")).toBe("HTTP://***@host.example");
+    expect(maskUrlCredentials("https://host.example/a@b?x=y@z#f@g")).toBe("https://host.example/a@b?x=y@z#f@g");
+    expect(maskUrlCredentials("mail me at a@b.com")).toBe("mail me at a@b.com");
+    expect(maskUrlCredentials(["https://a:b@h/x", { k: "https://c@h/y", n: 3, z: null }])).toEqual([
+      "https://***@h/x",
+      { k: "https://***@h/y", n: 3, z: null },
+    ]);
   });
 
   it("turns argument keys into words", () => {
