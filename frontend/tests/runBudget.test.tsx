@@ -300,7 +300,9 @@ describe("ChatPage run budget", () => {
     expect(receipts).toHaveTextContent("board_query");
     expect(receipts).toHaveTextContent("drive_search — failed");
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue this run" }));
+    const continueButton = screen.getByRole("button", { name: "Continue this run" });
+    expect(continueButton.querySelector("svg")).not.toBeNull();
+    fireEvent.click(continueButton);
 
     await waitFor(() =>
       expect(chatSend).toHaveBeenCalledWith(
@@ -501,5 +503,222 @@ describe("ChatPage run budget", () => {
     expect(screen.getByText("First question of the day.")).toBeInTheDocument();
     expect(screen.getByText("First answer of the day.")).toBeInTheDocument();
     expect(screen.getByText("Latest answer.")).toBeInTheDocument();
+  });
+
+  describe("usage line telemetry", () => {
+    const TELEMETRY = {
+      run_id: "run-budget",
+      status: "success",
+      input_tokens: 5200,
+      output_tokens: 190,
+      total_tokens: 5390,
+      cache_hit_input_tokens: null,
+      cache_miss_input_tokens: null,
+      cache_write_input_tokens: null,
+      reasoning_tokens: null,
+      current_context_tokens: 34000,
+      context_window_tokens: 100000,
+      context_use_ratio: 0.34,
+      elapsed_ms: 12400,
+      estimated_cost_usd: 0.04,
+      retry_count: 0,
+      compaction_count: 0,
+    };
+    const FINISHED = {
+      ...EXHAUSTED_BUDGET,
+      state: "finished",
+      stopped_by: null,
+      exhausted: [],
+      consumed: { ...EXHAUSTED_BUDGET.consumed, model_turns: 6 },
+      remaining: { requested_tools: [], final_answer: true },
+      continue_available: false,
+    };
+    const reply = (over: Record<string, unknown>) => ({
+      version: 1,
+      session_id: "thread-alpha",
+      current_run: { ...TELEMETRY, ...over },
+    });
+    const startRun = () => {
+      act(() => {
+        onChatEvent?.(envelope("turn_start", { state: "running" }));
+        onChatEvent?.(envelope("assistant_delta", { delta: "Here is the shortlist." }));
+      });
+    };
+    const endRun = (extra: Record<string, unknown> = {}) => {
+      act(() => {
+        onChatEvent?.(
+          envelope("turn_end", {
+            text: "Here is the shortlist.",
+            state: "complete",
+            run_budget: FINISHED,
+            ...extra,
+          }),
+        );
+      });
+    };
+
+    it("counts a compaction from the turn's own data when the telemetry reports none", async () => {
+      api.getCurrentRunTelemetry.mockResolvedValue(reply({ compaction_count: 0 }));
+      render(<ChatPage sessionId="thread-alpha" />);
+      await waitFor(() => expect(onChatEvent).toBeDefined());
+
+      startRun();
+      endRun({
+        compaction: {
+          generation: 1,
+          summarized: true,
+          compacted_messages: 42,
+          retained_director_messages: 12,
+          omitted_director_messages: 0,
+          measurement: "provider",
+          rejected_summaries: 0,
+        },
+      });
+
+      const usage = await screen.findByRole("group", { name: "Usage, last run" });
+      expect(usage).toHaveTextContent("1 compaction");
+      expect(await screen.findByRole("note")).toHaveTextContent("Context compacted");
+    });
+
+    it("says one compaction after a restore even when two runs of the thread compacted", async () => {
+      const compaction = {
+        generation: 1,
+        summarized: true,
+        compacted_messages: 5,
+        retained_director_messages: 2,
+        omitted_director_messages: 0,
+        measurement: "provider",
+        rejected_summaries: 0,
+      };
+      const run = (n: number) => {
+        const ids = { message_id: `message-${n}`, run_id: `run-${n}`, part_id: `part-${n}` };
+        return [
+          { ...envelope("turn_start", { state: "running" }), ...ids, event_id: `start-${n}` },
+          { ...envelope("assistant_delta", { delta: `Answer ${n}.` }), ...ids, event_id: `delta-${n}` },
+          {
+            ...envelope("turn_end", { text: `Answer ${n}.`, state: "complete", compaction }),
+            ...ids,
+            event_id: `end-${n}`,
+          },
+        ];
+      };
+      api.getSession.mockResolvedValue({
+        id: "thread-alpha",
+        title: "Long thread",
+        messages: [
+          { role: "user", content: "One.", message_id: "message-1" },
+          { role: "assistant", content: "Answer 1.", message_id: "message-1" },
+          { role: "user", content: "Two.", message_id: "message-2" },
+          { role: "assistant", content: "Answer 2.", message_id: "message-2" },
+        ],
+        events: [...run(1), ...run(2)],
+      });
+      api.getCurrentRunTelemetry.mockResolvedValue(reply({ compaction_count: 0 }));
+
+      render(<ChatPage sessionId="thread-alpha" />);
+
+      const usage = await screen.findByRole("group", { name: "Usage, last run" });
+      expect(usage).toHaveTextContent("1 compaction");
+      expect(usage).not.toHaveTextContent("2 compactions");
+      expect(await screen.findAllByRole("note")).toHaveLength(2);
+    });
+
+    it("shows no compaction chip for a run that did not compact", async () => {
+      api.getCurrentRunTelemetry.mockResolvedValue(reply({ compaction_count: 0 }));
+      render(<ChatPage sessionId="thread-alpha" />);
+      await waitFor(() => expect(onChatEvent).toBeDefined());
+
+      startRun();
+      endRun();
+
+      const usage = await screen.findByRole("group", { name: "Usage, last run" });
+      expect(usage).not.toHaveTextContent(/compaction/i);
+    });
+
+    it("tries a failed final reading again and shows the final numbers when a retry works", async () => {
+      let mode: "mid" | "fail-once" | "final" = "mid";
+      api.getCurrentRunTelemetry.mockImplementation(async () => {
+        if (mode === "mid") return reply({ status: "running", estimated_cost_usd: 0.0006 });
+        if (mode === "fail-once") {
+          mode = "final";
+          throw new Error("telemetry unavailable");
+        }
+        return reply({});
+      });
+      render(<ChatPage sessionId="thread-alpha" />);
+      await waitFor(() => expect(onChatEvent).toBeDefined());
+      startRun();
+      expect(await screen.findByRole("group", { name: "Usage, this run" })).toHaveTextContent("$0.0006 est.");
+
+      mode = "fail-once";
+      endRun();
+
+      const usage = await screen.findByRole(
+        "group",
+        { name: "Usage, last run" },
+        { timeout: 3000 },
+      );
+      expect(usage).toHaveTextContent("$0.04 est.");
+      expect(usage).not.toHaveTextContent("incomplete");
+    });
+
+    it("tries the final reading three times, then marks the mid-run numbers as possibly incomplete", async () => {
+      let failing = false;
+      api.getCurrentRunTelemetry.mockImplementation(async () => {
+        if (failing) throw new Error("telemetry unavailable");
+        return reply({ status: "running", estimated_cost_usd: 0.0006 });
+      });
+      render(<ChatPage sessionId="thread-alpha" />);
+      await waitFor(() => expect(onChatEvent).toBeDefined());
+      startRun();
+      await screen.findByRole("group", { name: "Usage, this run" });
+      await waitFor(() =>
+        expect(screen.getByRole("group", { name: "Usage, this run" })).toHaveTextContent("$0.0006 est."),
+      );
+
+      failing = true;
+      const before = api.getCurrentRunTelemetry.mock.calls.length;
+      endRun();
+
+      const usage = await screen.findByRole(
+        "group",
+        { name: "Usage, last run, may be incomplete" },
+        { timeout: 3000 },
+      );
+      expect(usage).toHaveTextContent("Last run, may be incomplete");
+      expect(usage).toHaveTextContent("$0.0006 est.");
+      expect(api.getCurrentRunTelemetry.mock.calls.length - before).toBe(3);
+
+      // The retries are bounded: nothing reads again on its own.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      expect(api.getCurrentRunTelemetry.mock.calls.length - before).toBe(3);
+    });
+
+    it("does not call a finished run the last run until its final reading is in", async () => {
+      let release: (() => void) | undefined;
+      let mode: "mid" | "final" = "mid";
+      api.getCurrentRunTelemetry.mockImplementation(async () => {
+        if (mode === "mid") return reply({ status: "running", estimated_cost_usd: 0.0006 });
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return reply({});
+      });
+      render(<ChatPage sessionId="thread-alpha" />);
+      await waitFor(() => expect(onChatEvent).toBeDefined());
+      startRun();
+      await screen.findByRole("group", { name: "Usage, this run" });
+
+      mode = "final";
+      endRun();
+
+      await waitFor(() => expect(release).toBeDefined());
+      expect(screen.getByRole("group", { name: "Usage, this run" })).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Usage, last run" })).not.toBeInTheDocument();
+
+      act(() => release?.());
+      const usage = await screen.findByRole("group", { name: "Usage, last run" });
+      expect(usage).toHaveTextContent("$0.04 est.");
+    });
   });
 });

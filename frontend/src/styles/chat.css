@@ -503,6 +503,11 @@
   font-size: 13px;
 }
 
+/* The stop card is read in full when a run ends, so it keeps the 13px floor. */
+.sourcecado-notice.sourcecado-run-stop {
+  font-size: 13px;
+}
+
 .sourcecado-compaction-receipt .sourcecado-notice-title {
   display: flex;
   align-items: center;

@@ -256,4 +256,56 @@ describe("restoreConversation merge fidelity", () => {
       },
     ]);
   });
+
+  it("keeps which run compacted when two runs of one thread compacted", () => {
+    const run = (n: number, compaction?: Record<string, unknown>) => {
+      const ids = {
+        version: 2,
+        session_id: "thread-production",
+        run_id: `run-${n}`,
+        message_id: `message-${n}`,
+        part_id: `part-${n}`,
+      } as const;
+      return [
+        { ...ids, event_id: `start-${n}`, type: "turn_start", state: "running" },
+        { ...ids, event_id: `delta-${n}`, type: "assistant_delta", delta: `Answer ${n}.` },
+        {
+          ...ids,
+          event_id: `end-${n}`,
+          type: "turn_end",
+          text: `Answer ${n}.`,
+          state: "complete",
+          ...(compaction ? { compaction } : {}),
+        },
+      ];
+    };
+    const compaction = {
+      generation: 1,
+      summarized: true,
+      compacted_messages: 5,
+      retained_director_messages: 2,
+      omitted_director_messages: 0,
+      measurement: "provider",
+      rejected_summaries: 0,
+    };
+
+    const restored = restoreConversation({
+      id: "thread-production",
+      title: "Long thread",
+      messages: [
+        { role: "user", content: "One.", message_id: "message-1" },
+        { role: "assistant", content: "Answer 1.", message_id: "message-1" },
+        { role: "user", content: "Two.", message_id: "message-2" },
+        { role: "assistant", content: "Answer 2.", message_id: "message-2" },
+        { role: "user", content: "Three.", message_id: "message-3" },
+        { role: "assistant", content: "Answer 3.", message_id: "message-3" },
+      ],
+      events: [...run(1, compaction), ...run(2, compaction), ...run(3)],
+    } as never);
+
+    const runs = restored.filter(
+      (message) => message.role === "assistant" && !message.parts.some((part) => part.type === "notice"),
+    );
+    expect(runs.map((message) => message.compacted === true)).toEqual([true, true, false]);
+  });
 });

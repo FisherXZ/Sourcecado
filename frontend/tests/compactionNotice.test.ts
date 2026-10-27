@@ -114,6 +114,26 @@ describe("compaction notice in the thread", () => {
     expect(rendered).toContain("Older parts of this conversation were compacted");
   });
 
+  it("marks the run's own message as compacted, so the usage line can count it", () => {
+    const store = new SourcecadoChatStore([], "thread-alpha");
+    store.applyChatEvent({
+      version: 2,
+      type: "turn_start",
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      event_id: "event-start",
+      message_id: "message-1",
+      part_id: "part-1",
+      state: "running",
+    });
+    store.applyChatEvent(turnEnd(notice));
+
+    const run = store
+      .messagesFor("thread-alpha")
+      .find((message) => message.id === "message-1");
+    expect(run?.compacted).toBe(true);
+  });
+
   it("adds no notice when the turn compacted nothing", () => {
     const store = new SourcecadoChatStore([], "thread-alpha");
     store.applyChatEvent({

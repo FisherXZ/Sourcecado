@@ -27,7 +27,7 @@ import {
 import { SourcecadoChatStore } from "../chat/store";
 import { runStatusOf } from "../chat/ThreadHeader";
 import { ThreadView } from "../chat/ThreadView";
-import { pickUsage } from "../chat/UsageLine";
+import { pickUsage, type FinalRead } from "../chat/UsageLine";
 import { readDraft, writeDraft } from "../chat/draftStorage";
 import {
   RecoveryProvider,
@@ -35,6 +35,10 @@ import {
 } from "../chat/recovery";
 import type { ToolFailure } from "../chat/protocol";
 import { InspectorProvider } from "../chat/Inspector";
+
+/** Extra tries for the run's final telemetry reading, after the first one. */
+const FINAL_READ_RETRIES = 2;
+const FINAL_READ_RETRY_MS = 400;
 
 function appendText(message: AppendMessage): string {
   return message.content
@@ -81,9 +85,21 @@ export function ChatPage({
   const [announcement, setAnnouncement] = useState("");
   const [activePerson, setActivePerson] = useState<ActivePerson | null>(null);
   const [runMetrics, setRunMetrics] = useState<CurrentRunMetrics | null>(null);
+  // Set when a run ends. Cleared when the run's final telemetry reading is in.
+  const [finalReadOf, setFinalRead] = useState<{
+    threadId: string;
+    state: FinalRead;
+  } | null>(null);
+  const [runEnds, setRunEnds] = useState(0);
   const [, setRevision] = useState(0);
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
+  // The count makes the telemetry effect read again even when no render saw
+  // the run as active, as with a run that starts and ends in one batch.
+  const runEnded = (threadId: string) => {
+    setFinalRead({ threadId, state: "pending" });
+    setRunEnds((count) => count + 1);
+  };
   const currentRunIsActive = runningThreadsRef.current.has(activeThreadId);
 
   // The usage line keeps the last run's numbers once the run ends, so the
@@ -95,24 +111,42 @@ export function ChatPage({
   useEffect(() => {
     if (!hasToken() || !activeThreadId) return;
     let active = true;
-    const refreshMetrics = () => {
-      void getCurrentRunTelemetry(activeThreadId)
-        .then((payload) => {
+    let retry: number | undefined;
+    // Metrics are passive; chat remains usable when measurement is unavailable.
+    const read = () =>
+      getCurrentRunTelemetry(activeThreadId).then(
+        (payload) => {
           if (active) setRunMetrics(payload.current_run);
-        })
-        .catch(() => {
-          // Metrics are passive; chat remains usable when measurement is unavailable.
-        });
+          return true;
+        },
+        () => false,
+      );
+    if (currentRunIsActive) {
+      void read();
+      const interval = window.setInterval(() => void read(), 1000);
+      return () => {
+        active = false;
+        window.clearInterval(interval);
+      };
+    }
+    // The run is over. Its final numbers are what the usage line keeps, so a
+    // failed read is tried again before the line gives up on it.
+    const attempt = (retries: number) => {
+      void read().then((ok) => {
+        if (!active) return;
+        if (ok || retries >= FINAL_READ_RETRIES) {
+          setFinalRead({ threadId: activeThreadId, state: ok ? "done" : "failed" });
+          return;
+        }
+        retry = window.setTimeout(() => attempt(retries + 1), FINAL_READ_RETRY_MS);
+      });
     };
-    refreshMetrics();
-    const interval = currentRunIsActive
-      ? window.setInterval(refreshMetrics, 1000)
-      : undefined;
+    attempt(0);
     return () => {
       active = false;
-      if (interval !== undefined) window.clearInterval(interval);
+      window.clearTimeout(retry);
     };
-  }, [activeThreadId, currentRunIsActive]);
+  }, [activeThreadId, currentRunIsActive, runEnds]);
 
   // A rename made elsewhere (the sidebar) changes the open thread's title.
   useEffect(() => {
@@ -256,12 +290,14 @@ export function ChatPage({
         } else if (applied.type === "turn_stopped") {
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
+          runEnded(threadId);
           if (threadId === activeThreadRef.current) {
             setAnnouncement("Run cancelled.");
           }
         } else if (applied.type === "turn_end") {
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
+          runEnded(threadId);
           if (threadId === activeThreadRef.current) {
             setAnnouncement(
               applied.state === "complete"
@@ -272,6 +308,7 @@ export function ChatPage({
         } else if (applied.type === "error") {
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
+          runEnded(threadId);
           if (threadId === activeThreadRef.current) {
             setAnnouncement(
               // "Run failed." would send someone reading by ear straight to a
@@ -447,7 +484,14 @@ export function ChatPage({
   const elapsedMs =
     runMetrics?.status === "running" ? runMetrics.elapsed_ms : null;
   const usage =
-    loading || loadError ? null : pickUsage(messages, runMetrics, running);
+    loading || loadError
+      ? null
+      : pickUsage(
+          messages,
+          runMetrics,
+          running,
+          finalReadOf?.threadId === activeThreadId ? finalReadOf.state : "done",
+        );
 
   // The backend names a thread when it saves the first message. No event
   // announces that, so ask for the name once output starts and once more when

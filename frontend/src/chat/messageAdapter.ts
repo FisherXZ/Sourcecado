@@ -115,6 +115,11 @@ export type SourcecadoStructuredMessage = {
   readonly role: "assistant" | "user" | "system";
   /** The run's spend against its budget, as of the last event for it. */
   readonly runBudget?: RunBudgetStatus;
+  /**
+   * The run ended with a compaction. Kept on the run's own message because a
+   * restored thread cannot say which run a compaction receipt belongs to.
+   */
+  readonly compacted?: boolean;
   readonly state:
     | "running"
     | "stopping"
