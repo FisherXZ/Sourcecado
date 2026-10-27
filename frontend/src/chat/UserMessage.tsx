@@ -3,6 +3,7 @@ import {
   type TextMessagePartProps,
 } from "@assistant-ui/react";
 
+import { MessageFileChips } from "./AttachmentChips";
 import { ContextChips } from "./ContextChips";
 import { EditMessageAction } from "./MessageActions";
 import { splitContext } from "./messageContext";
@@ -10,11 +11,12 @@ import { splitContext } from "./messageContext";
 function UserText({ text }: TextMessagePartProps) {
   // Context the director attached travels as lines after the text. Show it as
   // chips, as it looked when it was attached.
-  const { body, chips } = splitContext(text);
+  const { body, chips, files } = splitContext(text);
   return (
     <>
       <p>{body}</p>
       <ContextChips chips={chips} />
+      <MessageFileChips ids={files} />
     </>
   );
 }

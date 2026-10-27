@@ -1,6 +1,7 @@
 import type { QueueItem } from "../api";
 import { useState } from "react";
 
+import { MessageFileChips } from "./AttachmentChips";
 import { ContextChips } from "./ContextChips";
 import {
   ArrowDownIcon,
@@ -97,7 +98,7 @@ function QueueRow({
 }) {
   // A queued message may carry attached context. The row shows the text and
   // the chips apart, and an edit changes the text only.
-  const { body, chips } = splitContext(item.text);
+  const { body, chips, files } = splitContext(item.text);
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(body);
   const mutable = item.state !== "sending";
@@ -108,7 +109,7 @@ function QueueRow({
           onSubmit={(event) => {
             event.preventDefault();
             if (!text.trim()) return;
-            onEdit(item.id, withContext(text.trim(), chips));
+            onEdit(item.id, withContext(text.trim(), chips, files));
             setEditing(false);
           }}
         >
@@ -125,6 +126,7 @@ function QueueRow({
         <div className="sourcecado-queue-text">
           <span>{body}</span>
           <ContextChips chips={chips} />
+          <MessageFileChips ids={files} />
         </div>
       )}
       <strong>{queueStateLabel(item.state)}</strong>

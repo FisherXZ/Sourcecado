@@ -2062,6 +2062,160 @@ export async function disconnectGmail(): Promise<GmailStatus> {
   return res.json();
 }
 
+// --- Attachments (#253) ------------------------------------------------
+// The backend owns every number and every judgement here: the limits, the file
+// type, the extracted text. The client shows what it is told.
+
+export type AttachmentKind = "pdf" | "image" | "text" | "markdown" | "csv";
+
+export type AttachmentInfo = {
+  id: string;
+  name: string;
+  size: number;
+  kind: AttachmentKind;
+  mime: string;
+  chars: number;
+  total_chars: number | null;
+  truncated: boolean;
+  pages: number | null;
+};
+
+export type AttachmentLimits = {
+  max_files: number;
+  max_bytes: number;
+  max_text_chars: number;
+  /** True when the configured model can read an image. */
+  images: boolean;
+  /** The file picker's `accept` list. The backend still checks the content. */
+  accept: string;
+  types: string[];
+};
+
+export type AttachmentText = {
+  text: string;
+  truncated: boolean;
+  total_chars: number | null;
+};
+
+/** A refusal with the words to show next to the file. */
+export class AttachmentError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+const ATTACHMENT_KINDS = new Set(["pdf", "image", "text", "markdown", "csv"]);
+
+function toAttachmentInfo(value: unknown): AttachmentInfo {
+  const raw = (value ?? {}) as Record<string, unknown>;
+  if (
+    typeof raw.id !== "string" ||
+    typeof raw.name !== "string" ||
+    typeof raw.size !== "number" ||
+    typeof raw.kind !== "string" ||
+    !ATTACHMENT_KINDS.has(raw.kind)
+  ) {
+    throw new Error("attachment malformed");
+  }
+  return {
+    id: raw.id,
+    name: raw.name,
+    size: raw.size,
+    kind: raw.kind as AttachmentKind,
+    mime: typeof raw.mime === "string" ? raw.mime : "",
+    chars: typeof raw.chars === "number" ? raw.chars : 0,
+    total_chars: typeof raw.total_chars === "number" ? raw.total_chars : null,
+    truncated: raw.truncated === true,
+    pages: typeof raw.pages === "number" ? raw.pages : null,
+  };
+}
+
+export async function getAttachmentLimits(): Promise<AttachmentLimits> {
+  const res = await get("/v1/attachments/limits");
+  if (!res.ok) throw new Error(`attachment limits ${res.status}`);
+  const body = (await res.json()) as Partial<AttachmentLimits>;
+  if (typeof body.max_files !== "number" || typeof body.max_bytes !== "number") {
+    throw new Error("attachment limits malformed");
+  }
+  return {
+    max_files: body.max_files,
+    max_bytes: body.max_bytes,
+    max_text_chars: typeof body.max_text_chars === "number" ? body.max_text_chars : 0,
+    images: body.images === true,
+    accept: typeof body.accept === "string" ? body.accept : "",
+    types: Array.isArray(body.types) ? body.types.map(String) : [],
+  };
+}
+
+export async function uploadAttachment(
+  file: Blob,
+  name: string,
+  signal?: AbortSignal,
+): Promise<AttachmentInfo> {
+  let res: Response;
+  try {
+    res = await fetch(`${httpBase()}/v1/attachments`, {
+      method: "POST",
+      headers: {
+        "X-Club-Token": apiToken(),
+        "Content-Type": "application/octet-stream",
+        // In a header, not the URL, so no access log keeps the name.
+        "X-Attachment-Name": encodeURIComponent(name),
+      },
+      body: file,
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new AttachmentError("network", "Sourcecado could not be reached. Try again.");
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    throw new AttachmentError(
+      typeof body.error === "string" ? body.error : "upload_failed",
+      typeof body.message === "string" ? body.message : "This file could not be attached.",
+    );
+  }
+  return toAttachmentInfo(((await res.json()) as Record<string, unknown>).attachment);
+}
+
+/** The file's record, or null when it is no longer on this computer. */
+export async function getAttachment(id: string): Promise<AttachmentInfo | null> {
+  const res = await get(`/v1/attachments/${encodeURIComponent(id)}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`attachment ${res.status}`);
+  return toAttachmentInfo(((await res.json()) as Record<string, unknown>).attachment);
+}
+
+export async function getAttachmentText(id: string): Promise<AttachmentText | null> {
+  const res = await get(`/v1/attachments/${encodeURIComponent(id)}/text`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`attachment text ${res.status}`);
+  const body = (await res.json()) as Partial<AttachmentText>;
+  return {
+    text: typeof body.text === "string" ? body.text : "",
+    truncated: body.truncated === true,
+    total_chars: typeof body.total_chars === "number" ? body.total_chars : null,
+  };
+}
+
+/** An image as a data URL, which the app's content policy allows. Null when gone. */
+export async function getAttachmentImage(id: string): Promise<string | null> {
+  const res = await get(`/v1/attachments/${encodeURIComponent(id)}/content`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`attachment content ${res.status}`);
+  const blob = await res.blob();
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("attachment unreadable"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function hasToken(): boolean {
   return apiToken().length > 0;
 }

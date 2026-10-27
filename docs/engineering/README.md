@@ -26,6 +26,7 @@ Python venv; a packaged app uses the frozen backend.
 - [Tool availability and permissions](effective-tools.md)
 - [Run ledger](run-ledger.md), [budgets](run-budgets.md), and [evaluation harness](evaluations.md)
 - [Compaction](compaction.md), [context projection](context-projection.md), and [evidence envelope](evidence-envelope.md)
+- [Chat attachments](chat-attachments.md)
 
 ## Sourcing
 
