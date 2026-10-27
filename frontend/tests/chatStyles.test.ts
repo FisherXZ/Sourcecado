@@ -123,6 +123,21 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
+  it("keeps the header on one row on wide screens and cuts the title short first", () => {
+    const base = styles.match(/^\.sourcecado-thread-header\s*\{([^}]*)\}/m)?.[1] ?? "";
+    expect(base).toMatch(/display:\s*flex;/);
+    expect(base).not.toMatch(/flex-wrap/);
+    expect(styles).toMatch(
+      /\.sourcecado-thread-header h1\s*\{[^}]*flex:\s*0 4 auto;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-active-person\s*\{[^}]*flex:\s*0 1 auto;/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-thread-header\s*\{[^}]*flex-wrap:\s*wrap;/,
+    );
+  });
+
   it("keeps the header text at 13px or larger and out of muted ink", () => {
     const rules = [...styles.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
       .map((match) => ({ selector: match[1]!.trim(), body: match[2]! }))

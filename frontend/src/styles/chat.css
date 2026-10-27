@@ -277,7 +277,6 @@
 
 .sourcecado-thread-header {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
   min-width: 0;
@@ -288,6 +287,7 @@
 
 .sourcecado-thread-header h1 {
   min-width: 0;
+  flex: 0 4 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -324,8 +324,13 @@
   stroke-width: 1.6;
 }
 
+.sourcecado-run-status {
+  flex: 0 0 auto;
+}
+
 .sourcecado-active-person {
   max-width: min(360px, 100%);
+  flex: 0 1 auto;
   background: var(--surface);
   text-decoration: none;
 }
@@ -335,6 +340,7 @@
 }
 
 .sourcecado-active-person > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -877,6 +883,7 @@
 
 @media (max-width: 767px) {
   .sourcecado-thread-header {
+    flex-wrap: wrap;
     padding: 72px 16px 18px;
   }
 

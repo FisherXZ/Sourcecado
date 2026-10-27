@@ -111,6 +111,18 @@ export function ChatPage({
     };
   }, [activeThreadId, currentRunIsActive]);
 
+  // A rename made elsewhere (the sidebar) changes the open thread's title.
+  useEffect(() => {
+    const onRenamed = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: unknown; title?: unknown }>).detail;
+      if (typeof detail?.id !== "string" || typeof detail.title !== "string") return;
+      threadTitlesRef.current.set(detail.id, detail.title);
+      if (detail.id === activeThreadRef.current) setTitle(detail.title);
+    };
+    window.addEventListener("sourcecado:session-renamed", onRenamed);
+    return () => window.removeEventListener("sourcecado:session-renamed", onRenamed);
+  }, []);
+
   useEffect(() => {
     const loadVersion = ++loadVersionRef.current;
     let active = true;
@@ -426,11 +438,11 @@ export function ChatPage({
 
   const messages = storeRef.current.messagesFor(activeThreadId);
   const running = runningThreadsRef.current.has(activeThreadId);
-  const runStatus = runStatusOf(messages, running);
+  // No status until the thread has loaded: a restored thread may be waiting
+  // for approval, and Idle would be wrong for a moment.
+  const runStatus = loading || loadError ? null : runStatusOf(messages, running);
   const elapsedMs =
-    runStatus !== "idle" && runMetrics?.status === "running"
-      ? runMetrics.elapsed_ms
-      : null;
+    runMetrics?.status === "running" ? runMetrics.elapsed_ms : null;
 
   // The backend names a thread when it saves the first message. No event
   // announces that, so ask for the name once output starts and once more when

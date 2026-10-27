@@ -282,7 +282,7 @@ describe("ChatPage Warm Operator thread", () => {
     await waitFor(() => expect(header).toHaveTextContent("Thinking12s"));
 
     send({ type: "tool_started", event_id: "e2", id: "call-1", name: "apollo_people_search", arguments: {} });
-    await waitFor(() => expect(header).toHaveTextContent("Working12s"));
+    await waitFor(() => expect(header).toHaveTextContent("Working12s"), { timeout: 3000 });
 
     send({
       type: "permission_required",
@@ -295,7 +295,7 @@ describe("ChatPage Warm Operator thread", () => {
     await waitFor(() => expect(header).toHaveTextContent("Needs approval12s"));
 
     send({ type: "turn_end", event_id: "e4", state: "complete", text: "Done" });
-    await waitFor(() => expect(header).toHaveTextContent("Idle"));
+    await waitFor(() => expect(header).toHaveTextContent("Idle"), { timeout: 3000 });
     expect(header).not.toHaveTextContent("12s");
   });
 
@@ -392,6 +392,86 @@ describe("ChatPage Warm Operator thread", () => {
       screen.queryByRole("link", { name: /Active person:/ }),
     ).not.toBeInTheDocument();
     expect(api.getSession).toHaveBeenCalledWith("thread-alpha", "person two");
+  });
+
+  it("shows no status chip while the thread loads, then the restored state, never Idle first", async () => {
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-pending",
+      message_id: "assistant-pending",
+      part_id: "assistant-pending-part",
+    } as const;
+    const session = deferred<Record<string, unknown>>();
+    api.getSession.mockReturnValue(session.promise);
+
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    const chipTexts: string[] = [];
+    const watcher = new MutationObserver(() => {
+      const chip = container.querySelector(".sourcecado-run-status");
+      if (chip) chipTexts.push(chip.textContent ?? "");
+    });
+    watcher.observe(container, { childList: true, subtree: true, characterData: true });
+    expect(container.querySelector(".sourcecado-run-status")).toBeNull();
+
+    await act(async () => {
+      session.resolve({
+        id: "thread-alpha",
+        title: "Pending approval",
+        messages: [],
+        queue: [],
+        queue_paused: false,
+        events: [
+          { ...envelope, type: "turn_start", event_id: "r1", state: "running" },
+          {
+            ...envelope,
+            type: "permission_required",
+            event_id: "r2",
+            id: "pending-draft",
+            name: "gmail_draft",
+            arguments: { to: "alyssa@example.com" },
+            reason: "Creating a Gmail draft changes an external account.",
+          },
+        ],
+      });
+    });
+    await screen.findByRole("heading", { level: 1, name: "Pending approval" });
+    watcher.disconnect();
+
+    expect(screen.getByRole("banner")).toHaveTextContent("Needs approval");
+    expect(chipTexts.length).toBeGreaterThan(0);
+    expect(chipTexts.some((text) => text.includes("Idle"))).toBe(false);
+  });
+
+  it("follows a rename of the open thread, and ignores a rename of another thread", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("sourcecado:session-renamed", {
+          detail: { id: "thread-other", title: "Not this one" },
+        }),
+      );
+    });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Alpha");
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("sourcecado:session-renamed", {
+          detail: { id: "thread-alpha", title: "Renamed Alpha" },
+        }),
+      );
+    });
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Renamed Alpha" }),
+    ).toBeInTheDocument();
   });
 
   it("does not carry a running status or its time across threads", async () => {

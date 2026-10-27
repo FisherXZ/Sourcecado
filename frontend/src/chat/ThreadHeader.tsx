@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+
 import type { ActivePerson } from "../api";
 import type {
   SourcecadoStructuredMessage,
@@ -39,6 +41,47 @@ export function runStatusOf(
   return tools.some((tool) => tool.state === "running") ? "working" : "thinking";
 }
 
+/** Shortest time a live state stays on screen before another one replaces it. */
+const MIN_HOLD_MS = 400;
+
+/**
+ * The status to show, kept steady.
+ *
+ * A fast tool turns Thinking into Working and back several times in one
+ * second, which reads as a flicker. A live state therefore stays up for at
+ * least MIN_HOLD_MS before another state replaces it. If the real state has
+ * moved back to the shown one by then, nothing changes at all. The first state
+ * after the chip appears, a run starting from Idle, and Needs approval show at
+ * once, because the operator is waiting for them.
+ */
+function useSteadyStatus(status: RunStatus | null): RunStatus | null {
+  const [held, setHeld] = useState(status);
+  const heldSince = useRef(Date.now());
+  const latest = useRef(status);
+  latest.current = status;
+  const atOnce =
+    held === null || held === "idle" || status === null || status === "approval";
+  const shown = atOnce ? status : held;
+
+  useEffect(() => {
+    if (shown !== held) {
+      heldSince.current = Date.now();
+      setHeld(shown);
+      return;
+    }
+    if (status === held) return;
+    const wait = Math.max(0, MIN_HOLD_MS - (Date.now() - heldSince.current));
+    const timer = window.setTimeout(() => {
+      if (latest.current === held) return;
+      heldSince.current = Date.now();
+      setHeld(latest.current);
+    }, wait);
+    return () => window.clearTimeout(timer);
+  }, [status, held, shown]);
+
+  return shown;
+}
+
 function elapsedLabel(elapsedMs: number): string {
   const seconds = Math.floor(elapsedMs / 1000);
   if (seconds < 60) return `${seconds}s`;
@@ -71,34 +114,40 @@ export function ThreadHeader({
 }: {
   readonly title: string | null;
   readonly activePerson?: ActivePerson | null;
-  readonly status?: RunStatus;
+  /** Null while the thread loads: no chip, because Idle would be a guess. */
+  readonly status?: RunStatus | null;
   /** Backend-measured run time. Null when it is not known; never shown as 0. */
   readonly elapsedMs?: number | null;
 }) {
+  const shown = useSteadyStatus(status);
+  const name = title?.trim() || "New sourcing conversation";
   return (
     <header className="sourcecado-thread-header">
-      <h1>{title?.trim() || "New sourcing conversation"}</h1>
-      <p
-        className={`sourcecado-run-status sourcecado-run-status-${status}`}
-        data-status={status}
-      >
-        <Icon name={status} />
-        <span>{STATUS_LABEL[status]}</span>
-        {status !== "idle" && elapsedMs !== null ? (
-          <span className="sourcecado-run-status-time">
-            {elapsedLabel(elapsedMs)}
-          </span>
-        ) : null}
-      </p>
+      <h1 title={name}>{name}</h1>
       {activePerson ? (
         <a
           className="sourcecado-active-person"
           href={`#/people/${encodeURIComponent(activePerson.person_id)}`}
           aria-label={`Active person: ${activePerson.label}`}
+          title={activePerson.label}
         >
           <Icon name="person" />
           <span>{activePerson.label}</span>
         </a>
+      ) : null}
+      {shown ? (
+        <p
+          className={`sourcecado-run-status sourcecado-run-status-${shown}`}
+          data-status={shown}
+        >
+          <Icon name={shown} />
+          <span>{STATUS_LABEL[shown]}</span>
+          {shown !== "idle" && elapsedMs !== null ? (
+            <span className="sourcecado-run-status-time">
+              {elapsedLabel(elapsedMs)}
+            </span>
+          ) : null}
+        </p>
       ) : null}
     </header>
   );

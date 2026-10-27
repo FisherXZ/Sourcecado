@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SourcecadoStructuredMessage } from "../src/chat/messageAdapter";
 import { ThreadHeader, runStatusOf } from "../src/chat/ThreadHeader";
@@ -138,8 +138,95 @@ describe("ThreadHeader", () => {
 
     rerender(<ThreadHeader title="Alpha" status="thinking" elapsedMs={null} />);
     expect(screen.getByRole("banner")).toHaveTextContent(/^Alpha\s*Thinking$/);
+  });
 
-    rerender(<ThreadHeader title="Alpha" status="idle" elapsedMs={12_900} />);
+  it("shows no time on an idle chip, even if the backend still reports one", () => {
+    render(<ThreadHeader title="Alpha" status="idle" elapsedMs={12_900} />);
     expect(screen.getByRole("banner")).not.toHaveTextContent("12s");
+  });
+
+  it("puts the person chip before the status chip, after the title", () => {
+    render(
+      <ThreadHeader
+        title="Alpha"
+        activePerson={{ person_id: "p1", version: 1, label: "Maya Chen, Founder" }}
+      />,
+    );
+    const title = screen.getByRole("heading", { level: 1 });
+    const person = screen.getByRole("link");
+    const status = screen.getByRole("banner").querySelector(".sourcecado-run-status")!;
+    expect(title.compareDocumentPosition(person) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(person.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the full title and person label in tooltips for when they are cut short", () => {
+    const long = "Find the founders of every Berkeley alumni startup that raised in 2026";
+    render(
+      <ThreadHeader
+        title={long}
+        activePerson={{ person_id: "p1", version: 1, label: "Maya Chen, Founder at Acme" }}
+      />,
+    );
+    expect(screen.getByRole("heading", { level: 1, name: long })).toHaveAttribute("title", long);
+    expect(screen.getByRole("link")).toHaveAttribute("title", "Maya Chen, Founder at Acme");
+  });
+
+  it("shows no chip while the thread loads", () => {
+    render(<ThreadHeader title="Alpha" status={null} />);
+    expect(screen.getByRole("banner")).not.toHaveTextContent("Idle");
+    expect(screen.getByRole("banner").querySelector(".sourcecado-run-status")).toBeNull();
+  });
+});
+
+describe("ThreadHeader status hold", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const chip = () =>
+    screen.getByRole("banner").querySelector(".sourcecado-run-status")?.textContent ?? "";
+
+  it("shows the first state after loading at once", () => {
+    const { rerender } = render(<ThreadHeader title="Alpha" status={null} />);
+    rerender(<ThreadHeader title="Alpha" status="approval" />);
+    expect(chip()).toContain("Needs approval");
+  });
+
+  it("holds a live state for 400 ms before another state replaces it", () => {
+    const { rerender } = render(<ThreadHeader title="Alpha" status="thinking" />);
+    rerender(<ThreadHeader title="Alpha" status="working" />);
+    expect(chip()).toContain("Thinking");
+
+    act(() => void vi.advanceTimersByTime(399));
+    expect(chip()).toContain("Thinking");
+    act(() => void vi.advanceTimersByTime(1));
+    expect(chip()).toContain("Working");
+  });
+
+  it("does not flash a state that is gone before the hold ends", () => {
+    const seen: string[] = [];
+    const { rerender } = render(<ThreadHeader title="Alpha" status="thinking" />);
+    for (const next of ["working", "thinking", "working", "thinking"] as const) {
+      act(() => void vi.advanceTimersByTime(50));
+      rerender(<ThreadHeader title="Alpha" status={next} />);
+      seen.push(chip());
+    }
+    act(() => void vi.advanceTimersByTime(1000));
+    seen.push(chip());
+    expect(seen.every((text) => text.includes("Thinking"))).toBe(true);
+  });
+
+  it("ends on the real state once the run is over", () => {
+    const { rerender } = render(<ThreadHeader title="Alpha" status="working" />);
+    rerender(<ThreadHeader title="Alpha" status="idle" />);
+    act(() => void vi.advanceTimersByTime(400));
+    expect(chip()).toContain("Idle");
+  });
+
+  it("shows Needs approval at once, and starts a run at once from Idle", () => {
+    const { rerender } = render(<ThreadHeader title="Alpha" status="idle" />);
+    rerender(<ThreadHeader title="Alpha" status="thinking" />);
+    expect(chip()).toContain("Thinking");
+    rerender(<ThreadHeader title="Alpha" status="approval" />);
+    expect(chip()).toContain("Needs approval");
   });
 });

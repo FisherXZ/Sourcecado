@@ -12,7 +12,7 @@ import { Inspector } from "./Inspector";
 type ThreadViewProps = {
   readonly title: string | null;
   readonly activePerson?: ActivePerson | null;
-  readonly runStatus: RunStatus;
+  readonly runStatus: RunStatus | null;
   readonly elapsedMs: number | null;
   readonly loading: boolean;
   readonly loadError: boolean;
