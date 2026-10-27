@@ -3,6 +3,7 @@ import { useId, useState } from "react";
 
 import { Glyph } from "../generative/ResultCard";
 import { useInspector } from "./Inspector";
+import { safeExternalUrl } from "./inspectorFormat";
 import { ToolIcon } from "./ProcessIcons";
 import type { ToolIconKey } from "./toolRegistry";
 
@@ -69,7 +70,8 @@ function SourceChip({ part }: { readonly part: SourceMessagePart }) {
             status: "success",
             provider,
             externalUrl: part.sourceType === "url" ? part.url : null,
-            preview: part.sourceType === "url" ? part.url : null,
+            // An address with a password in it is not shown, as text or as a link.
+            preview: part.sourceType === "url" ? safeExternalUrl(part.url) : null,
             stale,
             truncated,
           },

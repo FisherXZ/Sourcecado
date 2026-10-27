@@ -6,6 +6,7 @@ import {
   type ApolloCurationResult,
 } from "../api";
 import { usePopulateComposer } from "../chat/ComposerDraftContext";
+import { useInInspector } from "../chat/inInspector";
 import { useInspector } from "../chat/Inspector";
 import type { DomainRendererProps } from "../chat/toolRegistry";
 import { hasApolloNameMask, withoutApolloNameMasks } from "../personName";
@@ -145,6 +146,9 @@ export function ApolloPeopleResult({
   const [failedCandidates, setFailedCandidates] = useState<FailedCandidate[]>([]);
   const populateComposer = usePopulateComposer();
   const { select, threadId } = useInspector();
+  // The copy in the inspector only shows. The thread card is the one place to
+  // select, review and keep people, so no state is split across two copies.
+  const readOnly = useInInspector();
   const enrich = toolName === "apollo_enrich_contact";
   const cardTitle = enrich ? "Apollo enriched contact" : "Apollo shortlist";
   const common = { id: cardId, toolCallIds: [toolCallId], provider: "apollo" as const };
@@ -410,14 +414,16 @@ export function ApolloPeopleResult({
         state="empty"
         note={`No candidates matched ${query}.`}
         footer={
-          <CardButton
-            icon="adjust"
-            onClick={() =>
-              populateComposer?.(`Adjust the Apollo people search for ${query}.`)
-            }
-          >
-            Adjust criteria
-          </CardButton>
+          readOnly ? undefined : (
+            <CardButton
+              icon="adjust"
+              onClick={() =>
+                populateComposer?.(`Adjust the Apollo people search for ${query}.`)
+              }
+            >
+              Adjust criteria
+            </CardButton>
+          )
         }
       />
     );
@@ -469,6 +475,7 @@ export function ApolloPeopleResult({
               </CardButton>
             ) : null}
           </div>
+          {readOnly ? null : (
           <section className="sourcecado-card-curate" aria-label="Curate Apollo shortlist">
             <label>
               <span>Target for selected people</span>
@@ -580,6 +587,7 @@ export function ApolloPeopleResult({
               </section>
             ) : null}
           </section>
+          )}
           <div className="sourcecado-card-credit">
             <p className="sourcecado-card-fact" data-tone="warn">
               <Glyph name="info" />
@@ -611,14 +619,16 @@ export function ApolloPeopleResult({
       <CardRows label="Apollo candidates" id={listId}>
         {people.slice(0, visibleCount).map((candidate) => (
           <CardRow key={candidate.id}>
-            <label className="sourcecado-card-check">
-              <input
-                type="checkbox"
-                checked={selectedIds.has(candidate.id)}
-                onChange={() => toggleCandidate(candidate.id)}
-              />
-              <span className="sr-only">Select {candidate.name}</span>
-            </label>
+            {readOnly ? null : (
+              <label className="sourcecado-card-check">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(candidate.id)}
+                  onChange={() => toggleCandidate(candidate.id)}
+                />
+                <span className="sr-only">Select {candidate.name}</span>
+              </label>
+            )}
             <span className="sourcecado-card-cell sourcecado-card-cell-name">
               <button
                 type="button"

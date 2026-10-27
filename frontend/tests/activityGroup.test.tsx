@@ -328,9 +328,11 @@ describe("ActivityGroup step rows", () => {
     expect(inspect.querySelector("svg")).not.toBeNull();
 
     fireEvent.click(inspect);
-    expect(screen.getByRole("complementary", { name: "Inspector" })).toHaveTextContent(
-      "PRIVATE_RAW_PAYLOAD",
-    );
+    // The panel shows the card first. The raw payload is behind the Raw toggle.
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(inspector).not.toHaveTextContent("PRIVATE_RAW_PAYLOAD");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
+    expect(inspector).toHaveTextContent("PRIVATE_RAW_PAYLOAD");
   });
 
   it("keeps a failed step's summary and recovery actions reachable without a second click", () => {

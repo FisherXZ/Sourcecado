@@ -120,9 +120,14 @@ describe("Apollo people result", () => {
     expect(container).not.toHaveTextContent("Zh***g");
 
     fireEvent.click(screen.getByRole("button", { name: "Inspect Searched Apollo" }));
-    fireEvent.click(screen.getByText("Result"));
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    // Output (the card), then Raw, then Context: none shows the mask.
+    expect(inspector).toHaveTextContent("Surname hidden by Apollo");
+    expect(inspector).not.toHaveTextContent("Zh***g");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
     expect(inspector).toHaveTextContent("surname hidden by Apollo");
+    expect(inspector).not.toHaveTextContent("Zh***g");
+    fireEvent.click(within(inspector).getByRole("tab", { name: "Context" }));
     expect(inspector).not.toHaveTextContent("Zh***g");
   });
 
@@ -521,6 +526,8 @@ describe("Apollo people result", () => {
       screen.getByRole("button", { name: "Inspect Searched Apollo" }),
     );
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(inspector).not.toHaveTextContent("PRIVATE_LEGACY_APOLLO_PAYLOAD");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
     expect(inspector).toHaveTextContent("PRIVATE_LEGACY_APOLLO_PAYLOAD");
   });
 
@@ -681,9 +688,12 @@ describe("Apollo people result", () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Inspect Enriched contact with Apollo" }),
       );
-      fireEvent.click(screen.getByText("Result"));
       const inspector = screen.getByRole("complementary", { name: "Inspector" });
+      expect(inspector).not.toHaveTextContent(maskedName);
+      fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
       expect(inspector).toHaveTextContent("Ada (surname hidden by Apollo)");
+      expect(inspector).not.toHaveTextContent(maskedName);
+      fireEvent.click(within(inspector).getByRole("tab", { name: "Context" }));
       expect(inspector).not.toHaveTextContent(maskedName);
     },
   );

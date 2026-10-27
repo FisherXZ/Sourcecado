@@ -1,6 +1,8 @@
 import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
+import { useInspector } from "./Inspector";
+import { toolInspectorTarget, turnRevision } from "./inspectorTargets";
 import { ActionIcon } from "./ProcessIcons";
 import {
   formatElapsed,
@@ -87,6 +89,16 @@ export function ActivityGroup({
     }
   }, [open, live, tools.length]);
 
+  // An open inspector item follows its step: when the step or the turn
+  // changes, the panel shows the new state, not the state at the click.
+  const { selected, sync } = useInspector();
+  useEffect(() => {
+    if (!selected || !tools.some((tool) => tool.toolCallId === selected.id)) return;
+    if (selected.revision === turnRevision(tools, states)) return;
+    const next = toolInspectorTarget(tools, states, selected.id);
+    if (next) sync(next);
+  }, [selected, tools, messageState]);
+
   const rowCount = tools.length + (lead ? 1 : 0);
   if (rowCount === 0) return null;
   const now = Date.now();
@@ -102,6 +114,7 @@ export function ActivityGroup({
           state={states[index]!}
           now={now}
           turnFailed={messageState === "failed"}
+          inspect={() => toolInspectorTarget(tools, states, tool.toolCallId)}
         />
       ))}
     </ol>
