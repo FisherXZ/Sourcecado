@@ -278,35 +278,105 @@
 .sourcecado-thread-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 8px 12px;
   min-width: 0;
-  padding: 24px max(24px, calc((100% - 760px) / 2));
+  padding: 20px max(24px, calc((100% - 760px) / 2));
   border-bottom: 1px solid var(--border);
   background: var(--canvas);
 }
 
-.sourcecado-thread-header > div {
-  min-width: 0;
-}
-
 .sourcecado-thread-header h1 {
+  min-width: 0;
+  flex: 0 4 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sourcecado-run-status,
+.sourcecado-active-person {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sourcecado-run-status svg,
+.sourcecado-active-person svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.sourcecado-run-status {
+  flex: 0 0 auto;
 }
 
 .sourcecado-active-person {
-  display: inline-flex;
-  max-width: 100%;
-  margin-top: 5px;
-  overflow: hidden;
-  color: var(--accent-deep);
-  font-size: 12px;
-  font-weight: 600;
+  max-width: min(360px, 100%);
+  flex: 0 1 auto;
+  background: var(--surface);
   text-decoration: none;
+}
+
+.sourcecado-active-person svg {
+  color: var(--accent-deep);
+}
+
+.sourcecado-active-person > span {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.sourcecado-active-person:hover {
+  background: var(--raised);
+}
+
+.sourcecado-run-status-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-run-status-thinking,
+.sourcecado-run-status-working {
+  border-color: var(--accent-tint);
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.sourcecado-run-status-approval {
+  border-color: var(--warn-bg);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sourcecado-run-status-thinking svg,
+  .sourcecado-run-status-working svg {
+    animation: sourcecado-status-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes sourcecado-status-pulse {
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .sourcecado-run-metrics {
@@ -335,18 +405,6 @@
 
 .sourcecado-run-metrics-running {
   color: var(--accent-deep);
-}
-
-.sourcecado-persona-badge {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--accent-tint);
-  color: var(--accent-deep);
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
 }
 
 .sourcecado-transcript {
@@ -396,12 +454,15 @@
   margin-bottom: 0;
 }
 
+/* Answer prose is one type scale. Body 15px / 1.65. Headings step down from
+   the body. Code, tables and metadata never go under 13px. */
 .sourcecado-markdown {
+  --code-font: "Geist Mono", ui-monospace, monospace;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.sourcecado-markdown :where(p, ul, ol, pre, blockquote, .sourcecado-table-scroll) {
+.sourcecado-markdown :where(p, ul, ol, pre, blockquote, .sourcecado-table-scroll, .sourcecado-code) {
   margin: 0 0 14px;
 }
 
@@ -409,22 +470,73 @@
   padding-left: 24px;
 }
 
+.sourcecado-markdown ul {
+  list-style: disc;
+}
+
+.sourcecado-markdown ol {
+  list-style: decimal;
+}
+
+.sourcecado-markdown :where(ul, ol) :where(ul, ol) {
+  margin: 6px 0 0;
+}
+
+.sourcecado-markdown ul ul {
+  list-style: circle;
+}
+
+.sourcecado-markdown ul ul ul {
+  list-style: square;
+}
+
+.sourcecado-markdown ol ol {
+  list-style: lower-alpha;
+}
+
 .sourcecado-markdown li + li {
   margin-top: 5px;
 }
 
-.sourcecado-markdown :where(h2, h3, h4) {
-  margin: 24px 0 10px;
-  line-height: 1.25;
-  letter-spacing: -.015em;
+.sourcecado-markdown .contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.sourcecado-markdown .task-list-item > input {
+  margin: 0 8px 0 0;
+  vertical-align: middle;
+}
+
+.sourcecado-markdown li > p {
+  margin: 0 0 6px;
+}
+
+.sourcecado-markdown li > p:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings are sized from the answer body (15px, 16px on narrow screens), so
+   no level falls below the body at any width. */
+.sourcecado-markdown :where(h1, h2, h3, h4, h5, h6) {
+  margin: 24px 0 8px;
+  color: var(--text);
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -.01em;
+}
+
+.sourcecado-markdown h1 {
+  font-size: 1.47em;
 }
 
 .sourcecado-markdown h2 {
-  font-size: 19px;
+  font-size: 1.27em;
 }
 
 .sourcecado-markdown h3 {
-  font-size: 16px;
+  font-size: 1.07em;
 }
 
 .sourcecado-markdown a {
@@ -433,51 +545,189 @@
   text-underline-offset: 3px;
 }
 
-.sourcecado-markdown code {
-  border-radius: 4px;
-  background: var(--raised);
-  font: .9em ui-monospace, "Geist Mono", monospace;
+.sourcecado-markdown blockquote {
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--border);
+}
+
+.sourcecado-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.sourcecado-markdown hr {
+  margin: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
 }
 
 .sourcecado-markdown :not(pre) > code {
   padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--raised);
+  font: .9em var(--code-font);
 }
 
-.sourcecado-markdown pre {
+/* Fenced code: a header with the language and a Copy icon, then the code. The
+   block scrolls sideways by itself. Syntax colors are Warm Operator tokens that
+   keep 4.5:1 on both the surface and the raised step, in light and dark. */
+.sourcecado-code {
+  --code-comment: var(--muted);
+  --code-keyword: var(--warn);
+  --code-string: var(--accent-deep);
+  --code-number: var(--error);
+  position: relative;
+  min-width: 0;
   max-width: 100%;
-  padding: 14px;
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
+  background: var(--surface);
+}
+
+.sourcecado-code-head {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 4px 0 12px;
+  border-bottom: 1px solid var(--border);
   background: var(--raised);
+  user-select: none;
 }
 
-.sourcecado-markdown pre code {
+.sourcecado-code-lang {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.sourcecado-code-status {
+  margin-left: auto;
+  padding-right: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.sourcecado-code-status:empty {
+  padding: 0;
+}
+
+.sourcecado-code-status[data-state="copied"] {
+  color: var(--accent-deep);
+}
+
+.sourcecado-code-status[data-state="failed"] {
+  color: var(--error);
+}
+
+.sourcecado-code-copy {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
-  white-space: pre;
+  color: var(--muted);
+  cursor: pointer;
 }
 
+.sourcecado-code-copy:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.sourcecado-code-copy:focus-visible {
+  outline-offset: -2px;
+}
+
+.sourcecado-code-copy[data-state="copied"] {
+  color: var(--accent-deep);
+}
+
+.sourcecado-code-copy[data-state="failed"] {
+  color: var(--error);
+}
+
+.sourcecado-markdown .sourcecado-code pre {
+  max-width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  line-height: 1.55;
+}
+
+.sourcecado-markdown .sourcecado-code code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.55 var(--code-font);
+  overflow-wrap: normal;
+  tab-size: 2;
+  white-space: pre;
+  word-break: normal;
+}
+
+.sourcecado-code :where(.hljs-comment, .hljs-quote) {
+  color: var(--code-comment);
+}
+
+.sourcecado-code :where(.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-built_in, .hljs-type, .hljs-name, .hljs-meta, .hljs-section) {
+  color: var(--code-keyword);
+}
+
+.sourcecado-code :where(.hljs-string, .hljs-regexp, .hljs-bullet, .hljs-addition) {
+  color: var(--code-string);
+}
+
+.sourcecado-code :where(.hljs-number, .hljs-literal, .hljs-symbol, .hljs-deletion) {
+  color: var(--code-number);
+}
+
+.sourcecado-code pre:focus-visible,
+.sourcecado-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Tables: horizontal rules only. A wide table scrolls inside its own block. */
 .sourcecado-table-scroll {
   max-width: 100%;
   overflow-x: auto;
 }
 
 .sourcecado-table-scroll table {
-  width: 100%;
-  min-width: 480px;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .sourcecado-table-scroll :where(th, td) {
-  padding: 8px 10px;
+  min-width: 96px;
+  max-width: 360px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
+  overflow-wrap: break-word;
   text-align: left;
+  vertical-align: top;
+}
+
+.sourcecado-table-scroll :where(th:first-child, td:first-child) {
+  padding-left: 0;
 }
 
 .sourcecado-table-scroll th {
-  background: var(--raised);
-  color: var(--muted);
+  border-bottom-color: var(--muted);
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -503,6 +753,15 @@
   .sourcecado-copy-action {
     min-height: 44px;
     min-width: 44px;
+  }
+
+  .sourcecado-code-head {
+    padding-right: 0;
+  }
+
+  .sourcecado-code-copy {
+    width: 44px;
+    height: 44px;
   }
 }
 
@@ -825,11 +1084,24 @@
 
 @media (max-width: 767px) {
   .sourcecado-thread-header {
+    flex-wrap: wrap;
     padding: 72px 16px 18px;
   }
 
   .sourcecado-thread-header h1 {
+    flex: 1 1 100%;
     font-size: 21px;
+  }
+
+  /* The chip stays 28px tall; its touch area grows to 44px around it. */
+  .sourcecado-active-person {
+    position: relative;
+  }
+
+  .sourcecado-active-person::after {
+    position: absolute;
+    inset: -8px -4px;
+    content: "";
   }
 
   .sourcecado-transcript {

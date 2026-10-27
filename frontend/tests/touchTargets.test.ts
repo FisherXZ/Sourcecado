@@ -55,6 +55,12 @@ describe("44px touch targets on narrow viewports (M4 regression guard)", () => {
     );
   });
 
+  it("sizes the code-block Copy icon button", () => {
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-code-copy\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px;/,
+    );
+  });
+
   it("sizes the queue's Resume-queue control (not just the 5-slot action grid)", () => {
     expect(styles).toMatch(
       /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-queue > button,[\s\S]*?min-height:\s*44px;[^}]*min-width:\s*44px;/,

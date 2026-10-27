@@ -117,7 +117,7 @@ describe("ChatPage Warm Operator thread", () => {
     });
   });
 
-  it("shows compact allowlisted measurements for the current run", async () => {
+  it("keeps run measurements out of the header", async () => {
     api.getSession.mockResolvedValue({
       id: "thread-alpha",
       title: "Measured run",
@@ -150,18 +150,185 @@ describe("ChatPage Warm Operator thread", () => {
     });
 
     const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Measured run" });
+    await waitFor(() => expect(api.getCurrentRunTelemetry).toHaveBeenCalled());
 
-    const metrics = await screen.findByRole("region", {
-      name: "Current run metrics",
-    });
-    expect(metrics).toHaveTextContent("100 tokens");
-    expect(metrics).toHaveTextContent("Context 8%");
-    expect(metrics).toHaveTextContent("1.3s");
-    expect(metrics).toHaveTextContent("1 retry");
-    expect(metrics).toHaveTextContent("2 compactions");
-    expect(metrics).toHaveTextContent("$0.0042 est.");
+    const header = screen.getByRole("banner");
+    expect(
+      screen.queryByRole("region", { name: "Current run metrics" }),
+    ).not.toBeInTheDocument();
+    for (const gone of ["tokens", "Context", "retry", "compaction", "$", "est."]) {
+      expect(header).not.toHaveTextContent(gone);
+    }
     expect(container).not.toHaveTextContent("PLANTED");
     expect(container).not.toHaveTextContent("private error");
+  });
+
+  it("shows the thread title, the status chip and nothing else in the header", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Find Maya Chen at Acme",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Find Maya Chen at Acme" });
+    await waitFor(() => expect(api.getCurrentRunTelemetry).toHaveBeenCalled());
+
+    const header = screen.getByRole("banner");
+    expect(header).not.toHaveTextContent("Sourcing workspace");
+    expect(header).not.toHaveTextContent("Sourcing Operator");
+    expect(api.getPersona).not.toHaveBeenCalled();
+    expect(header).toHaveTextContent("Find Maya Chen at Acme");
+    expect(header).toHaveTextContent("Idle");
+  });
+
+  it("names the thread in the header as soon as the backend does, without a reload", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: null,
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "New sourcing conversation" }),
+    ).toBeInTheDocument();
+
+    // The backend saves the first message, names the thread, then streams.
+    api.getSessions.mockResolvedValue({
+      sessions: [
+        {
+          session_id: "thread-alpha",
+          title: "Find Maya Chen at Acme",
+          n_msgs: 1,
+          pinned: false,
+          opened_at: null,
+          updated_at: "2026-10-26T12:00:00Z",
+        },
+      ],
+      open_id: "thread-alpha",
+    });
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      message_id: "assistant-1",
+      part_id: "assistant-part-1",
+    } as const;
+    act(() => {
+      onChatEvent?.({ ...envelope, type: "turn_start", event_id: "e1", state: "running" });
+    });
+    act(() => {
+      onChatEvent?.({ ...envelope, type: "assistant_delta", event_id: "e2", delta: "Looking" });
+    });
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Find Maya Chen at Acme" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "New sourcing conversation" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Thinking, Working, Needs approval and Idle with the elapsed time while a run is live", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    api.getCurrentRunTelemetry.mockResolvedValue({
+      version: 1,
+      session_id: "thread-alpha",
+      current_run: {
+        run_id: "run-1",
+        status: "running",
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        cache_hit_input_tokens: null,
+        cache_miss_input_tokens: null,
+        cache_write_input_tokens: null,
+        reasoning_tokens: null,
+        current_context_tokens: null,
+        context_window_tokens: null,
+        context_use_ratio: null,
+        elapsed_ms: 12400,
+        estimated_cost_usd: null,
+        retry_count: 0,
+        compaction_count: 0,
+      },
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+    const header = screen.getByRole("banner");
+    expect(header).toHaveTextContent("Idle");
+    expect(header).not.toHaveTextContent("12s");
+
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      message_id: "assistant-1",
+      part_id: "assistant-part-1",
+    } as const;
+    const send = (event: Record<string, unknown>) =>
+      act(() => {
+        onChatEvent?.({ ...envelope, ...event });
+      });
+
+    send({ type: "turn_start", event_id: "e1", state: "running" });
+    await waitFor(() => expect(header).toHaveTextContent("Thinking12s"));
+
+    send({ type: "tool_started", event_id: "e2", id: "call-1", name: "apollo_people_search", arguments: {} });
+    await waitFor(() => expect(header).toHaveTextContent("Working12s"), { timeout: 3000 });
+
+    send({
+      type: "permission_required",
+      event_id: "e3",
+      id: "call-2",
+      name: "gmail_draft",
+      arguments: { to: "maya@example.com" },
+      reason: "Creating a Gmail draft changes an external account.",
+    });
+    await waitFor(() => expect(header).toHaveTextContent("Needs approval12s"));
+
+    send({ type: "turn_end", event_id: "e4", state: "complete", text: "Done" });
+    await waitFor(() => expect(header).toHaveTextContent("Idle"), { timeout: 3000 });
+    expect(header).not.toHaveTextContent("12s");
+  });
+
+  it("shows Needs approval for a restored thread that still has a pending approval", async () => {
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-pending",
+      message_id: "assistant-pending",
+      part_id: "assistant-pending-part",
+    } as const;
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Pending approval",
+      messages: [],
+      queue: [],
+      queue_paused: false,
+      events: [
+        { ...envelope, type: "turn_start", event_id: "p1", state: "running" },
+        {
+          ...envelope,
+          type: "permission_required",
+          event_id: "p2",
+          id: "pending-draft",
+          name: "gmail_draft",
+          arguments: { to: "alyssa@example.com" },
+          reason: "Creating a Gmail draft changes an external account.",
+        },
+      ],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Pending approval" });
+    expect(screen.getByRole("banner")).toHaveTextContent("Needs approval");
   });
 
   it("shows the route-verified active person without replacing the chat title", async () => {
@@ -227,65 +394,138 @@ describe("ChatPage Warm Operator thread", () => {
     expect(api.getSession).toHaveBeenCalledWith("thread-alpha", "person two");
   });
 
-  it("does not carry measurements across threads while the next run loads", async () => {
-    const betaMetrics = deferred<{
-      version: 1;
-      session_id: string;
-      current_run: null;
-    }>();
+  it("shows no status chip while the thread loads, then the restored state, never Idle first", async () => {
+    const envelope = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-pending",
+      message_id: "assistant-pending",
+      part_id: "assistant-pending-part",
+    } as const;
+    const session = deferred<Record<string, unknown>>();
+    api.getSession.mockReturnValue(session.promise);
+
+    const { container } = render(<ChatPage sessionId="thread-alpha" />);
+    const chipTexts: string[] = [];
+    const watcher = new MutationObserver(() => {
+      const chip = container.querySelector(".sourcecado-run-status");
+      if (chip) chipTexts.push(chip.textContent ?? "");
+    });
+    watcher.observe(container, { childList: true, subtree: true, characterData: true });
+    expect(container.querySelector(".sourcecado-run-status")).toBeNull();
+
+    await act(async () => {
+      session.resolve({
+        id: "thread-alpha",
+        title: "Pending approval",
+        messages: [],
+        queue: [],
+        queue_paused: false,
+        events: [
+          { ...envelope, type: "turn_start", event_id: "r1", state: "running" },
+          {
+            ...envelope,
+            type: "permission_required",
+            event_id: "r2",
+            id: "pending-draft",
+            name: "gmail_draft",
+            arguments: { to: "alyssa@example.com" },
+            reason: "Creating a Gmail draft changes an external account.",
+          },
+        ],
+      });
+    });
+    await screen.findByRole("heading", { level: 1, name: "Pending approval" });
+    watcher.disconnect();
+
+    expect(screen.getByRole("banner")).toHaveTextContent("Needs approval");
+    expect(chipTexts.length).toBeGreaterThan(0);
+    expect(chipTexts.some((text) => text.includes("Idle"))).toBe(false);
+  });
+
+  it("follows a rename of the open thread, and ignores a rename of another thread", async () => {
+    api.getSession.mockResolvedValue({
+      id: "thread-alpha",
+      title: "Alpha",
+      messages: [],
+      events: [],
+    });
+    render(<ChatPage sessionId="thread-alpha" />);
+    await screen.findByRole("heading", { level: 1, name: "Alpha" });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("sourcecado:session-renamed", {
+          detail: { id: "thread-other", title: "Not this one" },
+        }),
+      );
+    });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Alpha");
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("sourcecado:session-renamed", {
+          detail: { id: "thread-alpha", title: "Renamed Alpha" },
+        }),
+      );
+    });
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Renamed Alpha" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not carry a running status or its time across threads", async () => {
     api.getSession.mockImplementation(async (id: string) => ({
       id,
       title: id,
       messages: [],
       events: [],
     }));
-    api.getCurrentRunTelemetry.mockImplementation((id: string) =>
-      id === "thread-alpha"
-        ? Promise.resolve({
-            version: 1,
-            session_id: id,
-            current_run: {
-              run_id: "run-alpha",
-              status: "success",
-              input_tokens: 8,
-              output_tokens: 2,
-              total_tokens: 10,
-              cache_hit_input_tokens: 0,
-              cache_miss_input_tokens: 8,
-              cache_write_input_tokens: 0,
-              reasoning_tokens: 0,
-              current_context_tokens: 8,
-              context_window_tokens: null,
-              context_use_ratio: null,
-              elapsed_ms: 100,
-              estimated_cost_usd: null,
-              retry_count: 0,
-              compaction_count: 0,
-            },
-          })
-        : betaMetrics.promise,
-    );
+    api.getCurrentRunTelemetry.mockImplementation(async (id: string) => ({
+      version: 1,
+      session_id: id,
+      current_run: {
+        run_id: `run-${id}`,
+        status: "running",
+        input_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        cache_hit_input_tokens: null,
+        cache_miss_input_tokens: null,
+        cache_write_input_tokens: null,
+        reasoning_tokens: null,
+        current_context_tokens: null,
+        context_window_tokens: null,
+        context_use_ratio: null,
+        elapsed_ms: 7000,
+        estimated_cost_usd: null,
+        retry_count: 0,
+        compaction_count: 0,
+      },
+    }));
 
     const view = render(<ChatPage sessionId="thread-alpha" />);
-    const alphaMetrics = await screen.findByRole("region", {
-      name: "Current run metrics",
+    await screen.findByRole("heading", { level: 1, name: "thread-alpha" });
+    act(() => {
+      onChatEvent?.({
+        version: 2,
+        type: "turn_start",
+        session_id: "thread-alpha",
+        run_id: "run-alpha",
+        event_id: "alpha-start",
+        message_id: "assistant-alpha",
+        part_id: "assistant-alpha-part",
+        state: "running",
+      });
     });
-    expect(alphaMetrics).toHaveTextContent("10 tokens");
-    expect(alphaMetrics).toHaveTextContent("0 retries");
+    await waitFor(() =>
+      expect(screen.getByRole("banner")).toHaveTextContent("Thinking7s"),
+    );
 
     view.rerender(<ChatPage sessionId="thread-beta" />);
     await screen.findByRole("heading", { level: 1, name: "thread-beta" });
-    expect(
-      screen.queryByRole("region", { name: "Current run metrics" }),
-    ).not.toBeInTheDocument();
-
-    await act(async () => {
-      betaMetrics.resolve({
-        version: 1,
-        session_id: "thread-beta",
-        current_run: null,
-      });
-    });
+    expect(screen.getByRole("banner")).toHaveTextContent("Idle");
+    expect(screen.getByRole("banner")).not.toHaveTextContent("7s");
   });
 
   it("notifies the Board when a live person-file tool changes it", async () => {
@@ -1772,24 +2012,6 @@ describe("ChatPage Warm Operator thread", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Sourcecado needs your approval to continue.",
     );
-  });
-
-  it("shows the active persona in the conversation header and reflects a persisted change on the next mount", async () => {
-    api.getSession.mockResolvedValue({
-      id: "thread-alpha",
-      title: "Alpha",
-      messages: [],
-      events: [],
-    });
-    const { unmount } = render(<ChatPage sessionId="thread-alpha" />);
-    await screen.findByRole("heading", { level: 1, name: "Alpha" });
-    expect(await screen.findByText("Sourcing Operator")).toBeInTheDocument();
-    unmount();
-
-    api.getPersona.mockResolvedValue({ id: "buddy", name: "Club", tools: [] });
-    render(<ChatPage sessionId="thread-alpha" />);
-    await screen.findByRole("heading", { level: 1, name: "Alpha" });
-    expect(await screen.findByText("Club")).toBeInTheDocument();
   });
 
   it("shows a progressive pending approval and waits for durable resolution", async () => {

@@ -5,9 +5,8 @@ import {
   type ToolCallMessagePartProps,
   type ToolCallMessagePart,
 } from "@assistant-ui/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { ActivityGroup } from "./ActivityGroup";
+import { AnswerMarkdown } from "./AnswerMarkdown";
 import { ApprovalCard } from "./ApprovalCard";
 import { RunBudgetView } from "./RunBudget";
 import { useLastApprovalDelivery } from "./approvalDelivery";
@@ -19,27 +18,7 @@ import { resolveInbox } from "../api";
 import type { RunBudgetStatus } from "./protocol";
 
 function AssistantText({ text }: TextMessagePartProps) {
-  return (
-    <div className="sourcecado-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children, ...props }) => (
-            <a {...props} target="_blank" rel="noreferrer noopener">
-              {children}
-            </a>
-          ),
-          table: ({ children, ...props }) => (
-            <div className="sourcecado-table-scroll">
-              <table {...props}>{children}</table>
-            </div>
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
+  return <AnswerMarkdown text={text} />;
 }
 
 function noticeFrame(code: unknown): {
