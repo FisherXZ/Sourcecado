@@ -48,16 +48,16 @@ async function loadPeople(): Promise<readonly PickerPerson[]> {
 }
 
 /**
- * The "+" button and its menu: attach a person as a chip above the box.
- *
- * Attaching a file belongs to the attachments work (#253). It shows here as
- * unavailable, so the menu does not offer a control that does nothing.
+ * The "+" button and its menu: attach a person as a chip above the box, or
+ * choose files. The file picker itself lives in the composer, which owns the
+ * files. This menu only asks for it.
  */
 export function ContextMenu({
   attached,
   boundPerson,
   slashOpen,
   onOpen,
+  fileOption,
   onAttach,
   onPicked,
 }: {
@@ -68,6 +68,13 @@ export function ContextMenu({
   readonly slashOpen: boolean;
   /** The menu is about to open. */
   readonly onOpen: () => void;
+  /** The "Attach a file" row: the limits the backend gave, and the picker. */
+  readonly fileOption: {
+    readonly detail: string;
+    /** The message already holds as many files as it may. */
+    readonly full: boolean;
+    readonly onChoose: () => void;
+  };
   readonly onAttach: (chip: ContextChip) => void;
   /** The menu closed after a pick; the composer takes focus back. */
   readonly onPicked: () => void;
@@ -225,9 +232,19 @@ export function ContextMenu({
             type="button"
             role="menuitem"
             className="sourcecado-menu-option"
-            aria-disabled="true"
+            aria-disabled={fileOption.full ? "true" : undefined}
+            onClick={
+              fileOption.full
+                ? undefined
+                : () => {
+                    // The picker opens from this click, so the browser allows it.
+                    close(false);
+                    fileOption.onChoose();
+                    onPicked();
+                  }
+            }
           >
-            <MenuRow icon={<FileIcon />} title="Attach a file" detail="Not available yet" />
+            <MenuRow icon={<FileIcon />} title="Attach a file" detail={fileOption.detail} />
           </button>
         </div>
       ) : null}

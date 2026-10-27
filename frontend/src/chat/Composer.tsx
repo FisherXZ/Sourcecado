@@ -4,15 +4,21 @@ import {
   useId,
   useRef,
   useState,
+  type ClipboardEvent,
+  type MutableRefObject,
+  type DragEvent,
   type KeyboardEvent,
   type SyntheticEvent,
 } from "react";
 
 import type { ActivePerson } from "../api";
+import { ComposerFileChips } from "./AttachmentChips";
+import { formatBytes } from "./attachments";
 import { ConnectionChip } from "./ConnectionChip";
 import { ContextChips } from "./ContextChips";
+import type { ComposerRestore } from "./ComposerDraftContext";
 import { ContextMenu } from "./ContextMenu";
-import { SendIcon } from "./icons";
+import { FileIcon, SendIcon } from "./icons";
 import { useScrollActiveIntoView } from "./MenuRow";
 import { withContext, type ContextChip } from "./messageContext";
 import {
@@ -22,16 +28,26 @@ import {
   SlashMenu,
   useSkillCatalog,
 } from "./SlashMenu";
+import { useComposerFiles } from "./useComposerFiles";
+
+/** A pasted picture has no name worth keeping. */
+function pastedName(file: File, index: number): string {
+  const extension = file.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+  return `Pasted image${index > 0 ? ` ${index + 1}` : ""}.${extension}`;
+}
 
 export function Composer({
   initialDraft,
   onDraftChange,
   boundPerson = null,
+  restoreRef,
 }: {
   readonly initialDraft: string;
   readonly onDraftChange: (draft: string) => void;
   /** Set when the conversation is about one person. */
   readonly boundPerson?: ActivePerson | null;
+  /** Filled with a function that puts an edited message's chips and files back. */
+  readonly restoreRef?: MutableRefObject<((restore: ComposerRestore) => void) | null>;
 }) {
   const aui = useAui();
   const running = useAuiState((state) => state.thread.isRunning);
@@ -43,6 +59,26 @@ export function Composer({
   const [chips, setChips] = useState<readonly ContextChip[]>([]);
   const [dismissedAt, setDismissedAt] = useState<string | null>(null);
   const [active, setActive] = useState(0);
+  const attachments = useComposerFiles();
+  const picker = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const blocked = attachments.blockedReason !== null;
+  const restoreFiles = attachments.restore;
+
+  useEffect(() => {
+    if (!restoreRef) return;
+    restoreRef.current = (restore) => {
+      setChips((current) => [
+        ...current,
+        ...restore.chips.filter((chip) => !current.some((item) => item.id === chip.id)),
+      ]);
+      restoreFiles(restore.files);
+    };
+    return () => {
+      restoreRef.current = null;
+    };
+  }, [restoreRef, restoreFiles]);
 
   useEffect(() => {
     if (hydrated.current) return;
@@ -91,22 +127,76 @@ export function Composer({
     }
   }
 
-  // The chips are written into the text at send time, whether the director
-  // presses Enter (a form submit) or clicks Send. With none attached the
-  // library sends exactly as it did before.
+  // The chips and the attached files are written into the text at send time,
+  // whether the director presses Enter (a form submit) or clicks Send. With
+  // none attached the library sends exactly as it did before. A file that is
+  // still processing, or that failed, holds the message back.
   function sendWithContext(event: SyntheticEvent) {
-    if (chips.length === 0) return;
+    if (chips.length === 0 && attachments.files.length === 0) return;
     event.preventDefault();
+    if (blocked) return;
     if (!aui.composer.getState().canSend) return;
-    aui.composer.setText(withContext(aui.composer.getState().text, chips));
+    aui.composer.setText(
+      withContext(aui.composer.getState().text, chips, attachments.readyIds),
+    );
     void aui.composer.send();
     setChips([]);
+    attachments.clear();
   }
+
+  const carriesFiles = (event: DragEvent) =>
+    Array.from(event.dataTransfer?.types ?? []).includes("Files");
+
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const data = event.clipboardData;
+    const pictures = Array.from(data?.files ?? []).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    // Pasted text stays text, even when the clipboard also holds a picture of it.
+    if (pictures.length === 0 || data.getData("text/plain") !== "") return;
+    event.preventDefault();
+    void attachments.add(
+      pictures.map(
+        (file, index) => new File([file], pastedName(file, index), { type: file.type }),
+      ),
+    );
+  }
+
+  const limits = attachments.limits;
+  const filesFull = limits !== null && attachments.files.length >= limits.max_files;
 
   return (
     <>
     <ConnectionChip />
-    <ComposerPrimitive.Root className="sourcecado-composer" onSubmit={sendWithContext}>
+    <ComposerPrimitive.Root
+      className="sourcecado-composer"
+      data-dragging={dragging || undefined}
+      onSubmit={sendWithContext}
+      onDragEnter={(event) => {
+        if (!carriesFiles(event)) return;
+        dragDepth.current += 1;
+        setDragging(true);
+      }}
+      onDragOver={(event) => {
+        if (!carriesFiles(event)) return;
+        // Without this the browser opens the file instead of dropping it here.
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(event) => {
+        if (!carriesFiles(event)) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDragging(false);
+      }}
+      onDrop={(event) => {
+        if (!carriesFiles(event)) return;
+        event.preventDefault();
+        dragDepth.current = 0;
+        setDragging(false);
+        void attachments.add(Array.from(event.dataTransfer.files));
+        input.current?.focus();
+      }}
+    >
       <ContextChips
         chips={chips}
         onRemove={(chip) => {
@@ -115,6 +205,19 @@ export function Composer({
           input.current?.focus();
         }}
       />
+      <ComposerFileChips
+        files={attachments.files}
+        onRemove={(file) => {
+          attachments.remove(file.key);
+          // The button that held focus is gone. Keep focus in the box.
+          input.current?.focus();
+        }}
+      />
+      {attachments.blockedReason ?? attachments.notice ? (
+        <p className="sourcecado-attachment-status" role="status">
+          {attachments.blockedReason ?? attachments.notice}
+        </p>
+      ) : null}
       <ComposerPrimitive.Input
         ref={input}
         aria-label="Message Sourcecado"
@@ -132,6 +235,7 @@ export function Composer({
           onDraftChange(event.currentTarget.value);
         }}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
         {...(slashOpen
           ? {
               "aria-haspopup": "listbox" as const,
@@ -159,13 +263,47 @@ export function Composer({
           attached={chips}
           boundPerson={boundPerson}
           slashOpen={slashOpen}
-          onOpen={() => setDismissedAt(text)}
+          onOpen={() => {
+            setDismissedAt(text);
+            void attachments.refreshLimits();
+          }}
+          fileOption={{
+            detail: filesFull
+              ? `Up to ${limits.max_files} files per message. Remove one to add another.`
+              : limits
+                ? [
+                    `Up to ${limits.max_files} files, ${formatBytes(limits.max_bytes)} each.`,
+                    limits.max_text_chars > 0 && limits.max_context_chars > 0
+                      ? `The model reads ${limits.max_text_chars.toLocaleString("en-US")} characters of text per file and ${limits.max_context_chars.toLocaleString("en-US")} in all.`
+                      : null,
+                    limits.images ? null : "No images with this model.",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")
+                : "PDF, images, text, Markdown or CSV",
+            full: filesFull,
+            onChoose: () => picker.current?.click(),
+          }}
           onAttach={(chip) =>
             setChips((current) =>
               current.some((item) => item.id === chip.id) ? current : [...current, chip],
             )
           }
           onPicked={() => input.current?.focus()}
+        />
+        <input
+          ref={picker}
+          type="file"
+          multiple
+          hidden
+          aria-label="Choose files to attach"
+          accept={limits?.accept || undefined}
+          onChange={(event) => {
+            const picked = Array.from(event.currentTarget.files ?? []);
+            // Choosing the same file again must still fire a change.
+            event.currentTarget.value = "";
+            void attachments.add(picked);
+          }}
         />
         <p className="sourcecado-composer-hints" id={hintsId}>
           <span>
@@ -188,6 +326,7 @@ export function Composer({
           <ComposerPrimitive.Send
             className="sourcecado-composer-action"
             aria-label="Send message"
+            aria-disabled={blocked || undefined}
             onClick={sendWithContext}
           >
             <span className="sourcecado-composer-action-visual" aria-hidden="true">
@@ -196,6 +335,12 @@ export function Composer({
           </ComposerPrimitive.Send>
         )}
       </div>
+      {dragging ? (
+        <div className="sourcecado-composer-drop" aria-hidden="true">
+          <FileIcon />
+          Drop files to attach
+        </div>
+      ) : null}
     </ComposerPrimitive.Root>
     </>
   );

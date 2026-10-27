@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   getSkills: vi.fn(),
   getBoard: vi.fn(),
   openChat: vi.fn(),
+  getAttachmentLimits: vi.fn(),
 }));
 const scrollIntoView = vi.fn();
 const chatSend = vi.fn();
@@ -29,6 +30,7 @@ vi.mock("../src/api", () => ({
   getBoard: api.getBoard,
   hasToken: () => true,
   openChat: api.openChat,
+  getAttachmentLimits: api.getAttachmentLimits,
 }));
 
 const SKILLS = [
@@ -137,6 +139,14 @@ describe("Composer", () => {
     });
     api.getSkills.mockResolvedValue({ skills: SKILLS });
     api.getBoard.mockResolvedValue(BOARD);
+    api.getAttachmentLimits.mockResolvedValue({
+      max_files: 5,
+      max_bytes: 10 * 1024 * 1024,
+      max_text_chars: 30_000,
+      images: true,
+      accept: ".pdf,.png,.txt",
+      types: ["PDF", "PNG", "Text"],
+    });
     api.openChat.mockImplementation((callback) => {
       onChatEvent = callback;
       return {
@@ -376,7 +386,7 @@ describe("Composer", () => {
   });
 
   describe("plus menu", () => {
-    it("offers a person and shows the file item as unavailable", async () => {
+    it("offers a person and a file, and the file row shows the backend's limits", async () => {
       await openChat();
       const trigger = screen.getByRole("button", { name: "Add context" });
       fireEvent.click(trigger);
@@ -384,14 +394,11 @@ describe("Composer", () => {
       const menu = await screen.findByRole("menu", { name: "Add context" });
       const person = within(menu).getByRole("menuitem", { name: /Attach a person/ });
       const file = within(menu).getByRole("menuitem", { name: /Attach a file/ });
-      expect(file).toHaveAttribute("aria-disabled", "true");
-      expect(file).toHaveTextContent("Not available yet");
+      expect(file).not.toHaveAttribute("aria-disabled");
+      await waitFor(() => expect(file).toHaveTextContent("Up to 5 files, 10.0 MB each"));
+      expect(file).not.toHaveTextContent("Not available yet");
       expect(person).not.toHaveAttribute("aria-disabled");
       expect(person).toHaveFocus();
-
-      fireEvent.click(file);
-      expect(screen.getByRole("menu", { name: "Add context" })).toBeInTheDocument();
-      expect(screen.queryByRole("combobox", { name: "Search people" })).not.toBeInTheDocument();
     });
 
     it("closes on Escape and returns focus to the plus button", async () => {
@@ -699,12 +706,12 @@ describe("message context", () => {
 
   it("round-trips the chips and the text", () => {
     const sent = withContext("Draft an intro", [maya]);
-    expect(splitContext(sent)).toEqual({ body: "Draft an intro", chips: [maya] });
+    expect(splitContext(sent)).toEqual({ body: "Draft an intro", chips: [maya], files: [] });
   });
 
   it("leaves a message with no chips unchanged", () => {
     expect(withContext("Hello", [])).toBe("Hello");
-    expect(splitContext("Hello")).toEqual({ body: "Hello", chips: [] });
+    expect(splitContext("Hello")).toEqual({ body: "Hello", chips: [], files: [] });
   });
 
   it("keeps the first line of the text first, so the conversation title stays the text", () => {
@@ -720,9 +727,9 @@ describe("message context", () => {
   it("shows the whole text when the block is not exactly chip lines", () => {
     const text =
       "Hi\n\n[Attached by the director]\nPerson: person_id x. Read the person file with board_get.\nand more";
-    expect(splitContext(text)).toEqual({ body: text, chips: [] });
+    expect(splitContext(text)).toEqual({ body: text, chips: [], files: [] });
     const withName =
       "Hi\n\n[Attached by the director]\nPerson: Maya Chen (person_id: x). Read the person file with board_get.";
-    expect(splitContext(withName)).toEqual({ body: withName, chips: [] });
+    expect(splitContext(withName)).toEqual({ body: withName, chips: [], files: [] });
   });
 });

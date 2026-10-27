@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { usePopulateComposer } from "./ComposerDraftContext";
 import { CheckIcon, EditIcon, Icon, RetryIcon } from "./icons";
+import { splitContext } from "./messageContext";
 import { RetryReason } from "./RetryReason";
 import { turnRetryBlock } from "./retrySafety";
 
@@ -266,7 +267,9 @@ export function focusComposer(at?: number) {
 
 /**
  * Edit on the operator's own message. It puts the text back in the composer
- * and stops there: the operator reads it, changes it and sends it.
+ * and stops there: the operator reads it, changes it and sends it. The people
+ * and files the message carried come back as chips, not as reference lines, so
+ * an edit cannot quietly turn them into plain text.
  *
  * It will not overwrite a different draft, because that would lose what the
  * operator typed.
@@ -274,10 +277,14 @@ export function focusComposer(at?: number) {
 export function EditMessageAction() {
   const populate = usePopulateComposer();
   const text = useAuiState((state) => textOf(state.message.content));
+  const { body, chips, files } = splitContext(text);
   // A boolean, so a keystroke re-renders this only when the answer changes.
   const otherDraft = useAuiState((state) => {
     const draft = state.thread.composer.text;
-    return draft.trim() !== "" && draft !== textOf(state.message.content);
+    return (
+      draft.trim() !== "" &&
+      draft !== splitContext(textOf(state.message.content)).body
+    );
   });
   if (!populate) return null;
   const reason = otherDraft ? "Send or clear the message you are writing first." : null;
@@ -288,8 +295,8 @@ export function EditMessageAction() {
           label="Edit message"
           reason={reason}
           onClick={() => {
-            populate(text);
-            focusComposer(text.length);
+            populate(body, { chips, files });
+            focusComposer(body.length);
           }}
         >
           <EditIcon />

@@ -41,6 +41,8 @@ from coworker.agent_run_reconcile import (
     review_queue,
 )
 from coworker.agent_run_repository import AgentRunRepository
+from coworker.attachments import AttachmentStore
+from coworker.attachments_api import attachments_router
 from coworker.agent_run_resume import restart as agent_run_restart
 from coworker.apollo import (
     ENRICH_CREDIT_COST,
@@ -140,6 +142,7 @@ from coworker.prompt_contract import (
 from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
 from coworker.provider import (
     ToolCall,
+    provider_accepts_images,
     provider_model_metadata,
     provider_verifications,
     safe_model_identifier,
@@ -463,6 +466,13 @@ def create_app(
             store=app.state.drive_ingestions,
             coordinator=app.state.drive_ingestion_coordinator,
             people=app.state.people,
+        )
+    )
+    app.state.attachments = AttachmentStore(root)
+    app.include_router(
+        attachments_router(
+            store=app.state.attachments,
+            accepts_images=lambda: provider_accepts_images(app.state.provider),
         )
     )
     app.state.agent_runs = AgentRunRepository(root)
@@ -3514,6 +3524,7 @@ def create_app(
                     run_trigger=(
                         "chat" if queue_item_id is None else "queued_chat"
                     ),
+                    attachments=app.state.attachments,
                 )
                 status = str(result.get("status") or "error")
                 if queue_item_id is not None:
