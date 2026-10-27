@@ -65,8 +65,33 @@ describe("Warm Operator thread styles", () => {
     const sizes = Array.from(answer.matchAll(/font(?:-size)?:\s*(?:[\d.]+ )?(\d+)px/g)).map(
       (match) => Number(match[1]),
     );
-    expect(sizes.length).toBeGreaterThan(5);
+    expect(sizes.length).toBeGreaterThan(3);
     expect(Math.min(...sizes)).toBeGreaterThanOrEqual(13);
+  });
+
+  it("sizes headings from the answer body so none falls below it at any width", () => {
+    const base = styles.match(
+      /\.sourcecado-markdown :where\(h1, h2, h3, h4, h5, h6\)\s*\{([^}]*)\}/,
+    );
+    const em = (tag: string) =>
+      Number(
+        styles.match(
+          new RegExp(`\\.sourcecado-markdown ${tag}\\s*\\{[^}]*font-size:\\s*([\\d.]+)em;`),
+        )?.[1],
+      );
+
+    // h4 to h6 inherit the body size. h1 to h3 step up from it.
+    expect(base?.[1]).toMatch(/font-size:\s*1em;/);
+    expect(em("h3")).toBeGreaterThan(1);
+    expect(em("h2")).toBeGreaterThan(em("h3"));
+    expect(em("h1")).toBeGreaterThan(em("h2"));
+    // The narrow-screen body is 16px, so a px heading would drop below it.
+    const headings = styles.match(/\.sourcecado-markdown (?::where\(h1[^{]*\)|h[1-6])\s*\{[^}]*\}/g) ?? [];
+    expect(headings).toHaveLength(4);
+    for (const rule of headings) expect(rule).not.toMatch(/font-size:\s*[\d.]+px/);
+    expect(styles).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sourcecado-assistant-message\s*\{[^}]*font-size:\s*16px;/,
+    );
   });
 
   it("uses plain assistant prose and an avocado-tinted user bubble", () => {

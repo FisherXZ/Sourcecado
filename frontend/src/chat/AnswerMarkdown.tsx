@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { createLowlight } from "lowlight";
@@ -34,6 +41,9 @@ const lowlight = createLowlight({
 });
 
 const COPIED_MS = 1800;
+// Above this size a block is shown as plain text. Coloring a very long block on
+// every streamed chunk costs more than the stream itself.
+const MAX_COLORED_CHARS = 40_000;
 
 // The highlighter returns a tree, so the code renders as React elements and no
 // HTML string is ever injected. Only color classes are added: token spans never
@@ -109,7 +119,15 @@ function CodeBlock({
   const [copy, setCopy] = useState<CopyState>("idle");
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
-  const content = useMemo(() => highlight(text, language), [text, language]);
+  // Color a deferred copy of the text and show the newest chunks as plain text
+  // until the color catches up. Only color changes, so the layout does not move.
+  const deferred = useDeferredValue(text);
+  const colored = text.startsWith(deferred) ? deferred : text;
+  const head = useMemo(
+    () =>
+      colored.length > MAX_COLORED_CHARS ? colored : highlight(colored, language),
+    [colored, language],
+  );
   const label = language ?? "text";
 
   // Copy uses the async clipboard API only. A hidden-textarea fallback would
@@ -126,26 +144,31 @@ function CodeBlock({
     timer.current = window.setTimeout(() => setCopy("idle"), COPIED_MS);
   };
 
+  const status =
+    copy === "copied" ? "Copied" : copy === "failed" ? "Copy failed" : "";
+
   return (
     <div className="sourcecado-code" role="group" aria-label={`${label} code`}>
       <div className="sourcecado-code-head">
         <span className="sourcecado-code-lang">{label}</span>
+        <span className="sourcecado-code-status" role="status" data-state={copy}>
+          {status}
+        </span>
         <button
           type="button"
           className="sourcecado-code-copy"
           aria-label="Copy code"
+          title={copy === "failed" ? "Copy failed" : "Copy code"}
           data-state={copy}
           onClick={() => void copyCode()}
         >
           {copy === "copied" ? <CheckIcon /> : <CopyIcon />}
         </button>
-        <span className="sr-only" role="status">
-          {copy === "copied" ? "Code copied" : copy === "failed" ? "Copy failed" : ""}
-        </span>
       </div>
       <pre tabIndex={0}>
         <code className={language ? `hljs language-${language}` : "hljs"}>
-          {content}
+          {head}
+          {text.slice(colored.length)}
         </code>
       </pre>
     </div>
@@ -176,11 +199,16 @@ function codeOf(
 // give every element type a new identity on each streamed chunk, remount the
 // DOM, and drop the operator's text selection.
 const components: Components = {
-  a: ({ node: _node, children, ...props }) => (
-    <a {...props} target="_blank" rel="noreferrer noopener">
-      {children}
-    </a>
-  ),
+  // react-markdown blanks a javascript: or data: URL. Show that link as text, so
+  // a click cannot open a blank tab.
+  a: ({ node: _node, children, href, ...props }) =>
+    href ? (
+      <a {...props} href={href} target="_blank" rel="noreferrer noopener">
+        {children}
+      </a>
+    ) : (
+      <>{children}</>
+    ),
   table: ({ node: _node, children, ...props }) => (
     <div
       className="sourcecado-table-scroll"

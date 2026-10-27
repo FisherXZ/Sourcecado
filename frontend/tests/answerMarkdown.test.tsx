@@ -93,7 +93,7 @@ describe("AnswerMarkdown formatting", () => {
 
     fireEvent.click(copy);
 
-    expect(await within(python).findByText("Code copied")).toBeInTheDocument();
+    expect(await within(python).findByText("Copied")).toBeInTheDocument();
     expect(writeText).toHaveBeenCalledTimes(1);
     const copied = writeText.mock.calls[0][0] as string;
     expect(copied.startsWith("def rank(people, weights):")).toBe(true);
@@ -121,14 +121,20 @@ describe("AnswerMarkdown formatting", () => {
     expect(screen.getByRole("status")).toHaveTextContent("");
   });
 
-  it("still copies when the clipboard API is missing", async () => {
+  it("reports failure in words, not only color, when the clipboard API is missing", async () => {
     setClipboard(undefined);
     render(<AnswerMarkdown text={"```bash\nls -la\n```"} />);
+    const copy = screen.getByRole("button", { name: "Copy code" });
+    expect(copy).toHaveAttribute("title", "Copy code");
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+      fireEvent.click(copy);
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Copy failed");
+    // The visible status carries the words. Color only adds to them.
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Copy failed");
+    expect(status).not.toHaveClass("sr-only");
+    expect(copy).toHaveAttribute("title", "Copy failed");
   });
 
   it("labels a block with no language as text and does not color it", () => {
@@ -159,11 +165,59 @@ describe("AnswerMarkdown formatting", () => {
       container.querySelectorAll("script, img, iframe, object, embed"),
     ).toHaveLength(0);
     expect(container.querySelector("[onerror]")).toBeNull();
-    for (const link of Array.from(container.querySelectorAll("a"))) {
-      expect(link.getAttribute("href") ?? "").not.toMatch(/^javascript:/i);
-    }
+    expect(container.querySelectorAll("a")).toHaveLength(0);
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
     expect(container).toHaveTextContent("<script>window.__pwned = 1</script>");
+  });
+
+  it("shows a javascript: or data: link as plain text, not as an anchor", () => {
+    const { container } = render(
+      <AnswerMarkdown
+        text={
+          "[js link](javascript:window.__pwned=1) and [data link](data:text/html,x) and [empty]() and [ok](https://acme.example)"
+        }
+      />,
+    );
+
+    // Only the safe link stays an anchor. The unsafe ones keep their words.
+    const anchors = Array.from(container.querySelectorAll("a"));
+    expect(anchors.map((a) => a.getAttribute("href"))).toEqual([
+      "https://acme.example",
+    ]);
+    expect(container.querySelector("p")).toHaveTextContent(
+      "js link and data link and empty and ok",
+    );
+  });
+
+  it("colors a block that grows, and keeps the text exact at each step", () => {
+    const lines = (count: number) =>
+      Array.from({ length: count }, (_, i) => `def fn_${i}(): return ${i}`).join("\n");
+    const fence = (code: string) => "```python\n" + code + "\n```";
+    const { container, rerender } = render(<AnswerMarkdown text={fence(lines(10))} />);
+    const code = container.querySelector("pre code") as HTMLElement;
+
+    rerender(<AnswerMarkdown text={fence(lines(30))} />);
+
+    expect(container.querySelector("pre code")).toBe(code);
+    expect(code.textContent).toBe(lines(30));
+    const defs = Array.from(code.querySelectorAll(".hljs-keyword")).filter(
+      (keyword) => keyword.textContent === "def",
+    );
+    expect(defs).toHaveLength(30);
+  });
+
+  it("shows a very long block as plain text and still copies all of it", async () => {
+    const code = Array.from({ length: 7000 }, (_, i) => `x_${i} = ${i}`).join("\n");
+    expect(code.length).toBeGreaterThan(40_000);
+    const { container } = render(<AnswerMarkdown text={"```python\n" + code + "\n```"} />);
+
+    const block = codeBlocks(container)[0];
+    expect(block.querySelector("[class*='hljs-']")).toBeNull();
+    expect(block.querySelector("pre code")?.textContent).toBe(code);
+    await act(async () => {
+      fireEvent.click(within(block).getByRole("button", { name: "Copy code" }));
+    });
+    expect(writeText).toHaveBeenCalledWith(code);
   });
 
   it("opens links in a new window without leaking the opener", () => {
