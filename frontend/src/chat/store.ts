@@ -88,6 +88,37 @@ export function tagRestoredThread(
   return messages;
 }
 
+/**
+ * Where the operator sent a message while the thread had no restore snapshot
+ * yet. It sits in the live buffer between the events that came before and
+ * after it, so `replaceThread` can put the message back in the same order.
+ */
+type SentBeforeRestore = { readonly sentMessageId: string };
+type LiveEntry = ProtocolChatEvent | SentBeforeRestore;
+type TurnStart = Extract<ProtocolChatEvent, { type: "turn_start" }>;
+
+function sentBeforeRestore(entry: LiveEntry): entry is SentBeforeRestore {
+  return "sentMessageId" in entry;
+}
+
+/** The run the message at `from` started: the first turn that began after it. */
+function nextTurnStart(
+  buffered: readonly LiveEntry[],
+  from: number,
+): TurnStart | undefined {
+  for (const entry of buffered.slice(from)) {
+    if (!sentBeforeRestore(entry) && entry.type === "turn_start") return entry;
+  }
+  return undefined;
+}
+
+function textOf(message: SourcecadoStructuredMessage): string {
+  return message.parts
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("")
+    .trim();
+}
+
 export type SourcecadoEvent =
   | {
       readonly type: "message_started";
@@ -238,9 +269,10 @@ export class SourcecadoChatStore {
   private readonly seenEventIds = new Set<string>();
   // Raw live events per thread, kept until the thread's restore snapshot
   // lands so `replaceThread` can re-apply the tail the snapshot missed.
-  private readonly liveEvents = new Map<string, ProtocolChatEvent[]>();
+  private readonly liveEvents = new Map<string, LiveEntry[]>();
   private readonly hydratedThreads = new Set<string>();
   private noticeNumber = 0;
+  private sentNumber = 0;
   private activeThreadId: string;
 
   constructor(
@@ -271,10 +303,21 @@ export class SourcecadoChatStore {
   ): void {
     const snapshotIds = restoredSnapshotIds.get(messages);
     const buffered = this.liveEvents.get(threadId) ?? [];
+    const unrestored = this.messagesFor(threadId);
     this.threads.set(threadId, messages);
     if (snapshotIds) {
       for (const id of snapshotIds) this.seenEventIds.add(id);
-      for (const event of buffered) {
+      for (const [position, event] of buffered.entries()) {
+        if (sentBeforeRestore(event)) {
+          const sent = unrestored.find(
+            (message) => message.id === event.sentMessageId,
+          );
+          if (sent) {
+            const run = nextTurnStart(buffered, position + 1);
+            this.restoreSentMessage(threadId, sent, run, snapshotIds);
+          }
+          continue;
+        }
         if (snapshotIds.has(event.event_id)) {
           // The snapshot already projected this event; it still proves the
           // run is alive when it re-announces an interrupted turn.
@@ -286,6 +329,48 @@ export class SourcecadoChatStore {
     }
     this.hydratedThreads.add(threadId);
     this.liveEvents.delete(threadId);
+  }
+
+  /**
+   * The operator sent `sent` before the restore snapshot arrived, so the
+   * snapshot overwrote it. Put it back before the answer it started, unless
+   * the snapshot already holds it.
+   */
+  private restoreSentMessage(
+    threadId: string,
+    sent: SourcecadoStructuredMessage,
+    run: TurnStart | undefined,
+    snapshotIds: ReadonlySet<string>,
+  ): void {
+    const current = this.messagesFor(threadId);
+    let at = current.length;
+    if (run && snapshotIds.has(run.event_id)) {
+      // The snapshot saw the run start, and a run stores its operator message
+      // just before the answer. An equal message right there is this one.
+      const start = current.findIndex((message) => message.id === run.message_id);
+      if (start >= 0) {
+        const before = current[start - 1];
+        if (before?.role === "user" && textOf(before) === textOf(sent)) return;
+        at = start;
+      }
+    }
+    // The page numbered this message before it knew how many the thread has,
+    // so its id can equal a restored one.
+    const id = `${threadId}:sent:${++this.sentNumber}`;
+    const kept = {
+      ...sent,
+      id,
+      parts: sent.parts.map((part) =>
+        part.id.startsWith(sent.id)
+          ? { ...part, id: id + part.id.slice(sent.id.length) }
+          : part,
+      ),
+    };
+    this.threads.set(threadId, [
+      ...current.slice(0, at),
+      kept,
+      ...current.slice(at),
+    ]);
   }
 
   applyChatEvent(value: unknown): ChatEvent | ConnectionChangeEvent {
@@ -308,17 +393,17 @@ export class SourcecadoChatStore {
       return event;
     }
     this.seenEventIds.add(event.event_id);
-    this.bufferLiveEvent(event);
+    this.bufferLive(event.session_id, event);
     this.applyProtocolEvent(event);
     return event;
   }
 
-  private bufferLiveEvent(event: ProtocolChatEvent): void {
-    if (this.hydratedThreads.has(event.session_id)) return;
-    const buffer = this.liveEvents.get(event.session_id) ?? [];
-    buffer.push(event);
+  private bufferLive(threadId: string, entry: LiveEntry): void {
+    if (this.hydratedThreads.has(threadId)) return;
+    const buffer = this.liveEvents.get(threadId) ?? [];
+    buffer.push(entry);
     if (buffer.length > LIVE_EVENT_BUFFER_LIMIT) buffer.shift();
-    this.liveEvents.set(event.session_id, buffer);
+    this.liveEvents.set(threadId, buffer);
   }
 
   // A restore snapshot marks a still-open turn "interrupted". A live event
@@ -697,6 +782,11 @@ export class SourcecadoChatStore {
   apply(event: SourcecadoEvent): void {
     const messages = this.messagesFor(event.threadId);
     if (event.type === "message_started") {
+      // Only the page's own send starts a user message. Before the restore
+      // snapshot lands, note where it falls among the live events.
+      if (event.role === "user") {
+        this.bufferLive(event.threadId, { sentMessageId: event.messageId });
+      }
       this.threads.set(event.threadId, [
         ...messages,
         {

@@ -881,6 +881,218 @@ describe("SourcecadoChatStore restore-while-streaming", () => {
   });
 });
 
+describe("SourcecadoChatStore send while restoring", () => {
+  const threadId = "thread-alpha";
+  const run = (turn: number) =>
+    ({
+      version: 2,
+      session_id: threadId,
+      run_id: `run-${turn}`,
+      message_id: `answer-${turn}`,
+      part_id: `answer-${turn}-part`,
+    }) as const;
+  const start = (turn: number) =>
+    ({ ...run(turn), event_id: `start-${turn}`, type: "turn_start", state: "running" }) as const;
+  const say = (turn: number, delta: string) =>
+    ({ ...run(turn), event_id: `say-${turn}`, type: "assistant_delta", delta }) as const;
+  const end = (turn: number, text: string) =>
+    ({ ...run(turn), event_id: `end-${turn}`, type: "turn_end", state: "complete", text }) as const;
+
+  // The page numbers what the operator sends the way ChatPage does.
+  const send = (store: SourcecadoChatStore, index: number, text: string) => {
+    const messageId = `${threadId}:legacy:${index}`;
+    store.apply({ type: "message_started", threadId, messageId, role: "user" });
+    store.apply({
+      type: "text_delta",
+      threadId,
+      messageId,
+      partId: `${messageId}:text:0`,
+      delta: text,
+    });
+    store.apply({ type: "message_finished", threadId, messageId, state: "complete" });
+  };
+  const fresh = () => new SourcecadoChatStore([{ id: threadId, messages: [] }], threadId);
+  const lines = (store: SourcecadoChatStore) =>
+    store.messagesFor(threadId).map((message) => {
+      const text = message.parts.map((part) => (part.type === "text" ? part.text : "")).join("");
+      return `${message.role}: ${text}`;
+    });
+
+  it("keeps the message in front of the answer it started", () => {
+    const store = fresh();
+    send(store, 0, "Find ML founders");
+    store.applyChatEvent(start(1));
+    store.applyChatEvent(say(1, "Two founders found."));
+    store.applyChatEvent(end(1, "Two founders found."));
+
+    // The snapshot was taken before the message was sent.
+    store.replaceThread(
+      threadId,
+      restoreConversation({
+        id: threadId,
+        title: null,
+        messages: [
+          { role: "user", content: "Earlier question" },
+          { role: "assistant", content: "Earlier answer." },
+        ],
+        events: [],
+      }),
+    );
+
+    expect(lines(store)).toEqual([
+      "user: Earlier question",
+      "assistant: Earlier answer.",
+      "user: Find ML founders",
+      "assistant: Two founders found.",
+    ]);
+  });
+
+  it("gives the kept message an id no restored message has", () => {
+    const store = fresh();
+    send(store, 0, "Find ML founders");
+
+    store.replaceThread(
+      threadId,
+      restoreConversation({
+        id: threadId,
+        title: null,
+        messages: [{ role: "user", content: "Earlier question" }],
+        events: [],
+      }),
+    );
+
+    const ids = store.messagesFor(threadId).map((message) => message.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const kept = store.messagesFor(threadId)[1]!;
+    expect(kept.parts.map((part) => part.id)).toEqual([`${kept.id}:text:0`]);
+  });
+
+  it("shows one message when the snapshot already holds it and its run", () => {
+    const store = fresh();
+    send(store, 0, "Find ML founders");
+    store.applyChatEvent(start(1));
+    store.applyChatEvent(say(1, "Two"));
+
+    store.replaceThread(
+      threadId,
+      restoreConversation({
+        id: threadId,
+        title: null,
+        messages: [{ role: "user", content: "Find ML founders" }],
+        events: [start(1), say(1, "Two")],
+      }),
+    );
+
+    expect(lines(store)).toEqual(["user: Find ML founders", "assistant: Two"]);
+  });
+
+  it("keeps the message when the snapshot saw the run start but not the message", () => {
+    const store = fresh();
+    send(store, 0, "Find ML founders");
+    store.applyChatEvent(start(1));
+
+    store.replaceThread(
+      threadId,
+      restoreConversation({
+        id: threadId,
+        title: null,
+        messages: [],
+        events: [start(1)],
+      }),
+    );
+
+    expect(lines(store)).toEqual(["user: Find ML founders", "assistant: "]);
+  });
+
+  it("keeps a message that repeats an earlier one in the snapshot", () => {
+    const store = fresh();
+    send(store, 0, "continue");
+    store.applyChatEvent(start(2));
+    store.applyChatEvent(say(2, "Going on."));
+
+    // The snapshot has the earlier "continue" and its answer, not this one.
+    store.replaceThread(
+      threadId,
+      restoreConversation({
+        id: threadId,
+        title: null,
+        messages: [
+          { role: "user", content: "continue" },
+          { role: "assistant", content: "Earlier answer." },
+        ],
+        events: [start(1), say(1, "Earlier answer."), end(1, "Earlier answer.")],
+      }),
+    );
+
+    expect(lines(store)).toEqual([
+      "user: continue",
+      "assistant: Earlier answer.",
+      "user: continue",
+      "assistant: Going on.",
+    ]);
+  });
+
+  it("keeps two messages, each in front of its own answer", () => {
+    const store = fresh();
+    send(store, 0, "First");
+    store.applyChatEvent(start(1));
+    store.applyChatEvent(say(1, "One."));
+    store.applyChatEvent(end(1, "One."));
+    send(store, 1, "Second");
+    store.applyChatEvent(start(2));
+    store.applyChatEvent(say(2, "Two."));
+
+    store.replaceThread(
+      threadId,
+      restoreConversation({ id: threadId, title: null, messages: [], events: [] }),
+    );
+
+    expect(lines(store)).toEqual([
+      "user: First",
+      "assistant: One.",
+      "user: Second",
+      "assistant: Two.",
+    ]);
+  });
+
+  it("keeps a message whose run has not started yet at the end", () => {
+    const store = fresh();
+    send(store, 0, "Find ML founders");
+
+    store.replaceThread(
+      threadId,
+      restoreConversation({
+        id: threadId,
+        title: null,
+        messages: [
+          { role: "user", content: "Earlier question" },
+          { role: "assistant", content: "Earlier answer." },
+        ],
+        events: [],
+      }),
+    );
+
+    expect(lines(store)).toEqual([
+      "user: Earlier question",
+      "assistant: Earlier answer.",
+      "user: Find ML founders",
+    ]);
+  });
+
+  it("does not hold on to a message once the thread has loaded", () => {
+    const store = fresh();
+    store.replaceThread(threadId, restoreConversation({ id: threadId, title: null, messages: [], events: [] }));
+    send(store, 0, "After load");
+
+    store.replaceThread(
+      threadId,
+      restoreConversation({ id: threadId, title: null, messages: [], events: [] }),
+    );
+
+    expect(lines(store)).toEqual([]);
+  });
+});
+
 describe("SourcecadoChatStore transport events", () => {
   it("passes a connection_change through without adding a transcript message", () => {
     const store = new SourcecadoChatStore(
