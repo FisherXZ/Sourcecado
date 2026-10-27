@@ -12,6 +12,7 @@ import type { ActivePerson } from "../api";
 import { ContextChips } from "./ContextChips";
 import { ContextMenu } from "./ContextMenu";
 import { SendIcon } from "./icons";
+import { useScrollActiveIntoView } from "./MenuRow";
 import { withContext, type ContextChip } from "./messageContext";
 import {
   matchSkills,
@@ -57,6 +58,9 @@ export function Composer({
   const { catalog, retry } = useSkillCatalog(slashOpen);
   const skills = catalog.status === "loaded" ? matchSkills(catalog.skills, query ?? "") : [];
   const activeSkill = skills[Math.min(active, skills.length - 1)];
+  useScrollActiveIntoView(
+    slashOpen && activeSkill ? skillOptionId(menuId, skills.indexOf(activeSkill)) : undefined,
+  );
 
   function insertSkill(name: string) {
     const next = `/${name} `;
@@ -72,10 +76,10 @@ export function Composer({
       setDismissedAt(text);
     } else if (skills.length > 0 && event.key === "ArrowDown") {
       event.preventDefault();
-      setActive((active + 1) % skills.length);
+      setActive((current) => (current + 1) % skills.length);
     } else if (skills.length > 0 && event.key === "ArrowUp") {
       event.preventDefault();
-      setActive((active - 1 + skills.length) % skills.length);
+      setActive((current) => (current - 1 + skills.length) % skills.length);
     } else if (
       activeSkill &&
       (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey))
@@ -102,9 +106,11 @@ export function Composer({
     <ComposerPrimitive.Root className="sourcecado-composer" onSubmit={sendWithContext}>
       <ContextChips
         chips={chips}
-        onRemove={(chip) =>
-          setChips((current) => current.filter((item) => item.id !== chip.id))
-        }
+        onRemove={(chip) => {
+          setChips((current) => current.filter((item) => item.id !== chip.id));
+          // The button that held focus is gone. Keep focus in the box.
+          input.current?.focus();
+        }}
       />
       <ComposerPrimitive.Input
         ref={input}
@@ -149,6 +155,8 @@ export function Composer({
         <ContextMenu
           attached={chips}
           boundPerson={boundPerson}
+          slashOpen={slashOpen}
+          onOpen={() => setDismissedAt(text)}
           onAttach={(chip) =>
             setChips((current) =>
               current.some((item) => item.id === chip.id) ? current : [...current, chip],

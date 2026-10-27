@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 /** The icon, title and one-line detail that every row of the composer menus shares. */
 export function MenuRow({
@@ -23,4 +23,11 @@ export function MenuRow({
       </span>
     </>
   );
+}
+
+/** Keep the row the keyboard chose in view, so Enter never picks a row the director cannot see. */
+export function useScrollActiveIntoView(activeId: string | undefined): void {
+  useEffect(() => {
+    if (activeId) document.getElementById(activeId)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeId]);
 }

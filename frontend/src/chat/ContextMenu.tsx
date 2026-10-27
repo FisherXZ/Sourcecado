@@ -8,9 +8,9 @@ import {
 } from "react";
 
 import { getBoard, type ActivePerson, type BoardPerson } from "../api";
-import { withoutApolloNameMasks } from "../personName";
-import { MenuRow } from "./MenuRow";
+import { MenuRow, useScrollActiveIntoView } from "./MenuRow";
 import type { ContextChip } from "./messageContext";
+import { boardPersonName, rememberBoard, shortLabel } from "./personNames";
 import {
   FileIcon,
   PersonIcon,
@@ -31,18 +31,17 @@ type People =
   | { readonly status: "failed" };
 
 function toPickerPerson(person: BoardPerson): PickerPerson {
-  const name = withoutApolloNameMasks(
-    [person.first_name, person.last_name].filter(Boolean).join(" "),
-  );
   return {
     id: person.person_id,
-    name: name || "Unknown person",
+    name: shortLabel(boardPersonName(person)),
     detail: [person.title, person.company].filter(Boolean).join(" · "),
   };
 }
 
 async function loadPeople(): Promise<readonly PickerPerson[]> {
   const board = await getBoard();
+  // The chips read their names from the same Board read.
+  rememberBoard(board);
   return [...board.open, ...board.in_conversation, ...board.done, ...board.backlog]
     .map(toPickerPerson)
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -57,12 +56,18 @@ async function loadPeople(): Promise<readonly PickerPerson[]> {
 export function ContextMenu({
   attached,
   boundPerson,
+  slashOpen,
+  onOpen,
   onAttach,
   onPicked,
 }: {
   readonly attached: readonly ContextChip[];
   /** A conversation about one person cannot read any other person file. */
   readonly boundPerson: ActivePerson | null;
+  /** The skill menu is open. The two menus never show together. */
+  readonly slashOpen: boolean;
+  /** The menu is about to open. */
+  readonly onOpen: () => void;
   readonly onAttach: (chip: ContextChip) => void;
   /** The menu closed after a pick; the composer takes focus back. */
   readonly onPicked: () => void;
@@ -112,7 +117,7 @@ export function ContextMenu({
   }
 
   function pick(person: PickerPerson) {
-    onAttach({ kind: "person", id: person.id, name: person.name });
+    onAttach({ kind: "person", id: person.id });
     close(false);
     onPicked();
   }
@@ -160,10 +165,10 @@ export function ContextMenu({
   function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown" && choices.length > 0) {
       event.preventDefault();
-      setActive((active + 1) % choices.length);
+      setActive((current) => (current + 1) % choices.length);
     } else if (event.key === "ArrowUp" && choices.length > 0) {
       event.preventDefault();
-      setActive((active - 1 + choices.length) % choices.length);
+      setActive((current) => (current - 1 + choices.length) % choices.length);
     } else if (event.key === "Enter") {
       event.preventDefault();
       const chosen = choices[active];
@@ -172,6 +177,12 @@ export function ContextMenu({
   }
 
   const activeId = choices[active] ? `${listId}-${active}` : undefined;
+  useScrollActiveIntoView(open && view === "people" ? activeId : undefined);
+
+  // The skill menu wins when it opens: close this one.
+  useEffect(() => {
+    if (slashOpen && open) close(false);
+  }, [slashOpen]);
 
   return (
     <div className="sourcecado-context-menu-root" ref={root} onKeyDown={onMenuKeyDown}>
@@ -183,7 +194,11 @@ export function ContextMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        onClick={() => (open ? close(true) : setOpen(true))}
+        onClick={() => {
+          if (open) return close(true);
+          onOpen();
+          setOpen(true);
+        }}
       >
         <PlusIcon />
       </button>
