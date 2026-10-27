@@ -321,13 +321,25 @@ export function convertStructuredMessage(
             }];
       }
       if (part.type === "artifact") return [];
+      // The backend closes a denied call with ok=false (tool_finished) a few
+      // milliseconds before it writes the approval receipt. For a call the
+      // operator denied, or has not decided yet, that failed result is the
+      // refusal, not an outcome. Leave it out so no result card is drawn from
+      // it. The step row reads the decision from the approval (processState).
+      const approvalState = part.approval?.state;
+      const undecided =
+        approvalState === "pending" ||
+        approvalState === "submitting" ||
+        approvalState === "failed-submit";
+      const noOutcome =
+        approvalState === "denied" || (undecided && part.state === "error");
       return [{
         type: "tool-call" as const,
         toolCallId: part.id,
         toolName: part.name,
         args: part.arguments as never,
         argsText: JSON.stringify(part.arguments),
-        ...(part.result !== undefined ? { result: part.result } : {}),
+        ...(part.result !== undefined && !noOutcome ? { result: part.result } : {}),
         isError: part.state === "error",
         ...(part.startedAt !== undefined
           ? {

@@ -960,6 +960,11 @@ export class SourcecadoChatStore {
                           scope: event.scope,
                           executionStatus: event.executionStatus,
                           executionError: event.executionError,
+                          // The receipt names the recipient or person, so the
+                          // resolved card keeps what the request resolved.
+                          ...(part.approval?.resource
+                            ? { resource: part.approval.resource }
+                            : {}),
                         },
                       }
                     : part,

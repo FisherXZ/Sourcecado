@@ -270,6 +270,49 @@ describe("Warm Operator thread styles", () => {
     );
   });
 
+  it("lays the approval card out as a bordered field table with an icon-and-text footer", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-approval-table\s*\{[^}]*width:\s*100%;[^}]*border-collapse:\s*collapse;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-approval-table :where\(th, td\)\s*\{[^}]*border-bottom:\s*1px solid var\(--border\);/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-approval-foot\s*\{[^}]*border-top:\s*1px solid var\(--border\);/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-approval-foot button\s*\{[^}]*display:\s*inline-flex;/,
+    );
+  });
+
+  it("bounds the approval field table so Allow and Deny stay reachable", () => {
+    expect(styles).toMatch(
+      /\.sourcecado-approval-table-scroll\s*\{[^}]*max-height:\s*min\(50vh, 420px\);[^}]*overflow-y:\s*auto;/,
+    );
+    expect(styles).toMatch(
+      /\.sourcecado-approval-details pre\s*\{[^}]*max-height:\s*240px;[^}]*overflow:\s*auto;/,
+    );
+  });
+
+  it("keeps approval text at 13px or larger and the decision readable", () => {
+    for (const selector of [
+      "\\.sourcecado-approval-card",
+      "\\.sourcecado-approval-table",
+      "\\.sourcecado-approval-receipt",
+      "\\.sourcecado-approval-actions kbd",
+    ]) {
+      expect(styles).toMatch(
+        new RegExp(`${selector}\\s*\\{[^}]*font-size:\\s*13px;`),
+      );
+    }
+    expect(styles).toMatch(
+      /\.sourcecado-approval-receipt\s*\{[^}]*color:\s*var\(--text\);/,
+    );
+    expect(styles).not.toMatch(
+      /\.sourcecado-approval-(card|receipt|table|reason|details)[^{]*\{[^}]*font-size:\s*(1[0-2]|[0-9])px;/,
+    );
+  });
+
   it("keeps failed-step recovery actions inline and raw details bounded", () => {
     expect(styles).toMatch(
       /\.sourcecado-recovery-actions\s*\{[^}]*display:\s*flex;/,
