@@ -8,6 +8,7 @@ import random
 import threading
 import uuid
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Any, Awaitable, Callable
 
 from coworker.agent_run_dispatch import (
@@ -18,6 +19,12 @@ from coworker.agent_run_dispatch import (
     needs_fence,
 )
 from coworker.agent_runs import TERMINAL_AGENT_RUN_STATES
+from coworker.attachments import (
+    AttachmentStore,
+    expand_messages,
+    has_image_reference,
+    send_problem,
+)
 from coworker.compaction import (
     CompactionContext,
     SessionCompactor,
@@ -42,6 +49,7 @@ from coworker.provider import (
     StreamKind,
     ToolCall,
     context_budget,
+    provider_accepts_images,
     provider_model_metadata,
 )
 from coworker.provider_retry import (
@@ -76,6 +84,72 @@ _APOLLO_TOOLS = frozenset({"apollo_search_people", "apollo_enrich_contact"})
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+# One reasoning event per this many seconds, not one per streamed token. A
+# long thought is thousands of tokens, and every event is a line in the
+# presentation log that the thread reloads from.
+_REASONING_BATCH_SECONDS = 0.15
+
+
+class _ReasoningFeed:
+    """Raw model reasoning for the thread, in a few events instead of many.
+
+    The first delta of a block goes out at once, so the thinking row shows
+    without delay. Later deltas wait until a batch is old enough, or until the
+    provider moves on to text or a tool call. A block is one provider attempt
+    that streamed reasoning; `step` tells the thread which block a delta joins.
+
+    The text leaves through `send` and nowhere else. It is never added to the
+    model's history, the run ledger, telemetry or a compaction summary.
+    """
+
+    def __init__(
+        self,
+        send: Callable[[dict[str, Any]], Awaitable[None]],
+        *,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        self._send = send
+        self._clock = clock
+        self._step = 0
+        self._open = False
+        self._pending: list[str] = []
+        self._last_sent: float | None = None
+
+    async def add(self, delta: str) -> None:
+        if not self._open:
+            self._open = True
+            self._step += 1
+            self._last_sent = None
+        self._pending.append(delta)
+        if (
+            self._last_sent is None
+            or self._clock() - self._last_sent >= _REASONING_BATCH_SECONDS
+        ):
+            await self._flush()
+
+    async def end_block(self) -> None:
+        """The provider stopped reasoning: send what is waiting."""
+        if not self._open:
+            return
+        self._open = False
+        await self._flush()
+
+    async def _flush(self) -> None:
+        if not self._pending:
+            return
+        text = "".join(self._pending)
+        self._pending.clear()
+        self._last_sent = self._clock()
+        await self._send(
+            {
+                "type": "reasoning_delta",
+                "delta": text,
+                "step": self._step,
+                "at": _now_iso(),
+            }
+        )
 
 
 def _safe_apollo_json(value: object) -> str:
@@ -747,6 +821,7 @@ async def run_turn(
     agent_runs: Any = None,
     run_owner: Any = None,
     run_trigger: str = "chat",
+    attachments: AttachmentStore | None = None,
 ) -> dict[str, Any]:
     workspace_runtime = execute_kwargs.get("workspace_runtime")
     events = TurnEventStream(
@@ -812,6 +887,8 @@ async def run_turn(
 
     async def _emit(event: dict[str, Any]) -> None:
         await events.send(event)
+
+    reasoning = _ReasoningFeed(_emit)
 
     def _stamp(message: dict[str, Any]) -> dict[str, Any]:
         """Identity for restore merges; stripped before the model sees it."""
@@ -1070,6 +1147,23 @@ async def run_turn(
             user_msg = {"role": "user", "content": text}
             history.append(user_msg)
             _persist_message(user_msg)
+        # A file the director attached is never dropped quietly. If it cannot
+        # reach the model, the run stops here and says why.
+        current_has_images = False
+        if attachments is not None:
+            problem = send_problem(
+                text,
+                attachments,
+                accepts_images=provider_accepts_images(selected_provider),
+            )
+            if problem is not None:
+                turn_error_kind = ErrorKind.POLICY
+                turn_error_message = problem
+                raise RuntimeError(problem)
+            current_has_images = has_image_reference(
+                [{"role": "user", "content": text}], attachments
+            )
+        admitted_files: set[str] = set()
         # Restore against the same list shape the boundary was computed over:
         # the system message at index 0, then the transcript. The user message
         # appended above sits past every stored boundary, so it cannot shift it.
@@ -1128,6 +1222,13 @@ async def run_turn(
                 selected_provider=selected_provider,
                 messages=model_messages,
             )
+            if current_has_images:
+                # Never fail over to a model that cannot read the image.
+                attempt_chain = tuple(
+                    candidate
+                    for candidate in attempt_chain
+                    if provider_accepts_images(candidate)
+                )
             controller = RetryController(
                 attempt_chain,
                 policy=retry_policy or RetryPolicy(),
@@ -1145,8 +1246,28 @@ async def run_turn(
                 provider_span = None
                 provider_context_window: int | None = None
                 meaningful_stream = False
+                request_messages = model_messages
+                request_image_ids: list[str] = []
+                if attachments is not None:
+                    # The reference lines become fenced file text, with each
+                    # file name inside the fence. The transcript and the ledger
+                    # keep only the lines.
+                    expansion = expand_messages(
+                        model_messages,
+                        attachments,
+                        accepts_images=provider_accepts_images(attempt_provider),
+                    )
+                    request_messages = expansion.messages
+                    request_image_ids = expansion.images
+                    attachments.record_context(expansion.left_out, expansion.cleared)
+                    for envelope in expansion.envelopes:
+                        if envelope.ref_id not in admitted_files:
+                            admitted_files.add(envelope.ref_id)
+                            authority.admit(
+                                EvidenceParts(metadata={}, envelopes=(envelope,))
+                            )
                 stream_kwargs: dict[str, Any] = {
-                    "messages": model_messages,
+                    "messages": request_messages,
                     "tools": openai_tools,
                 }
                 if getattr(attempt_provider, "uses_transient_context", False):
@@ -1171,7 +1292,10 @@ async def run_turn(
                             _ensure_provider_span(chunk.start)
                             continue
                         if chunk.kind is StreamKind.REASONING:
+                            if chunk.transient_reasoning_delta:
+                                await reasoning.add(chunk.transient_reasoning_delta)
                             continue
+                        await reasoning.end_block()
                         if chunk.kind is not None:
                             meaningful_stream = True
                         active_provider_span = _ensure_provider_span()
@@ -1220,7 +1344,9 @@ async def run_turn(
                                     provider_cost = None
                         if chunk.finish_reason is not None:
                             provider_finish_reason = chunk.finish_reason
+                    await reasoning.end_block()
                 except ProviderRequestCancelled:
+                    await reasoning.end_block()
                     _ensure_provider_span().cancel(
                         usage=provider_usage,
                         cost=provider_cost,
@@ -1236,6 +1362,7 @@ async def run_turn(
                     turn_span.cancel()
                     raise
                 except Exception as exc:
+                    await reasoning.end_block()
                     error_kind = _telemetry_provider_error_kind(exc)
                     _ensure_provider_span().fail(
                         error_kind,
@@ -1319,6 +1446,23 @@ async def run_turn(
                         ) from exc
                     turn_error_kind = error_kind
                     turn_error_message = safe_provider_failure_message(exc)
+                    if (
+                        attachments is not None
+                        and request_image_ids
+                        and error_kind is ErrorKind.INVALID_REQUEST
+                    ):
+                        # The request held an image and the provider refused it.
+                        # Stop sending those images, here and in every later
+                        # request, so the thread keeps working. Say which ones.
+                        names = attachments.reject_images(request_image_ids)
+                        turn_error_message = (
+                            "The model provider rejected this request, and it "
+                            f"held {'an image' if len(names) == 1 else 'images'}: "
+                            f"{', '.join(names)}. "
+                            f"{'It is' if len(names) == 1 else 'They are'} left "
+                            "out of this thread from now on. Send your message "
+                            "again without it."
+                        )
                     provider_failure = _record_model_failure(
                         exc, directive, turn_error_message
                     )

@@ -39,6 +39,13 @@ is a second allowlist, independent of the write-time allowlist in
 that leaned on the write side would keep passing its tests after the write side
 changed.
 
+The thread does show raw model reasoning (#225). It is kept as `reasoning_delta`
+events in the conversation's event log, which is the transcript the thread
+restores from, and nowhere else. `backend/tests/test_reasoning_events.py` plants
+a string in a reasoning stream and checks that it is absent from the run ledger,
+telemetry, the model's history and every compaction record. It is present in the
+restored transcript.
+
 Free text appears in exactly three places, all of them bounded and already
 passed through `redact_secrets` when they were stored: `reason`,
 `error_summary`, and reference titles. The ledger adds no free-text field of its

@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoardView } from "../src/Board";
 import { PersonFileView } from "../src/PersonFile";
+import { parseHash } from "../src/app/route";
 import { claim, livingBrief } from "./livingBrief";
 
 const api = vi.hoisted(() => ({
@@ -432,6 +434,81 @@ describe("Contacts and person-file routes", () => {
     await screen.findByRole("link", { name: /Alyssa Lee/ });
     window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
     await waitFor(() => expect(api.getBoard).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows the new status in Contacts after changing it in the Person File and navigating back", async () => {
+    // A hash router that mirrors AppShell's single mutually-exclusive outlet:
+    // Contacts and the Person File are never mounted at the same time, so
+    // navigating back remounts Contacts and it refetches.
+    function HashRouter() {
+      const [route, setRoute] = useState(() => parseHash(window.location.hash));
+      useEffect(() => {
+        const onHashChange = () => setRoute(parseHash(window.location.hash));
+        window.addEventListener("hashchange", onHashChange);
+        return () => window.removeEventListener("hashchange", onHashChange);
+      }, []);
+      return route.kind === "person" ? (
+        <PersonFileView personId={route.personId} />
+      ) : (
+        <BoardView />
+      );
+    }
+
+    const alyssa = {
+      person_id: "person one",
+      first_name: "Alyssa",
+      last_name: "Lee",
+      title: "Sourcing lead",
+      company: "Codeology",
+    };
+    // The server moves Alyssa from Open to In conversation once the write lands.
+    let moved = false;
+    api.getBoard.mockImplementation(async () =>
+      moved
+        ? { open: [], in_conversation: [{ ...alyssa, sequence_state: "in_conversation" }], done: [] }
+        : { open: [{ ...alyssa, sequence_state: "open" }], in_conversation: [], done: [] },
+    );
+    api.setPersonSequence.mockImplementation(async () => {
+      moved = true;
+      return { person: { person_id: "person one", sequence_state: "in_conversation" } };
+    });
+
+    window.location.hash = "#/board";
+    render(<HashRouter />);
+
+    // Start on Contacts: Alyssa is Open.
+    const openFilters = await screen.findByRole("group", {
+      name: "Filter contacts by sequence status",
+    });
+    expect(within(openFilters).getByRole("button", { name: "Open 1" })).toBeInTheDocument();
+    expect(
+      within(openFilters).getByRole("button", { name: "In conversation 0" }),
+    ).toBeInTheDocument();
+
+    // Navigate into her Person File the way a director does: open the row.
+    fireEvent.click(screen.getByLabelText("Open Person File for Alyssa Lee"));
+    await screen.findByRole("heading", { level: 1, name: "Alyssa Lee" });
+
+    // Change the status in the Person File.
+    fireEvent.click(screen.getByRole("button", { name: "In conversation" }));
+    await waitFor(() =>
+      expect(api.setPersonSequence).toHaveBeenCalledWith("person one", "in_conversation"),
+    );
+
+    // Navigate back to Contacts through the real back link — no event is
+    // dispatched here by the test; the remount alone must refresh the view.
+    fireEvent.click(screen.getByRole("link", { name: "← Contacts" }));
+
+    const updatedFilters = await screen.findByRole("group", {
+      name: "Filter contacts by sequence status",
+    });
+    await waitFor(() =>
+      expect(
+        within(updatedFilters).getByRole("button", { name: "In conversation 1" }),
+      ).toBeInTheDocument(),
+    );
+    expect(within(updatedFilters).getByRole("button", { name: "Open 0" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Alyssa Lee/ })).toBeInTheDocument();
   });
 
   it("can inspect and revert a prior person-file version", async () => {

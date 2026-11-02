@@ -14,6 +14,7 @@ EVENT_TYPES = frozenset(
         "turn_stopping",
         "turn_stopped",
         "assistant_delta",
+        "reasoning_delta",
         "permission_required",
         "approval_resolved",
         "tool_started",
@@ -78,6 +79,16 @@ def validate_event(event: object) -> str | None:
             return "turn_stopped.message must be a string"
     if event_type == "assistant_delta" and not isinstance(event.get("delta"), str):
         return "assistant_delta.delta must be a string"
+    if event_type == "reasoning_delta":
+        # Raw model reasoning for the thread. It lives in this presentation log
+        # and nowhere else: not in the model's history, the run ledger,
+        # telemetry, or a compaction summary.
+        if not isinstance(event.get("delta"), str) or not event["delta"]:
+            return "reasoning_delta.delta must be a non-empty string"
+        if not isinstance(event.get("step"), int) or event["step"] < 1:
+            return "reasoning_delta.step must be a positive integer"
+        if not isinstance(event.get("at"), str) or not event["at"]:
+            return "reasoning_delta.at must be a non-empty string"
     if event_type == "turn_end":
         if event.get("state") not in {"complete", "partial", "stopped", "interrupted"}:
             return "turn_end.state must be complete, partial, stopped, or interrupted"

@@ -1,7 +1,18 @@
 import { useId, useState } from "react";
 
-import { useInspector } from "../chat/Inspector";
 import type { DomainRendererProps } from "../chat/toolRegistry";
+import {
+  CardField,
+  CardRow,
+  CardRows,
+  ExpandableText,
+  Gap,
+  InspectButton,
+  rawToolTarget,
+  ResultCard,
+  SkeletonRows,
+  UnsupportedCard,
+} from "./ResultCard";
 
 const BODY_PREVIEW_LIMIT = 280;
 
@@ -43,39 +54,40 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+const NOT_SENT = "Not sent";
+
 export function GmailDraftResult({
   args,
   result,
   status,
   toolCallId,
   toolName,
+  failure,
+  cardId,
 }: DomainRendererProps) {
-  const { select } = useInspector();
   if (toolName !== "gmail_draft" && toolName !== "gmail_create_draft") {
     return null;
   }
+  const common = {
+    id: cardId,
+    toolCallIds: [toolCallId],
+    provider: "gmail" as const,
+    title: "Gmail draft",
+  };
   if (status === "loading") {
     return (
-      <section className="sourcecado-gmail-draft sourcecado-gmail-creating">
-        <header>
-          <h3>Creating Gmail draft</h3>
-          <strong>Not sent</strong>
-        </header>
-        <ol aria-label="Creating Gmail draft preview" aria-busy="true">
-          {[0, 1, 2].map((row) => (
-            <li key={row}>
-              <span />
-            </li>
-          ))}
-        </ol>
-      </section>
+      <ResultCard {...common} tag={NOT_SENT} state="loading">
+        <SkeletonRows label="Creating Gmail draft preview" />
+      </ResultCard>
     );
   }
   if (status === "error") {
     return (
-      <p className="sourcecado-gmail-failed">
-        Not sent · Gmail draft was not created.
-      </p>
+      <ResultCard
+        {...common}
+        state={failure?.class === "permission" ? "restricted" : "failed"}
+        note={`${NOT_SENT} · Gmail draft was not created.`}
+      />
     );
   }
   if (status !== "success") return null;
@@ -84,11 +96,15 @@ export function GmailDraftResult({
   const draftId = text(raw?.id) ?? text(raw?.draft_id);
   if (!raw || !draftId || raw.sent === true || raw.drafted === false) {
     return (
-      <section className="sourcecado-gmail-draft sourcecado-gmail-fallback">
-        <h3>Gmail draft result needs review</h3>
-        <strong>Not sent</strong>
-        <p>Sourcecado couldn’t verify a reviewable Gmail draft. Use Inspect above to review the result.</p>
-      </section>
+      <UnsupportedCard
+        cardId={cardId}
+        toolCallIds={[toolCallId]}
+        provider="gmail"
+        title="Gmail draft"
+        // A record that says it was sent must not be labelled "Not sent".
+        tag={raw?.sent === true ? undefined : NOT_SENT}
+        inspect={rawToolTarget({ toolCallId, toolName, args, result }, "Gmail draft")}
+      />
     );
   }
   const recipient = text(raw?.to) ?? text(input?.to);
@@ -99,71 +115,58 @@ export function GmailDraftResult({
     text(raw?.external_url) ?? text(raw?.externalUrl) ?? text(raw?.draftUrl);
 
   return (
-    <section className="sourcecado-gmail-draft" aria-label="Gmail draft artifact">
-      <header>
-        <div>
-          <h3>Gmail draft ready for review</h3>
-          <strong>Not sent</strong>
-        </div>
-        {draftId ? <p>Draft ID: {draftId}</p> : null}
-      </header>
-      {recipient ? <p>{recipient}</p> : null}
-      {subject ? <p>{subject}</p> : null}
-      {body ? <GmailDraftBody body={body} /> : null}
-      {account ? (
-        <p>Gmail · {account}</p>
-      ) : (
-        <p>Google account address unavailable; draft is still available.</p>
-      )}
-      <div className="sourcecado-gmail-actions">
-        <button
-          type="button"
-          aria-label={`Inspect Gmail draft ${draftId}`}
-          onClick={(event) =>
-            select(
-              {
-                kind: "artifact",
-                id: `gmail-draft:${toolCallId}:${draftId}`,
-                title: `Gmail draft: ${subject ?? draftId}`,
-                status: "success",
-                provider: "Gmail",
-                externalUrl,
-                preview: body ? body.slice(0, BODY_PREVIEW_LIMIT) : null,
-                result: {
-                  draftId,
-                  recipient,
-                  subject,
-                  account,
-                  status: "not_sent",
-                },
-              },
-              event.currentTarget,
-            )
-          }
-        >
-          Draft details
-        </button>
-        <button
-          type="button"
-          aria-label="Inspect Gmail source"
-          onClick={(event) =>
-            select(
-              {
-                kind: "source",
-                id: `gmail-source:${toolCallId}`,
-                title: "Gmail source",
-                status: "success",
-                provider: "Gmail",
-                preview: account ?? "Connected Google account address unavailable",
-                result: { resource: "Gmail drafts", account },
-              },
-              event.currentTarget,
-            )
-          }
-        >
-          Source
-        </button>
-      </div>
-    </section>
+    <ResultCard
+      {...common}
+      count="1 draft"
+      tag={NOT_SENT}
+      footer={
+        <InspectButton
+          target={{
+            kind: "artifact",
+            id: `gmail-draft:${toolCallId}:${draftId}`,
+            title: `Gmail draft: ${subject ?? draftId}`,
+            status: "success",
+            provider: "Gmail",
+            externalUrl,
+            preview: body ? body.slice(0, BODY_PREVIEW_LIMIT) : null,
+            result: {
+              draftId,
+              recipient,
+              subject,
+              account,
+              status: "not_sent",
+            },
+          }}
+        />
+      }
+    >
+      <CardRows label="Gmail draft">
+        <CardField icon="mail" label="To">
+          {recipient ?? <Gap>No recipient</Gap>}
+        </CardField>
+        <CardField icon="doc" label="Subject">
+          {subject ?? <Gap>No subject</Gap>}
+        </CardField>
+        <CardRow tall>
+          {body ? (
+            <ExpandableText
+              text={body}
+              limit={BODY_PREVIEW_LIMIT}
+              expandLabel="Expand draft body"
+              collapseLabel="Collapse draft body"
+              className="sourcecado-card-body-text"
+            />
+          ) : (
+            <Gap>No body</Gap>
+          )}
+        </CardRow>
+        <CardField icon="link" label="Draft ID">
+          {draftId}
+        </CardField>
+        <CardField icon="user" label="Account">
+          {account ?? <Gap>Account address unavailable</Gap>}
+        </CardField>
+      </CardRows>
+    </ResultCard>
   );
 }

@@ -73,17 +73,29 @@ h1 {
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px 12px 12px;
+  gap: 4px;
+  padding: 12px;
 }
 
-.app-identity,
-.operator-identity {
+/* Rows are a 16px icon plus a 13px label in a 32px row. Nothing in the rail
+   is smaller than 13px. */
+.rail-header {
   display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.app-identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
   align-items: center;
   gap: 10px;
-  min-height: 40px;
-  padding: 0 8px;
+  padding: 0 4px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -97,7 +109,7 @@ h1 {
   border-radius: 7px;
   background: var(--accent);
   color: var(--surface);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -107,25 +119,41 @@ img.app-mark {
   background: none;
 }
 
+.operator-avatar {
+  border-radius: 9999px;
+}
+
 .operator-identity {
-  border-top: 1px solid var(--border);
-  padding-top: 10px;
-  color: var(--muted);
-}
-
-.operator-identity span:last-child {
+  position: relative;
   display: flex;
-  flex-direction: column;
-}
-
-.operator-identity strong {
+  min-height: 48px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 4px 0;
+  border-top: 1px solid var(--border);
   color: var(--text);
-  font-size: 13px;
 }
 
-.operator-identity small {
-  font-size: 11px;
-  font-weight: 400;
+.operator-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.operator-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The persona name is the other half of the identity, so it wraps instead of
+   being cut off. */
+.operator-persona {
+  overflow-wrap: anywhere;
 }
 
 .new-chat-button,
@@ -133,6 +161,7 @@ img.app-mark {
 .rail-link,
 .thread-link,
 .thread-action,
+.rail-collapse-toggle,
 .rail-close,
 .rail-trigger,
 .welcome-actions a,
@@ -144,18 +173,48 @@ img.app-mark {
   font: inherit;
 }
 
+.rail-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .new-chat-button,
-.rail-search-button {
+.rail-search-button,
+.rail-link {
+  position: relative;
   display: flex;
   width: 100%;
-  min-height: 38px;
+  min-height: 32px;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 10px;
+  padding: 0 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.rail-icon {
+  flex: 0 0 auto;
+}
+
+/* Read aloud with the link, never shown. */
+.rail-badge-description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.new-chat-button,
+.rail-search-button {
   border: 1px solid var(--border);
   background: var(--surface);
-  color: var(--text);
   cursor: pointer;
 }
 
@@ -166,17 +225,37 @@ img.app-mark {
   font-weight: 600;
 }
 
-.rail-search-button {
-  justify-content: space-between;
-  color: var(--muted);
+.rail-search-button .rail-label {
+  flex: 1;
+  text-align: left;
 }
 
-.rail-search-button kbd {
-  padding: 2px 5px;
+.rail-search-button kbd.rail-label {
+  flex: 0 0 auto;
+  padding: 0 5px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--raised);
-  font: 10px ui-monospace, monospace;
+  font: 13px/18px ui-monospace, "Geist Mono", monospace;
+}
+
+.rail-collapse-toggle {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.rail-collapse-toggle:hover {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
 }
 
 .destination-links,
@@ -184,24 +263,42 @@ img.app-mark {
 .thread-groups {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
 
 .destination-links {
-  padding: 4px 0;
+  margin-top: 4px;
+  padding: 8px 0;
   border-bottom: 1px solid var(--border);
 }
 
-.rail-link,
+.rail-link {
+  overflow: hidden;
+  text-decoration: none;
+}
+
+.rail-link .rail-label {
+  flex: 1;
+}
+
 .thread-link {
   display: flex;
   min-width: 0;
-  min-height: 34px;
+  min-height: 32px;
+  flex: 1;
   align-items: center;
-  padding: 0 10px;
+  padding: 0 8px;
   overflow: hidden;
   color: var(--text);
+  font-size: 13px;
   text-decoration: none;
+}
+
+/* Ellipsis needs a block of its own. A flex container does not clip its own
+   text, so the title sits in a span. */
+.thread-title {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -209,9 +306,15 @@ img.app-mark {
 .rail-link:hover,
 .thread-row:hover,
 .rail-link[aria-current="page"],
+.thread-row[data-active="true"],
 .thread-link[aria-current="page"] {
   background: var(--accent-tint);
   color: var(--accent-deep);
+}
+
+.rail-link[aria-current="page"],
+.thread-link[aria-current="page"] {
+  font-weight: 600;
 }
 
 .thread-groups {
@@ -221,61 +324,97 @@ img.app-mark {
 }
 
 .thread-group-label {
-  margin: 10px 10px 3px;
-  color: var(--muted);
-  font: 10px ui-monospace, monospace;
-  letter-spacing: .08em;
-  text-transform: uppercase;
+  margin: 12px 8px 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .thread-empty {
-  margin: 4px 10px;
-  color: var(--muted);
-  font-size: 12px;
+  margin: 4px 8px;
+  color: var(--text);
+  font-size: 13px;
 }
 
 .thread-row {
+  position: relative;
   display: flex;
+  min-height: 32px;
   align-items: center;
   border-radius: 7px;
 }
 
-.thread-link {
-  flex: 1;
+/* Rename and pin sit over the end of the row. They show on hover and on
+   keyboard focus, so a row stays a clean line until the operator reaches for
+   it. They stay in the tab order while hidden. */
+.thread-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 14px;
+  border-radius: 0 7px 7px 0;
+  background: linear-gradient(90deg, transparent, var(--accent-tint) 14px);
+  opacity: 0;
+  transition: opacity 100ms ease-out;
+}
+
+.thread-row:hover .thread-actions,
+.thread-actions:focus-within {
+  opacity: 1;
+}
+
+/* Kept apart from the rule above: an engine without :has() drops this whole
+   rule, and the hover and button-focus cases must survive that. */
+.thread-row:has(:focus-visible) .thread-actions {
+  opacity: 1;
+}
+
+.thread-row:has(:focus-visible) {
+  background: var(--accent-tint);
 }
 
 .thread-action {
+  display: grid;
   width: 28px;
   height: 28px;
   flex: 0 0 28px;
+  place-items: center;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--text);
   cursor: pointer;
+}
+
+.thread-action:hover {
+  background: var(--surface);
+  color: var(--accent-deep);
+}
+
+/* The strip is flush to the row edge and the list clips overflow, so the
+   focus ring sits inside the button. */
+.thread-action:focus-visible {
+  outline-offset: -2px;
 }
 
 .thread-rename {
   display: grid;
   grid-template-columns: 1fr auto auto;
-  gap: 3px;
+  gap: 2px;
 }
 
 .thread-rename input {
   min-width: 0;
-  padding: 6px 7px;
+  height: 32px;
+  padding: 0 8px;
   border: 1px solid var(--accent);
   border-radius: 6px;
   background: var(--surface);
   color: var(--text);
-}
-
-.thread-rename button {
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .rail-spacer {
@@ -479,11 +618,22 @@ img.app-mark {
   .app-identity {
     padding-right: 44px;
   }
+
+  .rail-collapse-toggle {
+    display: none;
+  }
 }
 
 @media (max-width: 767px) {
   .app-rail-nav :where(a, button) {
     min-height: 44px;
+  }
+
+  .thread-actions {
+    position: static;
+    padding-left: 0;
+    background: none;
+    opacity: 1;
   }
 
   .thread-action {
@@ -493,6 +643,114 @@ img.app-mark {
 
   .command-results button {
     min-height: 44px;
+  }
+}
+
+/* Icon column: the wide rail shrinks to 48px and each control names itself
+   with a tooltip. Below 1180px the rail is the edge sheet and always shows
+   labels, so none of this applies there. */
+@media (min-width: 1180px) {
+  .app-rail {
+    transition: width 160ms ease-in-out, flex-basis 160ms ease-in-out;
+  }
+
+  .app-rail.is-collapsed {
+    width: 48px;
+    flex-basis: 48px;
+  }
+
+  .is-collapsed .app-rail-nav {
+    padding-inline: 8px;
+  }
+
+  .is-collapsed .rail-header {
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .is-collapsed .app-identity {
+    flex: 0 0 auto;
+    padding: 0;
+  }
+
+  /* Hidden from sight, still read aloud. */
+  .is-collapsed .rail-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .is-collapsed .new-chat-button,
+  .is-collapsed .rail-search-button,
+  .is-collapsed .rail-link {
+    justify-content: center;
+    padding: 0;
+    overflow: visible;
+  }
+
+  .is-collapsed .thread-groups {
+    display: none;
+  }
+
+  .is-collapsed .operator-identity {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  /* A count does not fit beside a 16px icon in a 48px column, and 99+ least
+     of all. The column shows a dot in the row's corner, clear of the icon.
+     The count is in the tooltip and the accessible name. */
+  .is-collapsed .rail-inbox-badge {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 8px;
+    height: 8px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    background: var(--pit);
+  }
+
+  .is-collapsed .rail-badge-count {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .is-collapsed [data-tooltip]:is(:hover, :focus-visible)::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    z-index: 40;
+    top: 50%;
+    left: calc(100% + 10px);
+    transform: translateY(-50%);
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: var(--text);
+    color: var(--surface);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.3;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+}
+
+@media (hover: none) {
+  .thread-actions {
+    position: static;
+    padding-left: 0;
+    background: none;
+    opacity: 1;
   }
 }
 

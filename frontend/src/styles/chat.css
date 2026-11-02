@@ -77,45 +77,6 @@
   overflow: hidden;
 }
 
-.sourcecado-chat-workspace:has(.sourcecado-inspector) {
-  grid-template-columns: minmax(0, 1fr) 360px;
-}
-
-.sourcecado-inspector {
-  width: 360px;
-  min-width: 0;
-  height: 100%;
-  padding: 20px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  border-left: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.sourcecado-inspector > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.sourcecado-inspector > header h2,
-.sourcecado-inspector > header p {
-  margin: 0;
-}
-
-.sourcecado-inspector > header h2 {
-  margin-top: 4px;
-  overflow-wrap: anywhere;
-  font-size: 18px;
-  line-height: 1.3;
-}
-
-.sourcecado-inspector button,
-.sourcecado-inspector a,
-.sourcecado-source-citation,
 .sourcecado-artifacts button,
 .sourcecado-inspect-tool {
   min-height: 32px;
@@ -129,22 +90,9 @@
   cursor: pointer;
 }
 
-.sourcecado-inspector a {
-  display: inline-flex;
-  align-items: center;
-  text-decoration: none;
-}
-
-.sourcecado-source-citation,
 .sourcecado-artifacts button,
 .sourcecado-inspect-tool {
   color: var(--accent-deep);
-}
-
-.sourcecado-source-citation {
-  min-height: 28px;
-  margin: 3px 6px 3px 0;
-  background: var(--accent-tint);
 }
 
 .sourcecado-artifacts {
@@ -159,68 +107,455 @@
   background: transparent;
 }
 
-.sourcecado-inspector-content,
-.sourcecado-inspector-error {
-  padding-top: 18px;
-  color: var(--muted);
+/* Inspector: the one side panel for tool step detail, retained sources and
+   attached files. It docks beside the thread and overlays it on a narrow
+   desktop. The operator drags its left edge to resize it. */
+.sourcecado-chat-workspace:has(.sourcecado-inspector) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.sourcecado-inspector {
+  position: relative;
+  display: flex;
+  width: var(--inspector-width, 400px);
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
   line-height: 1.5;
 }
 
-.sourcecado-inspector-content > :first-child,
-.sourcecado-inspector-error > :first-child {
-  margin-top: 0;
+@keyframes sourcecado-inspector-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
 }
 
-.sourcecado-inspector-content details {
-  margin-top: 14px;
-  border-top: 1px solid var(--border);
+@media (prefers-reduced-motion: no-preference) {
+  .sourcecado-inspector {
+    animation: sourcecado-inspector-in 180ms ease-out;
+  }
 }
 
-.sourcecado-inspector-content summary {
-  padding: 12px 0;
+.sourcecado-inspector-resize {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sourcecado-inspector-resize::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: transparent;
+  content: "";
+}
+
+.sourcecado-inspector-resize:hover::after,
+.sourcecado-inspector-resize:focus-visible::after {
+  background: var(--accent);
+}
+
+.sourcecado-inspector-resize:focus-visible {
+  outline: none;
+}
+
+.sourcecado-inspector-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 12px 20px;
+}
+
+.sourcecado-inspector-kind-icon {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--accent-deep);
+}
+
+.sourcecado-inspector-titles {
+  min-width: 0;
+  flex: 1;
+}
+
+.sourcecado-inspector-titles h2,
+.sourcecado-inspector-titles p {
+  margin: 0;
+}
+
+.sourcecado-inspector-titles h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+.sourcecado-inspector-titles h2:focus {
+  outline: none;
+}
+
+.sourcecado-inspector-kind {
+  font-size: 13px;
+}
+
+.sourcecado-inspector-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  background: var(--raised);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sourcecado-inspector-chip-running,
+.sourcecado-inspector-chip-done {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.sourcecado-inspector-chip-failed,
+.sourcecado-inspector-chip-denied {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.sourcecado-inspector-chip-waiting,
+.sourcecado-inspector-chip-blocked,
+.sourcecado-inspector-chip-partial,
+.sourcecado-inspector-chip-interrupted,
+.sourcecado-inspector-chip-unknown {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.sourcecado-inspector-close {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text);
   cursor: pointer;
 }
 
-.sourcecado-inspector-content pre {
-  max-width: 100%;
-  margin: 0 0 14px;
-  padding: 10px;
-  overflow-x: auto;
-  border-radius: 6px;
+.sourcecado-inspector-close:hover {
   background: var(--raised);
+}
+
+.sourcecado-inspector-error {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 16px 8px 20px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.sourcecado-inspector-error p {
+  min-width: 12rem;
+  margin: 0;
+  flex: 1;
+}
+
+.sourcecado-inspector-error button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--error);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sourcecado-inspector-tabs {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  padding: 0 16px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sourcecado-inspector-tabs button {
+  display: inline-flex;
+  min-height: 40px;
+  margin-bottom: -1px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
   color: var(--text);
-  white-space: pre-wrap;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sourcecado-inspector-tabs button:hover {
+  background: var(--raised);
+}
+
+.sourcecado-inspector-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.sourcecado-inspector-panel {
+  min-height: 0;
+  flex: 1;
+  padding: 16px 20px 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sourcecado-inspector-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sourcecado-inspector-timing {
+  margin: 0 0 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-inspector-steps {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-inspector-step {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 6px;
+}
+
+.sourcecado-inspector-step[aria-current="step"] {
+  background: var(--accent-tint);
+  font-weight: 600;
+}
+
+.sourcecado-inspector-step-label {
+  min-width: 0;
+  flex: 1;
   overflow-wrap: anywhere;
+}
+
+.sourcecado-inspector-step-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-inspector-step-state {
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--warn-bg);
+  white-space: nowrap;
+}
+
+.sourcecado-inspector-step-failed .sourcecado-inspector-step-state,
+.sourcecado-inspector-step-denied .sourcecado-inspector-step-state {
+  background: var(--error-bg);
+}
+
+.sourcecado-inspector-toggle {
+  display: inline-flex;
+  margin-bottom: 12px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--raised);
+}
+
+.sourcecado-inspector-toggle button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sourcecado-inspector-toggle button[aria-pressed="true"] {
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+  font-weight: 600;
+}
+
+.sourcecado-inspector-flags {
+  margin: 0 0 8px;
 }
 
 .sourcecado-inspector-badge {
   display: inline-flex;
   min-height: 24px;
   align-items: center;
-  margin: 0 5px 8px 0;
-  padding: 0 7px;
-  border-radius: 999px;
+  margin: 0 6px 0 0;
+  padding: 0 8px;
+  border-radius: 9999px;
   background: var(--warn-bg);
   color: var(--warn);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.sourcecado-inspector-error {
-  color: var(--error);
+.sourcecado-inspector-text {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
-.sourcecado-inspector-error :where(button, a) {
-  margin: 8px 7px 0 0;
-  border-color: var(--error);
-  color: var(--error);
+.sourcecado-inspector-empty {
+  margin: 0;
+}
+
+.sourcecado-inspector-output + .sourcecado-inspector-context {
+  margin-top: 20px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-inspector-context h3 {
+  margin: 20px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sourcecado-inspector-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.sourcecado-inspector-table th,
+.sourcecado-inspector-table td {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  text-align: left;
+  vertical-align: top;
+}
+
+.sourcecado-inspector-table tr:first-child > :is(th, td) {
+  border-top: 0;
+}
+
+.sourcecado-inspector-table th {
+  width: 36%;
+  padding-right: 12px;
+  font-weight: 500;
+}
+
+.sourcecado-inspector-table td {
+  white-space: pre-wrap;
+}
+
+.sourcecado-inspector-table code,
+.sourcecado-inspector-raw {
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.sourcecado-inspector-source {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The way out to the original page: an icon button named for screen readers.
+   The 32px width and the 44px touch size are set with the result cards below. */
+.sourcecado-inspector .sourcecado-inspector-external {
+  display: inline-flex;
+  min-height: 32px;
+  flex: none;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent-deep);
+}
+
+.sourcecado-inspector .sourcecado-inspector-external:hover {
+  background: var(--raised);
+}
+
+/* A result card in the Output view. Its footer is empty when its only button
+   would open the item that is already open. */
+.sourcecado-inspector-card .sourcecado-card-footer:empty {
+  display: none;
+}
+
+.sourcecado-inspector-raw {
+  max-width: 100%;
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .sourcecado-inspector-skeleton {
   width: 100%;
   height: 176px;
-  margin-top: 20px;
   border-radius: 8px;
   background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
   background-size: 200% 100%;
@@ -243,15 +578,16 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* A narrow desktop has no room beside the thread, so the panel overlays it. */
   .sourcecado-inspector {
     position: fixed;
     z-index: 60;
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(380px, calc(100vw - 32px));
+    width: min(var(--inspector-width, 400px), calc(100vw - 32px));
     height: 100vh;
-    border-left: 1px solid var(--border);
+    box-shadow: -12px 0 32px rgb(43 39 34 / 0.16);
   }
 
   .sourcecado-thread-header {
@@ -262,13 +598,32 @@
 @media (max-width: 767px) {
   .sourcecado-inspector {
     width: 100%;
-    padding: 16px;
     border-left: 0;
+    box-shadow: none;
   }
 
-  .sourcecado-inspector button,
-  .sourcecado-inspector a,
-  .sourcecado-source-citation,
+  .sourcecado-inspector-resize {
+    display: none;
+  }
+
+  .sourcecado-inspector-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .sourcecado-inspector-tabs button {
+    min-height: 44px;
+  }
+
+  .sourcecado-inspector-toggle button,
+  .sourcecado-inspector-error button {
+    min-height: 44px;
+  }
+
+  .sourcecado-inspector-panel {
+    padding: 16px;
+  }
+
   .sourcecado-artifacts button,
   .sourcecado-inspect-tool {
     min-height: 44px;
@@ -278,75 +633,261 @@
 .sourcecado-thread-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 8px 12px;
   min-width: 0;
-  padding: 24px max(24px, calc((100% - 760px) / 2));
+  padding: 20px max(24px, calc((100% - 760px) / 2));
   border-bottom: 1px solid var(--border);
   background: var(--canvas);
 }
 
-.sourcecado-thread-header > div {
-  min-width: 0;
-}
-
 .sourcecado-thread-header h1 {
+  min-width: 0;
+  flex: 0 4 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sourcecado-run-status,
+.sourcecado-active-person {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.sourcecado-run-status svg,
+.sourcecado-active-person svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.sourcecado-run-status {
+  flex: 0 0 auto;
 }
 
 .sourcecado-active-person {
-  display: inline-flex;
-  max-width: 100%;
-  margin-top: 5px;
-  overflow: hidden;
-  color: var(--accent-deep);
-  font-size: 12px;
-  font-weight: 600;
+  max-width: min(360px, 100%);
+  flex: 0 1 auto;
+  background: var(--surface);
   text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.sourcecado-run-metrics {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 0;
-  margin-top: 7px;
-  color: var(--muted);
-  font-size: 11px;
+.sourcecado-active-person svg {
+  color: var(--accent-deep);
+}
+
+.sourcecado-active-person > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sourcecado-active-person:hover {
+  background: var(--raised);
+}
+
+.sourcecado-run-status-time {
   font-variant-numeric: tabular-nums;
 }
 
-.sourcecado-run-metrics > span {
-  padding: 0 8px;
-  border-right: 1px solid var(--border);
-  white-space: nowrap;
-}
-
-.sourcecado-run-metrics > span:first-child {
-  padding-left: 0;
-}
-
-.sourcecado-run-metrics > span:last-child {
-  border-right: 0;
-}
-
-.sourcecado-run-metrics-running {
-  color: var(--accent-deep);
-}
-
-.sourcecado-persona-badge {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 4px 10px;
-  border-radius: 999px;
+.sourcecado-run-status-thinking,
+.sourcecado-run-status-working {
+  border-color: var(--accent-tint);
   background: var(--accent-tint);
   color: var(--accent-deep);
-  font-size: 11px;
+}
+
+.sourcecado-run-status-approval {
+  border-color: var(--warn-bg);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sourcecado-run-status-thinking svg,
+  .sourcecado-run-status-working svg {
+    animation: sourcecado-status-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes sourcecado-status-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Usage line (#235): the one line above the composer. */
+.sourcecado-usage {
+  position: relative;
+  margin: 0 0 6px;
+}
+
+.sourcecado-usage-line {
+  display: flex;
+  min-height: 28px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-usage-line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sourcecado-usage-scope {
   font-weight: 600;
+}
+
+.sourcecado-usage-item,
+.sourcecado-usage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
+}
+
+.sourcecado-usage-icon {
+  flex: 0 0 auto;
+  color: var(--accent-deep);
+}
+
+.sourcecado-usage-bar {
+  display: inline-block;
+  width: 56px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.sourcecado-usage-bar > span {
+  display: block;
+  min-width: 3px;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.sourcecado-usage-bar[data-level="high"] > span {
+  background: var(--warn);
+}
+
+.sourcecado-usage-chip {
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--raised);
+}
+
+.sourcecado-usage-detail {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: min(380px, 100%);
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sourcecado-usage-detail[hidden] {
+  display: none;
+}
+
+/* Keeps the pointer inside the hover area while it crosses the gap. */
+.sourcecado-usage-detail::after {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: 8px;
+  content: "";
+}
+
+.sourcecado-usage-detail p {
+  margin: 0;
+}
+
+.sourcecado-usage-detail-title {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.sourcecado-usage-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 16px;
+  margin: 0 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-usage-grid dt {
+  font-weight: 500;
+}
+
+.sourcecado-usage-grid dd {
+  margin: 0;
+}
+
+/* A compaction is a receipt, not a warning: neutral ground, ink text, 13px. */
+.sourcecado-notice.sourcecado-compaction-receipt {
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* The stop card is read in full when a run ends, so it keeps the 13px floor. */
+.sourcecado-notice.sourcecado-run-stop {
+  font-size: 13px;
+}
+
+.sourcecado-compaction-receipt .sourcecado-notice-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-usage-line {
+    min-height: 44px;
+    gap: 4px 10px;
+    padding: 0 4px;
+  }
+
+  .sourcecado-usage-bar {
+    width: 36px;
+  }
 }
 
 .sourcecado-transcript {
@@ -362,6 +903,69 @@
   scroll-padding-bottom: 40px;
 }
 
+/* Jump to latest (#251). It shows only while newer output is below. The
+   anchor has no height, so it takes no room in the thread grid. */
+.sourcecado-jump-anchor {
+  position: relative;
+  z-index: 3;
+  height: 0;
+  min-width: 0;
+}
+
+.sourcecado-jump-latest {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--text) 14%, transparent);
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.sourcecado-jump-latest:hover {
+  background: var(--raised);
+}
+
+.sourcecado-jump-latest:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .sourcecado-jump-latest {
+    animation: sourcecado-jump-in 160ms ease-out;
+  }
+}
+
+@keyframes sourcecado-jump-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-jump-latest {
+    transition: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .sourcecado-jump-latest {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 .sourcecado-assistant-message {
   width: 100%;
   min-width: 0;
@@ -373,6 +977,7 @@
 }
 
 .sourcecado-user-message {
+  position: relative;
   width: fit-content;
   max-width: min(72%, 660px);
   align-self: flex-end;
@@ -396,12 +1001,15 @@
   margin-bottom: 0;
 }
 
+/* Answer prose is one type scale. Body 15px / 1.65. Headings step down from
+   the body. Code, tables and metadata never go under 13px. */
 .sourcecado-markdown {
+  --code-font: "Geist Mono", ui-monospace, monospace;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.sourcecado-markdown :where(p, ul, ol, pre, blockquote, .sourcecado-table-scroll) {
+.sourcecado-markdown :where(p, ul, ol, pre, blockquote, .sourcecado-table-scroll, .sourcecado-code) {
   margin: 0 0 14px;
 }
 
@@ -409,22 +1017,73 @@
   padding-left: 24px;
 }
 
+.sourcecado-markdown ul {
+  list-style: disc;
+}
+
+.sourcecado-markdown ol {
+  list-style: decimal;
+}
+
+.sourcecado-markdown :where(ul, ol) :where(ul, ol) {
+  margin: 6px 0 0;
+}
+
+.sourcecado-markdown ul ul {
+  list-style: circle;
+}
+
+.sourcecado-markdown ul ul ul {
+  list-style: square;
+}
+
+.sourcecado-markdown ol ol {
+  list-style: lower-alpha;
+}
+
 .sourcecado-markdown li + li {
   margin-top: 5px;
 }
 
-.sourcecado-markdown :where(h2, h3, h4) {
-  margin: 24px 0 10px;
-  line-height: 1.25;
-  letter-spacing: -.015em;
+.sourcecado-markdown .contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.sourcecado-markdown .task-list-item > input {
+  margin: 0 8px 0 0;
+  vertical-align: middle;
+}
+
+.sourcecado-markdown li > p {
+  margin: 0 0 6px;
+}
+
+.sourcecado-markdown li > p:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings are sized from the answer body (15px, 16px on narrow screens), so
+   no level falls below the body at any width. */
+.sourcecado-markdown :where(h1, h2, h3, h4, h5, h6) {
+  margin: 24px 0 8px;
+  color: var(--text);
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -.01em;
+}
+
+.sourcecado-markdown h1 {
+  font-size: 1.47em;
 }
 
 .sourcecado-markdown h2 {
-  font-size: 19px;
+  font-size: 1.27em;
 }
 
 .sourcecado-markdown h3 {
-  font-size: 16px;
+  font-size: 1.07em;
 }
 
 .sourcecado-markdown a {
@@ -433,76 +1092,348 @@
   text-underline-offset: 3px;
 }
 
-.sourcecado-markdown code {
-  border-radius: 4px;
-  background: var(--raised);
-  font: .9em ui-monospace, "Geist Mono", monospace;
+.sourcecado-markdown blockquote {
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid var(--border);
+}
+
+.sourcecado-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.sourcecado-markdown hr {
+  margin: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
 }
 
 .sourcecado-markdown :not(pre) > code {
   padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--raised);
+  font: .9em var(--code-font);
 }
 
-.sourcecado-markdown pre {
+/* Fenced code: a header with the language and a Copy icon, then the code. The
+   block scrolls sideways by itself. Syntax colors are Warm Operator tokens that
+   keep 4.5:1 on both the surface and the raised step, in light and dark. */
+.sourcecado-code {
+  --code-comment: var(--muted);
+  --code-keyword: var(--warn);
+  --code-string: var(--accent-deep);
+  --code-number: var(--error);
+  position: relative;
+  min-width: 0;
   max-width: 100%;
-  padding: 14px;
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
+  background: var(--surface);
+}
+
+.sourcecado-code-head {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 4px 0 12px;
+  border-bottom: 1px solid var(--border);
   background: var(--raised);
+  user-select: none;
 }
 
-.sourcecado-markdown pre code {
+.sourcecado-code-lang {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.sourcecado-code-status {
+  margin-left: auto;
+  padding-right: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.sourcecado-code-status:empty {
+  padding: 0;
+}
+
+.sourcecado-code-status[data-state="copied"] {
+  color: var(--accent-deep);
+}
+
+.sourcecado-code-status[data-state="failed"] {
+  color: var(--error);
+}
+
+.sourcecado-code-copy {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
   background: transparent;
-  white-space: pre;
+  color: var(--muted);
+  cursor: pointer;
 }
 
+.sourcecado-code-copy:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.sourcecado-code-copy:focus-visible {
+  outline-offset: -2px;
+}
+
+.sourcecado-code-copy[data-state="copied"] {
+  color: var(--accent-deep);
+}
+
+.sourcecado-code-copy[data-state="failed"] {
+  color: var(--error);
+}
+
+.sourcecado-markdown .sourcecado-code pre {
+  max-width: 100%;
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  line-height: 1.55;
+}
+
+.sourcecado-markdown .sourcecado-code code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.55 var(--code-font);
+  overflow-wrap: normal;
+  tab-size: 2;
+  white-space: pre;
+  word-break: normal;
+}
+
+.sourcecado-code :where(.hljs-comment, .hljs-quote) {
+  color: var(--code-comment);
+}
+
+.sourcecado-code :where(.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-built_in, .hljs-type, .hljs-name, .hljs-meta, .hljs-section) {
+  color: var(--code-keyword);
+}
+
+.sourcecado-code :where(.hljs-string, .hljs-regexp, .hljs-bullet, .hljs-addition) {
+  color: var(--code-string);
+}
+
+.sourcecado-code :where(.hljs-number, .hljs-literal, .hljs-symbol, .hljs-deletion) {
+  color: var(--code-number);
+}
+
+.sourcecado-code pre:focus-visible,
+.sourcecado-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Tables: horizontal rules only. A wide table scrolls inside its own block. */
 .sourcecado-table-scroll {
   max-width: 100%;
   overflow-x: auto;
 }
 
 .sourcecado-table-scroll table {
-  width: 100%;
-  min-width: 480px;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .sourcecado-table-scroll :where(th, td) {
-  padding: 8px 10px;
+  min-width: 96px;
+  max-width: 360px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
+  overflow-wrap: break-word;
   text-align: left;
+  vertical-align: top;
+}
+
+.sourcecado-table-scroll :where(th:first-child, td:first-child) {
+  padding-left: 0;
 }
 
 .sourcecado-table-scroll th {
-  background: var(--raised);
-  color: var(--muted);
+  border-bottom-color: var(--muted);
+  color: var(--text);
   font-weight: 600;
 }
 
-.sourcecado-copy-action {
-  min-height: 32px;
-  margin-top: 8px;
-  padding: 0 8px;
+/* Message actions: icon buttons under an answer, and Edit beside the
+   operator's own message. They show on hover and on keyboard focus. Hiding is
+   opacity only, so every button stays in the tab order. Where there is no hover
+   they stay shown. A tooltip is the button's name, or the reason it is off. */
+.sourcecado-message-actions {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+:is(.sourcecado-assistant-message, .sourcecado-user-message):is(:hover, :focus-within)
+  .sourcecado-message-actions {
+  opacity: 1;
+}
+
+.sourcecado-message-action {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font: inherit;
-  font-size: 12px;
   cursor: pointer;
 }
 
-.sourcecado-copy-action:hover {
+.sourcecado-message-action:hover {
   background: var(--raised);
   color: var(--text);
 }
 
+.sourcecado-message-action[aria-pressed="true"] {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.sourcecado-message-action[aria-pressed="true"] .sourcecado-icon {
+  fill: currentcolor;
+  fill-opacity: 0.25;
+}
+
+.sourcecado-message-action[data-state="copied"] {
+  color: var(--accent-deep);
+}
+
+.sourcecado-message-action[data-state="failed"] {
+  color: var(--error);
+}
+
+/* A button that is off looks off. It keeps full ink strength, so the icon still
+   meets contrast, and loses its hover. The reason is a visible line beside it
+   (.sourcecado-retry-reason), and also the tooltip and the accessible name. */
+.sourcecado-message-action[aria-disabled="true"],
+.sourcecado-message-action[aria-disabled="true"]:hover {
+  border: 1px dashed var(--muted);
+  background: var(--raised);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.sourcecado-message-action::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: 240px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--surface);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  visibility: hidden;
+}
+
+.sourcecado-message-action:is(:hover, :focus-visible)::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Edit sits left of the operator's bubble. Its wrapper touches the bubble, so
+   the pointer can cross from one to the other without losing the hover. */
+.sourcecado-user-actions {
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  padding-right: 6px;
+  transform: translateY(-50%);
+}
+
+.sourcecado-user-actions .sourcecado-message-actions {
+  margin-top: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* Its tooltip opens below. The first message sits at the top of the thread,
+   where a tooltip that opens upward would be cut off by the scroll area. */
+.sourcecado-user-actions .sourcecado-message-action::after {
+  top: calc(100% + 8px);
+  right: 0;
+  bottom: auto;
+  left: auto;
+}
+
+@media (hover: none), (max-width: 767px) {
+  .sourcecado-message-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-message-actions {
+    transition: none;
+  }
+}
+
 @media (max-width: 767px) {
-  .sourcecado-copy-action {
-    min-height: 44px;
-    min-width: 44px;
+  .sourcecado-message-action {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* Below the bubble, because the bubble can fill nearly the whole row. */
+  .sourcecado-user-actions {
+    top: 100%;
+    right: 0;
+    padding-right: 0;
+    transform: none;
+  }
+
+  .sourcecado-code-head {
+    padding-right: 0;
+  }
+
+  .sourcecado-code-copy {
+    width: 44px;
+    height: 44px;
   }
 }
 
@@ -531,34 +1462,6 @@
   color: var(--muted);
 }
 
-.sourcecado-approval-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.sourcecado-shell-approval-summary {
-  margin: 12px 0;
-  padding: 12px;
-  border: 1px solid var(--warn);
-  border-radius: 8px;
-  background: var(--warn-bg);
-}
-
-.sourcecado-shell-approval-summary > strong {
-  color: var(--warn);
-}
-
-.sourcecado-shell-approval-summary dl {
-  margin: 9px 0;
-}
-
-.sourcecado-shell-approval-summary p {
-  margin: 8px 0 0;
-  color: var(--muted);
-  line-height: 1.45;
-}
-
-.sourcecado-approval-actions button,
 .sourcecado-load-error button {
   min-height: 38px;
   padding: 0 11px;
@@ -570,13 +1473,6 @@
   cursor: pointer;
 }
 
-.sourcecado-approval-actions button:last-child {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--surface);
-}
-
-.sourcecado-empty-thread,
 .sourcecado-load-error {
   width: min(620px, 100%);
   margin: auto;
@@ -589,19 +1485,6 @@
   background: var(--surface);
 }
 
-.sourcecado-empty-thread {
-  text-align: center;
-}
-
-.sourcecado-empty-thread h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: 28px;
-  font-weight: 500;
-  letter-spacing: -0.025em;
-}
-
-.sourcecado-empty-thread > p,
 .sourcecado-load-error p {
   margin: 7px 0 0;
   color: var(--muted);
@@ -666,30 +1549,93 @@
   padding: 0 0 22px;
 }
 
+/* Empty thread: a greeting above the composer and prompt chips under it, as a
+   stack near the top of the thread. The transcript is empty, so the composer
+   zone takes its row and the chips hang below. Nothing moves when they load. */
+.sourcecado-thread.is-empty .sourcecado-transcript,
+.sourcecado-thread.is-empty .sourcecado-composer-zone {
+  grid-area: 2 / 1;
+}
+
+.sourcecado-thread.is-empty .sourcecado-transcript {
+  padding: 0;
+}
+
+.sourcecado-thread.is-empty .sourcecado-composer-zone {
+  align-self: start;
+  padding-top: clamp(24px, 14vh, 140px);
+}
+
+.sourcecado-empty-greeting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin: 0 0 28px;
+  color: var(--text);
+  font-size: 40px;
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  text-align: center;
+}
+
+/* The owl is decoration. It loads only on wide windows: the image is declared
+   inside the media query, so a narrow window never fetches it. */
+.sourcecado-empty-owl {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .sourcecado-empty-owl {
+    display: block;
+    width: 64px;
+    height: 64px;
+    flex: 0 0 64px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--raised) url("/brand/mascot/owl-mapping.jpg") -40px -22px / 132px 132px no-repeat;
+  }
+}
+
+.sourcecado-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* Four chips fit in one row only when the row is wider than the composer. */
+@media (min-width: 1280px) {
+  .sourcecado-suggestions {
+    margin-inline: -100px;
+  }
+}
+
 .sourcecado-suggestion {
   display: flex;
-  width: fit-content;
+  min-width: 0;
   max-width: 100%;
-  min-height: 38px;
+  min-height: 44px;
   align-items: center;
   gap: 10px;
-  margin: 0 0 9px 10px;
-  padding: 0 11px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
+  padding: 0 14px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   text-align: left;
   cursor: pointer;
-  transition: background-color 140ms ease, color 140ms ease;
+  transition: background-color 140ms ease, border-color 140ms ease;
 }
 
 .sourcecado-suggestion:hover,
 .sourcecado-suggestion:focus-visible {
+  border-color: var(--accent);
   background: var(--raised);
-  color: var(--text);
 }
 
 .sourcecado-suggestion:focus-visible {
@@ -697,11 +1643,18 @@
   outline-offset: 2px;
 }
 
+.sourcecado-suggestion-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sourcecado-suggestion-icon {
   display: grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 24px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
   border-radius: 6px;
   background: var(--accent-tint);
@@ -709,8 +1662,8 @@
 }
 
 .sourcecado-suggestion-icon svg {
-  width: 15px;
-  height: 15px;
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentcolor;
   stroke-linecap: round;
@@ -719,26 +1672,27 @@
 }
 
 .sourcecado-composer {
+  position: relative;
   display: grid;
   width: 100%;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "input action";
-  gap: 10px;
-  min-height: 88px;
-  align-items: end;
-  padding: 13px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding: 13px 13px 9px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
   box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 8%, transparent);
 }
 
+.sourcecado-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
 .sourcecado-composer textarea {
-  grid-area: input;
   width: 100%;
   min-width: 0;
-  min-height: 54px;
+  min-height: 44px;
   max-height: 160px;
   overflow-y: auto;
   resize: none;
@@ -752,18 +1706,89 @@
   line-height: 1.45;
 }
 
+.sourcecado-composer textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.sourcecado-composer-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.sourcecado-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.sourcecado-composer-tool {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.sourcecado-composer-tool:hover,
+.sourcecado-composer-tool[aria-expanded="true"] {
+  background: var(--raised);
+}
+
+.sourcecado-composer-tool:focus-visible,
+.sourcecado-context-chip-remove:focus-visible,
+.sourcecado-menu-retry:focus-visible,
+.sourcecado-menu-option:focus-visible {
+  outline: 2px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+
+.sourcecado-composer-hints {
+  display: flex;
+  min-width: 0;
+  gap: 12px;
+  margin: 0 0 0 auto;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.sourcecado-composer-hints kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--raised);
+  font: inherit;
+  text-align: center;
+}
+
 .sourcecado-composer-action {
-  grid-area: action;
   width: 44px;
   height: 44px;
   min-width: 44px;
   min-height: 44px;
+  flex: 0 0 44px;
   padding: 0;
   border: 0;
   background: transparent;
   display: grid;
-  place-items: end;
-  align-self: end;
+  place-items: center;
   cursor: pointer;
   transition: color 140ms ease;
 }
@@ -808,28 +1833,267 @@
 .sourcecado-composer-action:disabled .sourcecado-composer-action-visual {
   border-color: var(--border);
   background: var(--raised);
-  color: var(--muted);
+  color: var(--text);
 }
 
-.sourcecado-composer-running {
-  min-height: 16px;
-  margin: 7px 0 0 13px;
-  color: var(--muted);
-  font-size: 11px;
-  visibility: hidden;
+/* Context chips: removable above the box, read-only on a message. */
+.sourcecado-context-chips {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.sourcecado-composer-running.is-visible {
-  visibility: visible;
+.sourcecado-context-chip {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.sourcecado-user-message .sourcecado-context-chips {
+  margin-top: 8px;
+}
+
+.sourcecado-user-message .sourcecado-context-chip {
+  background: var(--surface);
+}
+
+.sourcecado-context-chip-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--accent-deep);
+}
+
+.sourcecado-context-chip-icon .sourcecado-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.sourcecado-context-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-context-chip-remove {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  place-items: center;
+  margin: 0 -6px 0 -2px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sourcecado-context-chip-remove:hover {
+  background: var(--border);
+}
+
+.sourcecado-context-chip-remove .sourcecado-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Floating menus above the box: skills ("/") and context ("+"). */
+/* No position here: the menus anchor to the composer card, not to the button. */
+.sourcecado-context-menu-root {
+  flex: 0 0 auto;
+}
+
+.sourcecado-menu {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(320px, 50vh);
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.sourcecado-slash-menu {
+  right: 0;
+  left: 0;
+}
+
+.sourcecado-context-menu {
+  width: min(320px, calc(100vw - 32px));
+}
+
+.sourcecado-people-menu {
+  width: min(340px, calc(100vw - 32px));
+}
+
+/* The list scrolls, so the search box stays in view above it. */
+.sourcecado-menu ul {
+  display: grid;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.sourcecado-menu-option {
+  display: flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sourcecado-menu-option:hover,
+.sourcecado-menu-option[aria-selected="true"],
+.sourcecado-menu-option:focus-visible {
+  background: var(--raised);
+}
+
+.sourcecado-menu-option[aria-disabled="true"] {
+  cursor: default;
+}
+
+.sourcecado-menu-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.sourcecado-menu-option[aria-disabled="true"] .sourcecado-menu-icon {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.sourcecado-menu-text {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.sourcecado-menu-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-menu-detail {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-menu-status {
+  margin: 0;
+  padding: 10px 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.sourcecado-menu-retry {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sourcecado-menu-search {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.sourcecado-menu-search input {
+  min-width: 0;
+  flex: 1;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.sourcecado-menu-search input::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 
 @media (max-width: 767px) {
   .sourcecado-thread-header {
+    flex-wrap: wrap;
     padding: 72px 16px 18px;
   }
 
   .sourcecado-thread-header h1 {
+    flex: 1 1 100%;
     font-size: 21px;
+  }
+
+  /* The chip stays 28px tall; its touch area grows to 44px around it. */
+  .sourcecado-active-person {
+    position: relative;
+  }
+
+  .sourcecado-active-person::after {
+    position: absolute;
+    inset: -8px -4px;
+    content: "";
   }
 
   .sourcecado-transcript {
@@ -843,10 +2107,10 @@
 
   .sourcecado-user-message {
     max-width: 88%;
+    margin-bottom: 24px;
     font-size: 15px;
   }
 
-  .sourcecado-approval-actions button,
   .sourcecado-load-error button {
     min-height: 44px;
   }
@@ -856,14 +2120,31 @@
     padding-bottom: 12px;
   }
 
-  .sourcecado-suggestion {
-    min-height: 44px;
-    margin-left: 0;
-    padding-block: 3px;
+  .sourcecado-empty-greeting {
+    margin-bottom: 20px;
+    font-size: 28px;
+  }
+
+  .sourcecado-suggestions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .sourcecado-composer textarea {
     font-size: 16px;
+  }
+
+  .sourcecado-composer-tool {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+
+  .sourcecado-context-chip-remove {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+    margin: -8px -14px -8px -10px;
   }
 
   .welcome-actions :where(a, button),
@@ -887,6 +2168,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sourcecado-suggestion,
+  .sourcecado-composer-tool,
   .sourcecado-composer-action,
   .sourcecado-composer-action-visual {
     transition: none;
@@ -902,23 +2184,52 @@
   border-top: 1px solid var(--border);
 }
 
-.sourcecado-queue > .eyebrow {
-  display: inline-block;
+.sourcecado-queue-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 10px 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sourcecado-queue-count {
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .sourcecado-queue > button,
 .sourcecado-queue-actions button,
 .sourcecado-queue form button {
+  display: inline-flex;
   min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 0 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
+}
+
+.sourcecado-queue-actions button,
+.sourcecado-queue form button {
+  width: 32px;
+  padding: 0;
+}
+
+.sourcecado-queue button:focus-visible {
+  outline: 2px solid var(--accent-deep);
+  outline-offset: 2px;
 }
 
 .sourcecado-queue ol {
@@ -940,7 +2251,14 @@
   background: var(--raised);
 }
 
-.sourcecado-queue li > span {
+.sourcecado-queue-text {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.sourcecado-queue-text > span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -948,13 +2266,14 @@
 }
 
 .sourcecado-queue li > strong {
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .sourcecado-queue-actions {
   display: grid;
-  grid-template-columns: repeat(5, 64px);
+  grid-template-columns: repeat(5, 32px);
   justify-content: end;
   gap: 4px;
 }
@@ -996,349 +2315,374 @@
   margin-top: 0;
 }
 
-.sourcecado-living-brief {
-  display: grid;
-  max-width: 680px;
-  gap: 12px;
-  padding: 14px;
+/* Result cards and source chips (#234). One chrome for every structured
+   result: a header with the provider icon, title and count; rows 36px tall; a
+   footer with icon actions. Rows size to their content, so the card body
+   scrolls sideways at a narrow width and the page never does. */
+.sourcecado-card {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--surface);
-}
-
-.sourcecado-living-brief > header,
-.sourcecado-living-brief dl > div {
-  display: grid;
-  gap: 3px;
-}
-
-.sourcecado-living-brief h3,
-.sourcecado-living-brief h4,
-.sourcecado-living-brief p,
-.sourcecado-living-brief dl,
-.sourcecado-living-brief ul {
-  margin: 0;
-}
-
-.sourcecado-living-brief > header p,
-.sourcecado-living-brief dt {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.sourcecado-living-brief > dl,
-.sourcecado-living-brief > section > dl {
-  display: grid;
-  gap: 8px;
-}
-
-.sourcecado-living-brief dl > div {
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
-
-.sourcecado-living-brief dd {
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-.sourcecado-living-brief > section {
-  display: grid;
-  gap: 9px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.sourcecado-living-brief ul {
-  display: grid;
-  gap: 6px;
-  padding-left: 18px;
-}
-
-.sourcecado-living-brief-partial {
-  border-color: var(--warn);
-  background: var(--warn-bg);
-}
-
-.sourcecado-activity {
-  max-width: 680px;
-  margin-top: 14px;
-  padding-top: 9px;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.sourcecado-activity > button {
-  min-height: 34px;
-  padding: 0 7px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-
-.sourcecado-activity > button:hover {
-  background: var(--raised);
   color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
-.sourcecado-activity-running > button {
+.sourcecado-card[data-state="partial"],
+.sourcecado-card[data-state="stale"],
+.sourcecado-card[data-state="restricted"] {
+  border-color: var(--warn);
+}
+
+.sourcecado-card[data-state="failed"] {
+  border-color: var(--error);
+}
+
+.sourcecado-card[data-state="unsupported"],
+.sourcecado-card[data-state="empty"] {
+  border-style: dashed;
+}
+
+.sourcecado-card-header {
+  display: flex;
+  min-height: 40px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 12px;
+}
+
+.sourcecado-card-provider {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--raised);
   color: var(--accent-deep);
 }
 
-.sourcecado-activity-failed > button,
-.sourcecado-activity-partial > button {
-  color: var(--error);
-}
-
-@media (max-width: 767px) {
-  .sourcecado-activity > button {
-    min-height: 44px;
-    min-width: 44px;
-  }
-}
-
-.sourcecado-activity > ol {
-  display: grid;
-  gap: 0;
-  margin: 4px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-activity > ol > li {
-  display: flex;
+.sourcecado-card-header h3 {
   min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 7px;
-  border-top: 1px solid var(--border);
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
-.sourcecado-activity > ol > li > .sourcecado-activity-row-copy > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.sourcecado-card-header h3:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.sourcecado-card-count {
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.sourcecado-activity > ol > li > strong {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.sourcecado-apollo-result {
-  max-width: 100%;
-  margin-top: 10px;
-  padding: 12px 0 2px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
-  background: transparent;
+.sourcecado-card-tag,
+.sourcecado-card-state,
+.sourcecado-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--raised);
   color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
-.sourcecado-apollo-result > header {
+.sourcecado-card-tag,
+.sourcecado-card-state[data-state="partial"],
+.sourcecado-card-state[data-state="stale"],
+.sourcecado-card-state[data-state="restricted"],
+.sourcecado-card-badge[data-tone="warn"] {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.sourcecado-card-state[data-state="failed"],
+.sourcecado-card-badge[data-tone="error"] {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.sourcecado-card-glyph {
+  flex: none;
+}
+
+.sourcecado-card-glyph-loading {
+  animation: sourcecado-card-spin 0.9s linear infinite;
+}
+
+@keyframes sourcecado-card-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sourcecado-card-meta {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 12px 8px;
 }
 
-.sourcecado-apollo-result h3,
-.sourcecado-apollo-result p {
-  margin: 0;
-}
-
-.sourcecado-apollo-result h3 {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.sourcecado-apollo-result header p,
-.sourcecado-apollo-result > ol > li > p,
-.sourcecado-apollo-empty > p,
-.sourcecado-apollo-fallback > p {
-  margin-top: 3px;
-  color: var(--muted);
-  line-height: 1.45;
+.sourcecado-card-chip {
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: var(--raised);
   overflow-wrap: anywhere;
 }
 
-.sourcecado-apollo-result button {
-  min-height: 32px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--accent-deep);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
+.sourcecado-card-note {
+  margin: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--raised);
+  overflow-wrap: anywhere;
 }
 
-.sourcecado-apollo-result > ol {
+.sourcecado-card-note[data-state="partial"],
+.sourcecado-card-note[data-state="stale"],
+.sourcecado-card-note[data-state="restricted"] {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.sourcecado-card-note[data-state="failed"] {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.sourcecado-card-body {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-card-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sourcecado-card-rows {
   display: grid;
-  gap: 0;
-  margin: 9px 0 0;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.sourcecado-apollo-result > ol > li {
-  min-width: 0;
-  padding: 10px 0;
+.sourcecado-card-row {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
   border-top: 1px solid var(--border);
-  background: transparent;
 }
 
-.sourcecado-apollo-result .sourcecado-apollo-candidate-name {
-  max-width: 100%;
-  padding: 0;
+.sourcecado-card-rows > .sourcecado-card-row:first-child {
+  border-top: 0;
+}
+
+.sourcecado-card-row-tall,
+.sourcecado-card-row-stack {
+  align-items: flex-start;
+  padding-block: 8px;
+}
+
+.sourcecado-card-row-stack {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sourcecado-card-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sourcecado-card-cell {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 360px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
   overflow-wrap: anywhere;
+}
+
+/* Fixed column widths keep the rows aligned. A long value wraps inside its
+   column and the row grows past 36px for that row only. */
+.sourcecado-card-cell-name {
+  flex: 0 0 232px;
+  flex-wrap: wrap;
+}
+
+.sourcecado-card-cell-role {
+  flex: 0 0 176px;
+}
+
+.sourcecado-card-cell-when {
+  flex: 0 0 196px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-card-cell-email {
+  flex: 1 0 auto;
+}
+
+.sourcecado-card-cell-context {
+  max-width: 240px;
+}
+
+.sourcecado-card-cell-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sourcecado-card-key {
+  display: inline-flex;
+  width: 132px;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.sourcecado-card-value {
+  display: inline-flex;
+  max-width: 520px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-card-gap {
+  display: inline-flex;
+  padding: 0 8px;
+  border: 1px dashed var(--muted);
+  border-radius: 4px;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.sourcecado-card-name {
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0;
   border: 0;
   background: transparent;
-  font-size: 13px;
-  font-weight: 650;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
   text-align: left;
-}
-
-.sourcecado-apollo-select {
-  display: flex;
-  min-height: 44px;
-  width: fit-content;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12px;
+  text-decoration: underline transparent;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 
-.sourcecado-apollo-select input {
-  width: 20px;
-  height: 20px;
+.sourcecado-card-name:hover {
+  text-decoration-color: currentColor;
+}
+
+.sourcecado-card-check {
+  position: relative;
+  display: inline-flex;
+  width: 24px;
+  height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sourcecado-card-check input {
+  width: 18px;
+  height: 18px;
   margin: 0;
   accent-color: var(--accent);
 }
 
-.sourcecado-apollo-curation {
+.sourcecado-card-text {
   display: grid;
-  gap: 10px;
-  margin-top: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  gap: 4px;
 }
 
-.sourcecado-apollo-curation > label {
+.sourcecado-card-text > p {
+  max-width: 72ch;
+  margin: 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-card-section {
   display: grid;
   gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
 }
 
-.sourcecado-apollo-curation > label > input {
-  min-height: 40px;
-  padding: 0 11px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-.sourcecado-apollo-review,
-.sourcecado-apollo-curation-receipt {
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--raised);
-}
-
-.sourcecado-apollo-review h4 {
-  margin: 0 0 7px;
+.sourcecado-card-section h4 {
+  margin: 0;
   font-size: 13px;
-}
-
-.sourcecado-apollo-review ul,
-.sourcecado-apollo-curation-receipt ul {
-  margin: 8px 0;
-  padding-left: 20px;
-}
-
-.sourcecado-apollo-curation-receipt li {
-  display: flex;
-  min-height: 40px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.sourcecado-apollo-curation-receipt a {
-  color: var(--accent-deep);
   font-weight: 600;
 }
 
-.sourcecado-apollo-curation-failures {
-  margin-top: 9px;
-  padding-top: 9px;
-  border-top: 1px solid var(--error);
-  color: var(--error);
+.sourcecado-card-section p,
+.sourcecado-card-section ul,
+.sourcecado-card-section dl,
+.sourcecado-card-section dd {
+  margin: 0;
 }
 
-.sourcecado-apollo-credit-note {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-  color: var(--warn);
-}
-
-.sourcecado-apollo-credit-note p,
-.sourcecado-approval-card > .sourcecado-approval-credit-note {
-  color: var(--warn);
-}
-
-.sourcecado-apollo-empty,
-.sourcecado-apollo-fallback {
-  padding-bottom: 10px;
-}
-
-.sourcecado-apollo-empty > button {
-  margin-top: 10px;
-}
-
-.sourcecado-apollo-enriched > .sourcecado-apollo-candidate-name {
-  margin-top: 10px;
-}
-
-.sourcecado-apollo-skeleton {
+.sourcecado-card-section ul {
   display: grid;
-  max-width: 100%;
-  gap: 0;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
+  max-width: 72ch;
+  gap: 4px;
+  padding-left: 18px;
 }
 
-.sourcecado-apollo-skeleton li {
+.sourcecado-card-section dl {
   display: grid;
-  gap: 7px;
-  padding: 11px 0;
-  border-top: 1px solid var(--border);
+  gap: 4px;
 }
 
-.sourcecado-apollo-skeleton span {
+.sourcecado-card-section dt {
+  font-weight: 500;
+}
+
+.sourcecado-card-section dd {
+  max-width: 72ch;
+  white-space: pre-wrap;
+}
+
+.sourcecado-card-skeleton {
+  width: 100%;
+}
+
+.sourcecado-card-skeleton li {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-block: 10px;
+}
+
+.sourcecado-card-skeleton li span {
   display: block;
   width: min(220px, 62%);
   height: 11px;
@@ -1348,64 +2692,750 @@
   animation: shell-shimmer 1.4s linear infinite;
 }
 
-.sourcecado-apollo-skeleton span:last-child {
+.sourcecado-card-skeleton li span:last-child {
   width: min(320px, 86%);
 }
 
+.sourcecado-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-card-actions,
+.sourcecado-card-curate,
+.sourcecado-card-credit {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sourcecado-card-curate,
+.sourcecado-card-credit {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-card-curate {
+  align-items: flex-end;
+}
+
+.sourcecado-card-curate > label {
+  display: grid;
+  min-width: 220px;
+  flex: 1 1 240px;
+  gap: 4px;
+  font-weight: 500;
+}
+
+.sourcecado-card-curate > label > input {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.sourcecado-card-review,
+.sourcecado-card-receipt {
+  display: grid;
+  flex: 1 0 100%;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.sourcecado-card-review h4,
+.sourcecado-card-review p,
+.sourcecado-card-review ul,
+.sourcecado-card-receipt p,
+.sourcecado-card-receipt ul {
+  margin: 0;
+}
+
+.sourcecado-card-review h4 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sourcecado-card-review ul,
+.sourcecado-card-receipt ul {
+  padding-left: 18px;
+}
+
+.sourcecado-card-review .sourcecado-card-button {
+  justify-self: start;
+}
+
+.sourcecado-card-receipt ul {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-card-receipt li {
+  display: flex;
+  min-height: 36px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sourcecado-card-receipt a {
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.sourcecado-card-failures {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--error);
+  color: var(--error);
+}
+
+.sourcecado-card-failures p {
+  margin: 0;
+}
+
+.sourcecado-card-fact {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+}
+
+.sourcecado-card-fact[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.sourcecado-card-fact[data-tone="error"] {
+  color: var(--error);
+}
+
+.sourcecado-card-button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--accent-deep);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sourcecado-card-button:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+.sourcecado-card-button[data-tone="primary"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.sourcecado-card-button[data-tone="primary"]:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+.sourcecado-card-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.sourcecado-card-button[data-open="true"] .sourcecado-card-glyph {
+  transform: rotate(180deg);
+}
+
+.sourcecado-card :where(button, input, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sourcecado-source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-source-chip {
+  display: inline-flex;
+  min-height: 28px;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sourcecado-source-chip:hover {
+  background: var(--raised);
+}
+
+.sourcecado-source-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sourcecado-source-chip .sourcecado-tool-icon {
+  color: var(--accent-deep);
+}
+
+.sourcecado-source-domain {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-source-more[data-open="true"] .sourcecado-card-glyph {
+  transform: rotate(180deg);
+}
+
+.sourcecado-source-flag {
+  color: var(--warn);
+  font-weight: 500;
+}
+
+.sourcecado-step-actions .sourcecado-show-result {
+  display: inline-flex;
+  width: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-deep);
+  cursor: pointer;
+}
+
+.sourcecado-inspector .sourcecado-inspector-external {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
 @media (max-width: 767px) {
-  .sourcecado-apollo-result button {
+  .sourcecado-card-button,
+  .sourcecado-card-name,
+  .sourcecado-card-curate > label > input,
+  .sourcecado-source-chip,
+  .sourcecado-step-actions .sourcecado-show-result {
     min-height: 44px;
   }
 
-  .sourcecado-apollo-result > header,
-  .sourcecado-apollo-credit-note {
-    align-items: stretch;
-    flex-direction: column;
+  .sourcecado-card-button,
+  .sourcecado-step-actions .sourcecado-show-result,
+  .sourcecado-inspector .sourcecado-inspector-external {
+    min-width: 44px;
+  }
+
+  .sourcecado-step-actions .sourcecado-show-result,
+  .sourcecado-inspector .sourcecado-inspector-external {
+    width: 44px;
+  }
+
+  .sourcecado-card-check {
+    width: 44px;
+    height: 44px;
   }
 }
 
-.sourcecado-gmail-draft {
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-card-glyph-loading {
+    animation: none;
+  }
+}
+
+/* Process layer (#226): the tool step rows above the answer. One step is one
+   bordered row. Several steps group under a receipt line, and the open layer
+   scrolls inside a bounded height so it never pushes the answer off screen. */
+.sourcecado-activity {
   max-width: 100%;
-  margin-top: 10px;
-  padding: 12px 0 2px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sourcecado-activity-receipt,
+.sourcecado-step-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.sourcecado-gmail-draft > header {
+.sourcecado-activity-receipt:hover,
+.sourcecado-step-toggle:hover {
+  background: var(--raised);
+}
+
+.sourcecado-activity-summary,
+.sourcecado-step-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-step-object {
+  font-weight: 400;
+}
+
+.sourcecado-process-icon {
+  display: block;
+  flex: none;
+}
+
+.sourcecado-tool-icon,
+.sourcecado-action-icon-chevron {
+  color: var(--muted);
+}
+
+.sourcecado-activity-receipt[aria-expanded="true"] .sourcecado-action-icon-chevron,
+.sourcecado-step-toggle[aria-expanded="true"] .sourcecado-action-icon-chevron {
+  transform: rotate(90deg);
+}
+
+.sourcecado-step-status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-step-state {
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--raised);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.sourcecado-status-icon-running,
+.sourcecado-status-icon-done {
+  color: var(--accent-deep);
+}
+
+.sourcecado-status-icon-failed,
+.sourcecado-status-icon-denied {
+  color: var(--error);
+}
+
+.sourcecado-status-icon-waiting,
+.sourcecado-status-icon-blocked,
+.sourcecado-status-icon-partial,
+.sourcecado-status-icon-interrupted,
+.sourcecado-status-icon-unknown {
+  color: var(--warn);
+}
+
+.sourcecado-step-failed .sourcecado-step-state,
+.sourcecado-step-denied .sourcecado-step-state,
+.sourcecado-activity-failed > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-denied > .sourcecado-activity-receipt .sourcecado-step-state {
+  background: var(--error-bg);
+}
+
+.sourcecado-step-waiting .sourcecado-step-state,
+.sourcecado-step-blocked .sourcecado-step-state,
+.sourcecado-step-partial .sourcecado-step-state,
+.sourcecado-step-interrupted .sourcecado-step-state,
+.sourcecado-step-unknown .sourcecado-step-state,
+.sourcecado-activity-waiting > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-blocked > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-partial > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-interrupted > .sourcecado-activity-receipt .sourcecado-step-state,
+.sourcecado-activity-unknown > .sourcecado-activity-receipt .sourcecado-step-state {
+  background: var(--warn-bg);
+}
+
+@keyframes sourcecado-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sourcecado-status-icon-running {
+  animation: sourcecado-step-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-status-icon-running {
+    animation: none;
+  }
+}
+
+.sourcecado-activity-body {
+  max-height: min(320px, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 7px 7px;
+}
+
+.sourcecado-activity-body .sourcecado-step-toggle {
+  border-radius: 0;
+}
+
+.sourcecado-activity-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* A step splits the turn's text into lead-in sentences and the answer. Each is
+   its own block, and they need a gap so they do not run together. */
+.sourcecado-assistant-message .sourcecado-markdown + .sourcecado-markdown {
+  margin-top: 12px;
+}
+
+.sourcecado-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-step + .sourcecado-step {
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-step-detail {
+  display: grid;
+  max-height: 240px;
+  gap: 8px;
+  padding: 2px 12px 12px 38px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sourcecado-step-detail > p {
+  margin: 0;
+}
+
+.sourcecado-step-actions {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
-.sourcecado-gmail-draft h3,
-.sourcecado-gmail-draft p,
+.sourcecado-step-actions .sourcecado-inspect-tool {
+  display: inline-flex;
+  width: 32px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-activity-receipt,
+  .sourcecado-step-toggle {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .sourcecado-step-actions .sourcecado-inspect-tool {
+    width: 44px;
+  }
+
+  /* The state word stays whole. The summary gives way: two lines, then an
+     ellipsis, inside the 44px target. */
+  .sourcecado-activity-summary {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+
+  .sourcecado-step-detail {
+    padding-left: 12px;
+  }
+}
+
+/* Thinking row (#225): the model's raw reasoning, labeled as model reasoning.
+   It uses the tool step row frame. All text is 13px or larger in body ink. The
+   spark is decoration and the only quiet part of the row. */
+.sourcecado-step-toggle.sourcecado-thinking-toggle {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto 16px;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 2px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.sourcecado-thinking-icon {
+  color: var(--accent-deep);
+}
+
+.sourcecado-thinking-tag {
+  white-space: nowrap;
+}
+
+.sourcecado-thinking-line {
+  grid-column: 2 / 4;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-thinking-body {
+  max-height: min(240px, 35vh);
+  padding: 2px 12px 12px 38px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.sourcecado-thinking-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@keyframes sourcecado-thinking-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.sourcecado-thinking-live .sourcecado-thinking-icon {
+  animation: sourcecado-thinking-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-thinking-live .sourcecado-thinking-icon {
+    animation: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .sourcecado-thinking-body {
+    padding-left: 12px;
+  }
+}
+
+/* Web search (#252): one "Searched the web" row that opens to its queries. A
+   query opens to the results the backend kept for it. All text is 13px or
+   larger in body ink. Only the icons are quiet. */
+.sourcecado-search-detail {
+  max-height: min(320px, 40vh);
+  padding: 0 12px 8px 38px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sourcecado-activity-body .sourcecado-search-detail {
+  max-height: none;
+  overflow: visible;
+}
+
+.sourcecado-search-queries,
+.sourcecado-search-results {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourcecado-search-query-line,
+.sourcecado-search-result {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+button.sourcecado-search-query-line,
+.sourcecado-search-result {
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button.sourcecado-search-query-line:hover,
+.sourcecado-search-result:hover {
+  background: var(--raised);
+}
+
+button.sourcecado-search-query-line:focus-visible,
+.sourcecado-search-result:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sourcecado-search-query-text,
+.sourcecado-search-result-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-search-query-text {
+  font-weight: 500;
+}
+
+button.sourcecado-search-query-line[aria-expanded="true"] .sourcecado-action-icon-chevron {
+  transform: rotate(90deg);
+}
+
+.sourcecado-search-body {
+  margin: 0 0 4px 7px;
+  padding: 0 0 4px 16px;
+  border-left: 1px solid var(--border);
+}
+
+.sourcecado-search-body > p {
+  margin: 0;
+  padding: 6px 0;
+}
+
+.sourcecado-search-result-meta {
+  display: inline-flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.sourcecado-search-result-domain {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourcecado-search-flag {
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: var(--warn-bg);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .sourcecado-search-detail {
+    padding-left: 12px;
+  }
+
+  .sourcecado-search-query-line,
+  .sourcecado-search-result {
+    min-height: 44px;
+  }
+
+  /* The row label wraps to two lines, and "3 queries" never splits or drops. */
+  .sourcecado-search > .sourcecado-step-toggle .sourcecado-step-label {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+
+  .sourcecado-search-count {
+    white-space: nowrap;
+  }
+
+  /* A long query or title wraps to two lines instead of being cut at one. */
+  .sourcecado-search-query-text,
+  .sourcecado-search-result-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+
+  /* The domain and the states drop under the title, so the title keeps its width. */
+  .sourcecado-search-result {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    align-content: center;
+    gap: 0 10px;
+    padding: 4px 0;
+  }
+
+  .sourcecado-search-result .sourcecado-tool-icon {
+    grid-row: 1 / span 2;
+    align-self: start;
+    margin-top: 2px;
+  }
+
+  .sourcecado-search-result-meta {
+    flex-wrap: wrap;
+    grid-column: 2;
+  }
+}
+
+/* End of the process layer (#226) */
+
 .sourcecado-gmail-approval-preview p {
   margin: 0;
 }
 
-.sourcecado-gmail-draft h3 {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.sourcecado-gmail-draft > header strong,
 .sourcecado-gmail-approval-preview > strong {
   display: inline-flex;
   margin-top: 4px;
   color: var(--warn);
   font-size: 11px;
   text-transform: uppercase;
-}
-
-.sourcecado-gmail-draft > p,
-.sourcecado-gmail-fallback > p {
-  margin-top: 6px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
 }
 
 .sourcecado-gmail-body-preview {
@@ -1420,7 +3450,6 @@
   overflow-wrap: anywhere;
 }
 
-.sourcecado-gmail-draft button,
 .sourcecado-gmail-approval-preview button {
   min-height: 32px;
   padding: 0 9px;
@@ -1433,15 +3462,6 @@
   cursor: pointer;
 }
 
-.sourcecado-gmail-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
 .sourcecado-gmail-approval-preview {
   margin: 10px 0;
   padding: 10px 12px;
@@ -1449,96 +3469,16 @@
   background: var(--surface);
 }
 
-.sourcecado-gmail-failed {
-  margin: 8px 0 0;
-  color: var(--error);
-  font-weight: 600;
-}
-
-.sourcecado-gmail-creating > ol {
-  display: grid;
-  gap: 7px;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-gmail-creating li span {
-  display: block;
-  width: min(360px, 82%);
-  height: 12px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
-  background-size: 200% 100%;
-  animation: shell-shimmer 1.4s linear infinite;
-}
-
 @media (max-width: 767px) {
-  .sourcecado-gmail-draft button,
   .sourcecado-gmail-approval-preview button {
     min-height: 44px;
   }
-
-  .sourcecado-gmail-draft > header {
-    align-items: stretch;
-    flex-direction: column;
-  }
 }
 
-.sourcecado-calendar-result {
-  max-width: 100%;
-  margin-top: 10px;
-  padding: 12px 0 2px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-}
-
-.sourcecado-calendar-result > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.sourcecado-calendar-result h3,
-.sourcecado-calendar-result p,
 .sourcecado-calendar-approval-summary p {
   margin: 0;
 }
 
-.sourcecado-calendar-result h3 {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.sourcecado-calendar-result > p,
-.sourcecado-calendar-result > ol > li > p,
-.sourcecado-calendar-empty > p,
-.sourcecado-calendar-fallback > p {
-  margin-top: 4px;
-  color: var(--muted);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.sourcecado-calendar-result > ol {
-  display: grid;
-  gap: 0;
-  margin: 9px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-calendar-result > ol > li {
-  min-width: 0;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-  background: transparent;
-}
-
-.sourcecado-calendar-result button,
 .sourcecado-calendar-approval-summary button {
   min-height: 32px;
   padding: 0 9px;
@@ -1551,46 +3491,6 @@
   cursor: pointer;
 }
 
-.sourcecado-calendar-result .sourcecado-calendar-event-title {
-  max-width: 100%;
-  padding: 0;
-  overflow-wrap: anywhere;
-  border: 0;
-  background: transparent;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-}
-
-.sourcecado-calendar-write-result > header strong {
-  display: inline-flex;
-  margin-top: 4px;
-  color: var(--accent-deep);
-  font-size: 11px;
-  text-transform: uppercase;
-}
-
-.sourcecado-calendar-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.sourcecado-calendar-description {
-  margin-top: 10px;
-}
-
-.sourcecado-calendar-description > p {
-  padding: 9px 0;
-  color: var(--text);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .sourcecado-calendar-approval-summary {
   margin: 10px 0;
   padding: 10px 12px;
@@ -1598,236 +3498,139 @@
   background: var(--surface);
 }
 
-.sourcecado-calendar-failed {
-  margin: 8px 0 0;
-  color: var(--error);
-  font-weight: 600;
-}
-
-.sourcecado-calendar-loading li {
-  display: grid;
-  gap: 7px;
-}
-
-.sourcecado-calendar-loading li span {
-  display: block;
-  width: min(320px, 76%);
-  height: 11px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
-  background-size: 200% 100%;
-  animation: shell-shimmer 1.4s linear infinite;
-}
-
-.sourcecado-calendar-loading li span:last-child {
-  width: min(220px, 54%);
-}
-
 @media (max-width: 767px) {
-  .sourcecado-calendar-result button,
   .sourcecado-calendar-approval-summary button {
     min-height: 44px;
-  }
-
-  .sourcecado-calendar-result > header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-}
-
-.sourcecado-evidence-set {
-  max-width: 100%;
-  margin-top: 10px;
-  padding: 12px 0 2px;
-  overflow: hidden;
-  border-top: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-}
-
-.sourcecado-evidence-set > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.sourcecado-evidence-set h3,
-.sourcecado-evidence-set p {
-  margin: 0;
-}
-
-.sourcecado-evidence-set h3 {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.sourcecado-evidence-set > p,
-.sourcecado-evidence-set > ol > li > p,
-.sourcecado-evidence-empty > p,
-.sourcecado-evidence-fallback > p,
-.sourcecado-evidence-unavailable > p {
-  margin-top: 4px;
-  color: var(--muted);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.sourcecado-evidence-set > ol {
-  display: grid;
-  gap: 0;
-  margin: 9px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourcecado-evidence-set > ol > li {
-  min-width: 0;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-  background: transparent;
-}
-
-.sourcecado-evidence-set button {
-  min-height: 32px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--accent-deep);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.sourcecado-evidence-set .sourcecado-evidence-title {
-  max-width: 100%;
-  padding: 0;
-  overflow-wrap: anywhere;
-  border: 0;
-  background: transparent;
-  font-size: 13px;
-  font-weight: 650;
-  text-align: left;
-}
-
-.sourcecado-evidence-excerpt {
-  margin-top: 7px;
-}
-
-.sourcecado-evidence-excerpt > p {
-  padding: 8px 0;
-  color: var(--text);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.sourcecado-evidence-badge {
-  display: inline-flex;
-  min-height: 24px;
-  align-items: center;
-  margin: 7px 5px 0 0;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.sourcecado-evidence-partial {
-  margin-top: 10px;
-  padding: 9px 11px;
-  border-left: 2px solid var(--warn);
-  background: var(--warn-bg);
-  color: var(--warn);
-}
-
-.sourcecado-evidence-partial p {
-  margin-top: 3px;
-  color: var(--muted);
-}
-
-.sourcecado-evidence-loading li {
-  display: grid;
-  gap: 7px;
-}
-
-.sourcecado-evidence-loading li span {
-  display: block;
-  width: min(340px, 78%);
-  height: 11px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--border), var(--raised), var(--border));
-  background-size: 200% 100%;
-  animation: shell-shimmer 1.4s linear infinite;
-}
-
-.sourcecado-evidence-loading li span:last-child {
-  width: min(240px, 58%);
-}
-
-@media (max-width: 767px) {
-  .sourcecado-evidence-set button {
-    min-height: 44px;
-  }
-
-  .sourcecado-evidence-set > header {
-    align-items: stretch;
-    flex-direction: column;
   }
 }
 
 .sourcecado-approval-card {
   max-width: 620px;
   margin-top: 12px;
-  padding: 16px;
   border: 1px solid var(--warn);
   border-radius: 8px;
-  background: var(--warn-bg);
+  background: var(--surface);
+  font-size: 13px;
+  overflow: hidden;
 }
 
-.sourcecado-approval-card h2 {
+.sourcecado-approval-icon {
+  flex: none;
+}
+
+.sourcecado-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sourcecado-approval-action {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-deep);
+}
+
+.sourcecado-approval-head h2 {
+  min-width: 0;
   margin: 0;
   font-size: 15px;
-}
-
-.sourcecado-approval-card > p {
-  margin: 9px 0;
-  color: var(--muted);
-  line-height: 1.45;
-}
-
-.sourcecado-approval-card dl {
-  display: grid;
-  gap: 5px;
-  margin: 12px 0;
-}
-
-.sourcecado-approval-card dl > div {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 10px;
-}
-
-.sourcecado-approval-card :where(dt, dd) {
-  margin: 0;
-}
-
-.sourcecado-approval-card dt {
-  color: var(--muted);
-}
-
-.sourcecado-approval-card dd {
-  overflow-wrap: anywhere;
   font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
-.sourcecado-approval-card > button,
-.sourcecado-approval-receipt > button {
-  min-height: 38px;
-  padding: 0 9px;
+/* Focus lands on the title so a screen reader announces the request. The
+   ring goes on the card, which is what Command-Enter applies to. */
+.sourcecado-approval-head h2:focus-visible {
+  outline: none;
+}
+
+.sourcecado-approval-card:has(h2:focus-visible) {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* A long value must not push Allow and Deny out of reach: the fields scroll
+   inside a bounded region and the footer stays outside it. */
+.sourcecado-approval-table-scroll {
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sourcecado-approval-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sourcecado-approval-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.sourcecado-approval-table :where(th, td) {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  vertical-align: top;
+}
+
+.sourcecado-approval-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.sourcecado-approval-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.sourcecado-approval-table tbody th {
+  width: 38%;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.sourcecado-approval-table tbody th > svg {
+  margin-right: 8px;
+  color: var(--muted);
+  vertical-align: -3px;
+}
+
+.sourcecado-approval-table td {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-approval-table code {
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 13px;
+}
+
+.sourcecado-approval-unavailable {
+  color: var(--warn);
+  font-weight: 500;
+}
+
+.sourcecado-approval-body p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.sourcecado-approval-body button {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 0 8px 0 4px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface);
@@ -1836,53 +3639,155 @@
   cursor: pointer;
 }
 
+.sourcecado-approval-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 16px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  line-height: 1.4;
+}
+
+.sourcecado-approval-warning > svg {
+  margin-top: 1px;
+}
+
+.sourcecado-approval-reason,
+.sourcecado-approval-status {
+  margin: 12px 16px 0;
+  color: var(--text);
+  line-height: 1.45;
+}
+
 .sourcecado-approval-details {
-  margin-top: 8px;
+  margin: 12px 16px 0;
   padding: 10px;
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--raised);
+  color: var(--text);
+}
+
+.sourcecado-approval-details p {
+  margin: 8px 0 0;
 }
 
 .sourcecado-approval-details pre {
   max-width: 100%;
+  max-height: 240px;
   margin: 0;
-  overflow-x: auto;
+  overflow: auto;
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 13px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-approval-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.sourcecado-approval-foot button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sourcecado-approval-foot button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.sourcecado-approval-foot .sourcecado-approval-toggle {
+  padding-left: 6px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.sourcecado-approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.sourcecado-approval-foot .sourcecado-approval-actions button[data-decision="allow"] {
+  border-color: var(--accent-deep);
+  background: var(--accent-deep);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.sourcecado-approval-actions kbd {
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .sourcecado-approval-receipt {
   max-width: 620px;
   margin-top: 10px;
   background: transparent;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text);
+  font-size: 13px;
 }
 
 .sourcecado-approval-receipt > button {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sourcecado-approval-receipt > button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sourcecado-approval-receipt[data-tone="ok"] .sourcecado-approval-state {
+  color: var(--accent-deep);
+}
+
+.sourcecado-approval-receipt[data-tone="warn"] .sourcecado-approval-state {
+  color: var(--warn);
 }
 
 .sourcecado-approval-receipt > div {
-  margin-top: 5px;
-  padding: 9px;
+  margin-top: 4px;
+  padding: 8px 12px;
   border-left: 2px solid var(--border);
 }
 
 .sourcecado-approval-receipt p {
   margin: 3px 0;
-}
-
-.sourcecado-activity-row-copy {
-  min-width: 0;
-  flex: 1;
-}
-
-.sourcecado-activity-row-copy > p {
-  margin: 4px 0;
-  color: var(--muted);
-  white-space: normal;
 }
 
 .sourcecado-recovery-actions {
@@ -1896,6 +3801,7 @@
   display: inline-flex;
   min-height: 34px;
   align-items: center;
+  gap: 6px;
   padding: 0 9px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -1908,6 +3814,7 @@
 
 .sourcecado-failure-detail {
   max-width: 100%;
+  font-size: 13px;
   margin: 8px 0 0;
   padding: 9px;
   overflow-x: auto;
@@ -1917,12 +3824,295 @@
   white-space: pre-wrap;
 }
 
+/* Failed step and failed turn recovery (#236). A failed step row keeps its
+   disclosure button and gains a Retry icon button and an overflow menu on the
+   right, set off by a hairline like the Attio run bar. The failed-turn notice
+   gets the same icon button. The reconnect chip sits in the composer zone. */
+.sourcecado-step-row {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.sourcecado-step-row > .sourcecado-step-toggle {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sourcecado-step-recover {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0;
+  padding: 0 8px;
+  border-left: 1px solid var(--border);
+}
+
+.sourcecado-step-icon-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sourcecado-step-icon-button:hover {
+  background: var(--raised);
+}
+
+.sourcecado-step-icon-button:focus-visible {
+  outline: 2px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+
+.sourcecado-step-icon-button[aria-disabled="true"] {
+  cursor: default;
+}
+
+.sourcecado-step-icon-button[aria-disabled="true"]:hover {
+  background: var(--surface);
+}
+
+/* The overflow menu opens in a portal, so it is placed against the window. */
+.sourcecado-step-menu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  width: min(300px, calc(100vw - 16px));
+  flex-direction: column;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 14%, transparent);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.sourcecado-step-menu a.sourcecado-menu-option {
+  text-decoration: none;
+}
+
+.sourcecado-failure-toggle {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sourcecado-failure-toggle:hover {
+  background: var(--raised);
+}
+
+.sourcecado-failure-toggle:focus-visible {
+  outline: 2px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+
+.sourcecado-notice.sourcecado-notice-failed {
+  background: var(--error-bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.sourcecado-notice-failed .sourcecado-markdown {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sourcecado-notice-head {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 0;
+}
+
+.sourcecado-notice-head .sourcecado-notice-title {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+}
+
+.sourcecado-notice-provider {
+  margin: 0 0 6px 24px;
+}
+
+.sourcecado-notice-provider > span {
+  font-weight: 600;
+}
+
+/* The visible reason a Retry is off. Under an answer it shows with the action
+   bar (hover, focus, and always on touch). On a failure notice it always shows. */
+.sourcecado-retry-reason {
+  max-width: 620px;
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sourcecado-message-actions + .sourcecado-retry-reason {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.sourcecado-assistant-message:is(:hover, :focus-within)
+  .sourcecado-message-actions
+  + .sourcecado-retry-reason {
+  opacity: 1;
+}
+
+/* Where there is no hover the bar stays shown, so its reason does too. */
+@media (hover: none), (max-width: 767px) {
+  .sourcecado-message-actions + .sourcecado-retry-reason {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sourcecado-message-actions + .sourcecado-retry-reason {
+    transition: none;
+  }
+}
+
+.sourcecado-notice-failed .sourcecado-retry-reason {
+  margin: 0 0 6px 24px;
+}
+
+/* The notice Retry, when off, looks like the answer bar Retry when off. */
+.sourcecado-notice-head .sourcecado-step-icon-button[aria-disabled="true"],
+.sourcecado-notice-head .sourcecado-step-icon-button[aria-disabled="true"]:hover {
+  border: 1px dashed var(--muted);
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.sourcecado-connection {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 32px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0 0 8px;
+  padding: 3px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.sourcecado-connection[data-state="offline"] {
+  background: var(--error-bg);
+}
+
+.sourcecado-connection[data-state="restored"] {
+  background: var(--accent-tint);
+}
+
+.sourcecado-connection[data-state="reconnecting"] .sourcecado-status-icon-running {
+  color: var(--warn);
+}
+
+.sourcecado-connection-attempt {
+  font-variant-numeric: tabular-nums;
+}
+
+.sourcecado-connection .sourcecado-step-icon-button {
+  width: 28px;
+  height: 28px;
+  margin-right: -8px;
+}
+
 @media (max-width: 767px) {
-  .sourcecado-approval-card > button,
+  .sourcecado-step-icon-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .sourcecado-step-recover {
+    gap: 0;
+    margin: 0;
+    padding: 0 2px 0 4px;
+  }
+
+  .sourcecado-failure-toggle {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .sourcecado-connection .sourcecado-step-icon-button {
+    width: 44px;
+    height: 44px;
+    margin: -8px -12px -8px 0;
+  }
+
+  /* A failed row is two lines: the step on the first, the reason on the
+     second, so neither is cut short beside the two 44px buttons. */
+  .sourcecado-step-failed .sourcecado-step-toggle {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding-block: 4px;
+  }
+
+  .sourcecado-step-failed .sourcecado-step-label {
+    flex: 1 1 calc(100% - 60px);
+  }
+
+  .sourcecado-step-failed .sourcecado-step-status {
+    margin-left: 26px;
+  }
+}
+
+@media (max-width: 767px) {
+  .sourcecado-approval-foot .sourcecado-approval-toggle,
+  .sourcecado-approval-foot .sourcecado-approval-actions button,
+  .sourcecado-approval-body button,
   .sourcecado-approval-receipt > button,
   .sourcecado-recovery-actions :where(button, a) {
     min-height: 44px;
     min-width: 44px;
+  }
+
+  .sourcecado-approval-actions {
+    width: 100%;
+  }
+
+  .sourcecado-approval-actions button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .sourcecado-approval-actions kbd {
+    display: none;
+  }
+
+  .sourcecado-approval-table :where(th, td) {
+    padding-inline: 12px;
+  }
+
+  .sourcecado-approval-table tbody th {
+    width: 42%;
   }
 }
 
@@ -1952,10 +4142,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sourcecado-transcript-skeleton span,
-  .sourcecado-apollo-skeleton span,
-  .sourcecado-gmail-creating li span,
-  .sourcecado-calendar-loading li span,
-  .sourcecado-evidence-loading li span {
+  .sourcecado-card-skeleton li span {
     animation: none;
   }
 }

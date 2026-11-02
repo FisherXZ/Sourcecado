@@ -1,5 +1,10 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { ApprovalResource, RunBudgetStatus, ToolFailure } from "./protocol";
+import type {
+  ApprovalResource,
+  EvidenceReference,
+  RunBudgetStatus,
+  ToolFailure,
+} from "./protocol";
 import type { ProvenanceArtifact, ProvenanceSource } from "./protocol";
 
 export type LegacyStoredMessage = {
@@ -32,6 +37,20 @@ export type SourcecadoTextPart = {
     | "interrupted";
 };
 
+/**
+ * Raw model reasoning for one block of a turn. Never a record of an action:
+ * only tool parts mean recorded actions. Times are epoch milliseconds from
+ * the backend's own clock.
+ */
+export type SourcecadoReasoningPart = {
+  readonly type: "reasoning";
+  readonly id: string;
+  readonly text: string;
+  readonly state: "running" | "complete";
+  readonly startedAt?: number;
+  readonly endedAt?: number;
+};
+
 export type SourcecadoToolPart = {
   readonly type: "tool";
   readonly id: string;
@@ -42,6 +61,8 @@ export type SourcecadoToolPart = {
   readonly startedAt?: number;
   readonly completedAt?: number;
   readonly failure?: ToolFailure;
+  /** What the backend recorded about the external results this call returned. */
+  readonly evidence?: readonly EvidenceReference[];
   readonly recovery?: {
     readonly commandId: string;
     readonly action: "retry" | "repair" | "continue";
@@ -78,6 +99,9 @@ export type SourcecadoNoticePart = {
   readonly message: string;
   readonly recoverable: boolean;
   readonly occurrences?: number;
+  /** The model provider that failed the turn, when the backend names one. */
+  readonly provider?: string;
+  readonly model?: string;
 };
 
 export type SourcecadoSourcePart = ProvenanceSource & {
@@ -90,16 +114,35 @@ export type SourcecadoArtifactPart = ProvenanceArtifact & {
 
 export type SourcecadoPart =
   | SourcecadoTextPart
+  | SourcecadoReasoningPart
   | SourcecadoToolPart
   | SourcecadoNoticePart
   | SourcecadoSourcePart
   | SourcecadoArtifactPart;
+
+/**
+ * The highest compaction generation any of these messages ended under, or 0.
+ * A run raised the generation, and so compacted, only when its own generation
+ * is above this for the runs before it.
+ */
+export function highestCompactionGeneration(
+  messages: readonly SourcecadoStructuredMessage[],
+): number {
+  return Math.max(0, ...messages.map((message) => message.compactionGeneration ?? 0));
+}
 
 export type SourcecadoStructuredMessage = {
   readonly id: string;
   readonly role: "assistant" | "user" | "system";
   /** The run's spend against its budget, as of the last event for it. */
   readonly runBudget?: RunBudgetStatus;
+  /**
+   * The compaction generation the run ended under. The backend reports it on
+   * every run while a compaction is in effect, so it is the run that raised
+   * the number that compacted. Kept on the run's own message because a
+   * restored thread cannot say which run a compaction receipt belongs to.
+   */
+  readonly compactionGeneration?: number;
   readonly state:
     | "running"
     | "stopping"
@@ -243,6 +286,29 @@ export function convertStructuredMessage(
           status: textPartStatus(part.state),
         }];
       }
+      if (part.type === "reasoning") {
+        return [{
+          type: "reasoning" as const,
+          text: part.text,
+          parentId: part.id,
+          status:
+            part.state === "running"
+              ? { type: "running" as const }
+              : { type: "complete" as const },
+          ...(part.startedAt !== undefined
+            ? {
+                providerMetadata: {
+                  sourcecado: {
+                    startedAt: part.startedAt,
+                    ...(part.endedAt !== undefined
+                      ? { endedAt: part.endedAt }
+                      : {}),
+                  },
+                },
+              }
+            : {}),
+        }];
+      }
       if (part.type === "notice") {
         return [{
           type: "text" as const,
@@ -283,13 +349,25 @@ export function convertStructuredMessage(
             }];
       }
       if (part.type === "artifact") return [];
+      // The backend closes a denied call with ok=false (tool_finished) a few
+      // milliseconds before it writes the approval receipt. For a call the
+      // operator denied, or has not decided yet, that failed result is the
+      // refusal, not an outcome. Leave it out so no result card is drawn from
+      // it. The step row reads the decision from the approval (processState).
+      const approvalState = part.approval?.state;
+      const undecided =
+        approvalState === "pending" ||
+        approvalState === "submitting" ||
+        approvalState === "failed-submit";
+      const noOutcome =
+        approvalState === "denied" || (undecided && part.state === "error");
       return [{
         type: "tool-call" as const,
         toolCallId: part.id,
         toolName: part.name,
         args: part.arguments as never,
         argsText: JSON.stringify(part.arguments),
-        ...(part.result !== undefined ? { result: part.result } : {}),
+        ...(part.result !== undefined && !noOutcome ? { result: part.result } : {}),
         isError: part.state === "error",
         ...(part.startedAt !== undefined
           ? {
@@ -301,11 +379,12 @@ export function convertStructuredMessage(
               },
             }
           : {}),
-        ...(part.failure || part.recovery || part.approval
+        ...(part.failure || part.recovery || part.approval || part.evidence
           ? {
               providerMetadata: {
                 sourcecado: {
                   failure: part.failure ?? null,
+                  ...(part.evidence ? { evidence: part.evidence } : {}),
                   recovery: part.recovery ?? null,
                   approvalState: part.approval?.state ?? null,
                   actor: part.approval?.actor ?? null,
@@ -358,7 +437,19 @@ export function convertStructuredMessage(
             (part): part is SourcecadoNoticePart => part.type === "notice",
           );
           return notice
-            ? { sourcecadoNotice: true, sourcecadoNoticeCode: notice.code }
+            ? {
+                sourcecadoNotice: true,
+                sourcecadoNoticeCode: notice.code,
+                // A failed turn is the only notice the store adds as not
+                // recoverable. Connection and history notices are recoverable.
+                sourcecadoNoticeFailedTurn: !notice.recoverable,
+                ...(notice.provider
+                  ? {
+                      sourcecadoNoticeProvider: notice.provider,
+                      sourcecadoNoticeModel: notice.model,
+                    }
+                  : {}),
+              }
             : {};
         })(),
         ...(message.parts.some((part) => part.type === "artifact")

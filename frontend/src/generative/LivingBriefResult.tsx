@@ -1,7 +1,17 @@
-import { useId } from "react";
+import type { ReactNode } from "react";
 
 import type { LivingBrief } from "../api";
 import type { DomainRendererProps } from "../chat/toolRegistry";
+import {
+  CardField,
+  CardRows,
+  Gap,
+  InspectButton,
+  rawToolTarget,
+  ResultCard,
+  SkeletonRows,
+  type CardState,
+} from "./ResultCard";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -132,136 +142,198 @@ function stateLabel(value: string | null): string {
   return value.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 }
 
-export function LivingBriefResult({ result, status }: DomainRendererProps) {
-  const headingId = useId();
+function BriefList({
+  label,
+  items,
+  empty,
+}: {
+  readonly label: string;
+  readonly items: readonly { readonly id: string; readonly text: string }[];
+  readonly empty?: ReactNode;
+}) {
+  return (
+    <li className="sourcecado-card-row sourcecado-card-row-stack">
+      <section aria-label={label} className="sourcecado-card-section">
+        <h4>{label}</h4>
+        {items.length > 0 ? (
+          <ul>{items.map((claim) => <li key={claim.id}>{claim.text}</li>)}</ul>
+        ) : (
+          empty ?? null
+        )}
+      </section>
+    </li>
+  );
+}
+
+function Recorded({ value, none = "Not recorded" }: { value: string; none?: string }) {
+  return value ? <>{value}</> : <Gap>{none}</Gap>;
+}
+
+export function LivingBriefResult({
+  result,
+  status,
+  toolCallId,
+  toolName,
+  args,
+  failure,
+  cardId,
+}: DomainRendererProps) {
   const payload = record(result);
   const brief = livingBriefOf(payload?.brief);
+  const common = { id: cardId, toolCallIds: [toolCallId], provider: "person" as const };
   if (status === "loading") {
     return (
-      <section className="sourcecado-living-brief" aria-label="Loading living brief">
-        <h3>Reading the living brief…</h3>
-      </section>
+      <ResultCard {...common} title="Living brief" state="loading">
+        <SkeletonRows label="Loading living brief" />
+      </ResultCard>
     );
   }
-  if (status === "success" && !brief) {
+  // The Board read can fail and still say what is partial. That wins over a bare failure.
+  const unreadable = "Board is unavailable. Evidence already gathered remains available in this conversation.";
+  if (status === "error" && payload?.partial !== true) {
     return (
-      <section className="sourcecado-living-brief" aria-label="Legacy person-file receipt">
-        <h3>Person file read completed</h3>
-        <p>
-          This earlier receipt predates the complete living-brief view. Open the current
-          person file or ask Sourcecado to read it again.
-        </p>
-      </section>
+      <ResultCard
+        {...common}
+        title="Living brief"
+        state={failure?.class === "permission" ? "restricted" : "failed"}
+        note={`${failure?.summary ?? "Board is unavailable."} Evidence already gathered remains available in this conversation.`}
+      />
     );
   }
-  if (status === "error" || payload?.partial === true || !brief) {
+  if (status === "success" && !brief && payload?.partial !== true) {
     return (
-      <section
-        className="sourcecado-living-brief sourcecado-living-brief-partial"
-        aria-label="Partial living brief"
-      >
-        <h3>Living brief is partial</h3>
-        <p>Board is unavailable.</p>
-        <p>Evidence already gathered remains available in this conversation.</p>
-      </section>
+      <ResultCard
+        {...common}
+        title="Person file read"
+        state="unsupported"
+        note="This earlier receipt has no living brief to show. Read the person file again for the current one."
+        footer={
+          <InspectButton
+            target={rawToolTarget({ toolCallId, toolName, args, result }, "Person file read")}
+          />
+        }
+      />
+    );
+  }
+  if (payload?.partial === true || !brief) {
+    return (
+      <ResultCard {...common} title="Living brief" state="partial" note={unreadable} />
     );
   }
   const handoff = brief.handoff;
+  const notes = [
+    brief.partial
+      ? `Partial: ${brief.partial_sources.join(", ") || "some sources"} unavailable.`
+      : null,
+    brief.restricted_source_count > 0
+      ? `${brief.restricted_source_count} restricted ${brief.restricted_source_count === 1 ? "source is" : "sources are"} not shown.`
+      : null,
+    handoff.stale
+      ? `Successor handoff is out of date: ${fieldLabels(handoff.stale_fields)}.`
+      : null,
+  ].filter((note): note is string => note !== null);
+  const state: CardState = brief.partial
+    ? "partial"
+    : brief.restricted_source_count > 0
+      ? "restricted"
+      : handoff.stale
+        ? "stale"
+        : "ready";
   return (
-    <section
-      className="sourcecado-living-brief"
-      aria-labelledby={headingId}
+    <ResultCard
+      {...common}
+      title={`Living brief for ${brief.who || "this person"}`}
+      meta={[`Sequence · ${stateLabel(brief.state.sequence)}`]}
+      state={state}
+      note={notes.length > 0 ? notes.join(" ") : undefined}
+      footer={
+        <InspectButton
+          target={{
+            kind: "artifact",
+            id: `living-brief:${toolCallId}`,
+            title: `Living brief for ${brief.who || "this person"}`,
+            status: "success",
+            provider: "Board",
+            preview: `Person file version ${brief.person_version}`,
+            result: {
+              version: brief.version,
+              personVersion: brief.person_version,
+              sources: brief.source_refs.map((ref) => ({
+                provider: ref.provider,
+                title: ref.title,
+                fresh: ref.fresh,
+              })),
+            },
+          }}
+        />
+      }
     >
-      <header>
-        <div>
-          <h3 id={headingId}>Living brief for {brief.who || "this person"}</h3>
-          <p>Complete · Sequence · {stateLabel(brief.state.sequence)}</p>
-        </div>
-      </header>
-      <dl>
-        <div>
-          <dt>Target</dt>
-          <dd>{brief.target?.text || brief.why || "Not recorded"}</dd>
-        </div>
-        <div>
-          <dt>Outcome</dt>
-          <dd>{brief.outcome?.text || "None recorded"}</dd>
-        </div>
-        <div>
-          <dt>Last contact</dt>
-          <dd>
-            {brief.last_contact.direction
-              ? `${brief.last_contact.direction} · ${brief.last_contact.at ?? "date not recorded"}`
-              : "No outreach sent and no reply received"}
-          </dd>
-        </div>
-        <div>
-          <dt>What they want</dt>
-          <dd>{brief.wants.text || "Not recorded"}</dd>
-        </div>
-        <div>
-          <dt>Sources</dt>
-          <dd>
-            {brief.sources.length > 0
-              ? brief.sources
-                  .map((source) => source.replace(/^./, (letter) => letter.toUpperCase()))
-                  .join(", ")
-              : "None recorded"}
-          </dd>
-        </div>
-      </dl>
-      <section aria-label="Learned">
-        <h4>Learned</h4>
-        {brief.evidence.length > 0 ? (
-          <ul>{brief.evidence.map((claim) => <li key={claim.id}>{claim.text}</li>)}</ul>
-        ) : (
-          <p>Nothing filed yet.</p>
-        )}
-      </section>
-      {brief.conflicts.length > 0 ? (
-        <section aria-label="Conflicts">
-          <h4>Conflicts</h4>
-          <ul>{brief.conflicts.map((claim) => <li key={claim.id}>{claim.text}</li>)}</ul>
-        </section>
-      ) : null}
-      <section aria-label="Knowledge gaps">
-        <h4>Knowledge gaps</h4>
-        {brief.gaps.length > 0 ? (
-          <ul>{brief.gaps.map((claim) => <li key={claim.id}>{claim.text}</li>)}</ul>
-        ) : (
-          <p>Nothing is open.</p>
-        )}
-      </section>
-      {brief.artifacts.length > 0 ? (
-        <section aria-label="Artifacts">
-          <h4>Artifacts</h4>
-          <ul>{brief.artifacts.map((claim) => <li key={claim.id}>{claim.text}</li>)}</ul>
-        </section>
-      ) : null}
-      <section aria-label="Successor handoff">
-        <h4>Successor handoff</h4>
-        <dl>
-          <div><dt>Who this is</dt><dd>{handoff.who || "Not recorded"}</dd></div>
-          <div><dt>What we wanted</dt><dd>{handoff.wanted || "Not recorded"}</dd></div>
-          <div><dt>What happened</dt><dd>{handoff.happened || "Not recorded"}</dd></div>
-          <div><dt>What they want</dt><dd>{handoff.they_want || "Not recorded"}</dd></div>
-        </dl>
-        {handoff.generated ? (
-          <p>Draft for review. Nothing was saved.</p>
-        ) : handoff.freshness_unknown ? (
-          <p>Saved handoff. Its saved version was not recorded.</p>
-        ) : (
-          <p>Saved at version {handoff.version}.</p>
-        )}
-        {handoff.stale ? (
-          <p>Review outdated fields: {fieldLabels(handoff.stale_fields)}.</p>
+      <CardRows label="Living brief">
+        <CardField icon="doc" label="Target">
+          <Recorded value={brief.target?.text || brief.why} />
+        </CardField>
+        <CardField icon="review" label="Outcome">
+          <Recorded value={brief.outcome?.text ?? ""} none="None recorded" />
+        </CardField>
+        <CardField icon="mail" label="Last contact">
+          {brief.last_contact.direction ? (
+            `${brief.last_contact.direction} · ${brief.last_contact.at ?? "date not recorded"}`
+          ) : (
+            <Gap>No outreach sent and no reply received</Gap>
+          )}
+        </CardField>
+        <CardField icon="user" label="What they want">
+          <Recorded value={brief.wants.text} />
+        </CardField>
+        <CardField icon="link" label="Sources">
+          {brief.sources.length > 0 ? (
+            brief.sources
+              .map((source) => source.replace(/^./, (letter) => letter.toUpperCase()))
+              .join(", ")
+          ) : (
+            <Gap>None recorded</Gap>
+          )}
+        </CardField>
+        <BriefList
+          label="Learned"
+          items={brief.evidence}
+          empty={<Gap>Nothing filed yet</Gap>}
+        />
+        {brief.conflicts.length > 0 ? (
+          <BriefList label="Conflicts" items={brief.conflicts} />
         ) : null}
-        {handoff.truncated_fields.length > 0 ? (
-          <p>
-            Shortened for this chat view: {fieldLabels(handoff.truncated_fields)}.
-          </p>
+        <BriefList
+          label="Knowledge gaps"
+          items={brief.gaps}
+          empty={<p>Nothing is open.</p>}
+        />
+        {brief.artifacts.length > 0 ? (
+          <BriefList label="Artifacts" items={brief.artifacts} />
         ) : null}
-      </section>
-    </section>
+        <li className="sourcecado-card-row sourcecado-card-row-stack">
+          <section aria-label="Successor handoff" className="sourcecado-card-section">
+            <h4>Successor handoff</h4>
+            <dl>
+              <div><dt>Who this is</dt><dd><Recorded value={handoff.who} /></dd></div>
+              <div><dt>What we wanted</dt><dd><Recorded value={handoff.wanted} /></dd></div>
+              <div><dt>What happened</dt><dd><Recorded value={handoff.happened} /></dd></div>
+              <div><dt>What they want</dt><dd><Recorded value={handoff.they_want} /></dd></div>
+            </dl>
+            {handoff.generated ? (
+              <p>Draft for review. Nothing was saved.</p>
+            ) : handoff.freshness_unknown ? (
+              <p>Saved handoff. Its saved version was not recorded.</p>
+            ) : (
+              <p>Saved at version {handoff.version}.</p>
+            )}
+            {handoff.truncated_fields.length > 0 ? (
+              <p>
+                Shortened for this chat view: {fieldLabels(handoff.truncated_fields)}.
+              </p>
+            ) : null}
+          </section>
+        </li>
+      </CardRows>
+    </ResultCard>
   );
 }

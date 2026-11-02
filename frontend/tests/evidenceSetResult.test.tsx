@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 
 function tool(
@@ -27,6 +28,7 @@ function renderEvidence(tools: readonly ToolCallMessagePart[]) {
   return render(
     <InspectorProvider threadId="thread-evidence">
       <ActivityGroup tools={tools} messageState="complete" />
+      <AnswerResults tools={tools} />
       <Inspector />
     </InspectorProvider>,
   );
@@ -53,7 +55,7 @@ describe("Evidence set result", () => {
     ]);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Listed Drive folder · Completed" }),
+      screen.getByRole("button", { name: /^Listed Drive folder/ }),
     );
 
     expect(
@@ -67,9 +69,10 @@ describe("Evidence set result", () => {
       tool("call-drive-loading", "drive_search", { query: "Q3 sourcing" }, undefined),
     ]);
 
-    expect(
-      screen.getByRole("heading", { name: "Loading evidence" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence" })).toHaveAttribute(
+      "data-state",
+      "loading",
+    );
     const skeleton = screen.getByRole("list", { name: "Loading evidence" });
     expect(skeleton).toHaveAttribute("aria-busy", "true");
     expect(skeleton.querySelectorAll("li")).toHaveLength(3);
@@ -91,12 +94,13 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 2 sources · Completed" }),
+      screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "No evidence found" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence" })).toHaveAttribute(
+      "data-state",
+      "empty",
+    );
     expect(
       screen.getByText(
         "No evidence matched Q3 sourcing or hiring across Google Drive and Granola.",
@@ -128,16 +132,17 @@ describe("Evidence set result", () => {
       failed("call-granola-failed", "mcp__granola__list_meetings", "Granola"),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 2 sources · Failed" }),
+      screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Evidence unavailable" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence" })).toHaveAttribute(
+      "data-state",
+      "failed",
+    );
     expect(
       screen.getByText("Google Drive and Granola evidence unavailable."),
     ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Retry failed step" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Retry failed step/ })).toHaveLength(2);
     expect(container).not.toHaveTextContent("PRIVATE_Google Drive_ERROR");
     expect(container).not.toHaveTextContent("PRIVATE_Granola_ERROR");
   });
@@ -158,20 +163,23 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 2 sources · Completed" }),
+      screen.getByRole("button", { name: /^Used 2 sources/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Evidence result needs review" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Evidence" })).toHaveAttribute(
+      "data-state",
+      "unsupported",
+    );
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_GRANOLA_PAYLOAD");
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Drive/ }));
     fireEvent.click(
       screen.getByRole("button", { name: "Inspect Searched Drive" }),
     );
-    expect(
-      screen.getByRole("complementary", { name: "Inspector" }),
-    ).toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
+    const legacyInspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(legacyInspector).not.toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
+    fireEvent.click(within(legacyInspector).getByRole("button", { name: "Raw" }));
+    expect(legacyInspector).toHaveTextContent("PRIVATE_LEGACY_DRIVE_PAYLOAD");
   });
 
   it("clamps excerpts and opens exact stale truncated source provenance safely", () => {
@@ -192,7 +200,7 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Read Drive evidence · Completed" }),
+      screen.getByRole("button", { name: /^Read Drive evidence/ }),
     );
 
     expect(screen.getByText("Cached stale")).toBeInTheDocument();
@@ -260,7 +268,7 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 3 sources · Completed" }),
+      screen.getByRole("button", { name: /^Used 3 sources/ }),
     );
 
     expect(screen.getByText("Metadata only")).toBeInTheDocument();
@@ -294,7 +302,7 @@ describe("Evidence set result", () => {
     ]);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Listed Drive folder · Completed" }),
+      screen.getByRole("button", { name: /^Listed Drive folder/ }),
     );
 
     expect(screen.getByText("Target list")).toBeInTheDocument();
@@ -317,7 +325,7 @@ describe("Evidence set result", () => {
       ),
     ]);
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Drive · Completed" }),
+      screen.getByRole("button", { name: /^Searched Drive/ }),
     );
     const evidence = screen.getByRole("list", { name: "Evidence items" });
     expect(evidence.querySelectorAll(":scope > li")).toHaveLength(5);
@@ -330,13 +338,22 @@ describe("Evidence set result", () => {
     expect(
       screen.getByRole("button", { name: "Show 2 more evidence items" }),
     ).toHaveFocus();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Show 2 more evidence items" }),
-    );
+    const lastPage = screen.getByRole("button", { name: "Show 2 more evidence items" });
+    expect(lastPage).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(lastPage, { detail: 0 });
     expect(evidence.querySelectorAll(":scope > li")).toHaveLength(12);
     expect(
       screen.queryByRole("button", { name: /more evidence items/ }),
     ).not.toBeInTheDocument();
+    // The same button stays under focus and now offers to close the list.
+    const fewer = screen.getByRole("button", { name: "Show fewer evidence items" });
+    expect(fewer).toHaveFocus();
+    expect(fewer).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(fewer, { detail: 0 });
+    expect(evidence.querySelectorAll(":scope > li")).toHaveLength(5);
+    expect(
+      screen.getByRole("button", { name: "Show 5 more evidence items" }),
+    ).toHaveAttribute("aria-expanded", "false");
   });
 
   it.each([
@@ -397,10 +414,13 @@ describe("Evidence set result", () => {
       const { container } = renderEvidence([success, failed]);
 
       fireEvent.click(
-        screen.getByRole("button", { name: "Checked 2 sources · Partial" }),
+        screen.getByRole("button", { name: /^Used 2 sources/ }),
       );
 
-      expect(screen.getByText("Partial evidence")).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Evidence set" })).toHaveAttribute(
+        "data-state",
+        "partial",
+      );
       expect(
         screen.getByText(
           `${failedSource} evidence unavailable. ${successfulSource} evidence remains visible.`,
@@ -409,7 +429,7 @@ describe("Evidence set result", () => {
       expect(
         screen.getByText(`Successful ${successfulSource} evidence`),
       ).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Retry failed step" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Retry failed step/ })).toBeInTheDocument();
       expect(container).not.toHaveTextContent("PRIVATE_EVIDENCE_TRANSPORT_ERROR");
     },
   );
@@ -463,12 +483,14 @@ describe("Evidence set result", () => {
     ]);
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked 3 sources · Completed" }),
+      screen.getByRole("button", { name: /^Used 3 sources/ }),
     );
 
     expect(screen.getByRole("heading", { name: "Evidence set" })).toBeInTheDocument();
     expect(screen.getByText("2 evidence items")).toBeInTheDocument();
-    expect(screen.getByText("Google Drive and Granola")).toBeInTheDocument();
+    expect(container.querySelector(".sourcecado-card-meta")).toHaveTextContent(
+      "Google DriveGranola",
+    );
     expect(screen.getByText("Q3 sourcing plan")).toBeInTheDocument();
     expect(screen.getByText(/Priority roles/)).toBeInTheDocument();
     expect(screen.getByText("Hiring sync")).toBeInTheDocument();

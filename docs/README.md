@@ -39,6 +39,7 @@ The [engineering index](engineering/README.md) maps the active backend and front
 - [Compaction](engineering/compaction.md)
 - [Context projection](engineering/context-projection.md)
 - [Evidence envelope](engineering/evidence-envelope.md)
+- [Chat attachments](engineering/chat-attachments.md)
 - [Evaluations](engineering/evaluations.md)
 
 ### Sourcing job seams

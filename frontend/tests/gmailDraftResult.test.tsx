@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 
 function gmailDraft(
@@ -34,6 +35,7 @@ function renderDraft(tool = gmailDraft()) {
   return render(
     <InspectorProvider threadId="thread-gmail">
       <ActivityGroup tools={[tool]} messageState="complete" />
+      <AnswerResults tools={[tool]} />
       <Inspector />
     </InspectorProvider>,
   );
@@ -42,8 +44,8 @@ function renderDraft(tool = gmailDraft()) {
 describe("Gmail draft result", () => {
   it.each([
     ["denied", { approved: false }, "Denied"],
-    ["cancelled", { resolution: "cancelled" }, "Partial"],
-    ["expired", { resolution: "expired" }, "Partial"],
+    ["cancelled", { resolution: "cancelled" }, "Interrupted"],
+    ["expired", { resolution: "expired" }, "Interrupted"],
   ] as const)(
     "never presents a %s approval as a successful Gmail draft",
     (_approvalState, resolution, activityState) => {
@@ -58,15 +60,13 @@ describe("Gmail draft result", () => {
         }),
       );
 
+      const step = screen.getByRole("button", { name: /^Preparing Gmail draft/ });
+      expect(step).toHaveTextContent(activityState);
+      expect(step).not.toHaveTextContent("Completed");
       expect(
-        screen.getByRole("button", {
-          name: `Prepared Gmail draft · ${activityState}`,
-        }),
-      ).toBeInTheDocument();
-      expect(
-        screen.queryByRole("heading", { name: "Gmail draft ready for review" }),
+        screen.queryByRole("region", { name: "Gmail draft" }),
       ).not.toBeInTheDocument();
-      expect(container).not.toHaveTextContent("Draft ID:");
+      expect(container).not.toHaveTextContent("Draft ID");
     },
   );
 
@@ -82,9 +82,9 @@ describe("Gmail draft result", () => {
       }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Creating Gmail draft" }),
-    ).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Gmail draft" });
+    expect(card).toHaveAttribute("data-state", "loading");
+    expect(within(card).getByText("Loading")).toBeInTheDocument();
     expect(screen.getByText("Not sent")).toBeInTheDocument();
     expect(
       screen.getByRole("list", { name: "Creating Gmail draft preview" }),
@@ -107,17 +107,18 @@ describe("Gmail draft result", () => {
       }),
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Prepared Gmail draft · Failed" }),
-    );
+    expect(
+      screen.getByRole("button", { name: /^Preparing Gmail draft/ }),
+    ).toHaveTextContent("Failed");
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Gmail couldn’t create this draft.",
     );
     expect(screen.getByText("Not sent · Gmail draft was not created.")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { name: "Gmail draft ready for review" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Gmail draft" })).toHaveAttribute(
+      "data-state",
+      "failed",
+    );
     expect(container).not.toHaveTextContent("PRIVATE_GMAIL_PROVIDER_PAYLOAD");
     expect(screen.queryByRole("button", { name: /send/i })).not.toBeInTheDocument();
   });
@@ -134,24 +135,33 @@ describe("Gmail draft result", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Prepared Gmail draft · Completed",
+        name: /^Prepared Gmail draft/,
       }),
     );
-    expect(
-      screen.getByRole("heading", { name: "Gmail draft result needs review" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Not sent")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { name: "Gmail draft ready for review" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Gmail draft" })).toHaveAttribute(
+      "data-state",
+      "unsupported",
+    );
+    // The record says it was sent. The card must not contradict it with "Not sent".
+    expect(screen.queryByText("Not sent")).not.toBeInTheDocument();
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_GMAIL_MIME");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Inspect Prepared Gmail draft" }),
     );
-    expect(
-      screen.getByRole("complementary", { name: "Inspector" }),
-    ).toHaveTextContent("PRIVATE_LEGACY_GMAIL_MIME");
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(inspector).not.toHaveTextContent("PRIVATE_LEGACY_GMAIL_MIME");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
+    expect(inspector).toHaveTextContent("PRIVATE_LEGACY_GMAIL_MIME");
+  });
+
+  it("still says Not sent on an unreadable record that does not claim a send", () => {
+    renderDraft(gmailDraft({ result: { drafted: false } }));
+    expect(screen.getByRole("region", { name: "Gmail draft" })).toHaveAttribute(
+      "data-state",
+      "unsupported",
+    );
+    expect(screen.getByText("Not sent")).toBeInTheDocument();
   });
 
   it("opens stable draft and source targets while keeping unsafe URLs non-clickable", () => {
@@ -168,14 +178,14 @@ describe("Gmail draft result", () => {
     );
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Prepared Gmail draft · Completed",
+        name: /^Prepared Gmail draft/,
       }),
     );
 
     expect(container).not.toHaveTextContent("javascript:alert");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Inspect Gmail draft draft_unsafe",
+        name: "Open in inspector: Gmail draft: Sourcing update",
       }),
     );
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
@@ -184,12 +194,7 @@ describe("Gmail draft result", () => {
     );
     expect(within(inspector).getByText("External URL unavailable")).toBeInTheDocument();
     expect(within(inspector).queryByRole("link")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Inspect Gmail source" }));
-    expect(within(inspector).getByRole("heading", { level: 2 })).toHaveTextContent(
-      "Gmail source",
-    );
-    expect(within(inspector).getByText("fisher@example.com")).toBeInTheDocument();
+    expect(inspector).toHaveTextContent("fisher@example.com");
   });
 
   it("renders a created draft as a review-ready not-sent artifact", () => {
@@ -197,21 +202,19 @@ describe("Gmail draft result", () => {
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Prepared Gmail draft · Completed",
+        name: /^Prepared Gmail draft/,
       }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Gmail draft ready for review" }),
-    ).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Gmail draft" });
+    expect(card).toHaveAttribute("data-state", "ready");
     expect(screen.getByText("Not sent")).toBeInTheDocument();
-    expect(screen.getByText("Draft ID: draft_1")).toBeInTheDocument();
+    expect(within(card).getByText("draft_1")).toBeInTheDocument();
     expect(screen.getByText("alyssa@example.com")).toBeInTheDocument();
     expect(screen.getByText("Sourcing update")).toBeInTheDocument();
     expect(screen.getByText(/Here is the sourcing update/)).toBeInTheDocument();
-    expect(
-      screen.getByText("Google account address unavailable; draft is still available."),
-    ).toBeInTheDocument();
+    // No account address came back, so the card shows a gap and does not guess one.
+    expect(screen.getByText("Account address unavailable")).toBeInTheDocument();
     expect(container).not.toHaveTextContent("PRIVATE_RAW_MIME");
     expect(screen.queryByRole("button", { name: /send/i })).not.toBeInTheDocument();
   });

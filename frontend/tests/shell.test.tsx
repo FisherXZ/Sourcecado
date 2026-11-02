@@ -1126,4 +1126,425 @@ describe("App shell routing", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
   });
+  describe("rebuilt sidebar", () => {
+    const threads = {
+      sessions: [
+        { session_id: "alpha", title: "Alpha", n_msgs: 2, pinned: true, opened_at: "2", updated_at: "2" },
+        { session_id: "beta", title: "Beta", n_msgs: 1, pinned: false, opened_at: "1", updated_at: "1" },
+      ],
+      open_id: "beta",
+      last_destination: "#/skills",
+    };
+
+    it("gives every destination row, the search row and New chat an icon", async () => {
+      render(<App />);
+
+      const nav = await screen.findByRole("navigation", { name: "Sourcecado" });
+      for (const name of ["Contacts", "Scheduled", "Connections", "Skills", "Memory", "Inbox", "Settings"]) {
+        expect(
+          within(nav).getByRole("link", { name }).querySelector("svg.rail-icon[aria-hidden='true']"),
+          name,
+        ).not.toBeNull();
+      }
+      expect(within(nav).getByRole("button", { name: "New chat" }).querySelector("svg.rail-icon")).not.toBeNull();
+      expect(within(nav).getByRole("button", { name: /Search/ }).querySelector("svg.rail-icon")).not.toBeNull();
+    });
+
+    it("shows a count badge on Inbox, Scheduled and Memory from the existing endpoints", async () => {
+      api.getInbox.mockResolvedValue({
+        items: [
+          { id: "a1", state: "pending", session_id: "sched-4" },
+          { id: "a2", state: "pending", session_id: "sched-7" },
+          { id: "a3", state: "pending", session_id: "thread-alpha" },
+        ],
+      });
+      api.getMemoryBacklog.mockResolvedValue({ needs_review: 5, classified: 0, items: [] });
+      api.getQuarantinedEffects.mockResolvedValue([{ id: "e1" }, { id: "e2" }, { id: "e3" }]);
+
+      render(<App />);
+
+      const nav = await screen.findByRole("navigation", { name: "Sourcecado" });
+      const badgeIn = async (name: string) => {
+        const link = within(nav).getByRole("link", { name });
+        await waitFor(() => expect(link.querySelector(".rail-inbox-badge")).not.toBeNull());
+        return link.querySelector(".rail-inbox-badge")!.textContent;
+      };
+      expect(await badgeIn("Inbox")).toBe("3");
+      expect(await badgeIn("Scheduled")).toBe("2");
+      expect(await badgeIn("Memory")).toBe("5");
+      expect(within(nav).getByRole("link", { name: "Contacts" }).querySelector(".rail-inbox-badge")).toBeNull();
+    });
+
+    it("shows no badge when nothing is pending", async () => {
+      render(<App />);
+
+      const nav = await screen.findByRole("navigation", { name: "Sourcecado" });
+      await waitFor(() => expect(api.getMemoryBacklog).toHaveBeenCalled());
+      expect(nav.querySelector(".rail-inbox-badge")).toBeNull();
+    });
+
+    it("offers rename and pin as icon buttons with no glyph characters", async () => {
+      api.getSessions.mockResolvedValue(threads);
+
+      render(<App />);
+
+      const rename = await screen.findByRole("button", { name: "Rename Beta" });
+      const pin = screen.getByRole("button", { name: "Pin Beta" });
+      const unpin = screen.getByRole("button", { name: "Unpin Alpha" });
+      for (const button of [rename, pin, unpin]) {
+        expect(button.querySelector("svg.rail-icon[aria-hidden='true']")).not.toBeNull();
+        expect(button.textContent).toBe("");
+      }
+      expect(pin.querySelector("svg")).not.toHaveAttribute("data-filled");
+      expect(unpin.querySelector("svg")).toHaveAttribute("data-filled", "true");
+      const rail = document.getElementById("app-rail")!;
+      for (const glyph of ["✎", "●", "○", "☰", "×", "＋"]) {
+        expect(rail.textContent).not.toContain(glyph);
+      }
+      expect(document.querySelector(".rail-trigger")!.textContent).toBe("");
+    });
+
+    it("collapses the rail to an icon column, remembers it, and expands again", async () => {
+      api.getSessions.mockResolvedValue(threads);
+      const first = render(<App />);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Collapse sidebar" }));
+
+      const rail = document.getElementById("app-rail")!;
+      expect(rail).toHaveClass("is-collapsed");
+      expect(screen.getByRole("link", { name: "Contacts" })).toHaveAttribute("data-tooltip", "Contacts");
+      expect(window.localStorage.getItem("sourcecado.shell.rail-collapsed.v1")).toBe("1");
+      first.unmount();
+
+      render(<App />);
+      expect(document.getElementById("app-rail")).toHaveClass("is-collapsed");
+
+      fireEvent.click(await screen.findByRole("button", { name: "Expand sidebar" }));
+      expect(document.getElementById("app-rail")).not.toHaveClass("is-collapsed");
+      expect(window.localStorage.getItem("sourcecado.shell.rail-collapsed.v1")).toBe("0");
+    });
+
+    it("starts expanded when the stored choice is unreadable", async () => {
+      window.localStorage.setItem("sourcecado.shell.rail-collapsed.v1", "garbage");
+
+      render(<App />);
+
+      await screen.findByRole("navigation", { name: "Sourcecado" });
+      expect(document.getElementById("app-rail")).not.toHaveClass("is-collapsed");
+    });
+
+    it("keeps the hamburger and focus trap working at narrow width with a collapsed choice stored", async () => {
+      window.localStorage.setItem("sourcecado.shell.rail-collapsed.v1", "1");
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("max-width"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      try {
+        render(<App />);
+
+        const rail = document.getElementById("app-rail")!;
+        expect(rail).toHaveAttribute("data-open", "false");
+        expect(rail).toHaveAttribute("inert");
+        expect(rail).not.toHaveClass("is-collapsed");
+        const trigger = screen.getByRole("button", { name: "Open navigation" });
+        fireEvent.click(trigger);
+        const close = await screen.findByRole("button", { name: "Close navigation" });
+        expect(close).toHaveFocus();
+        expect(rail).not.toHaveAttribute("inert");
+        const settings = within(rail).getByRole("link", { name: "Settings" });
+        settings.focus();
+        fireEvent.keyDown(settings, { key: "Tab" });
+        expect(close).toHaveFocus();
+        fireEvent.keyDown(window, { key: "Escape" });
+        await waitFor(() => expect(trigger).toHaveFocus());
+        expect(rail).toHaveAttribute("inert");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("shows the connected account and the persona name from settings in the footer", async () => {
+      api.getSettings.mockResolvedValue({
+        persona: { id: "analyst", name: "Research Analyst" },
+        model: "test",
+        gmail: { connected: true, email: "dana@codeology.club" },
+        apollo: { configured: false },
+      });
+
+      render(<App />);
+
+      const footer = await screen.findByRole("group", { name: "Signed-in operator" });
+      await waitFor(() => expect(footer).toHaveTextContent("Research Analyst"));
+      expect(footer).toHaveTextContent("dana@codeology.club");
+      expect(footer).not.toHaveTextContent("Sourcing Director");
+    });
+
+    it("falls back to the operator label and omits the persona when settings fail", async () => {
+      api.getSettings.mockRejectedValue(new Error("settings 500"));
+
+      render(<App />);
+
+      const footer = await screen.findByRole("group", { name: "Signed-in operator" });
+      await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+      expect(footer).toHaveTextContent("Operator");
+      expect(footer).not.toHaveTextContent("Sourcing Director");
+      expect(footer.querySelector(".operator-persona")).toBeNull();
+    });
+
+    it("refreshes the footer persona when settings change", async () => {
+      api.getSettings
+        .mockResolvedValueOnce({
+          persona: { id: "sourcing", name: "Sourcing Director" },
+          model: "test",
+          gmail: { connected: false, email: null },
+          apollo: { configured: false },
+        })
+        .mockResolvedValue({
+          persona: { id: "analyst", name: "Research Analyst" },
+          model: "test",
+          gmail: { connected: false, email: null },
+          apollo: { configured: false },
+        });
+
+      render(<App />);
+      const footer = await screen.findByRole("group", { name: "Signed-in operator" });
+      await waitFor(() => expect(footer).toHaveTextContent("Sourcing Director"));
+
+      window.dispatchEvent(new Event("sourcecado:settings-changed"));
+
+      await waitFor(() => expect(footer).toHaveTextContent("Research Analyst"));
+    });
+  });
+  describe("sidebar keyboard flow, badge cap and titles", () => {
+    const alpha = {
+      session_id: "alpha",
+      title: "Alpha",
+      n_msgs: 2,
+      pinned: false,
+      opened_at: "1",
+      updated_at: "1",
+    };
+
+    function twoThreads(pinned = false) {
+      api.getSessions.mockResolvedValue({
+        sessions: [{ ...alpha, pinned }],
+        open_id: "alpha",
+        last_destination: "#/skills",
+      });
+      api.pinSession.mockResolvedValue({ id: "alpha", title: "Alpha", pinned: !pinned });
+    }
+
+    async function startRename(title = "Alpha") {
+      const rename = await screen.findByRole("button", { name: `Rename ${title}` });
+      rename.focus();
+      fireEvent.click(rename);
+      return screen.getByRole("textbox", { name: "Conversation title" });
+    }
+
+    it("returns focus to the rename button after Save", async () => {
+      twoThreads();
+      render(<App />);
+
+      const input = await startRename();
+      fireEvent.change(input, { target: { value: "Renamed Alpha" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save Alpha" }));
+
+      const rename = await screen.findByRole("button", { name: "Rename Renamed Alpha" });
+      await waitFor(() => expect(rename).toHaveFocus());
+    });
+
+    it("returns focus to the rename button after Cancel", async () => {
+      twoThreads();
+      render(<App />);
+
+      await startRename();
+      fireEvent.click(screen.getByRole("button", { name: "Cancel renaming Alpha" }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Rename Alpha" })).toHaveFocus(),
+      );
+      expect(api.renameSession).not.toHaveBeenCalled();
+    });
+
+    it("cancels the rename on Escape, discards the draft and returns focus", async () => {
+      twoThreads();
+      render(<App />);
+
+      const input = await startRename();
+      fireEvent.change(input, { target: { value: "Half typed" } });
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Rename Alpha" })).toHaveFocus(),
+      );
+      expect(screen.queryByRole("textbox", { name: "Conversation title" })).not.toBeInTheDocument();
+      expect(api.renameSession).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Rename Alpha" }));
+      expect(screen.getByRole("textbox", { name: "Conversation title" })).toHaveValue("Alpha");
+    });
+
+    it("keeps the open edge sheet open when Escape cancels a rename", async () => {
+      twoThreads();
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query.includes("max-width"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }));
+      try {
+        render(<App />);
+        fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+        const input = await startRename();
+
+        fireEvent.keyDown(input, { key: "Escape" });
+
+        await waitFor(() =>
+          expect(screen.getByRole("button", { name: "Rename Alpha" })).toHaveFocus(),
+        );
+        expect(document.getElementById("app-rail")).toHaveAttribute("data-open", "true");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("moves focus to the pin button in the Pinned group after a keyboard pin", async () => {
+      twoThreads(false);
+      render(<App />);
+
+      const pin = await screen.findByRole("button", { name: "Pin Alpha" });
+      pin.focus();
+      fireEvent.click(pin);
+
+      const unpin = await screen.findByRole("button", { name: "Unpin Alpha" });
+      expect(within(screen.getByRole("group", { name: "Pinned threads" })).getByRole("button", { name: "Unpin Alpha" })).toBe(unpin);
+      await waitFor(() => expect(unpin).toHaveFocus());
+    });
+
+    it("moves focus to the pin button in the Recent group after a keyboard unpin", async () => {
+      twoThreads(true);
+      render(<App />);
+
+      const unpin = await screen.findByRole("button", { name: "Unpin Alpha" });
+      unpin.focus();
+      fireEvent.click(unpin);
+
+      const pin = await screen.findByRole("button", { name: "Pin Alpha" });
+      expect(within(screen.getByRole("group", { name: "Recent threads" })).getByRole("button", { name: "Pin Alpha" })).toBe(pin);
+      await waitFor(() => expect(pin).toHaveFocus());
+    });
+
+    it("leaves focus where the operator moved it while a pin was in flight", async () => {
+      twoThreads(false);
+      const pending = deferred<{ id: string; title: string; pinned: boolean }>();
+      api.pinSession.mockReturnValue(pending.promise);
+      render(<App />);
+
+      const pin = await screen.findByRole("button", { name: "Pin Alpha" });
+      pin.focus();
+      fireEvent.click(pin);
+      const search = screen.getByRole("button", { name: "Search conversations and destinations" });
+      search.focus();
+      pending.resolve({ id: "alpha", title: "Alpha", pinned: true });
+
+      await screen.findByRole("button", { name: "Unpin Alpha" });
+      expect(search).toHaveFocus();
+    });
+
+    it("caps a large badge at 99+ and keeps the exact count in the accessible name", async () => {
+      api.getMemoryBacklog.mockResolvedValue({ needs_review: 1003, classified: 0, items: [] });
+      api.getQuarantinedEffects.mockResolvedValue(Array.from({ length: 99 }, (_, i) => ({ id: `e${i}` })));
+
+      render(<App />);
+
+      const memory = await screen.findByRole("link", { name: "Memory" });
+      await waitFor(() => expect(memory.querySelector(".rail-inbox-badge")).not.toBeNull());
+      const badge = memory.querySelector(".rail-inbox-badge")!;
+      expect(badge).toHaveTextContent(/^99\+$/);
+      expect(badge).toHaveAttribute("aria-label", "Saved memory: 1003 waiting for review");
+      expect(memory).toHaveAccessibleDescription("Saved memory: 1003 waiting for review");
+      const inbox = screen.getByRole("link", { name: "Inbox" });
+      await waitFor(() => expect(inbox.querySelector(".rail-inbox-badge")).not.toBeNull());
+      expect(inbox.querySelector(".rail-inbox-badge")).toHaveTextContent(/^99$/);
+    });
+
+    it("keeps a long thread title in an ellipsis-capable span", async () => {
+      const long = "Find every founder at a seed stage robotics company in the Bay Area";
+      api.getSessions.mockResolvedValue({
+        sessions: [{ ...alpha, title: long }],
+        open_id: "alpha",
+        last_destination: "#/skills",
+      });
+
+      render(<App />);
+
+      const link = await screen.findByRole("link", { name: long });
+      expect(link.querySelector("span.thread-title")).toHaveTextContent(long);
+    });
+
+    it("names an untitled thread in the rail when its run starts or ends", async () => {
+      window.location.hash = "#/chat/fresh";
+      api.getSessions
+        .mockResolvedValueOnce({
+          sessions: [{ ...alpha, session_id: "fresh", title: null, n_msgs: 0 }],
+          open_id: "fresh",
+          last_destination: "#/chat/fresh",
+        })
+        .mockResolvedValue({
+          sessions: [{ ...alpha, session_id: "fresh", title: "Founders at Acme", n_msgs: 2 }],
+          open_id: "fresh",
+          last_destination: "#/chat/fresh",
+        });
+      api.getSession.mockResolvedValue({ id: "fresh", title: null, messages: [] });
+
+      render(<App />);
+      const rail = document.getElementById("app-rail")!;
+      expect(await within(rail).findByRole("link", { name: "New conversation" })).toBeInTheDocument();
+
+      window.dispatchEvent(new Event("sourcecado:sessions-changed"));
+
+      expect(await within(rail).findByRole("link", { name: "Founders at Acme" })).toBeInTheDocument();
+      expect(within(rail).queryByRole("link", { name: "New conversation" })).not.toBeInTheDocument();
+    });
+
+    it("never overwrites a title the rail already has when the list refreshes", async () => {
+      api.getSessions.mockResolvedValue({
+        sessions: [
+          { ...alpha, title: "Local name" },
+          { ...alpha, session_id: "fresh", title: null, n_msgs: 0 },
+        ],
+        open_id: "alpha",
+        last_destination: "#/skills",
+      });
+      render(<App />);
+      await screen.findByRole("link", { name: "Local name" });
+      api.getSessions.mockResolvedValue({
+        sessions: [
+          { ...alpha, title: "Backend name" },
+          { ...alpha, session_id: "fresh", title: "Named later", n_msgs: 2 },
+        ],
+        open_id: "alpha",
+        last_destination: "#/skills",
+      });
+
+      window.dispatchEvent(new Event("sourcecado:sessions-changed"));
+
+      expect(await screen.findByRole("link", { name: "Named later" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Local name" })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Backend name" })).not.toBeInTheDocument();
+    });
+
+    it("does not ask for the list again when every thread already has a title", async () => {
+      twoThreads();
+      render(<App />);
+      await screen.findByRole("link", { name: "Alpha" });
+      const before = api.getSessions.mock.calls.length;
+
+      window.dispatchEvent(new Event("sourcecado:sessions-changed"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(api.getSessions.mock.calls.length).toBe(before);
+    });
+  });
 });

@@ -2,42 +2,35 @@ import {
   MessagePrimitive,
   useAuiState,
   type TextMessagePartProps,
+  type SourceMessagePart,
   type ToolCallMessagePartProps,
   type ToolCallMessagePart,
 } from "@assistant-ui/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useState } from "react";
 import { ActivityGroup } from "./ActivityGroup";
+import { AnswerMarkdown } from "./AnswerMarkdown";
 import { ApprovalCard } from "./ApprovalCard";
+import { AssistantActions } from "./MessageActions";
 import { RunBudgetView } from "./RunBudget";
+import { CompactIcon } from "./UsageLine";
 import { useLastApprovalDelivery } from "./approvalDelivery";
-import { SourceCitation } from "./SourceCitation";
+import { AnswerResults } from "./AnswerResults";
 import { useInspector } from "./Inspector";
+import { answerHasStarted, isLiveMessage } from "./processState";
+import { ThinkingRow } from "./ThinkingRow";
+import { TurnNoticeHead } from "./TurnNotice";
+import {
+  joinReasoning,
+  reasoningParts,
+  reasoningTiming,
+  thinkingElapsedMs,
+  thoughtLabel,
+} from "./thinking";
 import { resolveInbox } from "../api";
 import type { RunBudgetStatus } from "./protocol";
 
 function AssistantText({ text }: TextMessagePartProps) {
-  return (
-    <div className="sourcecado-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children, ...props }) => (
-            <a {...props} target="_blank" rel="noreferrer noopener">
-              {children}
-            </a>
-          ),
-          table: ({ children, ...props }) => (
-            <div className="sourcecado-table-scroll">
-              <table {...props}>{children}</table>
-            </div>
-          ),
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
+  return <AnswerMarkdown text={text} />;
 }
 
 function noticeFrame(code: unknown): {
@@ -51,10 +44,7 @@ function noticeFrame(code: unknown): {
     };
   }
   if (code === "compacted") {
-    return {
-      title: "Older context was compacted.",
-      detail: "Available messages are shown.",
-    };
+    return { title: "Context compacted", detail: null };
   }
   if (code === "unsupported_version" || code === "malformed_event") {
     return {
@@ -107,14 +97,22 @@ function SafeToolFallback(part: ToolCallMessagePartProps) {
 
 export function AssistantMessage() {
   const message = useAuiState((state) => state.message);
+  // The operator's own open or close choice for the thinking row. It lives
+  // here so it survives the row moving between the one-row and receipt layouts.
+  const [thinkingChoice, setThinkingChoice] = useState<boolean | null>(null);
   const sourcecadoState = message.metadata.custom?.sourcecadoState;
   const runBudget = message.metadata.custom?.sourcecadoRunBudget as
     | RunBudgetStatus
     | undefined;
   const notice = message.metadata.custom?.sourcecadoNotice === true;
+  const compacted =
+    notice && message.metadata.custom?.sourcecadoNoticeCode === "compacted";
   const frame = notice
     ? noticeFrame(message.metadata.custom?.sourcecadoNoticeCode)
     : null;
+  // A notice about a turn that failed, as opposed to a connection or history notice.
+  const failedTurn =
+    notice && message.metadata.custom?.sourcecadoNoticeFailedTurn === true;
   const prose = message.content
     .filter((part) => part.type === "text")
     .map((part) => (part.type === "text" ? part.text : ""))
@@ -124,6 +122,32 @@ export function AssistantMessage() {
   const tools = message.content.filter(
     (part): part is ToolCallMessagePart => part.type === "tool-call",
   );
+  const sources = message.content.filter(
+    (part): part is SourceMessagePart => part.type === "source",
+  );
+  const answerStarted = answerHasStarted(message.content);
+  const reasoning = reasoningParts(message.content);
+  const thinking =
+    isLiveMessage(sourcecadoState) &&
+    reasoning.some((part) => part.status?.type === "running");
+  const timing = reasoningTiming(reasoning);
+  const lead =
+    reasoning.length > 0
+      ? {
+          summary: thinking
+            ? "Thinking…"
+            : thoughtLabel(thinkingElapsedMs(timing, Date.now())),
+          node: (
+            <ThinkingRow
+              text={joinReasoning(reasoning)}
+              thinking={thinking}
+              timing={timing}
+              chosen={thinkingChoice}
+              onChoose={setThinkingChoice}
+            />
+          ),
+        }
+      : undefined;
   const artifacts = Array.isArray(
     message.metadata.custom?.sourcecadoArtifacts,
   )
@@ -134,20 +158,41 @@ export function AssistantMessage() {
 
   return (
     <MessagePrimitive.Root
-      className={`sourcecado-assistant-message${notice ? " sourcecado-notice" : ""}`}
+      className={`sourcecado-assistant-message${notice ? " sourcecado-notice" : ""}${compacted ? " sourcecado-compaction-receipt" : ""}${failedTurn ? " sourcecado-notice-failed" : ""}`}
       {...(notice ? { role: "note" } : {})}
     >
       {frame ? (
-        <p className="sourcecado-notice-title">{frame.title}</p>
+        failedTurn ? (
+          <TurnNoticeHead
+            title={frame.title}
+            provider={message.metadata.custom?.sourcecadoNoticeProvider}
+            model={message.metadata.custom?.sourcecadoNoticeModel}
+          />
+        ) : (
+          <p className="sourcecado-notice-title">
+            {compacted ? <CompactIcon /> : null}
+            {frame.title}
+          </p>
+        )
       ) : null}
+      <ActivityGroup
+        tools={tools}
+        messageState={sourcecadoState}
+        answerStarted={answerStarted}
+        {...(lead ? { lead } : {})}
+      />
       <MessagePrimitive.Parts
         components={{
           Text: AssistantText,
-          Source: SourceCitation,
           tools: { Fallback: SafeToolFallback },
         }}
       />
-      <ActivityGroup tools={tools} messageState={sourcecadoState} />
+      <AnswerResults
+        tools={tools}
+        sources={sources}
+        messageState={sourcecadoState}
+        answerText={prose}
+      />
       <RunBudgetView status={runBudget} messageState={sourcecadoState} />
       {artifacts.length > 0 ? <ArtifactControls artifacts={artifacts} /> : null}
       {sourcecadoState === "cancelled" ? (
@@ -157,13 +202,11 @@ export function AssistantMessage() {
         <p className="sourcecado-notice-detail">{frame.detail}</p>
       ) : null}
       {copyable ? (
-        <button
-          type="button"
-          className="sourcecado-copy-action"
-          onClick={() => void navigator.clipboard?.writeText(prose)}
-        >
-          Copy response
-        </button>
+        <AssistantActions
+          prose={prose}
+          tools={tools}
+          messageState={sourcecadoState}
+        />
       ) : null}
     </MessagePrimitive.Root>
   );

@@ -54,6 +54,9 @@ export function createPersistedQueueAdapter({
       command_id: createQueueCommandId(),
     } as QueueCommand);
 
+  // With no run active nothing drains the queue, so a message put there would
+  // wait for ever. Both ways of sending (Enter, and send-and-steer) start the
+  // run at once. During a run they both wait in the queue.
   const enqueue = (message: AppendMessage) => {
     if (!running) {
       void dispatch(message);
@@ -72,11 +75,7 @@ export function createPersistedQueueAdapter({
     })),
     steerItems: [],
     enqueue,
-    steer(message: AppendMessage) {
-      const text = textOf(message);
-      if (!text) return;
-      command({ type: "queue_add", item_id: newId("queue"), text });
-    },
+    steer: enqueue,
     move(queueItemId: string, placement: QueuePlacement) {
       command({
         type: "queue_move",

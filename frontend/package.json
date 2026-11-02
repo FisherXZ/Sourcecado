@@ -15,6 +15,8 @@
   "dependencies": {
     "@assistant-ui/react": "0.15.16",
     "@tauri-apps/plugin-dialog": "2.7.2",
+    "highlight.js": "11.11.1",
+    "lowlight": "3.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "10.1.0",
@@ -24,6 +26,7 @@
     "@tauri-apps/cli": "^2.11.2",
     "@testing-library/jest-dom": "6.6.3",
     "@testing-library/react": "16.1.0",
+    "@types/hast": "3.0.5",
     "@types/node": "22.10.5",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",

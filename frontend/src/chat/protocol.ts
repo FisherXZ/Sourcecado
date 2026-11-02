@@ -52,6 +52,26 @@ export type ApprovalResource =
       readonly account: string | null;
     }
   | {
+      /** Person-bound send: backend `SendAuthority.as_resource` (gmail.py). */
+      readonly kind: "gmail_send_authority";
+      readonly person_id: string;
+      readonly draft_id: string;
+      readonly account: string | null;
+      readonly to: string;
+      readonly subject: string;
+      readonly body_digest: string;
+    }
+  | {
+      /** Person-bound enrichment: backend `enrichment_resource` (apollo.py). */
+      readonly kind: "apollo_enrichment";
+      readonly person_id: string;
+      readonly person: string;
+      readonly title: string | null;
+      readonly company: string | null;
+      readonly matched_on: "email" | "apollo_id" | "name";
+      readonly credits: number;
+    }
+  | {
       readonly kind: "shell_command";
       readonly execution_target: "docker" | "host" | "unknown";
       readonly command_summary: string;
@@ -82,6 +102,43 @@ export type ProvenanceArtifact = {
   readonly truncated: boolean;
 };
 
+/**
+ * The backend's allowlist record of one piece of external evidence a tool
+ * returned (`Envelope.reference`): where it came from and how well the record
+ * supports it. It has no field for the text of the evidence. `content` is the
+ * backend's own evidence vocabulary (present, partial, absent, missing,
+ * expired, ambiguous, unsupported).
+ */
+export type EvidenceReference = {
+  readonly id: string;
+  readonly provider: string;
+  readonly title: string;
+  readonly url: string | null;
+  readonly sensitivity: string;
+  readonly content: string;
+  readonly truncated: boolean;
+};
+
+/** Copies the known fields one at a time. A row with no id is dropped. */
+export function evidenceReferences(value: unknown): EvidenceReference[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw): EvidenceReference[] => {
+    if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id) return [];
+    return [
+      {
+        id: raw.id,
+        provider: typeof raw.provider === "string" ? raw.provider : "",
+        title: typeof raw.title === "string" ? raw.title : "",
+        url: typeof raw.url === "string" && raw.url ? raw.url : null,
+        sensitivity:
+          typeof raw.sensitivity === "string" ? raw.sensitivity : "standard",
+        content: typeof raw.content === "string" ? raw.content : "present",
+        truncated: raw.truncated === true,
+      },
+    ];
+  });
+}
+
 export type ProtocolChatEvent = ChatEventEnvelope &
   (
     | { readonly type: "turn_start"; readonly state: "running" }
@@ -97,6 +154,18 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly message: string;
       }
     | { readonly type: "assistant_delta"; readonly delta: string }
+    /**
+     * Raw model reasoning, shown in the thread as model reasoning and kept in
+     * the conversation transcript only. `step` says which reasoning block of
+     * the turn the text joins. `at` (ISO 8601) gives the thinking time. Both
+     * are optional so a log written without them still restores.
+     */
+    | {
+        readonly type: "reasoning_delta";
+        readonly delta: string;
+        readonly step?: number;
+        readonly at?: string;
+      }
     | {
         readonly type: "permission_required";
         readonly id: string;
@@ -138,6 +207,7 @@ export type ProtocolChatEvent = ChatEventEnvelope &
         readonly failure?: ToolFailure;
         readonly sources?: readonly ProvenanceSource[];
         readonly artifacts?: readonly ProvenanceArtifact[];
+        readonly evidence?: readonly EvidenceReference[];
       }
     | {
         readonly type: "tool_recovery";
@@ -692,6 +762,46 @@ function approvalResource(value: unknown): ApprovalResource | undefined {
       permanent_eligible: value.permanent_eligible,
     };
   }
+  if (value.kind === "gmail_send_authority") {
+    if (
+      typeof value.person_id !== "string" ||
+      typeof value.draft_id !== "string" ||
+      typeof value.to !== "string" ||
+      typeof value.subject !== "string" ||
+      typeof value.body_digest !== "string"
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "gmail_send_authority",
+      person_id: value.person_id,
+      draft_id: value.draft_id,
+      account: typeof value.account === "string" ? value.account : null,
+      to: value.to,
+      subject: value.subject,
+      body_digest: value.body_digest,
+    };
+  }
+  if (value.kind === "apollo_enrichment") {
+    if (
+      typeof value.person_id !== "string" ||
+      typeof value.person !== "string" ||
+      !["email", "apollo_id", "name"].includes(String(value.matched_on)) ||
+      typeof value.credits !== "number" ||
+      !Number.isFinite(value.credits)
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "apollo_enrichment",
+      person_id: value.person_id,
+      person: value.person,
+      title: typeof value.title === "string" ? value.title : null,
+      company: typeof value.company === "string" ? value.company : null,
+      matched_on: value.matched_on as "email" | "apollo_id" | "name",
+      credits: value.credits,
+    };
+  }
   if (value.kind !== "gmail_draft" || typeof value.draft_id !== "string") {
     return undefined;
   }
@@ -722,6 +832,7 @@ export function parseChatEvent(value: unknown): ChatEvent {
   if (isRecord(value) && hasEnvelope(value)) {
     const valid =
       (value.type === "assistant_delta" && typeof value.delta === "string") ||
+      (value.type === "reasoning_delta" && typeof value.delta === "string") ||
       (value.type === "turn_start" && value.state === "running") ||
       (value.type === "turn_stopping" &&
         value.state === "stopping" &&

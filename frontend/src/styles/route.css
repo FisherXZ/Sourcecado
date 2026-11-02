@@ -2300,11 +2300,6 @@
   }
 }
 
-.rail-link {
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .rail-inbox-badge {
   display: inline-grid;
   min-width: 20px;
@@ -2314,7 +2309,7 @@
   border-radius: 999px;
   background: var(--warn-bg);
   color: var(--warn);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 700;
 }
 

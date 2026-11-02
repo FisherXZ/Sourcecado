@@ -266,6 +266,55 @@ Three consequences follow, and each is a test.
   the call. A caller that supplied no run store was never fenced, which is the
   legacy and test path. The two are different values, not the same `None`.
 
+## Recovery controls in the chat
+
+A failed tool step carries a `failure` record: its class, `retry_safe`,
+`repair_route`, and the last recovery status. The chat reads those facts and
+offers an action only where the backend can carry it out. The chat adds no
+permission of its own. The commands are `retry_failed_step`, `repair_connection`
+and `continue_without_source`, and their backend behavior does not change.
+
+The chat offers Retry only for a step the backend calls `retry_safe`. That list
+holds tools that read. A send, a paid enrichment, a write, a shell command and
+a tool the list does not know are never offered a Retry. The backend would still
+park a fresh approval for such a retry. The chat does not ask it to. The operator
+asks for the action again in a new message, and that request asks for its own
+approval.
+
+| Step | Retry | Repair connection | Continue without this source |
+| --- | --- | --- | --- |
+| Failed, `retry_safe` | Runs the step again | Only with a `repair_route` | Yes |
+| Failed, not `retry_safe` | No | Only with a `repair_route` | Yes |
+| Failed, class `validation` | No. The same request would fail the same way. | No | Yes |
+| Not allowed (a refusal by policy) | No | No | Yes |
+| Step of a turn that ended in a provider failure | No. The turn notice carries the one Retry. | Only with a `repair_route` | Yes |
+| Recovery settled (`succeeded`, `skipped`, `denied`, `interrupted`) | No | No | No |
+| Outcome unknown, held, denied, interrupted | No | No | No |
+
+A failed turn (a model provider failure) has its own Retry on its notice. It
+sends the last operator message again as a new turn. It is on only when every
+step of the turn is a read-only tool. It is off when any step is a send, a paid
+enrichment, a write, a command or an unknown tool, when a step carried an
+approval, and when a step has no recorded result. The read-only list is in
+`frontend/src/chat/retrySafety.ts`. A test fails when it differs from
+`RETRY_SAFE` in `backend/coworker/permissions.py`.
+
+A held turn has no failure notice and no Retry: its outcome is unknown until a
+person settles it. The three Retry controls never share a turn. A turn that
+ends `complete` has the message Retry under its answer. A turn that ends
+`partial` has a failed step, so it has the step Retry and no answer bar. A turn
+that ends `failed` has the notice Retry.
+
+A Retry that is off stays on the screen, looks off (muted ink, dashed edge), and
+has a line beside it that says why. The answer Retry and the notice Retry work
+the same way. The reason is also the button's accessible name and its tooltip.
+
+When the chat socket returns after a drop, the page waits a moment for the
+socket to replay events it missed. Then it asks the backend which runs are still
+alive. A run the backend lost (a restart) never sends a terminal event, so the
+page marks its turn interrupted. That settles the header and the composer. A run
+the backend still reports as running is left alone.
+
 ## Extension points
 
 The following are named seams, not implementations.

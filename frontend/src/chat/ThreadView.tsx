@@ -1,19 +1,24 @@
-import { ThreadPrimitive, useAui } from "@assistant-ui/react";
+import { ThreadPrimitive, useAui, useAuiState } from "@assistant-ui/react";
+import { useRef } from "react";
 
 import { AssistantMessage } from "./AssistantMessage";
 import { Composer } from "./Composer";
-import { ComposerDraftProvider } from "./ComposerDraftContext";
+import { ComposerDraftProvider, type ComposerRestore } from "./ComposerDraftContext";
+import { EmptyGreeting, EmptyPrompts } from "./EmptyThread";
 import { Queue } from "./Queue";
-import { ThreadHeader } from "./ThreadHeader";
+import { ThreadHeader, type RunStatus } from "./ThreadHeader";
 import { UserMessage } from "./UserMessage";
-import type { ActivePerson, CurrentRunMetrics, QueueItem } from "../api";
+import type { ActivePerson, QueueItem } from "../api";
 import { Inspector } from "./Inspector";
+import { JumpToLatest, ScrollOnOwnSend } from "./JumpToLatest";
+import { UsageLine, type UsageSource } from "./UsageLine";
 
 type ThreadViewProps = {
   readonly title: string | null;
   readonly activePerson?: ActivePerson | null;
-  readonly personaName?: string | null;
-  readonly runMetrics?: CurrentRunMetrics | null;
+  readonly runStatus: RunStatus | null;
+  readonly elapsedMs: number | null;
+  readonly usage: UsageSource | null;
   readonly loading: boolean;
   readonly loadError: boolean;
   readonly onRetry: () => void;
@@ -29,42 +34,12 @@ type ThreadViewProps = {
   readonly onQueueRemove: (itemId: string) => void;
 };
 
-const SUGGESTED_ACTION = "Review the active contacts that need follow-up this week";
-
-function SuggestedAction({
-  label,
-  prompt,
-  onDraftChange,
-}: {
-  readonly label: string;
-  readonly prompt: string;
-  readonly onDraftChange: (draft: string) => void;
-}) {
-  const aui = useAui();
-  return (
-    <button
-      type="button"
-      className="sourcecado-suggestion"
-      onClick={() => {
-        aui.composer.setText(prompt);
-        onDraftChange(prompt);
-      }}
-    >
-      <span className="sourcecado-suggestion-icon" aria-hidden="true">
-        <svg viewBox="0 0 20 20" focusable="false">
-          <path d="M4 14.5c1.8-3.5 4.2-5.7 7.4-6.8M9.8 4.5l3.8 2.7-2.7 3.8" />
-        </svg>
-      </span>
-      <span>{label}</span>
-    </button>
-  );
-}
-
 export function ThreadView({
   title,
   activePerson,
-  personaName,
-  runMetrics,
+  runStatus,
+  elapsedMs,
+  usage,
   loading,
   loadError,
   onRetry,
@@ -80,9 +55,17 @@ export function ThreadView({
   onQueueRemove,
 }: ThreadViewProps) {
   const aui = useAui();
-  const populateComposer = (draft: string) => {
+  // The empty thread is a greeting above the composer and prompt chips under
+  // it, so it lives in the composer zone rather than in the transcript.
+  const showEmptyState =
+    useAuiState((state) => state.thread.isEmpty) && !loading && !loadError;
+  // The composer owns its chips and files. It registers how to restore them,
+  // so editing a message brings its files back as chips.
+  const restoreRef = useRef<((restore: ComposerRestore) => void) | null>(null);
+  const populateComposer = (draft: string, restore?: ComposerRestore) => {
     aui.composer.setText(draft);
     onDraftChange(draft);
+    if (restore) restoreRef.current?.(restore);
   };
   // Built here on purpose: this is the thread's composer. A component
   // rendered under a message sees the edit composer instead, so it cannot
@@ -95,12 +78,15 @@ export function ThreadView({
   return (
     <ComposerDraftProvider populate={populateComposer} send={sendMessage}>
     <div className="sourcecado-chat-workspace">
-    <ThreadPrimitive.Root className="sourcecado-thread">
+    <ThreadPrimitive.ViewportProvider>
+    <ThreadPrimitive.Root
+      className={showEmptyState ? "sourcecado-thread is-empty" : "sourcecado-thread"}
+    >
       <ThreadHeader
         title={title}
         activePerson={activePerson}
-        personaName={personaName}
-        runMetrics={runMetrics}
+        status={runStatus}
+        elapsedMs={elapsedMs}
       />
       <ThreadPrimitive.Viewport
         className="sourcecado-transcript"
@@ -113,6 +99,9 @@ export function ThreadView({
         // below, so the transcript itself must be explicitly non-live.
         aria-live="off"
         tabIndex={0}
+        // A queued message that starts while the operator reads must not pull
+        // the thread down. ScrollOnOwnSend scrolls for the operator's own send.
+        scrollToBottomOnRunStart={false}
       >
         {loading ? (
           <div className="sourcecado-transcript-skeleton" aria-label="Loading conversation">
@@ -130,12 +119,6 @@ export function ThreadView({
           </div>
         ) : (
           <>
-            <ThreadPrimitive.Empty>
-              <section className="sourcecado-empty-thread">
-                <h2>What are you sourcing today?</h2>
-                <p>Name a target, review an active sequence, or prepare outreach.</p>
-              </section>
-            </ThreadPrimitive.Empty>
             <ThreadPrimitive.Messages
               components={{
                 UserMessage,
@@ -153,6 +136,8 @@ export function ThreadView({
       >
         {announcement}
       </p>
+      <ScrollOnOwnSend />
+      <JumpToLatest />
       <Queue
         items={queueItems}
         paused={queuePaused}
@@ -163,18 +148,18 @@ export function ThreadView({
         onRemove={onQueueRemove}
       />
       <div className="sourcecado-composer-zone">
-        {!loading && !loadError ? (
-          <ThreadPrimitive.Empty>
-            <SuggestedAction
-              label={SUGGESTED_ACTION}
-              prompt={`${SUGGESTED_ACTION}.`}
-              onDraftChange={onDraftChange}
-            />
-          </ThreadPrimitive.Empty>
-        ) : null}
-        <Composer initialDraft={initialDraft} onDraftChange={onDraftChange} />
+        {showEmptyState ? <EmptyGreeting /> : null}
+        {usage ? <UsageLine source={usage} /> : null}
+        <Composer
+          initialDraft={initialDraft}
+          onDraftChange={onDraftChange}
+          boundPerson={activePerson ?? null}
+          restoreRef={restoreRef}
+        />
+        {showEmptyState ? <EmptyPrompts onPick={populateComposer} /> : null}
       </div>
     </ThreadPrimitive.Root>
+    </ThreadPrimitive.ViewportProvider>
     <Inspector />
     </div>
     </ComposerDraftProvider>

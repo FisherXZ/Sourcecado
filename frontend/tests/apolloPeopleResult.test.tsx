@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 
 const api = vi.hoisted(() => ({
@@ -82,6 +83,7 @@ function renderApollo(tool = apolloSearch()) {
   return render(
     <InspectorProvider threadId="thread-apollo">
       <ActivityGroup tools={[tool]} messageState="complete" />
+      <AnswerResults tools={[tool]} />
       <Inspector />
     </InspectorProvider>,
   );
@@ -109,7 +111,7 @@ describe("Apollo people result", () => {
   it("shows an honest incomplete name without rendering Apollo's mask", () => {
     const { container } = renderApollo();
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     expect(screen.getByText("Tim")).toBeInTheDocument();
@@ -118,16 +120,21 @@ describe("Apollo people result", () => {
     expect(container).not.toHaveTextContent("Zh***g");
 
     fireEvent.click(screen.getByRole("button", { name: "Inspect Searched Apollo" }));
-    fireEvent.click(screen.getByText("Result"));
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    // Output (the card), then Raw, then Context: none shows the mask.
+    expect(inspector).toHaveTextContent("Surname hidden by Apollo");
+    expect(inspector).not.toHaveTextContent("Zh***g");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
     expect(inspector).toHaveTextContent("surname hidden by Apollo");
+    expect(inspector).not.toHaveTextContent("Zh***g");
+    fireEvent.click(within(inspector).getByRole("tab", { name: "Context" }));
     expect(inspector).not.toHaveTextContent("Zh***g");
   });
 
   it("lets the director select several candidates and review before keeping", async () => {
     renderApollo();
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
@@ -194,7 +201,7 @@ describe("Apollo people result", () => {
       },
     });
     renderApollo();
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
       target: { value: "Director-authored target" },
@@ -229,7 +236,7 @@ describe("Apollo people result", () => {
         },
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
 
     expect(screen.getAllByRole("checkbox", { name: "Select Tim" })).toHaveLength(1);
     expect(screen.getByText("1 candidate")).toBeInTheDocument();
@@ -283,7 +290,7 @@ describe("Apollo people result", () => {
       active_person: { person_id: "person-tim-file", version: 1, label: "Tim" },
     });
     renderApollo();
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
@@ -343,7 +350,7 @@ describe("Apollo people result", () => {
     });
     api.openPersonSourcingChat.mockRejectedValueOnce(new Error("stale person version"));
     renderApollo();
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
       target: { value: "Director-authored target" },
@@ -420,7 +427,7 @@ describe("Apollo people result", () => {
         },
       });
     renderApollo();
-    fireEvent.click(screen.getByRole("button", { name: "Searched Apollo · Completed" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Tim" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Maya" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Target for selected people" }), {
@@ -459,7 +466,7 @@ describe("Apollo people result", () => {
   it("keeps the original search query beside the result count", () => {
     renderApollo();
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     expect(screen.getByText("2 candidates")).toBeInTheDocument();
@@ -492,9 +499,9 @@ describe("Apollo people result", () => {
       }),
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Failed" }),
-    );
+    expect(
+      screen.getByRole("button", { name: /^Searching Apollo/ }),
+    ).toHaveTextContent("Failed");
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Apollo couldn’t complete this people search.",
@@ -508,17 +515,19 @@ describe("Apollo people result", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
-    expect(
-      screen.getByRole("heading", { name: "Apollo result needs review" }),
-    ).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Apollo people search" });
+    expect(card).toHaveAttribute("data-state", "unsupported");
+    expect(within(card).getByText("Unsupported")).toBeInTheDocument();
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_APOLLO_PAYLOAD");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Inspect Searched Apollo" }),
     );
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(inspector).not.toHaveTextContent("PRIVATE_LEGACY_APOLLO_PAYLOAD");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
     expect(inspector).toHaveTextContent("PRIVATE_LEGACY_APOLLO_PAYLOAD");
   });
 
@@ -539,7 +548,7 @@ describe("Apollo people result", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
     const candidates = screen.getByRole("list", { name: "Apollo candidates" });
     expect(within(candidates).getAllByRole("listitem")).toHaveLength(5);
@@ -553,19 +562,29 @@ describe("Apollo people result", () => {
     fireEvent.click(firstPage, { detail: 0 });
     expect(within(candidates).getAllByRole("listitem")).toHaveLength(10);
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Show 2 more candidates" }),
-    );
+    const lastPage = screen.getByRole("button", { name: "Show 2 more candidates" });
+    expect(lastPage).toHaveFocus();
+    expect(lastPage).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(lastPage, { detail: 0 });
     expect(within(candidates).getAllByRole("listitem")).toHaveLength(12);
     expect(
       screen.queryByRole("button", { name: /more candidates/ }),
     ).not.toBeInTheDocument();
+    // The same button stays under the operator's focus and now offers to close the list.
+    const fewer = screen.getByRole("button", { name: "Show fewer candidates" });
+    expect(fewer).toHaveFocus();
+    expect(fewer).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(fewer, { detail: 0 });
+    expect(within(candidates).getAllByRole("listitem")).toHaveLength(5);
+    const reopen = screen.getByRole("button", { name: "Show 5 more candidates" });
+    expect(reopen).toHaveFocus();
+    expect(reopen).toHaveAttribute("aria-expanded", "false");
   });
 
   it("opens stable candidate source and credit details in the provenance Inspector", () => {
     renderApollo();
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     expect(
@@ -580,7 +599,7 @@ describe("Apollo people result", () => {
     );
     expect(within(inspector).getByText("Apollo")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Inspect Apollo source" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open in inspector: Apollo people search" }));
     expect(within(inspector).getByRole("heading", { level: 2 })).toHaveTextContent(
       "Apollo people search",
     );
@@ -599,7 +618,7 @@ describe("Apollo people result", () => {
     renderApollo(apolloEnrich());
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Enriched contact with Apollo · Completed",
+        name: /^Enriched contact with Apollo/,
       }),
     );
 
@@ -612,7 +631,12 @@ describe("Apollo people result", () => {
     expect(
       screen.getByText("Apollo credit used for this approved enrichment."),
     ).toBeInTheDocument();
-    expect(screen.getByText("Missing phone", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Apollo enriched contact" })).toHaveAttribute(
+      "data-state",
+      "partial",
+    );
+    expect(screen.getByText("Apollo did not return: phone.")).toBeInTheDocument();
+    expect(screen.getByText("Not returned by Apollo")).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -646,7 +670,7 @@ describe("Apollo people result", () => {
       );
       fireEvent.click(
         screen.getByRole("button", {
-          name: "Enriched contact with Apollo · Completed",
+          name: /^Enriched contact with Apollo/,
         }),
       );
 
@@ -655,17 +679,21 @@ describe("Apollo people result", () => {
           name: "Inspect enriched contact Ada (surname hidden by Apollo)",
         }),
       ).toBeInTheDocument();
+      expect(screen.getByText("Surname hidden by Apollo")).toBeInTheDocument();
       expect(
-        screen.getByText("Missing verified full name", { exact: false }),
+        screen.getByText(/Apollo did not return: verified full name/),
       ).toBeInTheDocument();
       expect(container).not.toHaveTextContent(maskedName);
 
       fireEvent.click(
         screen.getByRole("button", { name: "Inspect Enriched contact with Apollo" }),
       );
-      fireEvent.click(screen.getByText("Result"));
       const inspector = screen.getByRole("complementary", { name: "Inspector" });
+      expect(inspector).not.toHaveTextContent(maskedName);
+      fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
       expect(inspector).toHaveTextContent("Ada (surname hidden by Apollo)");
+      expect(inspector).not.toHaveTextContent(maskedName);
+      fireEvent.click(within(inspector).getByRole("tab", { name: "Context" }));
       expect(inspector).not.toHaveTextContent(maskedName);
     },
   );
@@ -693,7 +721,7 @@ describe("Apollo people result", () => {
     const { container } = renderApollo();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Searched Apollo · Completed" }),
+      screen.getByRole("button", { name: /^Searched Apollo/ }),
     );
 
     expect(
@@ -704,9 +732,10 @@ describe("Apollo people result", () => {
     expect(screen.getByText("Surname hidden by Apollo")).toBeInTheDocument();
     expect(screen.getByText("CEO · Apollo.io")).toBeInTheDocument();
     expect(screen.getByText("Email available after enrichment")).toBeInTheDocument();
-    expect(
-      screen.getByText("Missing title and full name", { exact: false }),
-    ).toBeInTheDocument();
+    // Gaps show as gaps. Nothing is invented for a missing title or surname.
+    expect(screen.getByText("No title")).toBeInTheDocument();
+    expect(screen.getByText("No surname")).toBeInTheDocument();
+    expect(screen.getByText("Email availability unknown")).toBeInTheDocument();
     expect(container).not.toHaveTextContent("person-tim");
   });
 });

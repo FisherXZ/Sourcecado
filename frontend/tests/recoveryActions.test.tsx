@@ -1,0 +1,442 @@
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import type { ToolCallMessagePart } from "@assistant-ui/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { ActivityGroup } from "../src/chat/ActivityGroup";
+import type { ToolFailure } from "../src/chat/protocol";
+import { RecoveryProvider } from "../src/chat/recovery";
+
+const failure = (overrides: Partial<ToolFailure> = {}): ToolFailure => ({
+  class: "timeout_network",
+  connector_id: "drive",
+  source: "Google Drive",
+  retry_safe: true,
+  idempotent: true,
+  summary: "Google Drive could not be reached. Retry is safe.",
+  repair_route: null,
+  detail: "PRIVATE_DETAIL",
+  call_id: "call-1",
+  run_id: "run-1",
+  session_id: "thread-1",
+  state: "failed",
+  ...overrides,
+});
+
+function failedStep(
+  fail: ToolFailure,
+  recovery?: Record<string, unknown>,
+  overrides: Partial<ToolCallMessagePart> = {},
+): ToolCallMessagePart {
+  return {
+    type: "tool-call",
+    toolCallId: "call-1",
+    toolName: "drive_search",
+    args: { query: "Codeology" },
+    argsText: "{}",
+    result: { error: "PRIVATE_DETAIL" },
+    isError: true,
+    providerMetadata: { sourcecado: { failure: fail, recovery: recovery ?? null } },
+    ...overrides,
+  };
+}
+
+function renderStep(
+  step: ToolCallMessagePart,
+  onAction = vi.fn(),
+  messageState = "complete",
+) {
+  const view = render(
+    <RecoveryProvider onAction={onAction}>
+      <ActivityGroup tools={[step]} messageState={messageState} />
+    </RecoveryProvider>,
+  );
+  return { ...view, onAction };
+}
+
+const retryButton = () => screen.queryByRole("button", { name: /^Retry failed step/ });
+const overflow = () =>
+  screen.getByRole("button", { name: /^More recovery options for/ });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("failed step row", () => {
+  it("shows an x, a short reason and a Retry icon button on the row", () => {
+    renderStep(failedStep(failure()));
+
+    const row = screen.getByRole("button", { name: /^Searching Drive/ });
+    expect(row).toHaveTextContent("Could not connect");
+    // The word Failed stays in the accessible name for people who cannot see the icon.
+    expect(row).toHaveTextContent("Failed: Could not connect");
+    expect(row.querySelector(".sourcecado-status-icon-failed")).not.toBeNull();
+
+    const retry = screen.getByRole("button", {
+      name: "Retry failed step: Searching Drive for “Codeology”",
+    });
+    // An icon button: no visible text, one icon.
+    expect(retry).toHaveTextContent("");
+    expect(retry.querySelector("svg")).not.toBeNull();
+    // The failure details still wait behind the disclosure.
+    expect(document.body).not.toHaveTextContent("PRIVATE_DETAIL");
+  });
+
+  it("sends the retry command once, then waits for the backend to answer", () => {
+    const { onAction, rerender } = renderStep(failedStep(failure()));
+
+    fireEvent.click(retryButton()!);
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onAction).toHaveBeenCalledWith("retry", expect.objectContaining({ call_id: "call-1" }));
+
+    const waiting = screen.getByRole("button", { name: /^Retrying Searching Drive/ });
+    expect(waiting).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(waiting);
+    expect(onAction).toHaveBeenCalledTimes(1);
+
+    // The backend answers: the retry failed. The button is ready again.
+    rerender(
+      <RecoveryProvider onAction={onAction}>
+        <ActivityGroup
+          tools={[
+            failedStep(failure(), {
+              commandId: "cmd-1",
+              status: "failed",
+              outcome: "Retry failed; successful prior work was preserved.",
+            }),
+          ]}
+          messageState="complete"
+        />
+      </RecoveryProvider>,
+    );
+    expect(retryButton()).not.toHaveAttribute("aria-disabled");
+    expect(
+      screen.getByText("Retry failed; successful prior work was preserved."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps Retry usable when the command never left the browser", () => {
+    const onAction = vi.fn(() => ({ state: "dropped", reason: "offline" }) as const);
+    renderStep(failedStep(failure()), onAction);
+
+    fireEvent.click(retryButton()!);
+    fireEvent.click(retryButton()!);
+    expect(onAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a click that no event answers be sent again after a wait", () => {
+    vi.useFakeTimers();
+    const { onAction } = renderStep(failedStep(failure()));
+
+    fireEvent.click(retryButton()!);
+    expect(retryButton()).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(16_000);
+    });
+    fireEvent.click(retryButton()!);
+    expect(onAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("names the failure class in a few words", () => {
+    const cases: [Partial<ToolFailure>, string][] = [
+      [{ class: "connector_auth", repair_route: "#/connections/drive" }, "Needs repair"],
+      [{ class: "timeout_network" }, "Could not connect"],
+      [{ class: "validation" }, "Request rejected"],
+      [{ class: "unknown" }, "Failed"],
+    ];
+    for (const [overrides, reason] of cases) {
+      const { unmount } = renderStep(failedStep(failure(overrides)));
+      expect(screen.getByRole("button", { name: /^Searching Drive/ })).toHaveTextContent(reason);
+      unmount();
+    }
+  });
+});
+
+describe("failed step overflow menu", () => {
+  it("holds Retry, Repair connection and Continue without this source, each with an icon", () => {
+    const { onAction } = renderStep(
+      failedStep(
+        failure({
+          class: "connector_auth",
+          repair_route: "#/connections/drive",
+          summary: "Google Drive needs to be repaired before this source can be checked.",
+        }),
+      ),
+    );
+
+    fireEvent.click(overflow());
+    const menu = screen.getByRole("menu", { name: /^Recovery options for/ });
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "RetryRun this step again",
+      "Repair connectionGoogle Drive",
+      "Continue without this sourceGoogle Drive",
+    ]);
+    for (const item of items) expect(item.querySelector("svg")).not.toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: /Repair connection/ })).toHaveAttribute(
+      "href",
+      "#/connections/drive",
+    );
+
+    // Every pick runs the existing command, then closes the menu.
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Repair connection/ }));
+    expect(onAction).toHaveBeenLastCalledWith("repair", expect.objectContaining({ source: "Google Drive" }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.click(overflow());
+    fireEvent.click(screen.getByRole("menuitem", { name: /Continue without this source/ }));
+    expect(onAction).toHaveBeenLastCalledWith("continue", expect.objectContaining({ source: "Google Drive" }));
+  });
+
+  it("offers Repair only where the backend names a repair route", () => {
+    renderStep(failedStep(failure({ repair_route: null })));
+
+    fireEvent.click(overflow());
+    expect(screen.queryByRole("menuitem", { name: /Repair connection/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Retry/ })).toBeInTheDocument();
+  });
+
+  it("runs Retry from the menu through the same command", () => {
+    const { onAction } = renderStep(failedStep(failure()));
+
+    fireEvent.click(overflow());
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Retry/ }));
+    expect(onAction).toHaveBeenCalledWith("retry", expect.objectContaining({ call_id: "call-1" }));
+  });
+
+  it("opens outside the scrolling step list, so the list cannot clip it", () => {
+    const { container } = renderStep(failedStep(failure()));
+
+    fireEvent.click(overflow());
+    const menu = screen.getByRole("menu");
+    expect(container.contains(menu)).toBe(false);
+    expect(menu.parentElement).toBe(document.body);
+  });
+
+  it("is a keyboard menu: focus enters it, arrows move, Escape closes and returns focus", () => {
+    renderStep(failedStep(failure({ class: "connector_auth", repair_route: "#/connections/drive" })));
+
+    const trigger = overflow();
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]).toHaveFocus();
+
+    const menu = screen.getByRole("menu");
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(items[1]).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "End" });
+    expect(items[2]).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(items[0]).toHaveFocus();
+
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("puts focus back on its button when Tab leaves the menu, so Tab does not jump to the page top", () => {
+    renderStep(failedStep(failure({ class: "connector_auth", repair_route: "#/connections/drive" })));
+
+    const trigger = overflow();
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "End" });
+    expect(screen.getAllByRole("menuitem")[2]).toHaveFocus();
+
+    // The portal sits at the end of the page. Focus returns to the button
+    // before the browser moves on, so the next stop is next to the row.
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Tab" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Tab", shiftKey: true });
+    expect(trigger).toHaveFocus();
+  });
+
+  it("hands focus to the row when Continue settles the step and the buttons leave", () => {
+    const onAction = vi.fn();
+    const { rerender } = renderStep(failedStep(failure()), onAction);
+
+    const trigger = overflow();
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Continue without this source/ }));
+    expect(trigger).toHaveFocus();
+
+    // The backend answers: the source is skipped, so the buttons are gone.
+    rerender(
+      <RecoveryProvider onAction={onAction}>
+        <ActivityGroup
+          tools={[failedStep(failure(), { commandId: "cmd-1", status: "skipped", outcome: "Continued without Google Drive." })]}
+          messageState="complete"
+        />
+      </RecoveryProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: /More recovery options/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Searching Drive/ })).toHaveFocus();
+  });
+
+  it("hands focus to the row when a successful retry removes the Retry button", () => {
+    const onAction = vi.fn();
+    const { rerender } = renderStep(failedStep(failure()), onAction);
+
+    retryButton()!.focus();
+    fireEvent.click(retryButton()!);
+
+    rerender(
+      <RecoveryProvider onAction={onAction}>
+        <ActivityGroup
+          tools={[
+            {
+              type: "tool-call",
+              toolCallId: "call-1",
+              toolName: "drive_search",
+              args: { query: "Codeology" },
+              argsText: "{}",
+              result: { files: [] },
+            },
+          ]}
+          messageState="complete"
+        />
+      </RecoveryProvider>,
+    );
+
+    expect(screen.queryByRole("button", { name: /Retry/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Searched Drive/ })).toHaveFocus();
+  });
+
+  it("does not take focus when the buttons leave while focus is somewhere else", () => {
+    const onAction = vi.fn();
+    const { rerender } = renderStep(failedStep(failure()), onAction);
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+
+    rerender(
+      <RecoveryProvider onAction={onAction}>
+        <ActivityGroup
+          tools={[failedStep(failure(), { commandId: "cmd-1", status: "skipped" })]}
+          messageState="complete"
+        />
+      </RecoveryProvider>,
+    );
+
+    expect(outside).toHaveFocus();
+    outside.remove();
+  });
+
+  it("closes on a click outside", () => {
+    renderStep(failedStep(failure()));
+
+    fireEvent.click(overflow());
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+describe("which recovery actions appear", () => {
+  it("shows no Retry for a refusal by policy, and the menu holds Continue only", () => {
+    renderStep(
+      failedStep(
+        failure({
+          class: "permission",
+          retry_safe: false,
+          summary: "Board was not allowed to complete this action.",
+        }),
+      ),
+    );
+
+    expect(screen.getByRole("button", { name: /Not allowed/ })).toBeInTheDocument();
+    expect(retryButton()).toBeNull();
+    fireEvent.click(overflow());
+    expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: /Continue without this source/ })).toBeInTheDocument();
+  });
+
+  it("shows no Retry for a request the tool rejected, because it would fail the same way", () => {
+    renderStep(failedStep(failure({ class: "validation", summary: "Drive needs corrected request details before retrying." })));
+
+    expect(retryButton()).toBeNull();
+    fireEvent.click(overflow());
+    expect(screen.queryByRole("menuitem", { name: /^Retry/ })).not.toBeInTheDocument();
+  });
+
+  it("offers no Retry for a step that is not retry-safe, such as a send, and says why", () => {
+    renderStep(
+      failedStep(
+        failure({
+          class: "unknown",
+          retry_safe: false,
+          idempotent: false,
+          source: "Gmail",
+          summary: "Gmail failed. Review the details before choosing what to do next.",
+        }),
+        undefined,
+        { toolName: "gmail_send" },
+      ),
+    );
+
+    expect(retryButton()).toBeNull();
+    // The step opens itself, and the reason is on the page as text.
+    expect(screen.getByText("Retry is off. This step is not safe to repeat.")).toBeInTheDocument();
+    fireEvent.click(overflow());
+    expect(screen.queryByRole("menuitem", { name: /^Retry/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Continue without this source/ })).toBeInTheDocument();
+  });
+
+  it("offers no Retry when the failure carries no retry-safe flag, for any tool", () => {
+    for (const toolName of ["apollo_enrich_contact", "gmail_draft", "board_upsert", "shell_exec", "mcp__granola__create_note"]) {
+      const { unmount } = renderStep(
+        failedStep({ ...failure(), retry_safe: undefined as unknown as boolean }, undefined, { toolName } as never),
+      );
+      expect(retryButton(), toolName).toBeNull();
+      unmount();
+    }
+  });
+
+  it("offers no Retry on a step of a turn that ended in a provider failure", () => {
+    // The failed-turn notice carries that turn's one Retry.
+    renderStep(failedStep(failure()), vi.fn(), "failed");
+
+    expect(retryButton()).toBeNull();
+    expect(screen.getByRole("button", { name: /^More recovery options/ })).toBeInTheDocument();
+  });
+
+  it("offers nothing once the backend has settled the step", () => {
+    for (const status of ["succeeded", "skipped", "denied", "interrupted"]) {
+      const { unmount } = renderStep(failedStep(failure(), { commandId: "cmd-1", status }));
+      expect(retryButton()).toBeNull();
+      expect(screen.queryByRole("button", { name: /More recovery options/ })).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("keeps Retry after the operator opens the repair page, until the step is retried", () => {
+    renderStep(
+      failedStep(failure({ class: "connector_auth", repair_route: "#/connections/drive" }), {
+        commandId: "cmd-2",
+        status: "awaiting_repair",
+      }),
+    );
+
+    expect(retryButton()).not.toBeNull();
+  });
+
+  it("never offers Retry on a step whose outcome is unknown or that was interrupted", () => {
+    renderStep(
+      failedStep(failure(), undefined, {
+        result: undefined,
+        isError: false,
+        providerMetadata: undefined,
+      }),
+    );
+
+    expect(screen.getByRole("button", { name: /Outcome unknown/ })).toBeInTheDocument();
+    expect(retryButton()).toBeNull();
+    expect(screen.queryByRole("button", { name: /More recovery options/ })).not.toBeInTheDocument();
+  });
+});

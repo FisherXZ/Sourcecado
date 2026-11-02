@@ -3,6 +3,7 @@ import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { describe, expect, it } from "vitest";
 
 import { ActivityGroup } from "../src/chat/ActivityGroup";
+import { AnswerResults } from "../src/chat/AnswerResults";
 import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 
 function calendarList(
@@ -76,6 +77,7 @@ function renderCalendar(tool = calendarList()) {
   return render(
     <InspectorProvider threadId="thread-calendar">
       <ActivityGroup tools={[tool]} messageState="complete" />
+      <AnswerResults tools={[tool]} />
       <Inspector />
     </InspectorProvider>,
   );
@@ -94,10 +96,9 @@ describe("Calendar event result", () => {
       }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Creating Calendar event" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Creating · Not yet created")).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Calendar event" });
+    expect(card).toHaveAttribute("data-state", "loading");
+    expect(within(card).getByText("Not yet created")).toBeInTheDocument();
     expect(screen.getByText("Aug 25, 2026 · 10:00 AM–10:30 AM")).toBeInTheDocument();
     expect(screen.getByText("America/Los_Angeles")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -106,20 +107,17 @@ describe("Calendar event result", () => {
   it("renders a created Calendar event as a truthful review artifact", () => {
     renderCalendar(calendarWrite("calendar_create"));
     fireEvent.click(
-      screen.getByRole("button", { name: "Prepared calendar event · Completed" }),
+      screen.getByRole("button", { name: /^Prepared calendar event/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Calendar event created" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Created")).toBeInTheDocument();
-    expect(screen.getByText("Event ID: event-created")).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Calendar event" });
+    expect(card).toHaveAttribute("data-state", "ready");
+    expect(within(card).getByText("Created")).toBeInTheDocument();
+    expect(within(card).getByText("event-created")).toBeInTheDocument();
     expect(screen.getByText("Candidate interview")).toBeInTheDocument();
     expect(screen.getByText("Aug 25, 2026 · 10:00 AM–10:30 AM")).toBeInTheDocument();
     expect(screen.getByText("America/Los_Angeles")).toBeInTheDocument();
-    expect(
-      screen.getByText("Google Calendar account address unavailable; event is still available."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Account address unavailable")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
   });
 
@@ -130,23 +128,21 @@ describe("Calendar event result", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Updated calendar event · Completed" }),
+      screen.getByRole("button", { name: /^Updated calendar event/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Calendar event updated" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Updated")).toBeInTheDocument();
-    expect(screen.getByText("Event ID: event-existing")).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "Calendar event" });
+    expect(within(card).getByText("Updated")).toBeInTheDocument();
+    expect(within(card).getByText("event-existing")).toBeInTheDocument();
     expect(screen.getByText("Candidate interview updated")).toBeInTheDocument();
-    expect(screen.getByText("Changed fields: title")).toBeInTheDocument();
+    expect(within(card).getByText("title")).toBeInTheDocument();
     expect(screen.queryByText("Date unavailable or invalid")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
   });
 
   it.each([
-    ["calendar_create", "Prepared calendar event", "created"],
-    ["calendar_update", "Updated calendar event", "updated"],
+    ["calendar_create", "Preparing calendar event", "created"],
+    ["calendar_update", "Updating calendar event", "updated"],
   ] as const)(
     "keeps a failed %s write truthful",
     (toolName, activityLabel, verb) => {
@@ -161,9 +157,10 @@ describe("Calendar event result", () => {
           },
         }),
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: `${activityLabel} · Failed` }),
-      );
+      // A failed step opens itself, so its summary needs no click.
+      expect(
+        screen.getByRole("button", { name: new RegExp(`^${activityLabel}`) }),
+      ).toHaveTextContent("Failed");
 
       expect(screen.getByRole("alert")).toHaveTextContent(
         "Google Calendar couldn’t save this event.",
@@ -171,9 +168,10 @@ describe("Calendar event result", () => {
       expect(
         screen.getByText(`Calendar event was not ${verb}.`),
       ).toBeInTheDocument();
-      expect(
-        screen.queryByRole("heading", { name: `Calendar event ${verb}` }),
-      ).not.toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Calendar event" })).toHaveAttribute(
+        "data-state",
+        "failed",
+      );
       expect(container).not.toHaveTextContent("PRIVATE_CALENDAR_WRITE_ERROR");
     },
   );
@@ -198,7 +196,7 @@ describe("Calendar event result", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Prepared calendar event · Completed" }),
+      screen.getByRole("button", { name: /^Prepared calendar event/ }),
     );
 
     expect(container).not.toHaveTextContent("PRIVATE_DESCRIPTION_TAIL");
@@ -211,7 +209,9 @@ describe("Calendar event result", () => {
     ).toHaveFocus();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Inspect Calendar event event-created" }),
+      screen.getByRole("button", {
+        name: "Open in inspector: Candidate interview",
+      }),
     );
     const inspector = screen.getByRole("complementary", { name: "Inspector" });
     expect(within(inspector).getByRole("heading", { level: 2 })).toHaveTextContent(
@@ -219,22 +219,16 @@ describe("Calendar event result", () => {
     );
     expect(within(inspector).getByText("External URL unavailable")).toBeInTheDocument();
     expect(within(inspector).queryByRole("link")).not.toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Inspect Calendar source" }),
-    );
-    expect(within(inspector).getByRole("heading", { level: 2 })).toHaveTextContent(
-      "Google Calendar source",
-    );
-    expect(within(inspector).getByText("operator@example.com")).toBeInTheDocument();
+    expect(inspector).toHaveTextContent("operator@example.com");
   });
 
   it("uses event-shaped rows while Calendar is loading", () => {
     renderCalendar(calendarList({ result: undefined }));
 
-    expect(
-      screen.getByRole("heading", { name: "Loading Calendar events" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Calendar events" })).toHaveAttribute(
+      "data-state",
+      "loading",
+    );
     const skeleton = screen.getByRole("list", {
       name: "Loading Calendar events",
     });
@@ -245,12 +239,13 @@ describe("Calendar event result", () => {
   it("renders a clear empty Calendar window without inventing actions", () => {
     renderCalendar(calendarList({ result: { events: [] } }));
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "No Calendar events" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Calendar events" })).toHaveAttribute(
+      "data-state",
+      "empty",
+    );
     expect(
       screen.getByText("No upcoming events matched this Calendar window."),
     ).toBeInTheDocument();
@@ -262,19 +257,21 @@ describe("Calendar event result", () => {
       calendarList({ result: { events: "PRIVATE_LEGACY_CALENDAR_PAYLOAD" } }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Calendar result needs review" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Calendar events" })).toHaveAttribute(
+      "data-state",
+      "unsupported",
+    );
     expect(container).not.toHaveTextContent("PRIVATE_LEGACY_CALENDAR_PAYLOAD");
     fireEvent.click(
       screen.getByRole("button", { name: "Inspect Checked calendar" }),
     );
-    expect(
-      screen.getByRole("complementary", { name: "Inspector" }),
-    ).toHaveTextContent("PRIVATE_LEGACY_CALENDAR_PAYLOAD");
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(inspector).not.toHaveTextContent("PRIVATE_LEGACY_CALENDAR_PAYLOAD");
+    fireEvent.click(within(inspector).getByRole("button", { name: "Raw" }));
+    expect(inspector).toHaveTextContent("PRIVATE_LEGACY_CALENDAR_PAYLOAD");
   });
 
   it("keeps Calendar list failures contextual without exposing provider payloads", () => {
@@ -289,9 +286,9 @@ describe("Calendar event result", () => {
         },
       }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Failed" }),
-    );
+    expect(
+      screen.getByRole("button", { name: /^Checking calendar/ }),
+    ).toHaveTextContent("Failed");
 
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Calendar couldn’t load upcoming events.",
@@ -340,7 +337,7 @@ describe("Calendar event result", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
 
     expect(screen.getByText("Aug 26, 2026 · All day")).toBeInTheDocument();
@@ -375,7 +372,7 @@ describe("Calendar event result", () => {
       }),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
     fireEvent.click(
       screen.getByRole("button", {
@@ -391,7 +388,9 @@ describe("Calendar event result", () => {
     expect(within(inspector).queryByRole("link")).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Inspect Calendar source" }),
+      screen.getByRole("button", {
+        name: "Open in inspector: Google Calendar source",
+      }),
     );
     expect(within(inspector).getByRole("heading", { level: 2 })).toHaveTextContent(
       "Google Calendar source",
@@ -402,20 +401,23 @@ describe("Calendar event result", () => {
   it("renders valid events while visibly preserving invalid partial rows", () => {
     const { container } = renderCalendar();
     fireEvent.click(
-      screen.getByRole("button", { name: "Checked calendar · Completed" }),
+      screen.getByRole("button", { name: /^Checked calendar/ }),
     );
 
-    expect(
-      screen.getByRole("heading", { name: "Upcoming Calendar events" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("2 events")).toBeInTheDocument();
+    const heading = screen.getByRole("heading", { name: "Upcoming Calendar events" });
+    expect(heading).toBeInTheDocument();
+    // The step row also shows the count, so scope this one to the result card.
+    expect(within(heading.closest("section")!).getByText("2 events")).toBeInTheDocument();
     expect(screen.getByText("Sourcing standup")).toBeInTheDocument();
     expect(screen.getByText("Aug 25, 2026 · 10:00 AM–10:30 AM")).toBeInTheDocument();
     expect(screen.getByText("America/Los_Angeles")).toBeInTheDocument();
     expect(screen.getByText("Untitled event")).toBeInTheDocument();
     expect(screen.getByText("Date unavailable or invalid")).toBeInTheDocument();
+    // The card is partial, and the gaps show as gaps. No title or date is invented.
+    expect(heading.closest("section")).toHaveAttribute("data-state", "partial");
+    expect(screen.getByText("No title")).toBeInTheDocument();
     expect(
-      screen.getByText("Missing title and valid date from Google Calendar source."),
+      screen.getByText("1 of 2 events lack a title or a valid date."),
     ).toBeInTheDocument();
     expect(container).not.toHaveTextContent("PRIVATE_CALENDAR_PAYLOAD");
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();

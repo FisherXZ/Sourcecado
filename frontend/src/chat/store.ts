@@ -1,5 +1,6 @@
 import {
   compactionNoticeText,
+  evidenceReferences,
   parseChatEvent,
   type ChatEvent,
   type ConnectionChangeEvent,
@@ -7,9 +8,14 @@ import {
   type RecoverableChatNotice,
   type TransportChatError,
 } from "./protocol";
-import type { SourcecadoStructuredMessage } from "./messageAdapter";
+import {
+  highestCompactionGeneration,
+  type SourcecadoPart,
+  type SourcecadoStructuredMessage,
+} from "./messageAdapter";
 import type {
   ApprovalResource,
+  EvidenceReference,
   ProvenanceArtifact,
   ProvenanceSource,
   RunBudgetStatus,
@@ -82,6 +88,37 @@ export function tagRestoredThread(
   return messages;
 }
 
+/**
+ * Where the operator sent a message while the thread had no restore snapshot
+ * yet. It sits in the live buffer between the events that came before and
+ * after it, so `replaceThread` can put the message back in the same order.
+ */
+type SentBeforeRestore = { readonly sentMessageId: string };
+type LiveEntry = ProtocolChatEvent | SentBeforeRestore;
+type TurnStart = Extract<ProtocolChatEvent, { type: "turn_start" }>;
+
+function sentBeforeRestore(entry: LiveEntry): entry is SentBeforeRestore {
+  return "sentMessageId" in entry;
+}
+
+/** The run the message at `from` started: the first turn that began after it. */
+function nextTurnStart(
+  buffered: readonly LiveEntry[],
+  from: number,
+): TurnStart | undefined {
+  for (const entry of buffered.slice(from)) {
+    if (!sentBeforeRestore(entry) && entry.type === "turn_start") return entry;
+  }
+  return undefined;
+}
+
+function textOf(message: SourcecadoStructuredMessage): string {
+  return message.parts
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("")
+    .trim();
+}
+
 export type SourcecadoEvent =
   | {
       readonly type: "message_started";
@@ -95,6 +132,14 @@ export type SourcecadoEvent =
       readonly messageId: string;
       readonly partId: string;
       readonly delta: string;
+    }
+  | {
+      readonly type: "reasoning_delta";
+      readonly threadId: string;
+      readonly messageId: string;
+      readonly partId: string;
+      readonly delta: string;
+      readonly at?: number;
     }
   | {
       readonly type: "tool_started";
@@ -116,6 +161,7 @@ export type SourcecadoEvent =
       readonly failure?: ToolFailure;
       readonly sources?: readonly ProvenanceSource[];
       readonly artifacts?: readonly ProvenanceArtifact[];
+      readonly evidence?: readonly EvidenceReference[];
     }
   | {
       readonly type: "tool_recovery";
@@ -174,6 +220,12 @@ export type SourcecadoEvent =
       readonly status: RunBudgetStatus;
     }
   | {
+      readonly type: "run_compaction_known";
+      readonly threadId: string;
+      readonly messageId: string;
+      readonly generation: number;
+    }
+  | {
       readonly type: "message_finished";
       readonly threadId: string;
       readonly messageId: string;
@@ -181,6 +233,33 @@ export type SourcecadoEvent =
     };
 
 const LIVE_EVENT_BUFFER_LIMIT = 1000;
+
+/**
+ * Reasoning is over once the answer text or a tool call starts, or the turn
+ * ends. The thread collapses the thinking row at that point.
+ */
+function settleReasoning(
+  parts: readonly SourcecadoPart[],
+): readonly SourcecadoPart[] {
+  return parts.some((part) => part.type === "reasoning" && part.state === "running")
+    ? parts.map((part) =>
+        part.type === "reasoning" && part.state === "running"
+          ? { ...part, state: "complete" as const }
+          : part,
+      )
+    : parts;
+}
+
+function settleReasoningIn(
+  messages: readonly SourcecadoStructuredMessage[],
+  messageId: string,
+): readonly SourcecadoStructuredMessage[] {
+  return messages.map((message) =>
+    message.id === messageId
+      ? { ...message, parts: settleReasoning(message.parts) }
+      : message,
+  );
+}
 
 export class SourcecadoChatStore {
   private readonly threads = new Map<
@@ -190,9 +269,14 @@ export class SourcecadoChatStore {
   private readonly seenEventIds = new Set<string>();
   // Raw live events per thread, kept until the thread's restore snapshot
   // lands so `replaceThread` can re-apply the tail the snapshot missed.
-  private readonly liveEvents = new Map<string, ProtocolChatEvent[]>();
+  private readonly liveEvents = new Map<string, LiveEntry[]>();
   private readonly hydratedThreads = new Set<string>();
+  // The queued message the backend is running now, per thread, from its latest
+  // queue snapshot. The run's own `turn_start` does not say which message it is.
+  private readonly queuedRuns = new Map<string, { id: string; text: string }>();
+  private readonly shownQueuedRuns = new Set<string>();
   private noticeNumber = 0;
+  private sentNumber = 0;
   private activeThreadId: string;
 
   constructor(
@@ -223,10 +307,21 @@ export class SourcecadoChatStore {
   ): void {
     const snapshotIds = restoredSnapshotIds.get(messages);
     const buffered = this.liveEvents.get(threadId) ?? [];
+    const unrestored = this.messagesFor(threadId);
     this.threads.set(threadId, messages);
     if (snapshotIds) {
       for (const id of snapshotIds) this.seenEventIds.add(id);
-      for (const event of buffered) {
+      for (const [position, event] of buffered.entries()) {
+        if (sentBeforeRestore(event)) {
+          const sent = unrestored.find(
+            (message) => message.id === event.sentMessageId,
+          );
+          if (sent) {
+            const run = nextTurnStart(buffered, position + 1);
+            this.restoreSentMessage(threadId, sent, run, snapshotIds);
+          }
+          continue;
+        }
         if (snapshotIds.has(event.event_id)) {
           // The snapshot already projected this event; it still proves the
           // run is alive when it re-announces an interrupted turn.
@@ -238,6 +333,82 @@ export class SourcecadoChatStore {
     }
     this.hydratedThreads.add(threadId);
     this.liveEvents.delete(threadId);
+  }
+
+  /**
+   * The operator sent `sent` before the restore snapshot arrived, so the
+   * snapshot overwrote it. Put it back before the answer it started, unless
+   * the snapshot already holds it.
+   */
+  private restoreSentMessage(
+    threadId: string,
+    sent: SourcecadoStructuredMessage,
+    run: TurnStart | undefined,
+    snapshotIds: ReadonlySet<string>,
+  ): void {
+    const current = this.messagesFor(threadId);
+    let at = current.length;
+    if (run && snapshotIds.has(run.event_id)) {
+      // The snapshot saw the run start, and a run stores its operator message
+      // just before the answer. An equal message right there is this one.
+      const start = current.findIndex((message) => message.id === run.message_id);
+      if (start >= 0) {
+        const before = current[start - 1];
+        if (before?.role === "user" && textOf(before) === textOf(sent)) return;
+        at = start;
+      }
+    }
+    // The page numbered this message before it knew how many the thread has,
+    // so its id can equal a restored one.
+    const id = `${threadId}:sent:${++this.sentNumber}`;
+    const kept = {
+      ...sent,
+      id,
+      parts: sent.parts.map((part) =>
+        part.id.startsWith(sent.id)
+          ? { ...part, id: id + part.id.slice(sent.id.length) }
+          : part,
+      ),
+    };
+    this.threads.set(threadId, [
+      ...current.slice(0, at),
+      kept,
+      ...current.slice(at),
+    ]);
+  }
+
+  /**
+   * Tell the store which queued message, if any, the backend has taken to run
+   * next for this thread. Call it with every queue snapshot. The message gets
+   * its bubble when that run starts.
+   */
+  noteQueue(
+    threadId: string,
+    items: readonly { id: string; text: string; state: string }[],
+  ): void {
+    const running = items.find((item) => item.state === "sending");
+    if (running) this.queuedRuns.set(threadId, { id: running.id, text: running.text });
+    else this.queuedRuns.delete(threadId);
+  }
+
+  // A queued message never went through the composer, so the page has no
+  // bubble for it. Add one just before its run opens, so it sits above the
+  // answer, and note it in the live buffer like any message sent before the
+  // restore snapshot lands.
+  private showQueuedMessage(threadId: string): void {
+    const queued = this.queuedRuns.get(threadId);
+    if (!queued || this.shownQueuedRuns.has(queued.id)) return;
+    this.shownQueuedRuns.add(queued.id);
+    const messageId = `${threadId}:queued:${queued.id}`;
+    this.apply({ type: "message_started", threadId, messageId, role: "user" });
+    this.apply({
+      type: "text_delta",
+      threadId,
+      messageId,
+      partId: `${messageId}:text:0`,
+      delta: queued.text,
+    });
+    this.apply({ type: "message_finished", threadId, messageId, state: "complete" });
   }
 
   applyChatEvent(value: unknown): ChatEvent | ConnectionChangeEvent {
@@ -260,17 +431,22 @@ export class SourcecadoChatStore {
       return event;
     }
     this.seenEventIds.add(event.event_id);
-    this.bufferLiveEvent(event);
+    if (event.type === "turn_start") this.showQueuedMessage(event.session_id);
+    // A queued message has one run. Once any run ends, the claim is spent.
+    if (["turn_end", "turn_stopped", "error"].includes(event.type)) {
+      this.queuedRuns.delete(event.session_id);
+    }
+    this.bufferLive(event.session_id, event);
     this.applyProtocolEvent(event);
     return event;
   }
 
-  private bufferLiveEvent(event: ProtocolChatEvent): void {
-    if (this.hydratedThreads.has(event.session_id)) return;
-    const buffer = this.liveEvents.get(event.session_id) ?? [];
-    buffer.push(event);
+  private bufferLive(threadId: string, entry: LiveEntry): void {
+    if (this.hydratedThreads.has(threadId)) return;
+    const buffer = this.liveEvents.get(threadId) ?? [];
+    buffer.push(entry);
     if (buffer.length > LIVE_EVENT_BUFFER_LIMIT) buffer.shift();
-    this.liveEvents.set(event.session_id, buffer);
+    this.liveEvents.set(threadId, buffer);
   }
 
   // A restore snapshot marks a still-open turn "interrupted". A live event
@@ -287,10 +463,14 @@ export class SourcecadoChatStore {
           ? {
               ...message,
               state: "running" as const,
-              parts: message.parts.map((part) =>
+              parts: message.parts.map((part, index) =>
                 part.type === "text" && part.state === "interrupted"
                   ? { ...part, state: "running" as const }
-                  : part,
+                  : // The snapshot settled a block the model was still in.
+                    part.type === "reasoning" &&
+                      index === message.parts.length - 1
+                    ? { ...part, state: "running" as const }
+                    : part,
               ),
             }
           : message,
@@ -311,6 +491,7 @@ export class SourcecadoChatStore {
     code: string,
     message: string,
     recoverable = true,
+    provider?: { readonly provider: string; readonly model: string },
   ): void {
     let messages = this.messagesFor(threadId);
     let occurrences = 1;
@@ -332,7 +513,11 @@ export class SourcecadoChatStore {
         }
       }
     }
-    const messageId = `${threadId}:notice:${++this.noticeNumber}`;
+    // A restored thread numbered its own receipts from 1, so skip ids in use.
+    let messageId: string;
+    do {
+      messageId = `${threadId}:notice:${++this.noticeNumber}`;
+    } while (messages.some((message) => message.id === messageId));
     this.threads.set(threadId, [
       ...messages,
       {
@@ -350,10 +535,31 @@ export class SourcecadoChatStore {
                 : message,
             recoverable,
             ...(occurrences > 1 ? { occurrences } : {}),
+            ...provider,
           },
         ],
       },
     ]);
+  }
+
+  /**
+   * Marks every turn still running on a thread as interrupted. For a run the
+   * backend lost: its process ended, so no terminal event will ever arrive.
+   */
+  interruptRunning(threadId: string): void {
+    for (const message of this.messagesFor(threadId)) {
+      if (
+        message.role === "assistant" &&
+        (message.state === "running" || message.state === "stopping")
+      ) {
+        this.apply({
+          type: "message_state_changed",
+          threadId,
+          messageId: message.id,
+          state: "interrupted",
+        });
+      }
+    }
   }
 
   replayChatEvents(events: readonly unknown[]): void {
@@ -396,6 +602,27 @@ export class SourcecadoChatStore {
         partId: event.part_id,
         delta: event.delta,
       });
+      return;
+    }
+    if (event.type === "reasoning_delta") {
+      const at = event.at ? Date.parse(event.at) : undefined;
+      this.apply({
+        type: "reasoning_delta",
+        threadId: event.session_id,
+        messageId: event.message_id,
+        partId: `${event.part_id}:reasoning:${event.step ?? 1}`,
+        delta: event.delta,
+        ...(at !== undefined && Number.isFinite(at) ? { at } : {}),
+      });
+      return;
+    }
+    if (event.type === "provider_recovery") {
+      // The attempt that was reasoning has failed. Its block is over, so the
+      // live count stops here. The retry opens a new block if it reasons.
+      this.threads.set(
+        event.session_id,
+        settleReasoningIn(this.messagesFor(event.session_id), event.message_id),
+      );
       return;
     }
     if (event.type === "turn_stopping") {
@@ -492,6 +719,9 @@ export class SourcecadoChatStore {
         ...(event.failure ? { failure: event.failure } : {}),
         ...(event.sources ? { sources: event.sources } : {}),
         ...(event.artifacts ? { artifacts: event.artifacts } : {}),
+        ...(Array.isArray(event.evidence)
+          ? { evidence: evidenceReferences(event.evidence) }
+          : {}),
       });
       return;
     }
@@ -522,11 +752,28 @@ export class SourcecadoChatStore {
         });
       }
       if (event.compaction) {
-        this.addNotice(
-          event.session_id,
-          "compacted",
-          compactionNoticeText(event.compaction),
-        );
+        // The backend sends the standing generation on every run while a
+        // compaction is in effect. Only a run that raised it compacted.
+        const compacted =
+          event.compaction.generation >
+          highestCompactionGeneration(
+            this.messagesFor(event.session_id).filter(
+              (message) => message.id !== event.message_id,
+            ),
+          );
+        this.apply({
+          type: "run_compaction_known",
+          threadId: event.session_id,
+          messageId: event.message_id,
+          generation: event.compaction.generation,
+        });
+        if (compacted) {
+          this.addNotice(
+            event.session_id,
+            "compacted",
+            compactionNoticeText(event.compaction),
+          );
+        }
       }
       if (event.state === "complete") {
         this.apply({
@@ -567,6 +814,9 @@ export class SourcecadoChatStore {
             : "error"),
           event.message,
           false,
+          event.failure
+            ? { provider: event.failure.provider, model: event.failure.model }
+            : undefined,
         );
       }
     }
@@ -575,6 +825,11 @@ export class SourcecadoChatStore {
   apply(event: SourcecadoEvent): void {
     const messages = this.messagesFor(event.threadId);
     if (event.type === "message_started") {
+      // Only the page's own send starts a user message. Before the restore
+      // snapshot lands, note where it falls among the live events.
+      if (event.role === "user") {
+        this.bufferLive(event.threadId, { sentMessageId: event.messageId });
+      }
       this.threads.set(event.threadId, [
         ...messages,
         {
@@ -599,23 +854,49 @@ export class SourcecadoChatStore {
       return;
     }
 
+    if (event.type === "run_compaction_known") {
+      this.threads.set(
+        event.threadId,
+        messages.map((message) =>
+          message.id === event.messageId
+            ? { ...message, compactionGeneration: event.generation }
+            : message,
+        ),
+      );
+      return;
+    }
+
     if (event.type === "text_delta") {
       this.threads.set(
         event.threadId,
         messages.map((message) => {
           if (message.id !== event.messageId) return message;
-          const current = message.parts.find(
-            (part) => part.type === "text" && part.id === event.partId,
+          // The backend sends every text delta of a turn under one part id. A
+          // step in between splits the text into segments, so text before a
+          // step (a lead-in) and text after it (the answer) stay separate and
+          // keep their order relative to the steps.
+          const segmentIds = message.parts.filter(
+            (part) =>
+              part.type === "text" &&
+              (part.id === event.partId ||
+                part.id.startsWith(`${event.partId}~`)),
           );
+          const last = message.parts[message.parts.length - 1];
+          const current =
+            last?.type === "text" &&
+            (last.id === event.partId || last.id.startsWith(`${event.partId}~`))
+              ? last
+              : undefined;
           // A live delta to an "interrupted" restore proves the run is
           // still streaming; put the message and its part back to running.
           const revived = message.state === "interrupted";
+          const settled = settleReasoning(message.parts);
           return {
             ...message,
             ...(revived ? { state: "running" as const } : {}),
             parts: current
-              ? message.parts.map((part) =>
-                  part.type === "text" && part.id === event.partId
+              ? settled.map((part) =>
+                  part === current
                     ? {
                         ...part,
                         text: part.text + event.delta,
@@ -624,12 +905,61 @@ export class SourcecadoChatStore {
                     : part,
                 )
               : [
-                  ...message.parts,
+                  ...settled,
                   {
                     type: "text" as const,
+                    id:
+                      segmentIds.length === 0
+                        ? event.partId
+                        : `${event.partId}~${segmentIds.length}`,
+                    text: event.delta,
+                    state: "running" as const,
+                  },
+                ],
+          };
+        }),
+      );
+      return;
+    }
+
+    if (event.type === "reasoning_delta") {
+      this.threads.set(
+        event.threadId,
+        messages.map((message) => {
+          if (message.id !== event.messageId) return message;
+          const known = message.parts.some(
+            (part) => part.type === "reasoning" && part.id === event.partId,
+          );
+          return {
+            ...message,
+            ...(message.state === "interrupted"
+              ? { state: "running" as const }
+              : {}),
+            parts: known
+              ? message.parts.map((part) =>
+                  part.type === "reasoning" && part.id === event.partId
+                    ? {
+                        ...part,
+                        text: part.text + event.delta,
+                        // A delta means the model is still reasoning. A part
+                        // restored from a run that is still going was settled
+                        // by the snapshot, so it runs again here.
+                        state: "running" as const,
+                        ...(event.at !== undefined ? { endedAt: event.at } : {}),
+                      }
+                    : part,
+                )
+              : [
+                  // A new block means the earlier one is over.
+                  ...settleReasoning(message.parts),
+                  {
+                    type: "reasoning" as const,
                     id: event.partId,
                     text: event.delta,
                     state: "running" as const,
+                    ...(event.at !== undefined
+                      ? { startedAt: event.at, endedAt: event.at }
+                      : {}),
                   },
                 ],
           };
@@ -641,7 +971,7 @@ export class SourcecadoChatStore {
     if (event.type === "tool_started") {
       this.threads.set(
         event.threadId,
-        messages.map((message) =>
+        settleReasoningIn(messages, event.messageId).map((message) =>
           message.id === event.messageId
             ? {
                 ...message,
@@ -698,6 +1028,7 @@ export class SourcecadoChatStore {
                         ...part,
                         result: event.result,
                         failure: event.failure,
+                        ...(event.evidence ? { evidence: event.evidence } : {}),
                         state: event.isError
                           ? ("error" as const)
                           : ("complete" as const),
@@ -834,6 +1165,11 @@ export class SourcecadoChatStore {
                           scope: event.scope,
                           executionStatus: event.executionStatus,
                           executionError: event.executionError,
+                          // The receipt names the recipient or person, so the
+                          // resolved card keeps what the request resolved.
+                          ...(part.approval?.resource
+                            ? { resource: part.approval.resource }
+                            : {}),
                         },
                       }
                     : part,
@@ -864,7 +1200,7 @@ export class SourcecadoChatStore {
                 ...message,
                 state: event.state,
                 parts: terminalTextState
-                  ? message.parts.map((part) =>
+                  ? settleReasoning(message.parts).map((part) =>
                       part.type === "text" && part.state === "running"
                         ? { ...part, state: terminalTextState }
                         : part,
@@ -884,7 +1220,7 @@ export class SourcecadoChatStore {
           ? {
               ...message,
               state: event.state,
-              parts: message.parts.map((part) =>
+              parts: settleReasoning(message.parts).map((part) =>
                 part.type === "text" && part.state === "running"
                   ? { ...part, state: "complete" as const }
                   : part,

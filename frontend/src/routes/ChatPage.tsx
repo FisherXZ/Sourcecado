@@ -5,7 +5,6 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  getPersona,
   getCurrentRunTelemetry,
   getSession,
   getSessions,
@@ -19,6 +18,7 @@ import {
   type QueueItem,
 } from "../api";
 import { ApprovalDeliveryProvider } from "../chat/approvalDelivery";
+import { ConnectionProvider } from "../chat/ConnectionChip";
 import { restoreConversation } from "../chat/restoreConversation";
 import { SourcecadoRuntimeProvider } from "../chat/SourcecadoRuntimeProvider";
 import {
@@ -26,14 +26,23 @@ import {
   createQueueCommandId,
 } from "../chat/persistedQueue";
 import { SourcecadoChatStore } from "../chat/store";
+import { runStatusOf } from "../chat/ThreadHeader";
 import { ThreadView } from "../chat/ThreadView";
+import { pickUsage, type FinalRead } from "../chat/UsageLine";
 import { readDraft, writeDraft } from "../chat/draftStorage";
 import {
   RecoveryProvider,
   type RecoveryAction,
 } from "../chat/recovery";
-import type { ToolFailure } from "../chat/protocol";
+import type { ConnectionChangeEvent, ToolFailure } from "../chat/protocol";
 import { InspectorProvider } from "../chat/Inspector";
+
+/** Extra tries for the run's final telemetry reading, after the first one. */
+const FINAL_READ_RETRIES = 2;
+const FINAL_READ_RETRY_MS = 400;
+
+/** How long after a reconnect the page waits before it asks which runs are alive. */
+const RUN_CHECK_DELAY_MS = 1500;
 
 function appendText(message: AppendMessage): string {
   return message.content
@@ -66,11 +75,16 @@ export function ChatPage({
   const threadQueuesRef = useRef(
     new Map<string, { items: readonly QueueItem[]; paused: boolean }>(),
   );
+  // Threads whose restore is in flight, and whether a live queue snapshot came
+  // in meanwhile. The restore's own queue is older than that snapshot.
+  const queueHeardDuringRestoreRef = useRef(new Map<string, boolean>());
   const runningThreadsRef = useRef(new Set<string>());
   const activeRunsRef = useRef(new Map<string, string>());
   const pendingCancelsRef = useRef(new Set<string>());
   const nextLegacyIndexRef = useRef(new Map<string, number>());
   const connectionStatusRef = useRef<ConnectionStatus>("connected");
+  const connectionRef = useRef<ConnectionChangeEvent | null>(null);
+  const wasDownRef = useRef(false);
   const lastApprovalDeliveryRef = useRef<CommandDelivery | null>(null);
   const [activeThreadId, setActiveThreadId] = useState(initialThreadId);
   const [title, setTitle] = useState<string | null>(null);
@@ -78,53 +92,88 @@ export function ChatPage({
   const [loadError, setLoadError] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [announcement, setAnnouncement] = useState("");
-  const [personaName, setPersonaName] = useState<string | null>(null);
   const [activePerson, setActivePerson] = useState<ActivePerson | null>(null);
   const [runMetrics, setRunMetrics] = useState<CurrentRunMetrics | null>(null);
+  // Set when a run ends. Cleared when the run's final telemetry reading is in.
+  const [finalReadOf, setFinalRead] = useState<{
+    threadId: string;
+    state: FinalRead;
+  } | null>(null);
+  const [runEnds, setRunEnds] = useState(0);
+  // The run that ended last, when this page saw it start, so telemetry left over
+  // from another run is not shown as its own. A run seen only at its end has no id here.
+  const [endedRun, setEndedRun] = useState<{
+    threadId: string;
+    runId: string | undefined;
+  } | null>(null);
   const [, setRevision] = useState(0);
 
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
+  // The count makes the telemetry effect read again even when no render saw
+  // the run as active, as with a run that starts and ends in one batch.
+  const runEnded = (threadId: string, runId: string | undefined) => {
+    setEndedRun({ threadId, runId });
+    setFinalRead({ threadId, state: "pending" });
+    setRunEnds((count) => count + 1);
+  };
   const currentRunIsActive = runningThreadsRef.current.has(activeThreadId);
 
+  // The usage line keeps the last run's numbers once the run ends, so the
+  // measurements are cleared only when the thread changes.
   useEffect(() => {
-    if (!hasToken() || !activeThreadId) {
-      setRunMetrics(null);
-      return;
-    }
     setRunMetrics(null);
-    let active = true;
-    const refreshMetrics = () => {
-      void getCurrentRunTelemetry(activeThreadId)
-        .then((payload) => {
-          if (active) setRunMetrics(payload.current_run);
-        })
-        .catch(() => {
-          // Metrics are passive; chat remains usable when measurement is unavailable.
-        });
-    };
-    refreshMetrics();
-    const interval = currentRunIsActive
-      ? window.setInterval(refreshMetrics, 1000)
-      : undefined;
-    return () => {
-      active = false;
-      if (interval !== undefined) window.clearInterval(interval);
-    };
-  }, [activeThreadId, currentRunIsActive]);
+  }, [activeThreadId]);
 
   useEffect(() => {
-    if (!hasToken()) return;
+    if (!hasToken() || !activeThreadId) return;
     let active = true;
-    getPersona()
-      .then((persona) => {
-        if (active) setPersonaName(persona.name);
-      })
-      .catch(() => {
-        // Persona is a header nicety; leave the header without it on failure.
+    let retry: number | undefined;
+    // Metrics are passive; chat remains usable when measurement is unavailable.
+    const read = () =>
+      getCurrentRunTelemetry(activeThreadId).then(
+        (payload) => {
+          if (active) setRunMetrics(payload.current_run);
+          return true;
+        },
+        () => false,
+      );
+    if (currentRunIsActive) {
+      void read();
+      const interval = window.setInterval(() => void read(), 1000);
+      return () => {
+        active = false;
+        window.clearInterval(interval);
+      };
+    }
+    // The run is over. Its final numbers are what the usage line keeps, so a
+    // failed read is tried again before the line gives up on it.
+    const attempt = (retries: number) => {
+      void read().then((ok) => {
+        if (!active) return;
+        if (ok || retries >= FINAL_READ_RETRIES) {
+          setFinalRead({ threadId: activeThreadId, state: ok ? "done" : "failed" });
+          return;
+        }
+        retry = window.setTimeout(() => attempt(retries + 1), FINAL_READ_RETRY_MS);
       });
+    };
+    attempt(0);
     return () => {
       active = false;
+      window.clearTimeout(retry);
     };
+  }, [activeThreadId, currentRunIsActive, runEnds]);
+
+  // A rename made elsewhere (the sidebar) changes the open thread's title.
+  useEffect(() => {
+    const onRenamed = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: unknown; title?: unknown }>).detail;
+      if (typeof detail?.id !== "string" || typeof detail.title !== "string") return;
+      threadTitlesRef.current.set(detail.id, detail.title);
+      if (detail.id === activeThreadRef.current) setTitle(detail.title);
+    };
+    window.addEventListener("sourcecado:session-renamed", onRenamed);
+    return () => window.removeEventListener("sourcecado:session-renamed", onRenamed);
   }, []);
 
   useEffect(() => {
@@ -157,6 +206,7 @@ export function ChatPage({
         }
       }
       setLoading(true);
+      queueHeardDuringRestoreRef.current.set(threadId, false);
       const conversation = personId
         ? await getSession(threadId, personId)
         : await getSession(threadId);
@@ -172,10 +222,17 @@ export function ChatPage({
         throw new Error("conversation person binding mismatch");
       }
       storeRef.current.replaceThread(threadId, restoreConversation(conversation));
-      threadQueuesRef.current.set(threadId, {
-        items: conversation.queue ?? [],
-        paused: conversation.queue_paused ?? false,
-      });
+      if (queueHeardDuringRestoreRef.current.get(threadId) !== true) {
+        threadQueuesRef.current.set(threadId, {
+          items: conversation.queue ?? [],
+          paused: conversation.queue_paused ?? false,
+        });
+      }
+      queueHeardDuringRestoreRef.current.delete(threadId);
+      storeRef.current.noteQueue(
+        threadId,
+        threadQueuesRef.current.get(threadId)?.items ?? [],
+      );
       loadedThreadsRef.current.add(threadId);
       threadTitlesRef.current.set(threadId, conversation.title);
       threadPeopleRef.current.set(threadId, loadedPerson);
@@ -206,8 +263,40 @@ export function ChatPage({
 
   useEffect(() => {
     if (!hasToken()) return;
+    let settleTimer: number | undefined;
+    // A run the backend lost (it restarted) never sends a terminal event, so
+    // the thread would keep showing "Thinking" and the Stop button. After the
+    // socket returns, ask the backend which runs are alive. The socket's own
+    // re-sync has had time to replay a terminal event for a run that ended
+    // while it was down. Whatever it settled is skipped here.
+    const settleLostRuns = () => {
+      for (const threadId of [...runningThreadsRef.current]) {
+        // No run id yet: the message has not started a run, so there is
+        // nothing to have lost.
+        if (!activeRunsRef.current.has(threadId)) continue;
+        void getCurrentRunTelemetry(threadId)
+          .then((payload) => {
+            if (!runningThreadsRef.current.has(threadId)) return;
+            if (payload.current_run?.status === "running") return;
+            storeRef.current.interruptRunning(threadId);
+            runningThreadsRef.current.delete(threadId);
+            activeRunsRef.current.delete(threadId);
+            if (threadId === activeThreadRef.current) {
+              setAnnouncement("Run interrupted. The connection was lost.");
+            }
+            refresh();
+          })
+          .catch(() => {
+            // Unknown stays as it was. The next reconnect asks again.
+          });
+      }
+    };
     const chat = openChat((event: SourcecadoSocketEvent) => {
       if (event.type === "queue_snapshot") {
+        if (queueHeardDuringRestoreRef.current.has(event.session_id)) {
+          queueHeardDuringRestoreRef.current.set(event.session_id, true);
+        }
+        storeRef.current.noteQueue(event.session_id, event.items);
         threadQueuesRef.current.set(event.session_id, {
           items: event.items,
           paused: event.paused,
@@ -227,6 +316,14 @@ export function ChatPage({
       const applied = storeRef.current.applyChatEvent(event);
       if (applied.type === "connection_change") {
         connectionStatusRef.current = applied.status;
+        connectionRef.current = applied;
+        if (applied.status !== "connected") {
+          wasDownRef.current = true;
+        } else if (wasDownRef.current) {
+          wasDownRef.current = false;
+          window.clearTimeout(settleTimer);
+          settleTimer = window.setTimeout(settleLostRuns, RUN_CHECK_DELAY_MS);
+        }
       } else if ("version" in applied) {
         const threadId = applied.session_id;
         if (applied.type === "turn_start") {
@@ -255,12 +352,14 @@ export function ChatPage({
             setAnnouncement("Sourcecado needs your approval to continue.");
           }
         } else if (applied.type === "turn_stopped") {
+          runEnded(threadId, activeRunsRef.current.get(threadId));
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
           if (threadId === activeThreadRef.current) {
             setAnnouncement("Run cancelled.");
           }
         } else if (applied.type === "turn_end") {
+          runEnded(threadId, activeRunsRef.current.get(threadId));
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
           if (threadId === activeThreadRef.current) {
@@ -271,6 +370,7 @@ export function ChatPage({
             );
           }
         } else if (applied.type === "error") {
+          runEnded(threadId, activeRunsRef.current.get(threadId));
           runningThreadsRef.current.delete(threadId);
           activeRunsRef.current.delete(threadId);
           if (threadId === activeThreadRef.current) {
@@ -288,6 +388,7 @@ export function ChatPage({
     });
     chatRef.current = chat;
     return () => {
+      window.clearTimeout(settleTimer);
       chat.close();
       if (chatRef.current === chat) chatRef.current = null;
     };
@@ -325,7 +426,11 @@ export function ChatPage({
       // once the message has somewhere to actually go right now. Otherwise
       // it is sitting in the transport's retry buffer, not "sent".
       runningThreadsRef.current.add(threadId);
-      writeDraft(threadId, "");
+      // A resend (Retry) does not come from the composer. The draft saved for
+      // the composer is not what was sent, so it stays.
+      if (message.metadata?.custom?.sourcecadoResend !== true) {
+        writeDraft(threadId, "");
+      }
       setAnnouncement("Run started.");
     } else {
       setAnnouncement(
@@ -431,7 +536,7 @@ export function ChatPage({
         : action === "repair"
           ? "repair_connection"
           : "continue_without_source";
-    chatRef.current?.recover?.({
+    return chatRef.current?.recover?.({
       type,
       session_id: failure.session_id,
       run_id: failure.run_id,
@@ -442,6 +547,51 @@ export function ChatPage({
 
   const messages = storeRef.current.messagesFor(activeThreadId);
   const running = runningThreadsRef.current.has(activeThreadId);
+  // No status until the thread has loaded: a restored thread may be waiting
+  // for approval, and Idle would be wrong for a moment.
+  const runStatus = loading || loadError ? null : runStatusOf(messages, running);
+  const elapsedMs =
+    runMetrics?.status === "running" ? runMetrics.elapsed_ms : null;
+  const usage =
+    loading || loadError
+      ? null
+      : pickUsage(
+          messages,
+          runMetrics,
+          running,
+          finalReadOf?.threadId === activeThreadId ? finalReadOf.state : "done",
+          endedRun?.threadId === activeThreadId ? endedRun.runId : undefined,
+        );
+
+  // The backend names a thread when it saves the first message. No event
+  // announces that, so ask for the name once output starts and once more when
+  // the run ends, instead of waiting for a reload.
+  const untitled = !title;
+  const hasMessages = messages.length > 0;
+  const outputStarted = messages.some(
+    (message) => message.role === "assistant" && message.parts.length > 0,
+  );
+  useEffect(() => {
+    if (!untitled || !hasMessages || loading || !activeThreadId || !hasToken()) {
+      return;
+    }
+    let active = true;
+    getSessions()
+      .then(({ sessions }) => {
+        const named = sessions
+          .find((row) => row.session_id === activeThreadId)
+          ?.title?.trim();
+        if (!active || !named) return;
+        threadTitlesRef.current.set(activeThreadId, named);
+        setTitle(named);
+      })
+      .catch(() => {
+        // The title is a nicety; the next change of state asks again.
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeThreadId, untitled, hasMessages, loading, running, outputStarted]);
   const queue = threadQueuesRef.current.get(activeThreadId) ?? {
     items: [],
     paused: false,
@@ -462,6 +612,7 @@ export function ChatPage({
     <main className="chat-page">
       <ApprovalDeliveryProvider deliveryRef={lastApprovalDeliveryRef}>
       <RecoveryProvider onAction={handleRecovery}>
+      <ConnectionProvider value={connectionRef.current}>
       <InspectorProvider threadId={activeThreadId}>
       <SourcecadoRuntimeProvider
         key={activeThreadId || "empty-thread"}
@@ -475,8 +626,9 @@ export function ChatPage({
         <ThreadView
           title={title}
           activePerson={activePerson}
-          personaName={personaName}
-          runMetrics={runMetrics}
+          runStatus={runStatus}
+          elapsedMs={elapsedMs}
+          usage={usage}
           loading={loading}
           loadError={loadError}
           onRetry={() => setLoadAttempt((attempt) => attempt + 1)}
@@ -493,6 +645,7 @@ export function ChatPage({
         />
       </SourcecadoRuntimeProvider>
       </InspectorProvider>
+      </ConnectionProvider>
       </RecoveryProvider>
       </ApprovalDeliveryProvider>
     </main>

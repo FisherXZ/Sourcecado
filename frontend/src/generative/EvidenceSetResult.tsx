@@ -1,9 +1,22 @@
 import type { ToolCallMessagePart } from "@assistant-ui/react";
 import { useId, useState } from "react";
 
+import { failureOf } from "../chat/processState";
+import { cardAnchorId } from "../chat/resultCards";
+import type { ToolIconKey } from "../chat/toolRegistry";
+import {
+  CardBadge,
+  CardButton,
+  CardRows,
+  ExpandableText,
+  InspectButton,
+  ResultCard,
+  SkeletonRows,
+} from "./ResultCard";
 import { useInspector } from "../chat/Inspector";
 
 const EXCERPT_PREVIEW_LIMIT = 280;
+const PAGE_SIZE = 5;
 
 type EvidenceItem = {
   readonly key: string;
@@ -18,31 +31,6 @@ type EvidenceItem = {
   readonly extractionStatus: string | null;
   readonly callIds: readonly string[];
 };
-
-function EvidenceExcerpt({ excerpt }: { readonly excerpt: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const excerptId = useId();
-  const truncated = excerpt.length > EXCERPT_PREVIEW_LIMIT;
-  const visible =
-    truncated && !expanded
-      ? `${excerpt.slice(0, EXCERPT_PREVIEW_LIMIT).trimEnd()}…`
-      : excerpt;
-  return (
-    <div className="sourcecado-evidence-excerpt">
-      <p id={excerptId}>{visible}</p>
-      {truncated ? (
-        <button
-          type="button"
-          aria-controls={excerptId}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? "Collapse evidence excerpt" : "Expand evidence excerpt"}
-        </button>
-      ) : null}
-    </div>
-  );
-}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -241,59 +229,78 @@ function evidenceItems(tools: readonly ToolCallMessagePart[]): EvidenceItem[] {
   return [...byKey.values()];
 }
 
+function iconFor(providers: readonly string[]): ToolIconKey {
+  if (providers.length !== 1) return "file";
+  return providers[0] === "Granola" ? "granola" : "drive";
+}
+
 export function EvidenceSetResult({
   tools,
 }: {
   readonly tools: readonly ToolCallMessagePart[];
 }) {
   const { select } = useInspector();
-  const [visibleCount, setVisibleCount] = useState(5);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const listId = useId();
   const items = evidenceItems(tools);
+  const toolCallIds = tools.map((tool) => tool.toolCallId);
+  const cardId = cardAnchorId(toolCallIds[0] ?? "evidence");
   const loading = tools.some(
     (tool) => tool.result === undefined && failedProvider(tool) === null,
   );
-  if (loading && items.length === 0) {
-    return (
-      <section className="sourcecado-evidence-set sourcecado-evidence-loading">
-        <h3>Loading evidence</h3>
-        <ol aria-label="Loading evidence" aria-busy="true">
-          {[0, 1, 2].map((row) => (
-            <li key={row}>
-              <span />
-              <span />
-            </li>
-          ))}
-        </ol>
-      </section>
-    );
-  }
   const providers = [...new Set(items.map((item) => item.provider))];
+  const failedTools = tools.filter((tool) => failedProvider(tool) !== null);
   const failedProviders = [
     ...new Set(
-      tools
+      failedTools
         .map(failedProvider)
         .filter((provider): provider is "Google Drive" | "Granola" => provider !== null),
     ),
   ];
   const sourceProviders = [...new Set(tools.map(providerForTool))];
+  const common = { id: cardId, toolCallIds, provider: iconFor(sourceProviders) };
+  if (loading && items.length === 0) {
+    return (
+      <ResultCard {...common} title="Evidence" state="loading">
+        <SkeletonRows label="Loading evidence" />
+      </ResultCard>
+    );
+  }
   const malformed = tools.some(malformedEvidenceTool);
   if (items.length === 0 && malformed) {
     return (
-      <section className="sourcecado-evidence-set sourcecado-evidence-fallback">
-        <h3>Evidence result needs review</h3>
-        <p>Sourcecado couldn’t summarize this evidence safely. Use Inspect above to review it.</p>
-      </section>
+      <ResultCard
+        {...common}
+        title="Evidence"
+        state="unsupported"
+        note="Sourcecado cannot read this result. The raw record is in the inspector."
+        footer={
+          <InspectButton
+            target={{
+              kind: "tool",
+              id: toolCallIds.join("+"),
+              title: "Evidence",
+              status: "success",
+              args: tools.map((tool) => tool.args),
+              result: tools.map((tool) => tool.result),
+            }}
+          />
+        }
+      />
     );
   }
   if (items.length === 0 && failedProviders.length > 0) {
+    const restricted = failedTools.every((tool) => failureOf(tool)?.class === "permission");
     return (
-      <section className="sourcecado-evidence-set sourcecado-evidence-unavailable">
-        <h3>Evidence unavailable</h3>
-        <p>{failedProviders.join(" and ")} evidence unavailable.</p>
-      </section>
+      <ResultCard
+        {...common}
+        title="Evidence"
+        state={restricted ? "restricted" : "failed"}
+        note={`${failedProviders.join(" and ")} evidence unavailable.`}
+      />
     );
   }
-  if (items.length === 0 && failedProviders.length === 0) {
+  if (items.length === 0) {
     const queries = [
       ...new Set(
         tools
@@ -305,94 +312,145 @@ export function EvidenceSetResult({
       ),
     ];
     return (
-      <section className="sourcecado-evidence-set sourcecado-evidence-empty">
-        <h3>No evidence found</h3>
-        <p>
-          No evidence matched {queries.length > 0 ? queries.join(" or ") : "this request"} across {sourceProviders.join(" and ")}.
-        </p>
-      </section>
+      <ResultCard
+        {...common}
+        title="Evidence"
+        count="0 evidence items"
+        state="empty"
+        note={`No evidence matched ${queries.length > 0 ? queries.join(" or ") : "this request"} across ${sourceProviders.join(" and ")}.`}
+      />
     );
   }
+  const staleCount = items.filter((item) => item.stale).length;
+  const partial = failedProviders.length > 0;
+  const state = partial ? "partial" : staleCount > 0 ? "stale" : "ready";
+  const note = partial
+    ? failedProviders
+        .map(
+          (provider) =>
+            `${provider} evidence unavailable. ${providers.join(" and ")} evidence remains visible.`,
+        )
+        .join(" ")
+    : staleCount > 0
+      ? staleCount === items.length
+        ? items.length === 1
+          ? "This item is a cached copy and may be out of date."
+          : `All ${items.length} items are cached and may be out of date.`
+        : `${staleCount} of ${items.length} items are cached and may be out of date.`
+      : undefined;
   return (
-    <section className="sourcecado-evidence-set" aria-label="Evidence set">
-      <header>
-        <div>
-          <h3>Evidence set</h3>
-          <p>{items.length} evidence items</p>
-        </div>
-        <p>{providers.join(" and ")}</p>
-      </header>
-      {failedProviders.length > 0 && items.length > 0 ? (
-        <div className="sourcecado-evidence-partial">
-          <strong>Partial evidence</strong>
-          {failedProviders.map((provider) => (
-            <p key={provider}>
-              {provider} evidence unavailable. {providers.join(" and ")} evidence remains visible.
-            </p>
-          ))}
-        </div>
-      ) : null}
-      <ol aria-label="Evidence items">
-        {items.slice(0, visibleCount).map((item) => (
-          <li key={item.key} data-source-id={item.sourceId}>
-            <button
-              type="button"
-              className="sourcecado-evidence-title"
-              aria-label={`Inspect evidence ${item.title}`}
-              onClick={(event) =>
-                select(
-                  {
-                    kind: "source",
-                    id: `evidence:${item.callIds.join("+")}:${item.sourceId}`,
-                    title: item.title,
-                    status: "success",
-                    provider: item.provider,
-                    externalUrl: item.externalUrl,
-                    preview: item.excerpt
-                      ? item.excerpt.slice(0, EXCERPT_PREVIEW_LIMIT)
-                      : item.context,
-                    stale: item.stale,
-                    truncated: item.truncated,
-                    result: {
-                      sourceId: item.sourceId,
-                      callIds: item.callIds,
-                      context: item.context,
-                      extractionStatus: item.extractionStatus,
-                    },
-                  },
-                  event.currentTarget,
+    <ResultCard
+      {...common}
+      provider={iconFor(providers)}
+      title="Evidence set"
+      count={`${items.length} evidence ${items.length === 1 ? "item" : "items"}`}
+      meta={providers}
+      state={state}
+      note={note}
+      footer={
+        <>
+          <InspectButton
+            target={{
+              kind: "source",
+              id: `evidence-set:${toolCallIds.join("+")}`,
+              title: "Evidence set",
+              status: "success",
+              provider: providers.join(" and "),
+              preview: `${items.length} evidence items from ${providers.join(" and ")}`,
+              result: { callIds: toolCallIds },
+            }}
+          />
+          {items.length > PAGE_SIZE ? (
+            <CardButton
+              icon="chevron"
+              aria-controls={listId}
+              aria-expanded={visibleCount > PAGE_SIZE}
+              data-open={visibleCount >= items.length}
+              onClick={() =>
+                setVisibleCount(
+                  visibleCount >= items.length
+                    ? PAGE_SIZE
+                    : Math.min(visibleCount + PAGE_SIZE, items.length),
                 )
               }
             >
-              {item.title}
-            </button>
-            <p>{item.provider}</p>
-            <p>{item.context}</p>
-            {item.stale ? <span className="sourcecado-evidence-badge">Cached stale</span> : null}
-            {item.truncated ? <span className="sourcecado-evidence-badge">Truncated</span> : null}
-            {item.extractionStatus === "metadata_only" ? (
-              <span className="sourcecado-evidence-badge">Metadata only</span>
+              {visibleCount >= items.length
+                ? "Show fewer evidence items"
+                : `Show ${Math.min(PAGE_SIZE, items.length - visibleCount)} more evidence items`}
+            </CardButton>
+          ) : null}
+        </>
+      }
+    >
+      <CardRows label="Evidence items" id={listId}>
+        {items.slice(0, visibleCount).map((item) => (
+          <li
+            key={item.key}
+            className="sourcecado-card-row sourcecado-card-row-stack"
+            data-source-id={item.sourceId}
+          >
+            <div className="sourcecado-card-line">
+              <span className="sourcecado-card-cell sourcecado-card-cell-name">
+                <button
+                  type="button"
+                  className="sourcecado-card-name"
+                  aria-label={`Inspect evidence ${item.title}`}
+                  onClick={(event) =>
+                    select(
+                      {
+                        kind: "source",
+                        id: `evidence:${item.callIds.join("+")}:${item.sourceId}`,
+                        title: item.title,
+                        status: "success",
+                        provider: item.provider,
+                        externalUrl: item.externalUrl,
+                        preview: item.excerpt
+                          ? item.excerpt.slice(0, EXCERPT_PREVIEW_LIMIT)
+                          : item.context,
+                        stale: item.stale,
+                        truncated: item.truncated,
+                        result: {
+                          sourceId: item.sourceId,
+                          callIds: item.callIds,
+                          context: item.context,
+                          extractionStatus: item.extractionStatus,
+                        },
+                      },
+                      event.currentTarget,
+                    )
+                  }
+                >
+                  {item.title}
+                </button>
+              </span>
+              <span className="sourcecado-card-cell">{item.provider}</span>
+              <span className="sourcecado-card-cell sourcecado-card-cell-context">
+                {item.context}
+              </span>
+              {item.stale ? <CardBadge>Cached stale</CardBadge> : null}
+              {item.truncated ? <CardBadge>Truncated</CardBadge> : null}
+              {item.extractionStatus === "metadata_only" ? (
+                <CardBadge>Metadata only</CardBadge>
+              ) : null}
+              {item.extractionStatus === "unsupported" ? (
+                <CardBadge>Unsupported format</CardBadge>
+              ) : null}
+              {item.extractionStatus === "failed" ? (
+                <CardBadge tone="error">Read failed</CardBadge>
+              ) : null}
+            </div>
+            {item.excerpt ? (
+              <ExpandableText
+                text={item.excerpt}
+                limit={EXCERPT_PREVIEW_LIMIT}
+                expandLabel="Expand evidence excerpt"
+                collapseLabel="Collapse evidence excerpt"
+                className="sourcecado-card-body-text"
+              />
             ) : null}
-            {item.extractionStatus === "unsupported" ? (
-              <span className="sourcecado-evidence-badge">Unsupported format</span>
-            ) : null}
-            {item.extractionStatus === "failed" ? (
-              <span className="sourcecado-evidence-badge">Read failed</span>
-            ) : null}
-            {item.excerpt ? <EvidenceExcerpt excerpt={item.excerpt} /> : null}
           </li>
         ))}
-      </ol>
-      {visibleCount < items.length ? (
-        <button
-          type="button"
-          onClick={() =>
-            setVisibleCount((count) => Math.min(count + 5, items.length))
-          }
-        >
-          Show {Math.min(5, items.length - visibleCount)} more evidence items
-        </button>
-      ) : null}
-    </section>
+      </CardRows>
+    </ResultCard>
   );
 }

@@ -1273,7 +1273,14 @@ def test_hidden_reasoning_still_retries_and_fails_over(tmp_path, failure):
         if event["type"] == "assistant_delta"
     ] == ["fallback answer"]
     assert [event["type"] for event in emitted if event["type"] == "error"] == []
-    assert "hidden plan" not in str(emitted)
+    # The thread shows the reasoning the model streamed before the failure,
+    # as reasoning. It is in no other event.
+    assert [
+        event["delta"] for event in emitted if event["type"] == "reasoning_delta"
+    ] == ["hidden plan"]
+    assert "hidden plan" not in str(
+        [event for event in emitted if event["type"] != "reasoning_delta"]
+    )
     assert "Review the partial response" not in str(emitted)
 
 

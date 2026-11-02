@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  SESSIONS_CHANGED,
   createSession,
   getInbox,
   getMemoryBacklog,
   getQuarantinedEffects,
+  getSessions,
+  getSettings,
   pinSession,
   renameSession,
   setLastDestination,
@@ -24,7 +27,9 @@ import { PreviewChannelBadge } from "../routes/UpdateChannel";
 import { UnavailableThreadPage } from "../routes/UnavailableThreadPage";
 import { WelcomePage } from "../routes/WelcomePage";
 import { CommandSearch } from "./CommandSearch";
-import { GlobalRail } from "./GlobalRail";
+import { GlobalRail, type RailOperator } from "./GlobalRail";
+import { RailIcon } from "./RailIcon";
+import { readRailCollapsed, writeRailCollapsed } from "./railPreference";
 import { parseHash } from "./route";
 import { readShellCache, writeShellCache } from "./sessionCache";
 import { getSessionsForBoot } from "./sessionBootstrap";
@@ -43,9 +48,13 @@ export function AppShell() {
   const [bootPending, setBootPending] = useState(true);
   const [stale, setStale] = useState(Boolean(cachedListing));
   const [railOpen, setRailOpen] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState(readRailCollapsed);
+  const [operator, setOperator] = useState<RailOperator | null>(null);
   const [scheduledApprovalCount, setScheduledApprovalCount] = useState(0);
   const [memoryReviewCount, setMemoryReviewCount] = useState(0);
   const [heldEffectCount, setHeldEffectCount] = useState(0);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const railTriggerRef = useRef<HTMLButtonElement>(null);
   const railFocusTimerRef = useRef<number | null>(null);
   const railWasOpenedRef = useRef(false);
@@ -167,6 +176,63 @@ export function AppShell() {
     };
   }, [route]);
   useEffect(() => {
+    let active = true;
+    // A new thread is untitled until its first message. When a run starts or
+    // ends, ask for the list again and fill in names the rail is missing.
+    // Rows that already have a title are left alone, so a rename in flight is
+    // never overwritten.
+    const refreshTitles = () => {
+      if (!sessionsRef.current?.some((row) => !row.title)) return;
+      getSessions().then(
+        ({ sessions: fresh }) => {
+          if (!active) return;
+          setSessions((current) => {
+            if (!current) return current;
+            let changed = false;
+            const next = current.map((row) => {
+              if (row.title) return row;
+              const title = fresh.find((item) => item.session_id === row.session_id)?.title;
+              if (!title) return row;
+              changed = true;
+              return { ...row, title };
+            });
+            return changed ? next : current;
+          });
+        },
+        () => {},
+      );
+    };
+    window.addEventListener(SESSIONS_CHANGED, refreshTitles);
+    return () => {
+      active = false;
+      window.removeEventListener(SESSIONS_CHANGED, refreshTitles);
+    };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    // The rail footer names the operator and the on-duty persona. Both come
+    // from settings, which changes on the Settings and Connections pages, so
+    // refresh on navigation, on focus (OAuth returns here) and when the
+    // Settings page reports a persona change.
+    const refreshOperator = () => {
+      getSettings().then(
+        (settings) => {
+          if (!active) return;
+          setOperator({ email: settings.gmail.email, persona: settings.persona.name });
+        },
+        () => {},
+      );
+    };
+    refreshOperator();
+    window.addEventListener("focus", refreshOperator);
+    window.addEventListener("sourcecado:settings-changed", refreshOperator);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshOperator);
+      window.removeEventListener("sourcecado:settings-changed", refreshOperator);
+    };
+  }, [route.kind]);
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -176,6 +242,11 @@ export function AppShell() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+  function toggleRailCollapsed() {
+    const next = !railCollapsed;
+    setRailCollapsed(next);
+    writeRailCollapsed(next);
+  }
   async function handleNewChat() {
     const created = await createSession();
     setSessions((current) => [
@@ -401,15 +472,18 @@ export function AppShell() {
           }, 0);
         }}
       >
-        <span aria-hidden="true">☰</span>
+        <RailIcon name="menu" size={20} />
       </button>
       <GlobalRail
         open={railOpen}
+        collapsed={railCollapsed}
+        operator={operator}
         route={route}
         sessions={sessions}
         scheduledApprovalCount={scheduledApprovalCount}
         memoryReviewCount={memoryReviewCount}
         heldEffectCount={heldEffectCount}
+        onToggleCollapsed={toggleRailCollapsed}
         onNewChat={() => void handleNewChat()}
         onOpenSession={handleOpenSession}
         onPin={(session) => void handlePin(session)}

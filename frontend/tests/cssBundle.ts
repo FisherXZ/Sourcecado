@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 // tests assert against raw CSS text, so read the split files directly in
 // import order instead of the aggregator, which node's fs cannot resolve
 // @import through.
-const SPLIT_FILES = ["tokens", "shell", "chat", "route", "responsive"];
+const SPLIT_FILES = ["tokens", "shell", "chat", "attachments", "route", "responsive"];
 
 export const styles = SPLIT_FILES.map((name) =>
   readFileSync(`src/styles/${name}.css`, "utf8"),
