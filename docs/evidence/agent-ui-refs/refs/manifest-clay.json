@@ -1,0 +1,235 @@
+[
+ {
+  "file": "clay-rail.png",
+  "product": "Clay",
+  "component": "rail",
+  "source_page_url": "https://www.clay.com/signals",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a7f6098d11ae7752df67af9_TopicIntent_new.avif",
+  "note": "App shell from the Signals page: icon-only destination column, labeled panel with scope switcher and collapse, link list, audiences list with search and plus."
+ },
+ {
+  "file": "clay-rail-2.png",
+  "product": "Clay",
+  "component": "rail",
+  "source_page_url": "https://www.clay.com/audiences",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a3a111bdc2fd711be9c6a7d_414b806de774344b8139c242ac6fced5_ABM.avif",
+  "note": "Audiences app: section header row \"All audiences\" with search and plus icons, then Created by me and Workspace groups."
+ },
+ {
+  "file": "clay-header.png",
+  "product": "Clay",
+  "component": "header",
+  "source_page_url": "https://www.clay.com/signals",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a7f6098d11ae7752df67af9_TopicIntent_new.avif",
+  "note": "Table header: title, green status dot, row count, updated time, overflow, square icon buttons with one filled primary, filter chips row."
+ },
+ {
+  "file": "clay-header-2.png",
+  "product": "Clay",
+  "component": "header",
+  "source_page_url": "https://www.clay.com/functions",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/69dd8de91b52fdc13e8b7397_12e4d3c680a37fe19e48498680c13254_functions-visual.png",
+  "note": "Functions app: breadcrumb bar with Credits button and avatar, toolbar with mode, view, column and row counts, and Running/Archived/Up-to-date row states."
+ },
+ {
+  "file": "clay-empty.png",
+  "product": "Clay",
+  "component": "empty",
+  "source_page_url": "https://www.clay.com/blog/how-sculptor-turns-your-gtm-data-into-your-competitive-advantage",
+  "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/690374d7046c1b93f4a0cc5c_5dce15f9.avif",
+  "note": "Sculptor suggested prompts as cards with an icon tile and one question each."
+ },
+ {
+  "file": "clay-empty-2.png",
+  "product": "Clay",
+  "component": "empty",
+  "source_page_url": "https://www.clay.com/use-cases/account-research",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6943253216a03b00791a9147_Account%20research%20at%20scale01.jpg",
+  "note": "Ask Claygent template list: title with count and close, two-line rows, selected row filled with an arrow."
+ },
+ {
+  "file": "clay-composer.png",
+  "product": "Clay",
+  "component": "composer",
+  "source_page_url": "https://www.clay.com/sculptor",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/68c898f8dcf34a6442235799_d2b1bdb5014302d3dff5e18262ae4136_Workflow%20acceleration.avif",
+  "note": "Sculptor side panel: header icons, View previous messages button, collapsible plan card, composer with plus and send."
+ },
+ {
+  "file": "clay-composer-2.png",
+  "product": "Clay",
+  "component": "composer",
+  "source_page_url": "https://www.clay.com/sequencer",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a95ac3daf4a36f6548d908c_sequencer-opengraph.png",
+  "note": "Sequencer prompt with column-reference chips and Update preview, Discard, Accept footer (also the approval pattern)."
+ },
+ {
+  "file": "clay-composer-3.png",
+  "product": "Clay",
+  "component": "composer",
+  "source_page_url": "https://www.clay.com/sculptor",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/68c9ac086f7098cdaf221bb6_Understand_actondata.png",
+  "note": "Sculptor panel mid-conversation: right-aligned user bubble, plain assistant text with headings, composer docked below with a context placeholder."
+ },
+ {
+  "file": "clay-toolstep.png",
+  "product": "Clay",
+  "component": "toolstep",
+  "source_page_url": "https://www.clay.com/claygent",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a6ad93e814d0abb89ed4195_claygent-hero-7.avif",
+  "note": "Claygent step list: check circle for done, spinner for running, blank for pending; per-row streaming phase text in the table."
+ },
+ {
+  "file": "clay-toolstep-2.png",
+  "product": "Clay",
+  "component": "toolstep",
+  "source_page_url": "https://www.clay.com/",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a1797e635ca38900bfbb10a_case-4.avif",
+  "note": "Clay agent step card: actor icon and name, three rows with right-aligned check or spinner, dotted link to the next action."
+ },
+ {
+  "file": "clay-resultcard.png",
+  "product": "Clay",
+  "component": "resultcard",
+  "source_page_url": "https://www.clay.com/use-cases/data-enrichment",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/69714194ec0845268014c05e_Waterfall_CRMEnrich.avif",
+  "note": "Waterfall provider list: First try, Then try, provider logo rows, a Load more row, and a result chip showing which provider returned data."
+ },
+ {
+  "file": "clay-resultcard-2.png",
+  "product": "Clay",
+  "component": "resultcard",
+  "source_page_url": "https://www.clay.com/clay-for-sales",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/697a57ee7c5368bd2cd1349a_b52f67831fb2baee1794f38092c326cd_Enrich%20reps%E2%80%99%20ad-hoc_Sales%20%281%29.avif",
+  "note": "Enriched card: header band, person row, fields each tagged with the source provider icon."
+ },
+ {
+  "file": "clay-resultcard-3.png",
+  "product": "Clay",
+  "component": "resultcard",
+  "source_page_url": "https://www.clay.com/use-cases/tam-sourcing",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a6769e132df69d1cd8a48e4_UI-sectiontam.png",
+  "note": "Provider picker grid with logo and name tiles (Apollo, ZoomInfo, Ocean.io, Clay DB, Clearbit, 6sense)."
+ },
+ {
+  "file": "clay-sidepanel.png",
+  "product": "Clay",
+  "component": "sidepanel",
+  "source_page_url": "https://www.clay.com/functions",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/69dd8de91b52fdc13e8b7397_12e4d3c680a37fe19e48498680c13254_functions-visual.png",
+  "note": "Function inspector: icon title, Edit button, overflow and collapse, Information section with Status, Credit cost, Owner rows."
+ },
+ {
+  "file": "clay-sidepanel-2.png",
+  "product": "Clay",
+  "component": "sidepanel",
+  "source_page_url": "https://www.clay.com/signals",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a7f6098d11ae7752df67af9_TopicIntent_new.avif",
+  "note": "Add signal panel: breadcrumb with close, provider checkboxes each with a per-unit cost chip, full-width Generate topics button."
+ },
+ {
+  "file": "clay-sidepanel-3.png",
+  "product": "Clay",
+  "component": "sidepanel",
+  "source_page_url": "https://www.clay.com/blog/open-weight-models-are-now-in-claygent",
+  "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/6a5560e8b9b2875f3bebf645_Open-weight-models_blog-inline-2.avif",
+  "note": "Claygent config panel: title with rename, Generate and Configure segmented tabs, model dropdown with search and Compare models link."
+ },
+ {
+  "file": "clay-approval.png",
+  "product": "Clay",
+  "component": "approval",
+  "source_page_url": "https://www.clay.com/changelog/product-roundup-25-q3-2-bce36",
+  "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/687d827b19a1ec2707903e5c_CleanShot%202025-07-20%20at%2019.57.36%402x.avif",
+  "note": "Import confirmation: what will happen, cost per row and total as coin chips, budget warning strip, auto-update toggle, Cancel and Import and run."
+ },
+ {
+  "file": "clay-approval-2.png",
+  "product": "Clay",
+  "component": "approval",
+  "source_page_url": "https://www.clay.com/changelog/product-roundup-25-q3-2-bce36",
+  "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/687d82077d1362f24d426c1e_CleanShot%202025-07-20%20at%2019.55.41%402x.avif",
+  "note": "Slack-delivered approval: question, optional feedback box, Approve and Deny buttons."
+ },
+ {
+  "file": "clay-usage.png",
+  "product": "Clay",
+  "component": "usage",
+  "source_page_url": "https://www.clay.com/changelog/introducing-claygent-neon",
+  "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/669637623fdf61a3938880a6_img-claygent-neon.avif",
+  "note": "Model picker rows with key-or-credits choice, coin cost chip, info chip and a Recommended pill."
+ },
+ {
+  "file": "clay-usage-2.png",
+  "product": "Clay",
+  "component": "usage",
+  "source_page_url": "https://www.clay.com/changelog/ai-action-consolidation",
+  "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/6707f7b06fdd84e4b3954c6b_CleanShot%202024-10-10%20at%2011.49.31%402x.avif",
+  "note": "Config footer: Try on 5 rows, coin pill \"1 / row\", Save split button."
+ },
+ {
+  "file": "clay-usage-3.png",
+  "product": "Clay",
+  "component": "usage",
+  "source_page_url": "https://www.clay.com/claygent",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a6adfe03db17a6091dc0c9d_claygent-meta-og-character.png",
+  "note": "Data hub metric cards: title with plus, two labeled big numbers each."
+ },
+ {
+  "file": "clay-error.png",
+  "product": "Clay",
+  "component": "error",
+  "source_page_url": "https://www.clay.com/ai-formula",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/673dbab1ce54620949925647_img-card-ai-formula-1.avif",
+  "note": "Empty and skipped enrichment cells in the table: \"Not found\" and \"Run condition not met\", selected cell outlined."
+ },
+ {
+  "file": "clay-error-2.png",
+  "product": "Clay",
+  "component": "error",
+  "source_page_url": "https://www.clay.com/blog/open-weight-models-are-now-in-claygent",
+  "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/6a5560e8b9b2875f3bebf645_Open-weight-models_blog-inline-2.avif",
+  "note": "Column running at 31% with a progress bar and an orange warning triangle on one row among green status dots."
+ },
+ {
+  "file": "clay-actions.png",
+  "product": "Clay",
+  "component": "actions",
+  "source_page_url": "https://www.clay.com/changelog/2024-11-15",
+  "image_url": "https://cdn.prod.website-files.com/61702af2e3966e09c4101538/6737d1fbe35152c1da730e7b_6737d0d7af122b1c7349dca3_Screenshot%25202024-11-15%2520at%25202.51.39%25E2%2580%25AFPM.avif",
+  "note": "Row context menu (Run 1 row, Insert row, Leave feedback, Delete 1 row in red) and the feedback panel it opens."
+ },
+ {
+  "file": "clay-actions-2.png",
+  "product": "Clay",
+  "component": "actions",
+  "source_page_url": "https://www.clay.com/audiences",
+  "image_url": "https://cdn.prod.website-files.com/61477f2c24a826836f969afe/6a3a11ce11df7428a0e76059_fb727d42b61acfd7418e75ec51235e9f_ABM3.avif",
+  "note": "Export menu: icon plus label rows and a filled Export action bar at the bottom."
+ },
+ {
+  "component": "thinking",
+  "product": "Clay",
+  "gap": "Clay shows no reasoning or thinking disclosure in any official image; Claygent Navigator mentions \"Claygent Replay\" for reviewing steps but no screenshot exists."
+ },
+ {
+  "component": "error",
+  "product": "Clay",
+  "gap": "No image shows a failed agent step or enrichment error with retry, fix-connection or skip actions; only empty-result cell states exist."
+ },
+ {
+  "component": "actions",
+  "product": "Clay",
+  "gap": "No image shows hover icon actions (copy, rerun, edit) on chat messages; only a row context menu exists."
+ },
+ {
+  "component": "approval",
+  "product": "Clay",
+  "gap": "No image shows the resolved state (approved or denied) of an approval; only the pending prompt."
+ },
+ {
+  "component": "composer",
+  "product": "Clay",
+  "gap": "No official image shows keyboard hints or a model/tool picker inside the chat composer; model choice lives in the column config panel."
+ }
+]

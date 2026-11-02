@@ -1,0 +1,220 @@
+[
+  {
+    "file": "claude-rail.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "rail",
+    "source_page_url": "https://claude.com/blog/interactive-tools-in-claude",
+    "image_url": "https://assets.claude.com/577251f8c98cfeb6a67ffe98b4e1be7d29503e64.png",
+    "note": "Collapsed icon rail: panel-toggle icon at the top, then five icon-only destinations, title chip beside it."
+  },
+  {
+    "file": "claude-rail-2.png",
+    "product": "Claude Code",
+    "component": "rail",
+    "source_page_url": "https://code.claude.com/docs/en/agent-view",
+    "image_url": "https://code.claude.com/docs/images/agent-view-light.png",
+    "note": "Session list grouped by state (Needs input, Working, Completed) with age, one-line status and key hints. A dark version exists at the same docs page."
+  },
+  {
+    "component": "rail",
+    "product": "Claude",
+    "gap": "Full expanded sidebar (new chat button, search with Cmd+K, recents with hover rename/star/delete, account footer) not found on an allowed host. The help-center screenshots that show it are hosted on downloads.intercomcdn.com, which is not on the allow-list."
+  },
+  {
+    "file": "claude-header.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "header",
+    "source_page_url": "https://www.anthropic.com/news/projects",
+    "image_url": "https://www-cdn.anthropic.com/images/4zrzovbb/website/c5823949d9350145ce2fda51acbc7076f2139cd0-1920x1080.png",
+    "note": "Breadcrumb header: wordmark, project chip with icon, thread title, then star, Share (lock icon + word) and a sliders icon button."
+  },
+  {
+    "file": "claude-header-2.png",
+    "product": "Claude Console (Managed Agents)",
+    "component": "header",
+    "source_page_url": "https://claude.com/platform/api",
+    "image_url": "https://assets.claude.com/47d7f15e3a1a7ee8c9303a801582d2eaeb183fb6.png",
+    "note": "Run header: back arrow and breadcrumb, bold title with an \"Idle\" status chip, Actions menu, Ask Claude button, then a row of icon chips and run metrics."
+  },
+  {
+    "component": "header",
+    "product": "Claude",
+    "gap": "Model or agent badge and an overflow (three dots) menu are not shown in any allowed image."
+  },
+  {
+    "file": "claude-empty.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "empty",
+    "source_page_url": "https://www.anthropic.com/news/research",
+    "image_url": "https://assets.claude.com/3c87b703466e6f61ed7222f39344337416bf3df2.mp4",
+    "note": "Home: spark glyph and serif greeting, large composer card, four icon+word prompt chips (Write, Code, Strategize, choice) below it. Frame at 12.5s of the Research demo video."
+  },
+  {
+    "file": "claude-empty-2.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "empty",
+    "source_page_url": "https://www.anthropic.com/news/research",
+    "image_url": "https://assets.claude.com/2de448df750ac57760e61a59fe8af1defc46d86e.png",
+    "note": "Suggestions from a connected tool: a \"From Drive\" panel directly under the composer, one prompt per row, hover row with chevron, close button."
+  },
+  {
+    "file": "claude-composer.png",
+    "product": "Claude Code",
+    "component": "composer",
+    "source_page_url": "https://code.claude.com/docs/en/cloud-environments",
+    "image_url": "https://code.claude.com/docs/images/cloud-environment-selector.png",
+    "note": "Claude Code on the web: one-line input with return glyph, environment chip and repo chip above it, a grouped popover, mode and model/effort row below."
+  },
+  {
+    "file": "claude-composer-2.png",
+    "product": "Claude Code",
+    "component": "composer",
+    "source_page_url": "https://claude.com/product/claude-code",
+    "image_url": "https://assets.claude.com/454390de9d9ccefb6082b7c2440c7547c1ec3964.webp",
+    "note": "Running state: placeholder becomes \"Queue another message\", a filled square stop button replaces send, mode chip and attached-file chip in the footer. Dark mode."
+  },
+  {
+    "component": "composer",
+    "product": "Claude",
+    "gap": "The \"+\" menu with attach, connectors and skills toggles is not shown in any allowed still image. Keyboard hints for the composer are not shown either."
+  },
+  {
+    "file": "claude-thinking.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "thinking",
+    "source_page_url": "https://claude.com/blog/interactive-tools-in-claude",
+    "image_url": "https://assets.claude.com/577251f8c98cfeb6a67ffe98b4e1be7d29503e64.png",
+    "note": "Collapsed row \"Thinking...\" with a chevron while streaming, and the expanded block \"Thought for 31 seconds\" with a one-line truncated body."
+  },
+  {
+    "file": "claude-thinking-2.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "thinking",
+    "source_page_url": "https://claude.com/features/artifacts",
+    "image_url": "https://assets.claude.com/c5788873a7fbd74ad7caec11fa90610ee8d8bc14.webm",
+    "note": "Working indicator without a thinking block: animated spark glyph, a bold task line, and a second line with the current step and a chevron. Frame at 1.2s."
+  },
+  {
+    "component": "thinking",
+    "product": "Claude",
+    "gap": "No still image shows the body streaming text or the elapsed counter ticking. The streaming and collapse motion is taken from the two states above, not from a recording."
+  },
+  {
+    "file": "claude-toolstep.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "toolstep",
+    "source_page_url": "https://www.anthropic.com/news/research",
+    "image_url": "https://assets.claude.com/d94666bde1a93acd0d678ecf8c4017230a6416a5.png",
+    "note": "Step rows in a thread: tool logo, past-tense label, result count and chevron. The running row has a muted label and a spinner below."
+  },
+  {
+    "file": "claude-toolstep-2.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "toolstep",
+    "source_page_url": "https://claude.com/product/cowork",
+    "image_url": "https://assets.claude.com/0d948b3a3dbf8e9669c90f8a669af1be99dd2fa0.webm",
+    "note": "Grouped steps: \"Used 4 integrations\" header, then a timeline of rows with one tool logo each and a \"Result\" toggle under each. Frame at 2.4s."
+  },
+  {
+    "component": "toolstep",
+    "product": "Claude",
+    "gap": "No claude.ai still shows a failed step row (x) or per-row elapsed time."
+  },
+  {
+    "file": "claude-resultcard.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "resultcard",
+    "source_page_url": "https://claude.com/blog/interactive-tools-in-claude",
+    "image_url": "https://assets.claude.com/577251f8c98cfeb6a67ffe98b4e1be7d29503e64.png",
+    "note": "Result groups inline: a search row with chips and a count, an expanded \"Found 1 related project\" row holding a nested card with thumbnail, and a field hover card."
+  },
+  {
+    "file": "claude-resultcard-2.png",
+    "product": "Claude desktop app",
+    "component": "resultcard",
+    "source_page_url": "https://claude.com/product/overview",
+    "image_url": "https://assets.claude.com/713c0c02f030abb3c3e1ca45aadc75a28e377197.webm",
+    "note": "File result card: document tile, title, type, and an \"open in\" menu with the Google Drive logo. Crop of a frame at 7.2s."
+  },
+  {
+    "component": "resultcard",
+    "product": "Claude",
+    "gap": "Web search result list with source citation chips and favicons: no allowed image shows it. Table result card: not found."
+  },
+  {
+    "file": "claude-sidepanel.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "sidepanel",
+    "source_page_url": "https://www.anthropic.com/news/projects",
+    "image_url": "https://www-cdn.anthropic.com/images/4zrzovbb/website/c5823949d9350145ce2fda51acbc7076f2139cd0-1920x1080.png",
+    "note": "Artifact panel opened from an inline card: back arrow and title, Preview | Code switch, close; footer with copy and download."
+  },
+  {
+    "file": "claude-sidepanel-2.png",
+    "product": "Claude desktop app",
+    "component": "sidepanel",
+    "source_page_url": "https://claude.com/product/overview",
+    "image_url": "https://assets.claude.com/713c0c02f030abb3c3e1ca45aadc75a28e377197.webm",
+    "note": "Session window with a right inspector: four collapsible sections (Progress, Outputs, Claude in Chrome, Context), a panel-toggle icon in the title bar. Frame at 7.2s."
+  },
+  {
+    "file": "claude-approval.png",
+    "product": "Claude Code",
+    "component": "approval",
+    "source_page_url": "https://code.claude.com/docs/en/permissions",
+    "image_url": "https://code.claude.com/docs/images/permission-prompt-bash-light.png",
+    "note": "Tool permission prompt, light: tool label, plain description, the exact command between rules, then four numbered choices and the key hints."
+  },
+  {
+    "file": "claude-approval-2.png",
+    "product": "Claude Code",
+    "component": "approval",
+    "source_page_url": "https://code.claude.com/docs/en/permissions",
+    "image_url": "https://code.claude.com/docs/images/permission-prompt-bash-dark.png",
+    "note": "The same prompt in dark mode. Accent color marks the tool label and the selected choice."
+  },
+  {
+    "component": "approval",
+    "product": "Claude",
+    "gap": "The claude.ai connector permission card (Allow once / Always allow / Deny buttons) and a resolved receipt state are not in any allowed image."
+  },
+  {
+    "file": "claude-usage.png",
+    "product": "Claude Code",
+    "component": "usage",
+    "source_page_url": "https://code.claude.com/docs/en/statusline",
+    "image_url": "https://code.claude.com/docs/images/statusline-multiline.png",
+    "note": "Status line under the input: model, folder, branch on line 1; context bar with percent, cost and time on line 2."
+  },
+  {
+    "file": "claude-usage-2.png",
+    "product": "Claude Console (Managed Agents)",
+    "component": "usage",
+    "source_page_url": "https://claude.com/platform/api",
+    "image_url": "https://assets.claude.com/47d7f15e3a1a7ee8c9303a801582d2eaeb183fb6.png",
+    "note": "Run transcript with per-event metrics: type pill, one-line summary, and right-aligned tokens and elapsed time. Transcript | Debug switch, filter, search."
+  },
+  {
+    "component": "usage",
+    "product": "Claude",
+    "gap": "claude.ai plan usage and session limit bars (Settings > Usage) are only shown in help-center images on a host outside the allow-list."
+  },
+  {
+    "component": "error",
+    "product": "Claude",
+    "gap": "No image of a failed turn, failed tool call, reconnect prompt or \"continue without\" in any allowed source. The only related control is the Retry button in the message action bar (section 12)."
+  },
+  {
+    "file": "claude-actions.png",
+    "product": "Claude.ai (web and desktop app)",
+    "component": "actions",
+    "source_page_url": "https://www.anthropic.com/news/projects",
+    "image_url": "https://www-cdn.anthropic.com/images/4zrzovbb/website/c5823949d9350145ce2fda51acbc7076f2139cd0-1920x1080.png",
+    "note": "Action bar on an assistant message: Copy and Retry (icon + word), thumbs up and down (icon only), in a bordered pill on the bottom-right edge of the message."
+  },
+  {
+    "component": "actions",
+    "product": "Claude",
+    "gap": "Edit action on user messages and the hover state: no allowed image. A second image for this component was not found."
+  }
+]
