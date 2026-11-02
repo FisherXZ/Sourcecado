@@ -751,3 +751,62 @@ def test_person_api_lists_versions_and_reverts(tmp_path):
     )
     assert reverted.status_code == 200
     assert reverted.json()["person"]["title"] == "Founder"
+
+
+# --- board_search (#242): wiring + parity ---
+
+
+def test_board_search_is_registered_at_every_site():
+    # A new agent tool must be wired at all of these or it silently misbehaves.
+    from coworker.board_tools import BOARD_TOOL_NAMES
+    from coworker.ledger import _NOT_FILED
+    from coworker.permissions import AUTO, RETRY_SAFE
+    from coworker.tools import OPENAI_TOOLS, SOURCECADO_OWNED
+    from coworker.turn import _TOOL_SOURCES
+
+    assert "board_search" in BOARD_TOOL_NAMES
+    assert "board_search" in {s["function"]["name"] for s in OPENAI_TOOLS}
+    assert "board_search" in SOURCECADO_OWNED
+    assert "board_search" in AUTO
+    assert "board_search" in RETRY_SAFE
+    assert "board_search" in _NOT_FILED
+    assert "board_search" in _TOOL_SOURCES
+    decision = decide("board_search")
+    assert decision.allowed is True
+    assert decision.needs_user is False
+
+
+def test_board_search_returns_the_same_identities_as_the_store(tmp_path):
+    store = PersonStore(tmp_path)
+    kept = _ada(store)  # backlog (kept before outreach)
+    active = store.keep_from_apollo(
+        apollo_id="grace",
+        first_name="Grace",
+        last_name_obfuscated="Hopper",
+        title="Admiral",
+        company="Analytic",
+    )
+    store.set_sequence(active["person_id"], "open", actor="director")
+
+    ok, result = execute("board_search", {"text": "analytic"}, people=store)
+
+    assert ok is True
+    assert result["count"] == 2
+    assert {row["person_id"] for row in result["people"]} == {
+        kept["person_id"],
+        active["person_id"],
+    }
+    # Exact parity with the UI's search path.
+    assert result["people"] == store.search("analytic")
+
+
+def test_board_search_reports_email_state_but_never_the_address(tmp_path):
+    store = PersonStore(tmp_path)
+    person = _ada(store)
+    store.apply_enrichment(person["person_id"], email="ada@analytic.test")
+
+    ok, result = execute("board_search", {"text": "ada"}, people=store)
+
+    assert ok is True
+    assert result["people"][0]["has_email"] is True
+    assert "ada@analytic.test" not in json.dumps(result)

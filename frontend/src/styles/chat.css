@@ -2601,6 +2601,36 @@
   text-decoration-color: currentColor;
 }
 
+/* "Already saved" badge on a shortlist candidate already in a Person File (#242). */
+.apollo-already-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--accent, var(--text));
+  text-decoration: none;
+}
+
+.apollo-already-saved:hover {
+  text-decoration: underline;
+}
+
+/* A name-only possible duplicate (#242) — informational, never a merge. */
+.apollo-possible-match {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-muted, var(--text));
+  text-decoration: none;
+}
+
+.apollo-possible-match:hover {
+  text-decoration: underline;
+}
+
 .sourcecado-card-check {
   position: relative;
   display: inline-flex;

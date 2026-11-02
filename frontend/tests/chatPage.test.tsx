@@ -33,6 +33,7 @@ function deferred<T>() {
 }
 
 vi.mock("../src/api", () => ({
+  resolveApolloIdentities: vi.fn().mockResolvedValue({}),
   connectCalendar: vi.fn(),
   connectDrive: vi.fn(),
   connectGmail: vi.fn(),

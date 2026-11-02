@@ -129,7 +129,7 @@ from coworker.brief import (
     project,
     prompt_context,
 )
-from coworker.people import DESCRIPTION_SLOTS, PersonStore
+from coworker.people import DESCRIPTION_SLOTS, SEARCH_LIMIT_DEFAULT, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.prompt_contract import (
@@ -2234,6 +2234,47 @@ def create_app(
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         return {"person": person}
+
+    # IMPORTANT: static /v1/people/* routes MUST be declared before the
+    # /v1/people/{person_id} param route below. Starlette matches in
+    # declaration order with no specificity ranking, so a static path placed
+    # after the param route would be captured as person_id="search" and 404.
+    @app.get("/v1/people/search")
+    def people_search(q: str = "", limit: int = SEARCH_LIMIT_DEFAULT):
+        """Find saved people by name, company, title, or known email.
+
+        Read-only over the local person store: never fetches an email or spends
+        an enrichment credit. Distinguishes no-match (empty list) from failure
+        (non-2xx) for the client.
+        """
+        results = app.state.people.search(q or "", limit=limit)
+        return {"results": results, "count": len(results), "query": q or ""}
+
+    @app.post("/v1/people/resolve-identities")
+    async def people_resolve_identities(request: Request):
+        """Classify Apollo shortlist candidates against saved identities.
+
+        Returns `resolved` (exact apollo_id -> 'Already saved') and `possible`
+        (apollo_id -> name-only matches, shown as a 'possible match'), both keyed
+        by the candidate's Apollo id.
+        """
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list):
+            return JSONResponse(
+                {"error": "candidates must be a list"}, status_code=400
+            )
+        cleaned = [
+            {
+                "apollo_id": candidate.get("apollo_id"),
+                "name": candidate.get("name"),
+            }
+            for candidate in candidates
+            if isinstance(candidate, dict)
+        ]
+        return app.state.people.resolve_shortlist(cleaned)
 
     @app.get("/v1/people/{person_id}")
     def people_get(person_id: str):

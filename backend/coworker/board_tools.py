@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from coworker.brief import CHAT_HANDOFF_FIELD_CHARS, brief_payload, project
-from coworker.people import ATTACHMENT_TYPES, PersonStore
+from coworker.people import ATTACHMENT_TYPES, SEARCH_LIMIT_DEFAULT, PersonStore
 
 _ATTACHMENT_SCHEMA = {"type": "string", "enum": sorted(ATTACHMENT_TYPES)}
 
@@ -40,6 +40,28 @@ BOARD_QUERY_SCHEMA: dict[str, Any] = {
                 "company": {"type": "string"},
                 "target": {"type": "string"},
             },
+            "additionalProperties": False,
+        },
+    },
+}
+
+BOARD_SEARCH_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "board_search",
+        "description": (
+            "Find saved person files by name, company, title, or known email, "
+            "including people kept before outreach (not yet in a sequence). "
+            "Searches only saved identities; it never fetches an email or spends "
+            "an Apollo credit. Returns bounded results."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["text"],
             "additionalProperties": False,
         },
     },
@@ -123,6 +145,7 @@ BOARD_DELETE_SCHEMA: dict[str, Any] = {
 BOARD_TOOL_SCHEMAS = [
     BOARD_GET_SCHEMA,
     BOARD_QUERY_SCHEMA,
+    BOARD_SEARCH_SCHEMA,
     BOARD_UPSERT_SCHEMA,
     BOARD_MUTATE_SCHEMA,
     BOARD_DELETE_SCHEMA,
@@ -241,6 +264,12 @@ def execute_board_tool(
                 target=str(args.get("target") or "") or None,
             )
             return True, {"people": records, "count": len(records)}
+        if name == "board_search":
+            results = people.search(
+                str(args.get("text") or ""),
+                limit=int(args.get("limit") or SEARCH_LIMIT_DEFAULT),
+            )
+            return True, {"people": results, "count": len(results)}
         identity = {
             "actor": actor,
             "session_id": session_id,
