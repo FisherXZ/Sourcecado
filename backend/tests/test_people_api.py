@@ -560,3 +560,83 @@ def test_board_move_rejects_invalid_state_and_unknown_person(tmp_path):
         json={"state": "open", "actor": "director"},
     )
     assert missing.status_code == 404
+
+
+# --- Saved-person finder endpoints (#242) ---
+
+
+def _keep(app, apollo_id, first, last, title, company):
+    return app.state.people.keep_from_apollo(
+        apollo_id=apollo_id,
+        first_name=first,
+        last_name_obfuscated=last,
+        title=title,
+        company=company,
+    )
+
+
+def test_people_search_route_is_not_shadowed_by_the_person_id_route(tmp_path):
+    # Regression: /v1/people/search must resolve to the search handler, never
+    # be captured as person_id="search" by /v1/people/{person_id}.
+    app = _app(tmp_path)
+    person = _keep(app, "a1", "Maya", "Chen", "Engineer", "Acme Labs")
+    res = TestClient(app).get(
+        "/v1/people/search",
+        params={"q": "maya"},
+        headers={TOKEN_HEADER: TOKEN},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["query"] == "maya"
+    assert body["count"] == 1
+    assert body["results"][0]["person_id"] == person["person_id"]
+    assert body["results"][0]["board_lane"] == "backlog"
+
+
+def test_people_search_empty_query_returns_no_results(tmp_path):
+    app = _app(tmp_path)
+    _keep(app, "a1", "Maya", "Chen", "Engineer", "Acme Labs")
+    res = TestClient(app).get(
+        "/v1/people/search", params={"q": ""}, headers={TOKEN_HEADER: TOKEN}
+    )
+    assert res.status_code == 200
+    assert res.json() == {"results": [], "count": 0, "query": ""}
+
+
+def test_people_search_requires_the_token(tmp_path):
+    res = TestClient(_app(tmp_path)).get("/v1/people/search", params={"q": "maya"})
+    assert res.status_code == 401
+
+
+def test_resolve_identities_returns_resolved_and_possible(tmp_path):
+    app = _app(tmp_path)
+    kept = _keep(app, "live1", "Maya", "Chen", "Engineer", "Acme Labs")
+    saved_twin = _keep(app, "twin-saved", "Noor", "Ali", "Designer", "Globex")
+    res = TestClient(app).post(
+        "/v1/people/resolve-identities",
+        json={
+            "candidates": [
+                {"apollo_id": "live1", "name": "Maya Chen"},
+                {"apollo_id": "unknown2", "name": "No Body"},
+                {"apollo_id": "twin-candidate", "name": "Noor Ali"},
+            ]
+        },
+        headers={TOKEN_HEADER: TOKEN},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert set(body["resolved"]) == {"live1"}
+    assert body["resolved"]["live1"]["person_id"] == kept["person_id"]
+    # Same name, different Apollo id -> possible match, not resolved.
+    assert [m["person_id"] for m in body["possible"]["twin-candidate"]] == [
+        saved_twin["person_id"]
+    ]
+
+
+def test_resolve_identities_rejects_a_non_list_body(tmp_path):
+    res = TestClient(_app(tmp_path)).post(
+        "/v1/people/resolve-identities",
+        json={"candidates": "live1"},
+        headers={TOKEN_HEADER: TOKEN},
+    )
+    assert res.status_code == 400

@@ -627,6 +627,75 @@ export async function getBoard(): Promise<Board> {
   return res.json();
 }
 
+/** One saved-person finder hit (#242). Never carries the email address itself. */
+export type SavedPersonMatch = {
+  person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  last_name_status: "known" | "hidden_by_apollo" | "missing";
+  title: string | null;
+  company: string | null;
+  sequence_state: string | null;
+  board_lane: "backlog" | "open" | "in_conversation" | "done";
+  has_email: boolean;
+  apollo_id: string | null;
+  match_kind: "email" | "name" | "company" | "title";
+};
+
+export type SavedPeopleSearchResult = {
+  results: SavedPersonMatch[];
+  count: number;
+  query: string;
+};
+
+/** Resolved saved record for one Apollo candidate (badge / possible-match). */
+export type ResolvedApolloIdentity = {
+  person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  last_name_status?: "known" | "hidden_by_apollo" | "missing";
+  title: string | null;
+  company: string | null;
+  sequence_state: string | null;
+  board_lane: "backlog" | "open" | "in_conversation" | "done";
+};
+
+export type ShortlistCandidate = { apollo_id?: string | null; name?: string | null };
+
+/**
+ * Shortlist candidates classified against saved identities, keyed by Apollo id:
+ * `resolved` = exact id match ("Already saved"); `possible` = name-only match
+ * ("possible match", never merged).
+ */
+export type ShortlistMatches = {
+  resolved: Record<string, ResolvedApolloIdentity>;
+  possible: Record<string, ResolvedApolloIdentity[]>;
+};
+
+export async function searchSavedPeople(
+  query: string,
+  limit = 20,
+): Promise<SavedPeopleSearchResult> {
+  const res = await get(
+    `/v1/people/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`people search ${res.status}`);
+  return res.json();
+}
+
+export async function resolveApolloIdentities(
+  candidates: ShortlistCandidate[],
+): Promise<ShortlistMatches> {
+  const res = await fetch(`${httpBase()}/v1/people/resolve-identities`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ candidates }),
+  });
+  if (!res.ok) throw new Error(`resolve identities ${res.status}`);
+  const data = await res.json();
+  return { resolved: data.resolved ?? {}, possible: data.possible ?? {} };
+}
+
 export async function refreshReplies(): Promise<{
   refresh: ReplyRefreshResult;
   board: Board;

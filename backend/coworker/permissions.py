@@ -27,6 +27,7 @@ AUTO = frozenset(
         "web_search",
         "board_get",
         "board_query",
+        "board_search",
         "board_upsert",
         "board_mutate",
     }
@@ -58,6 +59,7 @@ RETRY_SAFE = frozenset(
         "apollo_search_people",
         "board_get",
         "board_query",
+        "board_search",
     }
 )
 _MCP_WRITE = re.compile(r"write|create|delete|update", re.I)

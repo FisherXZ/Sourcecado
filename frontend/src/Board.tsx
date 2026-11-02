@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { DescriptionEditor, describeDescription } from "./DescriptionEditor";
+import { FindSavedPerson } from "./FindSavedPerson";
+import { Glyph } from "./generative/ResultCard";
 import {
   defaultPersonDescriptions,
   getBoard,
@@ -317,6 +319,7 @@ export function BoardView() {
   const [sequenceFilter, setSequenceFilter] = useState<SequenceFilter>("all");
   const [contactQuery, setContactQuery] = useState("");
   const [view, setView] = useState<BoardViewMode>("contacts");
+  const [finderOpen, setFinderOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -338,6 +341,20 @@ export function BoardView() {
     const refresh = () => setAttempt((value) => value + 1);
     window.addEventListener("sourcecado:board-changed", refresh);
     return () => window.removeEventListener("sourcecado:board-changed", refresh);
+  }, []);
+
+  // Contacts-scoped "/" shortcut opens the finder. It never collides with the
+  // global ⌘K palette, and is ignored while the director is typing in a field.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      event.preventDefault();
+      setFinderOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   async function checkReplies() {
@@ -375,12 +392,21 @@ export function BoardView() {
         <p>Keep active people moving from open outreach through completed follow-up.</p>
         <ViewSwitch active={view} onChange={setView} />
         <div className="board-page-actions">
+          <button
+            type="button"
+            className="board-finder-trigger"
+            onClick={() => setFinderOpen(true)}
+          >
+            <Glyph name="inspect" />
+            Find saved person
+          </button>
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
             {checking ? "Checking for replies…" : "Check for replies"}
           </button>
           {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
         </div>
       </header>
+      {finderOpen ? <FindSavedPerson onClose={() => setFinderOpen(false)} /> : null}
       {board === null && !failed ? <p role="status">Loading contacts…</p> : null}
       {failed ? (
         <section className="route-error" role="alert">

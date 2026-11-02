@@ -9,11 +9,13 @@ import { Inspector, InspectorProvider } from "../src/chat/Inspector";
 const api = vi.hoisted(() => ({
   curateApolloCandidates: vi.fn(),
   openPersonSourcingChat: vi.fn(),
+  resolveApolloIdentities: vi.fn(),
 }));
 
 vi.mock("../src/api", () => ({
   curateApolloCandidates: api.curateApolloCandidates,
   openPersonSourcingChat: api.openPersonSourcingChat,
+  resolveApolloIdentities: api.resolveApolloIdentities,
 }));
 
 function apolloSearch(
@@ -106,6 +108,8 @@ describe("Apollo people result", () => {
       },
     });
     api.openPersonSourcingChat.mockReset();
+    api.resolveApolloIdentities.mockReset();
+    api.resolveApolloIdentities.mockResolvedValue({ resolved: {}, possible: {} });
   });
 
   it("shows an honest incomplete name without rendering Apollo's mask", () => {
@@ -129,6 +133,57 @@ describe("Apollo people result", () => {
     expect(inspector).not.toHaveTextContent("Zh***g");
     fireEvent.click(within(inspector).getByRole("tab", { name: "Context" }));
     expect(inspector).not.toHaveTextContent("Zh***g");
+  });
+
+  it("marks a shortlist candidate already in a Person File as Already saved", async () => {
+    api.resolveApolloIdentities.mockResolvedValue({
+      resolved: {
+        "person-tim": {
+          person_id: "saved-tim",
+          first_name: "Tim",
+          last_name: null,
+          title: "CEO",
+          company: "Apollo.io",
+          sequence_state: null,
+          board_lane: "backlog",
+        },
+      },
+      possible: {},
+    });
+    renderApollo();
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
+
+    const badge = await screen.findByRole("link", { name: /Already saved/ });
+    expect(badge.getAttribute("href")).toBe("#/people/saved-tim");
+    // The badge is read-only: resolving an identity must never keep anyone.
+    expect(api.curateApolloCandidates).not.toHaveBeenCalled();
+  });
+
+  it("flags a name-only duplicate as a possible match, never Already saved", async () => {
+    api.resolveApolloIdentities.mockResolvedValue({
+      resolved: {},
+      possible: {
+        "person-tim": [
+          {
+            person_id: "maybe-tim",
+            first_name: "Tim",
+            last_name: "Zheng",
+            title: "CEO",
+            company: "Apollo.io",
+            sequence_state: null,
+            board_lane: "backlog",
+          },
+        ],
+      },
+    });
+    renderApollo();
+    fireEvent.click(screen.getByRole("button", { name: /^Searched Apollo/ }));
+
+    const badge = await screen.findByRole("link", { name: /Possible match/ });
+    expect(badge.getAttribute("href")).toBe("#/people/maybe-tim");
+    expect(screen.queryByRole("link", { name: /Already saved/ })).toBeNull();
+    // Possible match is informational only — never keeps or merges.
+    expect(api.curateApolloCandidates).not.toHaveBeenCalled();
   });
 
   it("lets the director select several candidates and review before keeping", async () => {
