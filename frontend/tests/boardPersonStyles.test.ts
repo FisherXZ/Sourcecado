@@ -35,8 +35,9 @@ describe("Contacts and person-file styles", () => {
     for (const size of contacts.matchAll(/font-size:\s*(\d+)px/g)) {
       expect(Number(size[1])).toBeGreaterThanOrEqual(13);
     }
+    // Contacts and the CRM detail sheets load after the shared sheets and before responsive.css.
     expect(styles).toMatch(
-      /@import "\.\/styles\/contacts\.css";\s*@import "\.\/styles\/crm-details\.css";\s*@import "\.\/styles\/responsive\.css";/,
+      /@import "\.\/styles\/contacts\.css";[\s\S]*?@import "\.\/styles\/crm-details\.css";[\s\S]*?@import "\.\/styles\/responsive\.css";/,
     );
   });
 

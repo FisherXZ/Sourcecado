@@ -101,7 +101,7 @@ describe("App shell routing", () => {
       brief: livingBrief({ who: "Alyssa", why: "Strong fit", learned: [], missing: [], sources: [] }),
       timeline: [],
     });
-    api.getSchedule.mockResolvedValue({ jobs: [], runs: [] });
+    api.getSchedule.mockResolvedValue({ jobs: [], runs: [], templates: [], cadences: [] });
     api.getSessions.mockResolvedValue({ sessions: [], open_id: null, last_destination: null });
     api.getSession.mockResolvedValue({ id: "", title: null, messages: [] });
     api.getSettings.mockResolvedValue({
@@ -189,7 +189,7 @@ describe("App shell routing", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Scheduled tasks" }),
+      await screen.findByRole("heading", { level: 1, name: "Scheduled" }),
     ).toBeInTheDocument();
   });
 
@@ -206,10 +206,12 @@ describe("App shell routing", () => {
           prompt: "Review priority sourcing work.",
           createdAt: "2026-08-25T10:00:00Z",
           nextRunAt: "2026-08-31T09:00:00-07:00",
+          enabled: true,
         },
       ],
       runs: [],
       templates: [],
+      cadences: [{ id: "weekly_monday_0900", label: "Every Monday at 9:00 AM" }],
     });
 
     render(<App />);
@@ -217,7 +219,10 @@ describe("App shell routing", () => {
     expect(
       await screen.findByRole("heading", { level: 1, name: "Weekly priority review" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Scheduled tasks" })).toHaveAttribute(
+      "href",
+      "#/scheduled",
+    );
   });
 
   it("renders a direct Connections hash route", async () => {
@@ -234,7 +239,7 @@ describe("App shell routing", () => {
     render(<App />);
 
     expect(await screen.findAllByRole("heading", { level: 1 })).toHaveLength(1);
-    expect(screen.getByText("google-drive")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Connection not found" })).toBeInTheDocument();
   });
 
   it("renders a direct Settings hash route", async () => {
@@ -378,7 +383,7 @@ describe("App shell routing", () => {
     fireEvent.click(screen.getByRole("link", { name: "Scheduled" }));
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Scheduled tasks" }),
+      await screen.findByRole("heading", { level: 1, name: "Scheduled" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Scheduled" })).toHaveAttribute("aria-current", "page");
   });
@@ -668,7 +673,7 @@ describe("App shell routing", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Scheduled tasks" }),
+      await screen.findByRole("heading", { level: 1, name: "Scheduled" }),
     ).toBeInTheDocument();
     expect(api.setLastDestination).not.toHaveBeenCalled();
 

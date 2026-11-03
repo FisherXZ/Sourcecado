@@ -9,7 +9,8 @@ vi.mock("../src/api", async importOriginal => ({
     brief: livingBrief(), timeline: [], versions: [], sourcing_chat: { session_id: "session_1" },
     meeting_evidence: { attached: [], proposed: [], rejected: [] } }),
 }));
-vi.mock("../src/Tasks", () => ({ TASKS_CHANGED: "sourcecado:tasks-changed", TaskList: () => null }));
+// Keep the real Tasks helpers the Person File now uses; only the list is stubbed.
+vi.mock("../src/Tasks", async importOriginal => ({ ...(await importOriginal<typeof import("../src/Tasks")>()), TaskList: () => null }));
 vi.mock("../src/EnrichmentPanel", () => ({ EnrichmentPanel: () => null }));
 afterEach(() => vi.unstubAllGlobals());
 
