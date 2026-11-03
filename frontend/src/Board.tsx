@@ -77,6 +77,7 @@ function ContactDescriptionCell({ person }: { person: BoardPerson }) {
           personId={person.person_id}
           description={general}
           rows={2}
+          startEditing
           onSaved={() =>
             window.dispatchEvent(new Event("sourcecado:board-changed"))
           }

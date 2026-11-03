@@ -48,6 +48,22 @@ describe("Contacts and person-file styles", () => {
     expect(personFile).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });
 
+  it("floats the preview over the table from 1100px and keeps narrow forms inside it", () => {
+    expect(contacts).toMatch(
+      /@media \(min-width: 1100px\)\s*\{\s*\.board-page \.person-preview\s*\{[^}]*position:\s*fixed;[^}]*width:\s*420px;[^}]*box-shadow:/,
+    );
+    // The side-by-side grid only applies between 1024px and 1099px.
+    expect(styles).toMatch(
+      /@media \(min-width: 1024px\) and \(max-width: 1099px\)\s*\{\s*\.board-page\.has-preview\s*\{[^}]*display:\s*grid;/,
+    );
+    // The header wraps instead of truncating the name.
+    expect(contacts).toMatch(/\.person-preview \.preview-titlebar\s*\{[^}]*flex-wrap:\s*wrap;/);
+    expect(contacts).not.toMatch(/\.preview-titlebar h2\s*\{[^}]*text-overflow:\s*ellipsis;/);
+    // One column, so the date input cannot push past the card at 390px.
+    expect(styles).toMatch(/\.preview-flag\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/);
+    expect(styles).toMatch(/\.preview-flag input\s*\{[^}]*min-width:\s*0;/);
+  });
+
   it("keeps attention and Gmail warnings on warm tokens", () => {
     // DESIGN.md reserves colour on a dense row for real attention, and the
     // warm "needs attention" pair is already defined in both themes. A

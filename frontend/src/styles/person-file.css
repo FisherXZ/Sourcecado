@@ -50,6 +50,7 @@
 .pf .person-section button,
 .pf .person-outreach-actions button,
 .pf .person-outreach-compose button,
+.pf .person-outreach-start button,
 .pf .description-actions button,
 .pf .route-error button {
   display: inline-flex;
@@ -64,6 +65,7 @@
 .pf .person-drive-actions button,
 .pf .person-outreach-actions button,
 .pf .person-outreach-compose button,
+.pf .person-outreach-start button,
 .pf .person-outreach-prepared,
 .pf .description-actions button,
 .pf .person-handoff button {
@@ -241,7 +243,14 @@
   gap: 8px;
 }
 
-/* Sequence state: a tinted pill that is a native select underneath. */
+/* Sequence state: a tinted pill that is a native select underneath, with
+   Undo beside it. Shared with the Contacts preview. */
+.sequence-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .pf-sequence {
   position: relative;
   display: inline-flex;
@@ -346,6 +355,10 @@
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 8px;
+}
+
+.pf-side-edit {
+  margin-left: auto;
 }
 
 .pf .pf-side-heading h2 {
@@ -737,17 +750,6 @@
   text-transform: none;
 }
 
-.pf .description-authority {
-  padding: 0 8px;
-  border-radius: 9999px;
-  background: var(--raised);
-}
-
-.pf .description-authority.is-human {
-  background: var(--accent-tint);
-  color: var(--accent-deep);
-}
-
 .pf .person-summary-grid {
   margin-top: 0;
 }
@@ -807,6 +809,7 @@
   .pf .person-section button,
   .pf .person-outreach-actions button,
   .pf .person-outreach-compose button,
+  .pf .person-outreach-start button,
   .pf .description-actions button {
     min-height: 44px;
   }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PreparedText } from "./crm/SavedTaskDrafts";
 import { AfterSendReminder } from "./AfterSendReminder";
 import { Glyph } from "./generative/ResultCard";
@@ -40,6 +40,25 @@ export function OutreachPanel({
   const [sentAt, setSentAt] = useState<Date | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [composing, setComposing] = useState(false);
+  const subjectField = useRef<HTMLInputElement>(null);
+  const draftButton = useRef<HTMLButtonElement>(null);
+  const focusNext = useRef<"subject" | "start" | null>(null);
+  const blank = subject.trim() === "" && body.trim() === "";
+  // Typed text keeps the form open, so it is never hidden unsaved.
+  const formOpen = composing || !blank;
+
+  useEffect(() => {
+    const target = focusNext.current === "subject" ? subjectField.current
+      : focusNext.current === "start" ? draftButton.current : null;
+    focusNext.current = null;
+    target?.focus();
+  }, [formOpen]);
+
+  function openCompose() {
+    focusNext.current = "subject";
+    setComposing(true);
+  }
 
   const reviewedHere =
     approval !== null &&
@@ -92,7 +111,8 @@ export function OutreachPanel({
 
       {!draft && !sent ? (
         <>
-        {prepared && !prepared.thread_id && !prepared.thread_review_required ? <button type="button" className="person-outreach-prepared" onClick={() => { setSubject(prepared.subject); setBody(prepared.body); }}><Icon name="draft" />Use prepared follow-up text</button> : null}
+        {prepared && !prepared.thread_id && !prepared.thread_review_required ? <button type="button" className="person-outreach-prepared" onClick={() => { setSubject(prepared.subject); setBody(prepared.body); openCompose(); }}><Icon name="draft" />Use prepared follow-up text</button> : null}
+        {formOpen ? (
         <form
           className="person-outreach-compose"
           onSubmit={(event) => {
@@ -114,6 +134,7 @@ export function OutreachPanel({
           </p>
           <label htmlFor="outreach-subject">Subject</label>
           <input
+            ref={subjectField}
             id="outreach-subject"
             value={subject}
             onChange={(event) => setSubject(event.target.value)}
@@ -127,11 +148,37 @@ export function OutreachPanel({
             onChange={(event) => setBody(event.target.value)}
             required
           />
-          <button type="submit" disabled={busy !== null}>
-            <Icon name="draft" />
-            {busy === "draft" ? "Creating draft…" : "Create Gmail draft"}
-          </button>
+          <div className="person-outreach-actions">
+            <button type="submit" disabled={busy !== null}>
+              <Icon name="draft" />
+              {busy === "draft" ? "Creating draft…" : "Create Gmail draft"}
+            </button>
+            <button
+              type="button"
+              disabled={busy !== null || !blank}
+              title={blank ? undefined : "Clear the subject and message to close"}
+              onClick={() => {
+                focusNext.current = "start";
+                setComposing(false);
+              }}
+            >
+              <Icon name="close" />
+              Cancel
+            </button>
+          </div>
         </form>
+        ) : (
+          <div className="person-outreach-start">
+            <button ref={draftButton} type="button" onClick={openCompose}>
+              <Icon name="draft" />
+              Draft email
+            </button>
+            <p className="person-outreach-recipient">
+              <Glyph name="mail" />
+              <span>To</span> <strong>{recipient}</strong>
+            </p>
+          </div>
+        )}
         </>
       ) : null}
 

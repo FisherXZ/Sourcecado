@@ -68,6 +68,7 @@ describe("DescriptionEditor", () => {
     render(
       <DescriptionEditor personId="p1" description={description()} onSaved={onSaved} />,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Add description" }));
     const field = screen.getByLabelText("Short description");
     fireEvent.change(field, { target: { value: "Concise." } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -87,6 +88,7 @@ describe("DescriptionEditor", () => {
     render(
       <DescriptionEditor personId="p1" description={description()} onSaved={vi.fn()} />,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Add description" }));
     const field = screen.getByLabelText("Short description");
     fireEvent.change(field, { target: { value: "Attempted." } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -98,6 +100,7 @@ describe("DescriptionEditor", () => {
     render(
       <DescriptionEditor personId="p1" description={description()} onSaved={vi.fn()} />,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Add description" }));
     fireEvent.change(screen.getByLabelText("Short description"), {
       target: { value: "x".repeat(501) },
     });
@@ -140,6 +143,7 @@ describe("DescriptionEditor", () => {
     const first = render(
       <DescriptionEditor personId="p1" description={description()} onSaved={vi.fn()} />,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Add description" }));
     fireEvent.change(screen.getByLabelText("Short description"), {
       target: { value: "Half-written." },
     });
@@ -169,6 +173,7 @@ describe("DescriptionEditor", () => {
         onClose={onClose}
       />,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Add description" }));
     const field = screen.getByLabelText("Short description");
     fireEvent.change(field, { target: { value: "First." } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -194,9 +199,79 @@ describe("DescriptionEditor", () => {
   it("cancel discards the draft back to the saved text", () => {
     const saved = description({ authority: "human", text: "Saved copy.", version: 1 });
     render(<DescriptionEditor personId="p1" description={saved} onSaved={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
     const field = screen.getByLabelText("Short description");
+    expect(field).toHaveValue("Saved copy.");
     fireEvent.change(field, { target: { value: "Scratch." } });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    // Cancel closes the editor back to the saved text and drops the draft.
+    expect(screen.queryByLabelText("Short description")).toBeNull();
+    expect(screen.getByText("Saved copy.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit description" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
     expect(screen.getByLabelText("Short description")).toHaveValue("Saved copy.");
+  });
+
+  it("shows one Add button for an empty slot and reveals the editor on click", () => {
+    render(
+      <DescriptionEditor personId="p1" description={description()} onSaved={vi.fn()} />,
+    );
+    // No empty textarea, counter or disabled Save/Cancel/Clear at rest.
+    expect(screen.queryByLabelText("Short description")).toBeNull();
+    expect(screen.queryByText("0 / 500")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+    expect(screen.queryByText("Assistant")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add description" }));
+
+    expect(screen.getByLabelText("Short description")).toHaveFocus();
+    expect(screen.getByText("0 / 500")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add description" })).toBeNull();
+  });
+
+  it("shows saved text with its owner and an Edit button, not an open editor", () => {
+    const saved = description({ authority: "human", text: "Warm intro.", version: 1 });
+    render(<DescriptionEditor personId="p1" description={saved} onSaved={vi.fn()} />);
+    expect(screen.getByText("Warm intro.")).toBeInTheDocument();
+    expect(screen.getByText("Human-edited")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit description" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Short description")).toBeNull();
+  });
+
+  it("keeps a human-protected blank visible with its release control", () => {
+    const blank = description({ authority: "human", text: "", version: 4 });
+    render(<DescriptionEditor personId="p1" description={blank} onSaved={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Add description" })).toBeInTheDocument();
+    expect(screen.getByText("Human-edited")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Let the assistant maintain this" }),
+    ).toBeInTheDocument();
+  });
+
+  it("names the detailed slot's buttons apart from the short one", () => {
+    render(
+      <DescriptionEditor
+        personId="p1"
+        description={description({ slot: "detailed" })}
+        onSaved={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add detailed description" }));
+    expect(screen.getByLabelText("Detailed description")).toHaveFocus();
+  });
+
+  it("opens straight into the editor when the host already chose to edit", () => {
+    render(
+      <DescriptionEditor
+        personId="p1"
+        description={description()}
+        onSaved={vi.fn()}
+        startEditing
+      />,
+    );
+    expect(screen.getByLabelText("Short description")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add description" })).toBeNull();
   });
 });

@@ -142,6 +142,19 @@ describe("Person File record layout", () => {
     );
   });
 
+  it("offers Add buttons instead of empty description editors", async () => {
+    render(<PersonFileView personId="per_maya" />);
+    const overview = await screen.findByRole("tabpanel", { name: "Overview" });
+    expect(within(overview).getByRole("button", { name: "Add description" })).toBeInTheDocument();
+    expect(within(overview).queryByLabelText("Short description")).toBeNull();
+    expect(within(overview).queryByText("0 / 500")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
+    const notes = screen.getByRole("tabpanel", { name: "Notes" });
+    fireEvent.click(within(notes).getByRole("button", { name: "Add detailed description" }));
+    expect(within(notes).getByRole("textbox", { name: "Detailed description" })).toHaveFocus();
+  });
+
   it("shows a person not yet in a sequence as Not started", async () => {
     api.getPerson.mockResolvedValue(personFile(null));
     render(<PersonFileView personId="per_maya" />);

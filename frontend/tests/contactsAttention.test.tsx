@@ -77,7 +77,8 @@ describe("Contacts attention and preview", () => {
     render(<BoardView />);
     fireEvent.click(await screen.findByRole("button", { name: "Preview Maya Patel" }));
     const preview = await screen.findByRole("region", { name: "Person preview" });
-    const text = await within(preview).findByLabelText("Short description");
+    fireEvent.click(await within(preview).findByRole("button", { name: "Add description" }));
+    const text = within(preview).getByLabelText("Short description");
     fireEvent.change(text, { target: { value: "Unsaved context" } });
     fireEvent.click(within(preview).getByRole("button", { name: "Next person" }));
     expect(screen.getByRole("alertdialog", { name: "Unsaved edits" })).toBeInTheDocument();
@@ -124,7 +125,8 @@ describe("Contacts attention and preview", () => {
   it("keeps unsaved description text when closing until the user discards it", async () => {
     const close = vi.fn();
     render(<PersonPreview personId="per_maya" onClose={close} />);
-    const text = await screen.findByLabelText("Short description");
+    fireEvent.click(await screen.findByRole("button", { name: "Add description" }));
+    const text = screen.getByLabelText("Short description");
     fireEvent.change(text, { target: { value: "Context from an offline meeting" } });
     fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
     expect(close).not.toHaveBeenCalled();
@@ -191,7 +193,8 @@ describe("Preview change review", () => {
     const startHash = window.location.hash;
     api.listTasks.mockResolvedValue({tasks: [{task_id: "task_maya", person_id: "per_maya", title: "Send examples", details: "", due_date: null, due_timezone: null, state: "open", origin: "human", version: 1, protected_fields: [], source_refs: [], created_at: "2026-11-02", updated_at: "2026-11-02", completed_at: null}], truncated: false, timezone: "America/Los_Angeles", today: "2026-11-02"});
     render(<PersonPreview personId="per_maya" onClose={() => {}} />);
-    fireEvent.change(await screen.findByLabelText("Attention reason"), {target: {value: "Keep this unsaved flag"}});
+    fireEvent.click(await screen.findByRole("button", {name: "Flag"}));
+    fireEvent.change(screen.getByLabelText("Attention reason"), {target: {value: "Keep this unsaved flag"}});
     fireEvent.click(await screen.findByRole("link", {name: "Prepare a follow-up draft for Send examples"}));
     expect(screen.getByRole("alertdialog", {name: "Unsaved edits"})).toBeInTheDocument();
     expect(window.location.hash).toBe(startHash);
@@ -211,3 +214,96 @@ describe("Preview change review", () => {
       "/v1/people/per_maya/sequence", expect.objectContaining({state: "in_conversation", expected_version: 2, operation_id: expect.any(String)}), "POST"));
   });
 });
+
+describe("Preview controls", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    api.listTasks.mockResolvedValue({ tasks: [], timezone: "America/Los_Angeles", today: "2026-11-02", truncated: false });
+    vi.clearAllMocks();
+    api.getPerson.mockResolvedValue(file());
+    api.crmRequest.mockResolvedValue({});
+  });
+
+  it("changes status from the tinted pill through the same receipt path, with Undo", async () => {
+    const moved = { ...maya, sequence_state: "in_conversation", version: 3 };
+    api.crmRequest.mockResolvedValueOnce({ change: { change_id: "chg_status" }, person: moved });
+    // The first read is the saved state; the refresh after the save sees the move.
+    api.getPerson.mockResolvedValueOnce(file()).mockResolvedValue({ ...file(), person: moved });
+    render(<PersonPreview personId="per_maya" onClose={() => {}} />);
+    const pill = await screen.findByRole("combobox", { name: "Relationship status" });
+    expect(pill).toHaveValue("open");
+    expect(pill.closest("label")).toHaveClass("pf-sequence", "is-open");
+
+    fireEvent.change(pill, { target: { value: "in_conversation" } });
+
+    await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith("/v1/people/per_maya/sequence",
+      expect.objectContaining({ state: "in_conversation", expected_version: 2, operation_id: expect.any(String) }), "POST"));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Relationship status" })).toHaveValue("in_conversation"));
+    fireEvent.click(await screen.findByRole("button", { name: "Undo sequence change" }));
+    await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith("/v1/people/per_maya/crm-changes/chg_status/undo",
+      expect.objectContaining({ operation_id: expect.any(String) }), "POST"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Undo sequence change" })).toBeNull());
+  });
+
+  it("keeps the attention form behind one Flag button until it is needed", async () => {
+    render(<PersonPreview personId="per_maya" onClose={() => {}} />);
+    const flag = await screen.findByRole("button", { name: "Flag" });
+    expect(screen.queryByLabelText("Attention reason")).toBeNull();
+    expect(screen.queryByLabelText("Flag until (optional)")).toBeNull();
+
+    fireEvent.click(flag);
+    expect(screen.getByLabelText("Attention reason")).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Attention reason")).toBeNull();
+    expect(screen.getByRole("button", { name: "Flag" })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Flag" }));
+    fireEvent.change(screen.getByLabelText("Attention reason"), { target: { value: "Call after meeting" } });
+    fireEvent.change(screen.getByLabelText("Flag until (optional)"), { target: { value: "2026-11-10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save flag" }));
+    await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith("/v1/people/per_maya/attention",
+      expect.objectContaining({ reason: "Call after meeting", until: "2026-11-10", expected_version: 2, operation_id: expect.any(String) }), "PATCH"));
+    await waitFor(() => expect(screen.queryByLabelText("Attention reason")).toBeNull());
+  });
+
+  it("shows a saved flag as a chip with Edit flag and Clear flag", async () => {
+    api.getPerson.mockResolvedValue({ ...file(), person: { ...maya, attention_reason: "Call after meeting", attention_until: "2026-11-10" } });
+    render(<PersonPreview personId="per_maya" onClose={() => {}} />);
+    expect(await screen.findByText(/Call after meeting · until 2026-11-10/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Flag" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear flag" }));
+    await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith("/v1/people/per_maya/attention",
+      expect.objectContaining({ reason: null, until: null, expected_version: 2 }), "PATCH"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit flag" }));
+    expect(screen.getByLabelText("Attention reason")).toHaveFocus();
+  });
+
+  it("shows contact details once, as icon and value lines", async () => {
+    api.getPerson.mockResolvedValue({ ...file(), person: { ...maya, email: "maya@lumen.test" } });
+    render(<PersonPreview personId="per_maya" onClose={() => {}} />);
+    const details = await screen.findByRole("region", { name: "Person details" });
+    expect(within(details).getByRole("link", { name: "maya@lumen.test" })).toHaveAttribute("href", "mailto:maya@lumen.test");
+    expect(screen.getAllByText("maya@lumen.test")).toHaveLength(1);
+    expect(screen.getAllByText("Lumen")).toHaveLength(1);
+    expect(within(details).queryByText("Email")).toBeNull();
+    expect(within(details).getByRole("button", { name: "Edit details" })).toBeInTheDocument();
+  });
+
+  it("gives every preview button an icon", async () => {
+    api.getPerson.mockResolvedValue({ ...file(), crm_proposals: [{ person_id: "per_maya", proposal_id: "prop_task", kind: "task_create",
+      value: { title: "Send examples" }, current_value: null, reason: "Asked for examples", source_refs: [] }],
+    crm_changes: [{ change_id: "status_one", entity_type: "status", action: "update", reason: "Changed status", actor: "director" }] });
+    render(<PersonPreview personId="per_maya" onClose={() => {}} />);
+    await screen.findByText("Asked for examples");
+    const preview = screen.getByRole("region", { name: "Person preview" });
+    const buttons = within(preview).getAllByRole("button", { hidden: true });
+    expect(buttons.map(button => button.textContent || button.getAttribute("aria-label"))).toEqual(
+      expect.arrayContaining(["Flag", "Accept", "Edit suggestion", "Dismiss", "Undo", "Add description"]));
+    for (const button of buttons) {
+      expect(button.querySelector("svg"), button.textContent || button.getAttribute("aria-label") || "").not.toBeNull();
+    }
+  });
+});
+

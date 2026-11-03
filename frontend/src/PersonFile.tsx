@@ -9,6 +9,7 @@ import { MonidResearch } from "./MonidResearch";
 import { TaskList } from "./Tasks";
 import { MailActivity } from "./crm/MailActivity";
 import { SavedTaskDrafts, savedTaskDrafts } from "./crm/SavedTaskDrafts";
+import { SequencePill } from "./crm/SequencePill";
 import { Glyph, type GlyphName } from "./generative/ResultCard";
 import { Icon } from "./icons";
 import {
@@ -33,12 +34,6 @@ import {
   undoTaskChange,
   type PersonFile,
 } from "./api";
-
-const STATES = [
-  { id: "open", label: "Open" },
-  { id: "in_conversation", label: "In conversation" },
-  { id: "done", label: "Done" },
-] as const;
 
 const TABS = [
   { id: "overview", label: "Overview", icon: "user" },
@@ -332,37 +327,13 @@ export function PersonFileView({
             ) : null}
           </div>
           <div className="pf-actions">
-            <label className={`pf-sequence is-${sequence || "none"}`}>
-              <span className="pf-visually-hidden">Sequence state</span>
-              <select
-                value={sequence}
-                disabled={moving !== null}
-                aria-busy={moving !== null || undefined}
-                onChange={(event) => void move(event.target.value)}
-              >
-                <option value="" disabled>
-                  Not started
-                </option>
-                {STATES.map((state) => (
-                  <option key={state.id} value={state.id}>
-                    {state.label}
-                  </option>
-                ))}
-              </select>
-              <Glyph name="chevron" />
-            </label>
-            {undoChange ? (
-              <button
-                type="button"
-                className="pf-icon-btn"
-                aria-label="Undo sequence change"
-                title="Undo sequence change"
-                disabled={moving !== null}
-                onClick={() => void undoMove()}
-              >
-                <Icon name="reply" />
-              </button>
-            ) : null}
+            <SequencePill
+              label="Sequence state"
+              value={sequence}
+              disabled={moving !== null}
+              onChange={(state) => void move(state)}
+              onUndo={undoChange ? () => void undoMove() : undefined}
+            />
             <button
               type="button"
               className="pf-btn pf-btn-primary"
@@ -407,7 +378,6 @@ export function PersonFileView({
           <PersonDetailsEditor
             key={personId}
             ref={details}
-            variant="sidebar"
             editTrigger={editButton}
             person={file.person}
             history={file.crm_changes}

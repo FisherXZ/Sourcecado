@@ -307,8 +307,10 @@
   font-size: 13px;
 }
 
-.has-preview .contacts-table {
-  min-width: 760px;
+@media (max-width: 1099px) {
+  .has-preview .contacts-table {
+    min-width: 760px;
+  }
 }
 
 .contacts-table th {
@@ -652,27 +654,53 @@
   font-weight: 500;
 }
 
-/* Preview header in the Clay pattern: who, where in the list, and close. */
+/* From 1100px the preview floats over the right of the table, which keeps
+   its full width underneath. */
+@media (min-width: 1100px) {
+  .board-page .person-preview {
+    position: fixed;
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    z-index: 30;
+    width: 420px;
+    max-height: none;
+    box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 14%, transparent);
+  }
+}
+
+/* Preview header in the Clay pattern: who, where in the list, and close.
+   The name keeps its own line when the actions do not fit beside it. */
 .person-preview .preview-titlebar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: -4px 0 12px;
 }
 
-.person-preview .preview-titlebar h2 {
+.preview-identity {
+  display: flex;
+  flex: 1 1 160px;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  flex: 1;
-  margin: 0;
-  overflow: hidden;
-  font-size: 16px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.preview-titlebar-fill {
-  flex: 1;
+.person-preview .preview-titlebar h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.preview-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
 }
 
 .preview-pager {
@@ -714,6 +742,104 @@
   opacity: .4;
 }
 
+/* Every preview button carries an icon; keep icon and label on one line. */
+.person-preview button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.person-preview .pf-icon-btn,
+.person-preview .preview-icon-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.person-preview .pf-icon-btn:hover:not(:disabled),
+.person-preview .preview-icon-button:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--raised);
+}
+
+/* Sequence pill and flag share one line under the header. */
+.person-preview .preview-status {
+  margin-bottom: 8px;
+}
+
+.person-preview .pf-sequence {
+  display: inline-flex;
+  gap: 0;
+}
+
+.person-preview .pf-sequence.is-none {
+  color: var(--text);
+}
+
+.person-preview .pf-sequence select {
+  min-height: 32px;
+  padding: 0 30px 0 14px;
+  border-radius: 9999px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.preview-flag-set {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 2px;
+}
+
+.preview-flag-set .contacts-pill {
+  min-width: 0;
+}
+
+.preview-flag-set .contacts-pill svg {
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  vertical-align: -2px;
+}
+
+/* Details: the same icon + value lines as the Person File sidebar. */
+.person-preview .pf-side-heading h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.person-preview .pf-attr > a {
+  color: var(--text);
+}
+
+.person-preview .pf-attr-add {
+  justify-self: start;
+  min-height: 32px;
+  margin-left: -6px;
+  padding: 0 8px 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--accent-deep);
+  font: inherit;
+}
+
+.person-preview .pf-attr-add:hover {
+  background: var(--raised);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .contacts-icon-button.is-spinning svg {
     animation: none;
@@ -729,9 +855,16 @@
 
 @media (max-width: 1023px) {
   .person-preview .preview-titlebar button,
-  .person-preview .preview-icon-link {
+  .person-preview .preview-icon-link,
+  .person-preview .pf-icon-btn,
+  .person-preview .preview-icon-button {
     width: 44px;
     height: 44px;
+    min-height: 44px;
+  }
+
+  .person-preview .pf-sequence select,
+  .person-preview .pf-attr-add {
     min-height: 44px;
   }
 }

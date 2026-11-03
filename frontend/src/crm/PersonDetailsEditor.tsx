@@ -143,9 +143,8 @@ export const PersonDetailsEditor = forwardRef<
     onSaved: (person: PersonFile["person"]) => void;
     history?: CrmChange[];
     onBusyChange?: (busy: boolean) => void;
-    /** "sidebar": Person File attribute list; the edit trigger lives outside. */
-    variant?: "panel" | "sidebar";
-    /** Where focus returns after an edit when the trigger lives outside. */
+    /** The edit button when it lives outside (the Person File header); focus
+     *  returns there after an edit. Without it, the heading has its own. */
     editTrigger?: RefObject<HTMLButtonElement | null>;
   }
 >(function PersonDetailsEditor(
@@ -154,13 +153,11 @@ export const PersonDetailsEditor = forwardRef<
     onSaved,
     history = [],
     onBusyChange,
-    variant = "panel",
     editTrigger,
   },
   ref,
 ) {
   const pid = person.person_id;
-  const sidebar = variant === "sidebar";
   const [draft, setDraft] = useState<Draft | null>(() => read(pid));
   const [review, setReview] = useState<PersonCorrectionReview | null>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -391,104 +388,81 @@ export const PersonDetailsEditor = forwardRef<
       data-unsaved={dirty ? "true" : undefined}
       data-correction-busy={busy ? "true" : undefined}
     >
-      {sidebar ? (
-        <div className="pf-side-heading">
-          <h2>Details</h2>
-          {protectedFields ? (
-            <span
-              className="pf-badge"
-              title="Human corrections are protected from provider updates."
-            >
-              Human-edited
-            </span>
-          ) : null}
-        </div>
-      ) : (
-        <div className="person-details-heading">
-          <h3>Details</h3>
-          {!draft ? (
-            <button type="button" ref={editButton} onClick={begin}>
-              <Icon name="edit" />
-              Edit details
-            </button>
-          ) : null}
-        </div>
-      )}
+      <div className="pf-side-heading">
+        <h2>Details</h2>
+        {protectedFields ? (
+          <span
+            className="pf-badge"
+            title="Human corrections are protected from provider updates."
+          >
+            Human-edited
+          </span>
+        ) : null}
+        {/* Without an outside trigger (the Contacts preview), edit from here. */}
+        {!editTrigger && !draft ? (
+          <button
+            type="button"
+            ref={editButton}
+            className="pf-icon-btn pf-side-edit"
+            aria-label="Edit details"
+            title="Edit details"
+            onClick={begin}
+          >
+            <Icon name="edit" />
+          </button>
+        ) : null}
+      </div>
       {!draft ? (
         <>
-          {sidebar ? (
-            <ul className="pf-attrs">
-              {ATTRIBUTES.map(({ field, noun, icon }) => {
-                const raw = person[field];
-                const value = typeof raw === "string" ? raw.trim() : "";
-                const mark =
-                  "glyph" in icon ? (
-                    <Glyph name={icon.glyph} />
-                  ) : (
-                    <Icon name={icon.icon} />
-                  );
-                if (!value)
-                  return (
-                    <li key={field} className="pf-attr is-missing">
-                      <button
-                        type="button"
-                        className="pf-attr-add"
-                        onClick={() => {
-                          focusField.current = field;
-                          begin();
-                        }}
-                      >
-                        {mark}
-                        Add {noun}
-                      </button>
-                    </li>
-                  );
-                const href = safeLink(field, value);
+          <ul className="pf-attrs">
+            {ATTRIBUTES.map(({ field, noun, icon }) => {
+              const raw = person[field];
+              const value = typeof raw === "string" ? raw.trim() : "";
+              const mark =
+                "glyph" in icon ? (
+                  <Glyph name={icon.glyph} />
+                ) : (
+                  <Icon name={icon.icon} />
+                );
+              if (!value)
                 return (
-                  <li key={field} className="pf-attr">
-                    {mark}
-                    {href ? (
-                      <a
-                        href={href}
-                        {...(field === "linkedin_url"
-                          ? { target: "_blank", rel: "noreferrer" }
-                          : {})}
-                      >
-                        {shownValue(field, value)}
-                      </a>
-                    ) : (
-                      <span>{value}</span>
-                    )}
-                    {field === "email" ? (
-                      <CopyValue value={value} noun="email" />
-                    ) : null}
+                  <li key={field} className="pf-attr is-missing">
+                    <button
+                      type="button"
+                      className="pf-attr-add"
+                      onClick={() => {
+                        focusField.current = field;
+                        begin();
+                      }}
+                    >
+                      {mark}
+                      Add {noun}
+                    </button>
                   </li>
                 );
-              })}
-            </ul>
-          ) : (
-            <>
-              <dl className="person-details-contact">
-                {["email", "phone", "linkedin_url"].map((field) => {
-                  const value = person[field];
-                  return typeof value === "string" && value ? (
-                    <div key={field}>
-                      <dt>{FIELDS.find((f) => f.field === field)?.label}</dt>
-                      <dd>{value}</dd>
-                    </div>
-                  ) : null;
-                })}
-              </dl>
-              {!person.email && !person.phone && !person.linkedin_url ? (
-                <p className="person-empty">No contact details saved.</p>
-              ) : null}
-              {protectedFields ? (
-                <p className="person-details-protection">
-                  Human corrections are protected from provider updates.
-                </p>
-              ) : null}
-            </>
-          )}
+              const href = safeLink(field, value);
+              return (
+                <li key={field} className="pf-attr">
+                  {mark}
+                  {href ? (
+                    <a
+                      href={href}
+                      {...(field === "linkedin_url"
+                        ? { target: "_blank", rel: "noreferrer" }
+                        : {})}
+                    >
+                      {shownValue(field, value)}
+                    </a>
+                  ) : (
+                    <span>{value}</span>
+                  )}
+                  {field === "email" ? (
+                    <CopyValue value={value} noun="email" />
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
           {conflicts.length ? (
             <div className="person-details-conflicts">
               <h4>Provider differences to review</h4>
