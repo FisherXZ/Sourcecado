@@ -836,7 +836,8 @@ export type TaskListing = {
 
 export type TaskSaveResult = {
   task: PersonTask;
-  change: { change_id: string } | null;
+  /** `can_undo` is false when the server will refuse to reverse this change. */
+  change: { change_id: string; can_undo?: boolean } | null;
   replayed: boolean;
 };
 

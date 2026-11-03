@@ -13,6 +13,7 @@ import {
   subscribeDescriptionDraft,
   writeDescriptionDraft,
 } from "./descriptionDrafts";
+import { Glyph } from "./generative/ResultCard";
 import { Icon } from "./icons";
 
 const LIMITS: Record<DescriptionSlot, number> = { general: 500, detailed: 8000 };
@@ -80,6 +81,7 @@ export function DescriptionEditor({
     () => readDescriptionDraft(personId, slot)?.text ?? null,
   );
   const [editing, setEditing] = useState(startEditing);
+  const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -129,6 +131,7 @@ export function DescriptionEditor({
 
   function edit(next: string) {
     setDraft(next);
+    setArmed(false);
     setStatus(null);
     writeDescriptionDraft(personId, slot, {
       text: next,
@@ -138,6 +141,7 @@ export function DescriptionEditor({
 
   function cancel() {
     setDraft(null);
+    setArmed(false);
     setStatus(null);
     clearDescriptionDraft(personId, slot);
     close();
@@ -231,7 +235,8 @@ export function DescriptionEditor({
     </details>
   ) : null;
   const statusLine = status ? (
-    <p className="description-status" role="status">
+    <p className="crm-alert description-status" role="status">
+      <Glyph name="info" />
       {status}
     </p>
   ) : null;
@@ -281,10 +286,30 @@ export function DescriptionEditor({
     );
   }
 
+  // The counter appears only once the text nears the limit.
+  const nearLimit = value.length >= limit * 0.8;
+
   return (
-    <div className="description-editor" data-unsaved={dirty || busy ? "true" : undefined}>
+    <div
+      className="description-editor is-editing"
+      data-unsaved={dirty || busy ? "true" : undefined}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          void save();
+          return;
+        }
+        if (event.key !== "Escape" || busy) return;
+        // Escape cancels an unchanged edit; changed text needs a second Escape.
+        event.preventDefault();
+        event.stopPropagation();
+        if (!dirty || armed) cancel();
+        else setArmed(true);
+      }}
+    >
       {stale ? (
-        <p className="description-stale" role="status">
+        <p className="crm-note description-stale" role="status">
+          <Glyph name="info" />
           The saved copy changed since you started this draft. Saving replaces it.
         </p>
       ) : null}
@@ -292,31 +317,43 @@ export function DescriptionEditor({
         ref={field}
         className="description-textarea"
         aria-label={SLOT_LABEL[slot]}
+        placeholder={slot === "general" ? "Add a short description" : "Add detailed notes"}
         rows={rows}
         value={value}
         onChange={(event) => edit(event.target.value)}
       />
-      <div className="description-editor-meta">
-        <span className={`description-count${overLimit ? " is-over" : ""}`}>
-          {value.length} / {limit}
-        </span>
-      </div>
-      <div className="description-actions">
+      <div className="description-editor-foot">
         <button
           type="button"
-          onClick={() => void save()}
-          disabled={busy || overLimit || !dirty}
+          className="crm-btn is-ghost description-clear"
+          title="Empty the text. Save keeps it blank."
+          onClick={clear}
+          disabled={busy || value.length === 0}
         >
-          <Icon name="save" />
-          {busy ? "Saving…" : "Save"}
+          <Icon name="deny" />
+          Clear
         </button>
-        <button type="button" onClick={cancel} disabled={busy}>
+        {armed && dirty ? (
+          <span className="description-hint" role="status">Press Escape again to discard</span>
+        ) : null}
+        {nearLimit ? (
+          <span className={`description-count${overLimit ? " is-over" : ""}`}>
+            {value.length} / {limit}
+          </span>
+        ) : null}
+        <button type="button" className="crm-btn is-ghost" onClick={cancel} disabled={busy}>
           <Icon name="close" />
           Cancel
         </button>
-        <button type="button" onClick={clear} disabled={busy || value.length === 0}>
-          <Icon name="deny" />
-          Clear
+        <button
+          type="button"
+          className="crm-btn is-primary"
+          title="Save (⌘Enter)"
+          onClick={() => void save()}
+          disabled={busy || overLimit || !dirty}
+        >
+          <Icon name="check" />
+          {busy ? "Saving…" : "Save"}
         </button>
       </div>
       {statusLine}

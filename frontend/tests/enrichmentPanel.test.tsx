@@ -88,6 +88,49 @@ describe("deliberate person enrichment",()=>{
   expect(await screen.findByRole("alert")).toHaveTextContent("Apollo couldn’t confirm this is the same person. No details were saved.");
   expect(screen.getByRole("link",{name:"Review person details"})).toHaveAttribute("href","#/people/maya");
  });
+ it("explains a no match with the cost and offers a better identifier",async()=>{
+  const missed=terminal("no_match");
+  api.getPersonEnrichment.mockResolvedValue({...missed,known:{...base.known,email:null},latest:{...missed.latest,matched_on:"name",credits_actual:1,fields_found:[],fields_applied:[]}});
+  const edit=vi.fn();render(<EnrichmentPanel personId="maya" onEditDetail={edit}/>);
+  expect(await screen.findByText("Apollo found no match for Maya Patel at Example Labs.")).toBeInTheDocument();
+  expect(screen.getByText("1 credit used")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("No match found · 1 credit");
+  // The card replaces the bare Find button, so the click has a visible result.
+  expect(screen.queryByRole("button",{name:"Find contact details"})).toBeNull();
+  fireEvent.click(screen.getByRole("button",{name:"Add email"}));expect(edit).toHaveBeenCalledWith("email");
+  fireEvent.click(screen.getByRole("button",{name:"Edit company"}));expect(edit).toHaveBeenCalledWith("company");
+  fireEvent.click(screen.getByRole("button",{name:"Look up again"}));
+  await screen.findByRole("button",{name:"Approve lookup once"});expect(api.decideApproval).not.toHaveBeenCalled();
+ });
+ it("does not offer identifier edits when the saved Apollo id drove the match",async()=>{
+  const missed=terminal("no_match");api.getPersonEnrichment.mockResolvedValue({...missed,latest:{...missed.latest,fields_applied:[]}});
+  render(<EnrichmentPanel personId="maya" onEditDetail={vi.fn()}/>);
+  await screen.findByText("Apollo found no match for Maya Patel at Example Labs.");
+  expect(screen.queryByRole("button",{name:/email/})).toBeNull();
+  expect(screen.getByRole("button",{name:"Look up again"})).toBeInTheDocument();
+ });
+ it.each([["failed","Apollo couldn’t complete this lookup."],["insufficient_credit","Apollo has no credits left for this lookup."]])("gives %s a reason and a next step",async(status,reason)=>{
+  api.getPersonEnrichment.mockResolvedValue(terminal(status));render(<EnrichmentPanel personId="maya"/>);
+  expect(await screen.findByText(reason)).toBeInTheDocument();
+  expect(screen.getByRole("button",{name:"Try again"})).toBeEnabled();
+  if(status==="insufficient_credit")expect(screen.getByRole("link",{name:"Check Apollo credits"})).toHaveAttribute("href","#/connections/apollo");
+  expect(api.preparePersonEnrichment).not.toHaveBeenCalled();
+ });
+ it("shows Looking up while the approved lookup runs, then the filled fields",async()=>{
+  api.getPersonEnrichment.mockResolvedValue(review);let finish!:(value:unknown)=>void;
+  api.decideApproval.mockReturnValue(new Promise(resolve=>{finish=resolve;}));
+  render(<EnrichmentPanel personId="maya"/>);fireEvent.click(await screen.findByRole("button",{name:"Approve lookup once"}));
+  expect(screen.getByRole("status")).toHaveTextContent("Looking up…");
+  api.getPersonEnrichment.mockResolvedValue(terminal());finish({ok:true});
+  const filled=await screen.findByRole("list",{name:"Filled from Apollo"});
+  expect(filled).toHaveTextContent("Email");expect(filled).toHaveClass("is-fresh");
+ });
+ it("tells the host when preparing the review opened the person's chat",async()=>{
+  api.getPersonEnrichment.mockResolvedValue({...base,session_id:null});const opened=vi.fn();
+  render(<EnrichmentPanel personId="maya" onSessionOpened={opened}/>);
+  fireEvent.click(await screen.findByRole("button",{name:"Find contact details"}));
+  await screen.findByRole("button",{name:"Approve lookup once"});expect(opened).toHaveBeenCalledTimes(1);
+ });
  it("reuses the preparation operation after a lost preparation response",async()=>{
   api.preparePersonEnrichment.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(review);
   render(<EnrichmentPanel personId="maya"/>);fireEvent.click(await screen.findByRole("button",{name:"Find contact details"}));
