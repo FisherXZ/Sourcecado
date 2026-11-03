@@ -440,8 +440,11 @@ export function PersonFileView({
             <OutreachPanel
               personId={personId}
               sessionId={file.sourcing_chat?.session_id ?? null}
+              personVersion={typeof file.person.version === "number" ? file.person.version : null}
               recipient={typeof file.person.email === "string" ? file.person.email : null}
               prepared={savedTaskDrafts(file)[0]}
+              // Draft email opened the chat, so the header now offers Open chat.
+              onChatOpened={() => setAttempt((value) => value + 1)}
             />
             <SavedTaskDrafts file={file} />
           </TabPanel>

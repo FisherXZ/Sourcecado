@@ -919,9 +919,3 @@
     height: 44px;
   }
 }
-
-/* The preview is narrower than a task row's full action set: let actions wrap below the title. */
-.person-preview .task-row-actions {
-  flex: 1 1 100%;
-  min-width: 0;
-}

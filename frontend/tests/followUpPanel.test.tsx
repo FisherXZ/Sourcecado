@@ -11,6 +11,8 @@ const api = vi.hoisted(() => ({
   requestSendApproval: vi.fn(),
   decideApproval: vi.fn(),
   openPersonSourcingChat: vi.fn(),
+  updateTask: vi.fn(),
+  undoTaskChange: vi.fn(),
 }));
 
 vi.mock("../src/api", async (importOriginal) => ({
@@ -180,10 +182,39 @@ describe("Follow-up panel", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Allow once and send" }));
-    expect(await screen.findByText(/The task is still open/)).toBeTruthy();
+    // Sending leaves the task open; the sent card offers to finish it.
+    expect(await screen.findByRole("button", { name: "Mark task done" })).toBeVisible();
+    expect(api.updateTask).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Set follow-up" })).toBeVisible();
     expect(api.decideApproval).toHaveBeenCalledWith("send_1", "allow");
     expect(readFollowUpText("per_1", "task_1")).toBeNull();
+  });
+
+  it("marks the task done from the sent card, with Undo", async () => {
+    api.updateTask.mockResolvedValue({
+      task: { task_id: "task_1", title: "Send Ada the deck", state: "completed", version: 2 },
+      change: { change_id: "chg_done" },
+      replayed: false,
+    });
+    api.undoTaskChange.mockResolvedValue({ task: null, change: null, replayed: false });
+    panel();
+    fireEvent.click(await screen.findByRole("button", { name: "Create reply draft in Gmail" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Request approval to send" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Allow once and send" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Mark task done" }));
+    expect(await screen.findByText("Task marked done")).toBeTruthy();
+    expect(api.updateTask).toHaveBeenCalledWith("per_1", "task_1", {
+      changes: { state: "completed" },
+      expectedVersion: 1,
+      operationId: expect.any(String),
+    });
+    expect(screen.getByText("Completed “Send Ada the deck”")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo completing Send Ada the deck" }));
+    expect(await screen.findByRole("button", { name: "Mark task done" })).toBeTruthy();
+    expect(api.undoTaskChange).toHaveBeenCalledWith("per_1", "chg_done", { operationId: expect.any(String) });
+    expect(api.decideApproval).toHaveBeenCalledTimes(1);
   });
 
   it("denies a pending approval before saving a changed message", async () => {

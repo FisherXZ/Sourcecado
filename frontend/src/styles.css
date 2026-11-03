@@ -3,11 +3,11 @@
 @import "./styles/chat.css";
 @import "./styles/attachments.css";
 @import "./styles/route.css";
-@import "./styles/afterSendReminder.css";
 @import "./styles/enrichment.css";
 @import "./styles/monid.css";
 @import "./styles/person-file.css";
 @import "./styles/contacts.css";
+@import "./styles/crm-interactions.css";
 @import "./styles/responsive.css";
 
 .person-mail-activity .person-timeline-entry,
@@ -135,25 +135,6 @@
   gap: 8px;
 }
 
-.description-textarea {
-  width: 100%;
-  resize: vertical;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-.description-editor-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  font-size: 13px;
-  color: var(--text);
-}
-
 /* At rest: the saved text, then its owner and icon actions on one line. */
 .description-text {
   margin: 0;
@@ -237,23 +218,6 @@ button.description-icon-button:disabled {
     min-width: 44px;
     min-height: 44px;
   }
-}
-
-.description-count.is-over {
-  color: var(--error-text, #9b3b2e);
-  font-weight: 600;
-}
-
-.description-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.description-stale,
-.description-status {
-  font-size: 13px;
-  color: var(--pit, var(--muted));
 }
 
 .person-descriptions {
@@ -579,252 +543,8 @@ button.description-icon-button:disabled {
   opacity: .65;
 }
 
-/* Contacts / Tasks view switch and the shared task list. The same rows render
-   in Contacts and in a person file; colour appears only for overdue work and
-   always beside a text label. */
-.task-list {
-  min-width: 0;
-}
-
-.contacts-list .task-list {
-  padding: 4px 14px 14px;
-}
-
-.task-list-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 44px;
-}
-
-.task-list-header h2,
-.task-list-header h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.task-list-header button,
-.task-row-action,
-.task-form-actions button,
-.task-list-error button {
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.task-form-actions button[type="submit"] {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--surface);
-}
-
-.task-list-header button:disabled,
-.task-form-actions button:disabled {
-  cursor: not-allowed;
-  opacity: .6;
-}
-
-.task-rows {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.task-group-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 14px 0 6px;
-  border-bottom: 1px solid var(--border);
-}
-
-.task-group-label h3,
-.task-group-label h4 {
-  margin: 0;
-  color: var(--muted);
-  font-family: ui-monospace, "Geist Mono", monospace;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-}
-
-.task-group-count {
-  min-width: 18px;
-  padding: 1px 5px;
-  border-radius: 9999px;
-  background: var(--canvas);
-  color: var(--muted);
-  font-family: ui-monospace, "Geist Mono", monospace;
-  font-size: 10px;
-  text-align: center;
-}
-
-.task-row {
-  display: flex;
-  flex-wrap: wrap;
-  min-height: 44px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.task-row-copy {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.task-title {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-details {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.task-meta a {
-  color: var(--accent-deep);
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.task-due {
-  font-family: ui-monospace, "Geist Mono", monospace;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.task-row.is-overdue .task-due {
-  color: var(--warn);
-  font-weight: 600;
-}
-
-.task-row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-  gap: 6px;
-}
-
-.task-state {
-  font-weight: 600;
-  color: var(--text);
-}
-
-.task-row.is-state-completed .task-title,
-.task-row.is-state-cancelled .task-title {
-  color: var(--muted);
-  text-decoration: line-through;
-}
-
-.task-row-notice {
-  margin: 4px 0 0;
-  color: var(--warn);
-  font-size: 12px;
-}
-
-.task-history-section {
-  margin-top: 12px;
-}
-
-.task-history-section summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.task-history-section summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.task-history {
-  display: grid;
-  flex-basis: 100%;
-  gap: 8px;
-  width: 100%;
-  margin: 8px 0 4px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--raised);
-}
-
-.task-history-rows {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.task-history-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 36px;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.task-history-row:last-child {
-  border-bottom: 0;
-}
-
-.task-history-copy {
-  display: grid;
-  gap: 2px;
-  font-size: 13px;
-}
-
-.task-history > button {
-  justify-self: start;
-}
-
-.task-form {
-  display: grid;
-  gap: 10px;
-  width: 100%;
-  margin: 8px 0;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--canvas);
-}
-
+/* Labelled fields reused by the Monid forms, and the button TaskDraft renders
+   in suggestion cards. The task list itself lives in styles/crm-interactions.css. */
 .task-field {
   display: grid;
   gap: 4px;
@@ -850,75 +570,20 @@ button.description-icon-button:disabled {
   font-size: 13px;
 }
 
-.task-field-date input {
-  max-width: 200px;
-  font-family: ui-monospace, "Geist Mono", monospace;
-}
-
-.task-form-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.task-form [role="alert"],
-.task-list-error p {
-  margin: 0;
-  color: var(--error);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.task-conflict {
-  padding: 10px 12px;
+.task-row-action {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-size: 12px;
-}
-
-.task-conflict p {
-  margin: 0;
-  color: var(--warn);
-}
-
-.task-conflict dl {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 2px 10px;
-  margin: 8px 0;
+  background: var(--surface);
   color: var(--text);
-}
-
-.task-conflict dt {
+  font: inherit;
+  font-size: 13px;
   font-weight: 600;
+  cursor: pointer;
 }
 
-.task-conflict dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.task-list-error {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin: 8px 0;
-}
-
-.task-list-status,
-.task-list-timezone {
-  margin: 10px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.task-list-header button:focus-visible,
 .task-row-action:focus-visible,
-.task-form-actions button:focus-visible,
-.task-list-error button:focus-visible,
-.task-meta a:focus-visible,
 .task-field input:focus-visible,
 .task-field textarea:focus-visible,
 .task-field select:focus-visible {
@@ -927,154 +592,16 @@ button.description-icon-button:disabled {
 }
 
 @media (max-width: 767px) {
-  .task-list-header button,
   .task-row-action,
-  .task-form-actions button,
-  .task-list-error button,
   .task-field input,
   .task-field textarea,
   .task-field select {
     min-height: 44px;
   }
 
-  .task-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .task-row-actions {
-    width: 100%;
-  }
-
   .person-summary-grid {
     grid-template-columns: 1fr;
   }
-
-}
-
-/* Outreach: draft, review, approve. Dense and quiet; the only colour is the
-   accent tint on the reviewed version and the warm error on a refusal. */
-.person-outreach-compose,
-.person-outreach-review {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.person-outreach-compose label {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.person-outreach-compose input,
-.person-outreach-compose textarea {
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  line-height: 1.55;
-}
-
-.person-outreach-start button,
-.person-outreach-compose button,
-.person-outreach-actions button {
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-/* No draft yet: one Draft email button beside the recipient. */
-.person-outreach-start {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  margin-top: 14px;
-}
-
-.person-outreach-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.person-outreach-actions button:disabled,
-.person-outreach-compose button:disabled {
-  cursor: wait;
-  opacity: .65;
-}
-
-.person-outreach-recipient,
-.person-outreach-account,
-.person-outreach-version {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.person-outreach-status {
-  color: var(--accent-deep);
-  font-size: 11px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-
-.person-outreach-body {
-  margin: 0;
-  max-height: 260px;
-  overflow: auto;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--raised);
-  color: var(--text);
-  font: inherit;
-  line-height: 1.55;
-  white-space: pre-wrap;
-}
-
-.person-outreach-version code,
-.person-outreach-approval code,
-.person-outreach-sent code {
-  font-family: ui-monospace, "Geist Mono", monospace;
-}
-
-.person-outreach-approval {
-  margin-top: 4px;
-  padding: 12px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: var(--accent-tint);
-}
-
-.person-outreach-approval p {
-  margin: 0 0 8px;
-  line-height: 1.55;
-}
-
-.person-outreach-approval [role="alert"],
-.person-outreach-error {
-  margin: 0;
-  color: var(--error);
-  line-height: 1.45;
-}
-
-.person-outreach-sent {
-  margin-top: 14px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--raised);
 }
 
 /* 16px icons shown before button text. */
@@ -1085,196 +612,6 @@ button.description-icon-button:disabled {
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.task-row-prepare,
-.follow-up button,
-.follow-up .person-outreach-actions button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.task-row-prepare {
-  text-decoration: none;
-}
-
-.task-row-prepare:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* Follow-up editor. Sender, recipient, thread and the full message are shown
-   before approval (borrowed from Attio's compose view). */
-.follow-up {
-  scroll-margin-top: 16px;
-}
-
-.follow-up-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.follow-up-header h2 {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.follow-up-header h2:focus {
-  outline: none;
-}
-
-.follow-up-header h2:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.follow-up-icon-button {
-  justify-content: center;
-  min-width: 34px;
-  min-height: 34px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-}
-
-.follow-up-context {
-  display: grid;
-  gap: 4px;
-  margin: 12px 0 0;
-  font-size: 13px;
-}
-
-.follow-up-context div {
-  display: grid;
-  grid-template-columns: 104px minmax(0, 1fr);
-  gap: 8px;
-}
-
-.follow-up-context dt {
-  color: var(--muted);
-}
-
-.follow-up-context dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text);
-}
-
-.follow-up-context select {
-  max-width: 100%;
-  min-height: 34px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-.follow-up-context a {
-  color: var(--accent-deep);
-}
-
-.follow-up-blocker {
-  margin: 10px 0 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--warn-bg);
-  color: var(--warn);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.follow-up-points {
-  margin-top: 10px;
-  font-size: 13px;
-}
-
-.follow-up-points summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.follow-up-points ul {
-  margin: 8px 0 0;
-  padding-left: 18px;
-  line-height: 1.5;
-}
-
-.follow-up-sources,
-.follow-up-hint,
-.follow-up-status {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.follow-up-editor {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.follow-up-editor input,
-.follow-up-editor textarea {
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.follow-up-editor input[readonly] {
-  background: var(--raised);
-  color: var(--muted);
-}
-
-.follow-up-editor input:focus-visible,
-.follow-up-editor textarea:focus-visible,
-.follow-up-context select:focus-visible,
-.follow-up-icon-button:focus-visible,
-.follow-up .person-outreach-actions button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.follow-up .person-outreach-actions button:disabled {
-  cursor: not-allowed;
-  opacity: .65;
-}
-
-.follow-up-error p {
-  margin: 10px 0 8px;
-  color: var(--error);
-}
-
-.follow-up .person-outreach-sent p {
-  margin: 6px 0 0;
-}
-
-@media (max-width: 767px) {
-  .follow-up-context div {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
-
-  .follow-up-icon-button {
-    min-width: 44px;
-    min-height: 44px;
-  }
-
-  .follow-up .person-outreach-actions button {
-    flex: 1 1 100%;
-    justify-content: center;
-  }
 }
 
 /* The same quiet correction editor belongs to both person surfaces. */

@@ -227,8 +227,45 @@ describe("DescriptionEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add description" }));
 
     expect(screen.getByLabelText("Short description")).toHaveFocus();
-    expect(screen.getByText("0 / 500")).toBeInTheDocument();
+    // The counter waits until the text nears the limit.
+    expect(screen.queryByText("0 / 500")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add description" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Short description"), {
+      target: { value: "x".repeat(420) },
+    });
+    expect(screen.getByText("420 / 500")).toBeInTheDocument();
+  });
+
+  it("closes an unchanged editor on Escape and asks twice before dropping changes", () => {
+    const saved = description({ authority: "human", text: "Saved copy.", version: 1 });
+    render(<DescriptionEditor personId="p1" description={saved} onSaved={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
+    fireEvent.keyDown(screen.getByLabelText("Short description"), { key: "Escape" });
+    expect(screen.queryByLabelText("Short description")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit description" })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit description" }));
+    const field = screen.getByLabelText("Short description");
+    fireEvent.change(field, { target: { value: "Scratch." } });
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(field).toHaveValue("Scratch.");
+    expect(screen.getByText("Press Escape again to discard")).toBeInTheDocument();
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(screen.queryByLabelText("Short description")).toBeNull();
+    expect(screen.getByText("Saved copy.")).toBeInTheDocument();
+    expect(patchPersonDescription).not.toHaveBeenCalled();
+  });
+
+  it("saves with Cmd+Enter", async () => {
+    const saved = description({ authority: "human", text: "Typed.", version: 1 });
+    patchPersonDescription.mockResolvedValue({ descriptions: descriptionsFrom(saved), description: saved, saved: true });
+    render(<DescriptionEditor personId="p1" description={description()} onSaved={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add description" }));
+    fireEvent.change(screen.getByLabelText("Short description"), { target: { value: "Typed." } });
+    fireEvent.keyDown(screen.getByLabelText("Short description"), { key: "Enter", metaKey: true });
+    await waitFor(() =>
+      expect(patchPersonDescription).toHaveBeenCalledWith("p1", "general", { text: "Typed.", expectedVersion: 0 }),
+    );
   });
 
   it("shows saved text with its owner and an Edit button, not an open editor", () => {

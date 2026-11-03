@@ -567,6 +567,35 @@ describe("Contacts and person-file routes", () => {
     );
   });
 
+  it("opens the sourcing chat from Draft email and switches the header to Open chat", async () => {
+    const unbound = await api.getPerson();
+    const withEmail = { ...unbound, person: { ...unbound.person, email: "alyssa@example.test" } };
+    let bound = false;
+    api.getPerson.mockImplementation(async () =>
+      bound ? { ...withEmail, sourcing_chat: { session_id: "thread one", person_id: "person one" } } : withEmail,
+    );
+    api.openPersonSourcingChat.mockImplementation(async () => {
+      bound = true;
+      return {
+        created: true,
+        session: { id: "thread one", title: "Sourcing · Alyssa Lee", n_msgs: 0 },
+        active_person: { person_id: "person one", version: 2, label: "Alyssa Lee" },
+      };
+    });
+    window.location.hash = "#/people/person%20one";
+    render(<PersonFileView personId="person one" />);
+
+    expect(await screen.findByRole("button", { name: "Start chat" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Draft email" }));
+
+    await waitFor(() => expect(api.openPersonSourcingChat).toHaveBeenCalledWith("person one", 2));
+    expect(await screen.findByLabelText("Subject")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open chat" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start chat" })).not.toBeInTheDocument();
+    // Drafting stays on the person file; only Start chat navigates.
+    expect(window.location.hash).toBe("#/people/person%20one");
+  });
+
   it("offers the same single action as Open when the person is already bound", async () => {
     api.getPerson.mockResolvedValueOnce({
       ...(await api.getPerson()),

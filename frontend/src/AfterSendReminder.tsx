@@ -3,8 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { getAfterSendReminder, saveAfterSendReminder, type AfterSendReminderContext, type PersonTask } from "./api";
 import { Glyph } from "./generative/ResultCard";
 import { Icon } from "./icons";
-import { TASKS_CHANGED } from "./Tasks";
-import "./styles/afterSendReminder.css";
+import { dueText, TASKS_CHANGED, ZoneNote } from "./Tasks";
 
 /** Optional local task work, separate from the completed send and its approval. */
 export function AfterSendReminder({ personId, sent }: {
@@ -30,7 +29,13 @@ export function AfterSendReminder({ personId, sent }: {
 
   const messageId = typeof sent.message_id === "string" ? sent.message_id.trim() : "";
   if (sent.sent !== true || !messageId) return null;
-  if (skipped) return <p ref={skippedMessage} tabIndex={-1} role="status">No follow-up added.</p>;
+  if (skipped) {
+    return (
+      <p ref={skippedMessage} className="crm-line after-send-reminder" tabIndex={-1} role="status">
+        No follow-up added.
+      </p>
+    );
+  }
 
   async function open() {
     if (busy) return;
@@ -70,25 +75,45 @@ export function AfterSendReminder({ personId, sent }: {
   }
 
   return <section className="after-send-reminder" aria-label="Optional follow-up reminder">
-    {task ? <div role="status">
-      <p>Follow-up saved: {task.title} · {task.due_date} ({task.due_timezone}).</p>
-      <a href={`#/people/${encodeURIComponent(personId)}`}>View person’s tasks</a>
-    </div> : context ? <form onSubmit={event => void save(event)} aria-label="Set follow-up">
-      <p className="after-send-hint"><Glyph name="clock" />{context.timezone} · Reminder only, never sends email</p>
+    {task ? <div className="after-send-saved" role="status">
+      <p className="crm-line is-ok">
+        <Icon name="check" />
+        Follow-up saved: {task.title}{task.due_date ? ` · ${dueText(task.due_date)}` : ""}
+      </p>
+      <a className="crm-btn is-ghost" href={`#/people/${encodeURIComponent(personId)}`}><Glyph name="review" />View person’s tasks</a>
+    </div> : context ? <form className="after-send-form" onSubmit={event => void save(event)} aria-label="Set follow-up"
+      onKeyDown={event => {
+        if (event.key !== "Escape" || busy) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setSkipped(true);
+      }}>
       <fieldset disabled={busy}>
-        <label className="task-field">Follow-up task<input ref={heading} value={title} maxLength={200} required onChange={event => setTitle(event.currentTarget.value)} /></label>
-        <label className="task-field">Follow-up date<input type="date" value={date} required onChange={event => setDate(event.currentTarget.value)} /></label>
-        <div className="person-outreach-actions">
-          <button type="submit" disabled={!date || !title.trim()}><Icon name={problem ? "refresh" : "save"} />{busy ? "Saving follow-up…" : problem ? "Retry saving follow-up" : "Save follow-up"}</button>
-          <button type="button" aria-label="Skip follow-up" onClick={() => setSkipped(true)}><Icon name="close" />Skip</button>
-        </div>
+        <input ref={heading} className="after-send-title" aria-label="Follow-up task" placeholder="Follow-up task"
+          value={title} maxLength={200} required onChange={event => setTitle(event.currentTarget.value)} />
+        <input className="after-send-date" type="date" aria-label="Follow-up date" value={date} required
+          onChange={event => setDate(event.currentTarget.value)} />
+        <button type="submit" className="crm-btn is-primary" disabled={!date || !title.trim()}>
+          <Icon name={problem ? "refresh" : "check"} />
+          {busy ? "Saving follow-up…" : problem ? "Retry saving follow-up" : "Save follow-up"}
+        </button>
+        <button type="button" className="crm-icon-btn" aria-label="Skip follow-up" title="Skip" onClick={() => setSkipped(true)}>
+          <Icon name="close" />
+        </button>
       </fieldset>
-    </form> : <div className="person-outreach-actions">
-      <button type="button" disabled={busy} onClick={() => void open()}><Icon name="reply" />{busy ? "Loading follow-up…" : problem ? "Retry follow-up options" : "Set follow-up"}</button>
-      <button type="button" disabled={busy} aria-label="Skip follow-up" onClick={() => setSkipped(true)}><Icon name="close" />Skip</button>
+      <ZoneNote timezone={context.timezone} />
+    </form> : <div className="crm-actions">
+      <button type="button" className="crm-btn" disabled={busy} onClick={() => void open()}>
+        <Icon name="calendar" />
+        {busy ? "Loading follow-up…" : problem ? "Retry follow-up options" : "Set follow-up"}
+      </button>
+      <button type="button" className="crm-btn is-ghost" disabled={busy} aria-label="Skip follow-up" onClick={() => setSkipped(true)}>
+        <Icon name="close" />
+        Skip
+      </button>
     </div>}
-    {problem ? <div role="alert"><p>{problem}</p>
-      {context ? <button type="button" disabled={busy} onClick={() => void open()}><Icon name="refresh" />Refresh follow-up options</button> : null}
+    {problem ? <div className="crm-alert" role="alert"><Glyph name="info" /><span>{problem}</span>
+      {context ? <button type="button" className="crm-btn" disabled={busy} onClick={() => void open()}><Icon name="refresh" />Refresh follow-up options</button> : null}
     </div> : null}
   </section>;
 }
