@@ -376,7 +376,7 @@ def _enrichment_receipt(call_id, fields):
     return AttachmentExpectation(record_type="source_ref", fields=(
         ("source","apollo"),("apollo_id","nimbus-dana"),("approval_id",call_id),
         ("credits",None),("fetched_at","$TIMESTAMP"),("matched_on","apollo_id"),
-        ("fields_applied",fields),
+        ("fields_applied",fields),("fields_found",fields),("fields_conflicting",[]),
     ))
 
 def deliberate_enrichment_scenario() -> EvalScenario:

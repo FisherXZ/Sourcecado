@@ -890,6 +890,13 @@ def _add_crm_email_tasks(context: MigrationContext) -> int:
     return 0
 
 
+def _add_person_corrections(context: MigrationContext) -> int:
+    from coworker.person_corrections import add_schema
+    _widen_crm_changes(context,CRM_CHANGES_COLUMNS)
+    add_schema(context.connection)
+    return _count_people_db(context)
+
+
 def _add_approval_identity_revision(context: MigrationContext) -> int:
     assert context.connection is not None
     conn = context.connection
@@ -1182,8 +1189,14 @@ REGISTRY: tuple[StoreSpec, ...] = (
             Migration(from_version=8, to_version=9,
                 description="Add monotonic person identity revisions for action-specific send and enrichment approvals.",
                 count=_count_people_db, apply=_add_approval_identity_revision),
+            Migration(from_version=9,to_version=10,
+                description="Add protected person corrections and provider conflict review without changing identity facts.",
+                count=_count_people_db,apply=_add_person_corrections),
         ),
         json_columns=(
+            ("person_field_controls","source_refs"),
+            ("person_correction_conflicts","saved_value"),
+            ("person_correction_conflicts","incoming_value"),
             ("events", "payload"),
             ("person_attachments", "fields_json"),
             ("person_versions", "person_json"),

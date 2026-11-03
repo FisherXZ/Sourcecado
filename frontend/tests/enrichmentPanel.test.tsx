@@ -59,6 +59,19 @@ describe("deliberate person enrichment",()=>{
   expect(await screen.findByRole("button",{name:"Approve lookup once"})).toBeDisabled();
   expect(screen.getByRole("link",{name:"Review person details"})).toHaveAttribute("href","#/people/maya");
  });
+ it("requires fixing a missing connection before approving a restored review",async()=>{
+  api.getPersonEnrichment.mockResolvedValue({...review,problem:"apollo_not_configured"});render(<EnrichmentPanel personId="maya"/>);
+  expect(await screen.findByRole("button",{name:"Approve lookup once"})).toBeDisabled();
+  expect(screen.getByRole("link",{name:"Connect Apollo"})).toHaveAttribute("href","#/connections/apollo");
+  expect(api.decideApproval).not.toHaveBeenCalled();
+ });
+ it("keeps an older unknown stopped while displaying the newer known result",async()=>{
+  api.getPersonEnrichment.mockResolvedValue({...terminal(),can_request:false,unresolved_unknown_id:"older-unknown"});render(<EnrichmentPanel personId="maya"/>);
+  await screen.findByText("Contact details found");fireEvent.click(screen.getByRole("button",{name:"Review a new lookup"}));
+  fireEvent.click(screen.getByRole("checkbox",{name:"I understand this is a new paid attempt"}));fireEvent.click(screen.getByRole("button",{name:"Review new attempt"}));
+  await waitFor(()=>expect(api.preparePersonEnrichment).toHaveBeenCalledWith("maya",expect.anything(),expect.any(String),"older-unknown"));
+  expect(api.decideApproval).not.toHaveBeenCalled();
+ });
  it("reuses the preparation operation after a lost preparation response",async()=>{
   api.preparePersonEnrichment.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(review);
   render(<EnrichmentPanel personId="maya"/>);fireEvent.click(await screen.findByRole("button",{name:"Review lookup"}));

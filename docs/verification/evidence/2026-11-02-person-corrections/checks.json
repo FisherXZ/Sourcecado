@@ -1,0 +1,12 @@
+{
+  "checks": [
+    "Shared full-file editor shows saved/corrected values at1440 and390 without page overflow",
+    "Concurrent save preserves draft; reviewed rebase saves same person and preserves task plus historical Gmail recipient",
+    "Reload preserves correction and conflicting fake provider facts remain reviewable without replacing human values",
+    "Field-scoped Undo restores only company/email and preserves the independent role correction",
+    "Duplicate review links existing file, requires explicit confirmation and allows Cancel with focus return; no merge occurred",
+    "The compact preview uses the same accessible editor at390"
+  ],
+  "page_errors": [],
+  "synthetic_state_only": true
+}

@@ -3092,14 +3092,14 @@ export type EnrichmentAttempt = {
   fetched_at: string | null; created_at: string | null; source_ref_id?: string | null;
   fields_found: string[]; fields_applied: string[];
   conflicts: Array<{field:string;current:string|null;proposed:string|null}>;
-  stale_identity: boolean;
+  stale_identity: boolean; review_required?: boolean; code?: string | null;
 };
 export type PersonEnrichment = {
   person: {person_id:string;name:string;title:string|null;company:string|null;version:number;identity_revision:number};
   known: {email:string|null;phone:string|null;linkedin_url:string|null};
   match: Record<string,string> | null; credits_estimated:number|null; session_id:string|null;
   status:string; latest:EnrichmentAttempt|null; pending:EnrichmentAttempt|null;
-  can_request:boolean; problem:string|null; attempts?:EnrichmentAttempt[];
+  can_request:boolean; problem:string|null; attempts?:EnrichmentAttempt[]; unresolved_unknown_id?:string|null;
 };
 export async function getPersonEnrichment(personId:string):Promise<PersonEnrichment> {
   const response=await get(`/v1/people/${encodeURIComponent(personId)}/enrichment`);
@@ -3113,4 +3113,45 @@ export async function preparePersonEnrichment(personId:string, current:PersonEnr
     ...(acknowledgedUnknownId ? {acknowledged_unknown_id:acknowledgedUnknownId} : {}),
   });
   return getPersonEnrichment(personId);
+}
+export type PersonDetailField = "first_name" | "last_name" | "title" | "company" | "email" | "phone" | "linkedin_url";
+export type PersonCorrectionReview = {
+  person_id: string;
+  expected_version: number;
+  changes: Array<{ field: PersonDetailField; label: string; before: string | null; after: string | null }>;
+  duplicates: Array<{ person_id: string; name: string; company: string | null; matched_fields: PersonDetailField[]; href: string }>;
+  collision_token: string;
+  identity_changed: boolean;
+};
+export type PersonCorrectionInput = {
+  changes: Partial<Record<PersonDetailField, string | null>>;
+  expected_version: number;
+  operation_id: string;
+  reason: string;
+  collision_token?: string;
+  confirmed_duplicate_ids?: string[];
+  source_refs?: string[];
+};
+export class PersonCorrectionError extends Error {
+  constructor(message: string, public status: number, public code?: string, public review?: PersonCorrectionReview) { super(message); }
+}
+async function correctionRequest<T>(personId: string, suffix: string, body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(personId)}/corrections${suffix}`, {
+    method: "POST", headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new PersonCorrectionError(result.error ?? "Couldn’t save this correction. Your edits are kept.", response.status, result.code, result.review);
+  return result as T;
+}
+export function reviewPersonCorrection(personId: string, body: Pick<PersonCorrectionInput, "changes" | "expected_version">): Promise<PersonCorrectionReview> {
+  return correctionRequest(personId, "/review", body);
+}
+export function savePersonCorrection(personId: string, body: PersonCorrectionInput): Promise<{ person: PersonFile["person"]; change: CrmChange; replayed: boolean }> {
+  return correctionRequest(personId, "", body);
+}
+export async function undoPersonCorrection(personId:string,changeId:string,input:{operation_id:string;collision_token?:string;confirmed_duplicate_ids?:string[]}):Promise<{person:PersonFile["person"];replayed:boolean}> {
+  const response=await fetch(`${httpBase()}/v1/people/${encodeURIComponent(personId)}/crm-changes/${encodeURIComponent(changeId)}/undo`,{method:"POST",headers:{"X-Club-Token":apiToken(),"Content-Type":"application/json"},body:JSON.stringify(input)});
+  const result=await response.json();
+  if(!response.ok)throw new PersonCorrectionError(result.error??"Couldn’t undo this correction.",response.status,result.code,result.review);
+  return result;
 }

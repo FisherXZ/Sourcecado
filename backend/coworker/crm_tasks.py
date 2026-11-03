@@ -86,7 +86,7 @@ CRM_CHANGES_V5_COLUMNS = """
         compensates_change_id TEXT REFERENCES crm_changes(change_id),
         created_at TEXT NOT NULL
 """
-CRM_CHANGES_COLUMNS = CRM_CHANGES_V5_COLUMNS.replace("IN ('task')", "IN ('task', 'description', 'attention', 'proposal', 'review', 'status', 'artifact')").replace("'cancel', 'undo')", "'cancel', 'undo', 'accept', 'dismiss')")
+CRM_CHANGES_COLUMNS = CRM_CHANGES_V5_COLUMNS.replace("IN ('task')", "IN ('task', 'description', 'attention', 'proposal', 'review', 'status', 'artifact', 'person_details')").replace("'cancel', 'undo')", "'cancel', 'undo', 'accept', 'dismiss')")
 CRM_CHANGES_INDEX_STATEMENTS: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS crm_changes_entity

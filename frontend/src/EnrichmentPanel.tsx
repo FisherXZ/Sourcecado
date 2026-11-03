@@ -9,7 +9,7 @@ const STATUS:Record<string,string>={
   found:"Contact details found",partial:"Some details found",no_match:"No match found",
   failed:"Lookup failed",insufficient_credit:"Not enough credits",outcome_unknown:"Outcome unknown",denied:"Lookup cancelled",
 };
-const FIELD:Record<string,string>={email:"Email",phone:"Phone",linkedin_url:"LinkedIn",first_name:"First name",last_name:"Surname",title:"Role",company:"Company"};
+const FIELD:Record<string,string>={name:"Name",email:"Email",phone:"Phone",linkedin_url:"LinkedIn",first_name:"First name",last_name:"Surname",title:"Role",company:"Company"};
 function storageKey(pid:string) {return `sourcecado:enrichment-review:${pid}`;}
 function savedOperation(pid:string):string|null {try{return localStorage.getItem(storageKey(pid));}catch{return null;}}
 function rememberOperation(pid:string,id:string|null) {try{if(id)localStorage.setItem(storageKey(pid),id);else localStorage.removeItem(storageKey(pid));}catch{/* Server receipts remain authoritative. */}}
@@ -87,9 +87,10 @@ export function EnrichmentPanel({personId}:{personId:string}) {
     } finally {if(mounted.current && owner.current===pid)setBusy(false);}
   }
   const latest=context?.latest;
+  const unknownId=context?.unresolved_unknown_id ?? (context?.status==="outcome_unknown" ? latest?.id : undefined);
   return <section className="person-enrichment" aria-label="Contact enrichment">
     <header><h3>Contact details</h3><span className={`enrichment-state enrichment-${context?.status??"loading"}`} role="status">
-      <Glyph name={busy || context?.status==="running" ? "loading" : "info"}/>{context?STATUS[context.status]??"Lookup result":"Loading lookup status…"}
+      <Glyph name={busy || context?.status==="running" ? "loading" : "info"}/>{context ? (busy ? (approving ? "Submitting decision…" : "Preparing review…") : STATUS[context.status]??"Lookup result") : problem ? "Status unavailable" : "Loading lookup status…"}
     </span></header>
     {context ? <>
       <dl className="enrichment-known">
@@ -104,7 +105,7 @@ export function EnrichmentPanel({personId}:{personId:string}) {
         <div className="enrichment-cost"><span>Estimated credits · 1 person</span><strong>{context.pending.credits_estimated??"Unknown"}</strong></div>
         {context.pending.stale_identity ? <p role="alert">These person details changed. Cancel this review and prepare a new one.</p> : null}
         <div className="person-outreach-actions">
-          <button type="button" disabled={busy||unconfirmed||context.pending.stale_identity} onClick={()=>void decide("allow")}><Icon name="approve"/>Approve lookup once</button>
+          <button type="button" disabled={busy||unconfirmed||context.pending.stale_identity||Boolean(context.problem)} onClick={()=>void decide("allow")}><Icon name="approve"/>Approve lookup once</button>
           <button type="button" disabled={busy} onClick={()=>void decide("deny")}><Icon name="close"/>Cancel lookup</button>
         </div>
       </div> : <>
@@ -112,20 +113,22 @@ export function EnrichmentPanel({personId}:{personId:string}) {
           <p>Apollo{latest.fetched_at ? ` · ${new Date(latest.fetched_at).toLocaleString()}` : ""}</p>
           <p>{latest.credits_actual===null ? "Actual credits not reported" : `Actual credits: ${latest.credits_actual}`}</p>
           {latest.fields_applied.length ? <p>Updated: {latest.fields_applied.map(field=>FIELD[field]??field).join(", ")}</p> : null}
+          {latest.review_required ? <p role="alert">Apollo couldn’t confirm this is the same person. No details were saved. Check the person’s details before another lookup.</p> : null}
           {latest.conflicts.length ? <div><p>Human corrections were kept. Provider differences need review.</p><ul>{latest.conflicts.map(value=><li key={value.field}>{FIELD[value.field]??value.field}: {value.current??"blank"} → {value.proposed??"blank"}</li>)}</ul></div> : null}
         </div> : null}
         {context.status==="not_enriched" ? <div className="enrichment-cost"><span>Estimated credits · 1 person</span><strong>{context.credits_estimated??"Unknown"}</strong></div> : null}
-        {context.problem==="apollo_not_configured" ? <a href="#/connections/apollo"><Icon name="edit"/>Connect Apollo</a> : null}
-        {context.problem ? <p role="status">{context.problem==="no_match_key" ? "Correct the person’s identity before a lookup." : "Connect Apollo in Connections before a lookup."}</p> : null}
+        {context.problem ? <p role="status">{["no_match_key","ambiguous_match"].includes(context.problem??"") ? "Correct the person’s identity before a lookup." : "Connect Apollo in Connections before a lookup."}</p> : null}
         {context.can_request ? <button type="button" disabled={busy} onClick={()=>void prepare()}><Icon name="assistant"/>Review lookup</button> : null}
-        {context.status==="outcome_unknown" && !newReview ? <button type="button" disabled={busy} onClick={()=>{setNewReview(true);setAcknowledged(false);}}><Icon name="approve"/>Review a new lookup</button> : null}
+        {unknownId && context.status!=="outcome_unknown" ? <p role="status">An earlier lookup has an unknown outcome.</p> : null}
+        {unknownId && !newReview ? <button type="button" disabled={busy} onClick={()=>{setNewReview(true);setAcknowledged(false);}}><Icon name="approve"/>Review a new lookup</button> : null}
         {newReview ? <div className="enrichment-review">
           <p>The previous outcome remains unknown. A new lookup is a separate paid attempt.</p>
           <label><input type="checkbox" checked={acknowledged} onChange={event=>setAcknowledged(event.target.checked)}/>I understand this is a new paid attempt</label>
-          <button type="button" disabled={busy||!acknowledged} onClick={()=>{operation.current=null;rememberOperation(personId,null);void prepare(latest?.id);}}><Icon name="assistant"/>Review new attempt</button>
+          <button type="button" disabled={busy||!acknowledged} onClick={()=>{operation.current=null;rememberOperation(personId,null);void prepare(unknownId);}}><Icon name="assistant"/>Review new attempt</button>
         </div> : null}
       </>}
-      {(context.problem==="no_match_key" || context.pending?.stale_identity || latest?.conflicts.length) ? <a href={`#/people/${encodeURIComponent(personId)}`}><Icon name="edit"/>Review person details</a> : null}
+      {context.problem==="apollo_not_configured" ? <a href="#/connections/apollo"><Icon name="edit"/>Connect Apollo</a> : null}
+      {(["no_match_key","ambiguous_match"].includes(context.problem??"") || context.pending?.stale_identity || latest?.stale_identity || latest?.conflicts.length) ? <a href={`#/people/${encodeURIComponent(personId)}`}><Icon name="edit"/>Review person details</a> : null}
     </> : null}
     {context?.attempts && context.attempts.length>1 ? <details className="enrichment-history"><summary>Lookup history</summary><ol>{context.attempts.map(attempt=><li key={attempt.id}>{STATUS[attempt.status]??"Lookup result"} · {attempt.fetched_at??attempt.created_at??"Time not recorded"} · {attempt.credits_actual===null ? "Actual cost not reported" : `${attempt.credits_actual} credits`}</li>)}</ol></details> : null}
     {problem ? <p role="alert">{problem}</p> : null}

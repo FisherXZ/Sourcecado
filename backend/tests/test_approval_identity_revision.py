@@ -61,7 +61,7 @@ def test_schema_8_upgrades_with_backup_without_constructor_rewriting_identity(tm
     result=migrations.apply_migrations(tmp_path)
     assert result.error is None,result
     current=PersonStore(tmp_path)
-    assert current._conn.execute('PRAGMA user_version').fetchone()[0]==9
+    assert current._conn.execute('PRAGMA user_version').fetchone()[0]==10
     assert current.get(pid)['identity_revision']==0
     assert current.apply_enrichment(pid,email='new@example.test')['identity_revision']==1
     assert result.backup_id is not None

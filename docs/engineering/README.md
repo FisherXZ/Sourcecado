@@ -35,6 +35,7 @@ Python venv; a packaged app uses the frozen backend.
 - [CRM evidence analysis and email tasks](crm-analysis.md)
 - [Tracked Gmail activity](gmail-activity.md)
 - [Contacts attention and shared tasks](contacts-attention.md)
+- [Protected person corrections](person-corrections.md)
 - [Living brief](living-brief.md)
 - [Meeting evidence](meeting-evidence.md) and [legal artifacts](legal-artifacts.md)
 

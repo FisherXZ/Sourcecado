@@ -3,6 +3,8 @@
 @import "./styles/chat.css";
 @import "./styles/attachments.css";
 @import "./styles/route.css";
+@import "./styles/afterSendReminder.css";
+@import "./styles/enrichment.css";
 @import "./styles/responsive.css";
 
 .person-section-nav {
@@ -1710,3 +1712,28 @@
     justify-content: center;
   }
 }
+
+/* The same quiet correction editor belongs to both person surfaces. */
+.person-details-editor { font-size: 13px; padding: 16px 0; border-block: 1px solid var(--border); }
+.person-details-heading,.person-details-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.person-details-heading h3 { margin:0; font-size:14px; }
+.person-details-editor button { display:inline-flex; align-items:center; gap:6px; font-size:13px; }
+.person-details-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:12px 0; }
+.person-details-fields label,.person-details-source { display:grid; gap:5px; min-width:0; font-size:13px; }
+.person-details-editor input:not([type="checkbox"]),.person-details-editor textarea { width:100%; min-width:0; box-sizing:border-box; font:inherit; padding:8px; border:1px solid var(--border); border-radius:6px; color:var(--text); background:var(--surface); }
+.person-details-editor textarea { min-height:64px; resize:vertical; }
+.person-details-source { margin:12px 0; }
+.person-details-actions { justify-content:flex-start; margin-top:12px; }
+.person-details-review table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:13px; }
+.person-details-review th,.person-details-review td { padding:8px 6px; text-align:left; vertical-align:top; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.person-details-review h4,.person-details-conflicts h4 { font-size:14px; margin:12px 0; }
+.person-details-review td:last-child { background:var(--accent-tint); }
+.person-details-duplicates { padding:12px; margin-top:12px; border:1px solid var(--border); border-radius:8px; background:var(--raised); }
+.person-details-duplicates label { display:flex; gap:8px; align-items:flex-start; font-size:13px; }
+.person-details-contact { display:grid; gap:8px; margin:12px 0; }
+.person-details-contact>div { display:grid; grid-template-columns:76px minmax(0,1fr); gap:8px; }
+.person-details-contact dt { color:var(--muted); }
+.person-details-contact dd { margin:0; overflow-wrap:anywhere; }
+.person-details-protection,.person-details-reason { color:var(--muted); font-size:13px; }
+.person-details-conflicts article { padding:8px 0; border-top:1px solid var(--border); }
+@media(max-width:480px) { .person-details-fields { grid-template-columns:minmax(0,1fr); } .person-details-review th,.person-details-review td { padding:8px 4px; } }

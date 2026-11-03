@@ -7,6 +7,8 @@ import { crmRequest, defaultPersonDescriptions, getPerson, newOperationId, type 
 import { MailActivity } from "./MailActivity";
 import { SavedTaskDrafts } from "./SavedTaskDrafts";
 import { TaskDraft } from "./TaskDraft";
+import {Icon} from "../icons";
+import {PersonDetailsEditor,clearPersonCorrectionDraft} from "./PersonDetailsEditor";
 
 function reviewValue(value: Record<string, unknown> | null | undefined): string {
   if (!value) return "No saved value";
@@ -25,6 +27,7 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [detailsBusy,setDetailsBusy]=useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [flag, setFlag] = useState("");
   const [until, setUntil] = useState("");
@@ -65,6 +68,7 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
   }, []);
 
   function navigate(next: () => void) {
+    if(detailsBusy)return;
     if (busy || flagDirty || editingProposal || panel.current?.querySelector('[data-unsaved="true"], .task-form')) {
       setPending(() => next);
     } else next();
@@ -101,7 +105,7 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
     }}
     onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); navigate(onClose); } }}>
     <header className="preview-header">
-      <button type="button" ref={back} onClick={() => navigate(onClose)}>Back to Contacts</button>
+      <button type="button" ref={back} disabled={detailsBusy} onClick={() => navigate(onClose)}><Icon name="reply"/>Back to Contacts</button>
       <a href={`#/people/${encodeURIComponent(personId)}`} onClick={event => {
         event.preventDefault(); navigate(() => { window.location.hash = `#/people/${encodeURIComponent(personId)}`; });
       }}>Open person file</a>
@@ -113,7 +117,7 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
         panel.current?.querySelector<HTMLElement>('[data-unsaved="true"] textarea, .task-form input')?.focus();
       }}>Keep editing and save</button>
       <button type="button" disabled={busy} onClick={() => {
-        clearDescriptionDraft(personId, "general"); clearDescriptionDraft(personId, "detailed");
+        clearDescriptionDraft(personId, "general"); clearDescriptionDraft(personId, "detailed"); clearPersonCorrectionDraft(personId);
         const next = pending; setPending(null); next();
       }}>Discard edits</button>
     </div> : null}
@@ -126,6 +130,7 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
       <p className="person-timeline-meta">{person.last_contact_at
         ? `${person.last_contact_direction === "inbound" ? "They replied" : "We wrote"} · ${person.last_contact_at.slice(0, 10)}`
         : "No contact yet"}</p>
+      <PersonDetailsEditor key={personId} person={person} history={file.crm_changes} onBusyChange={setDetailsBusy} onSaved={next=>setFile(current=>current?.person.person_id===next.person_id?{...current,person:next}:current)}/>
       <EnrichmentPanel personId={personId} />
       <div className="preview-status">
         <label>Relationship status<select value={person.sequence_state ?? ""} disabled={busy} onChange={async event => {

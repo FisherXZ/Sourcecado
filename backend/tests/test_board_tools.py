@@ -7,6 +7,7 @@ from coworker.permissions import decide
 from coworker.people import PersonStore
 from coworker.server import TOKEN_HEADER, create_app
 from coworker.tools import OPENAI_TOOLS, execute
+from coworker.evidence_envelope import director_directive
 
 TOKEN = "test-token-person-board"
 
@@ -214,16 +215,18 @@ def test_keeping_then_patching_puts_ada_on_the_person_board(tmp_path):
     store.set_sequence(ada["person_id"], "open", actor="director")
 
     ok, patched = execute(
-        "board_mutate",
+        "crm_correct_person",
         {
-            "action": "patch",
+            "person_name": "Ada",
             "person_id": ada["person_id"],
             "expected_version": store.get(ada["person_id"])["version"],
-            "fields": {"title": "Founding partner"},
-            "rationale_summary": "Correct the title from a cited source.",
+            "changes": {"title": "Founding partner"},
+            "operation_id":"correct-ada-title",
+            "reason": "Correct the title from a cited source.",
         },
         people=store,
         actor="assistant",
+        crm_directive=director_directive("Change Ada's role to Founding partner",session_id="session-1",turn="run-1"),
         session_id="session-1",
         run_id="run-1",
     )
@@ -556,7 +559,7 @@ def test_revert_restores_a_prior_person_version(tmp_path):
         ada["person_id"],
         fields={"title": "Wrong title"},
         expected_version=1,
-        actor="assistant",
+        actor="director",
         rationale_summary="Bad source.",
     )
     reverted = store.revert(
@@ -730,7 +733,7 @@ def test_person_api_lists_versions_and_reverts(tmp_path):
         person["person_id"],
         fields={"title": "Wrong"},
         expected_version=1,
-        actor="assistant",
+        actor="director",
         rationale_summary="Bad title.",
     )
     client = TestClient(app)

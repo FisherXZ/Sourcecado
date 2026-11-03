@@ -45,7 +45,7 @@ def test_mail_migration_is_registered_and_preserves_populated_v5(tmp_path):
     outcome = migrations.apply_migrations(tmp_path)
     assert outcome.error is None and outcome.backup_id
     upgraded = PersonStore(tmp_path)
-    assert SCHEMA_VERSION == SCHEMA_VERSION
+    assert SCHEMA_VERSION == 10
     assert upgraded.get(pid) == before
     for table, rows in rows_before.items():
         assert upgraded._conn.execute(f"SELECT * FROM {table}").fetchall() == rows

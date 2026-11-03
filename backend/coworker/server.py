@@ -2246,8 +2246,11 @@ def create_app(
                 operation_id=payload.get("operation_id"),
                 reason=payload.get("reason"),
                 actor="director",
+                collision_token=payload.get("collision_token"),
+                confirmed_duplicate_ids=payload.get("confirmed_duplicate_ids"),
             )
         except (TaskError, ValueError) as exc:
+            if getattr(exc,"review",None):return JSONResponse({"error":str(exc),"code":exc.code,"review":exc.review},status_code=409)
             return _task_error(exc)
 
     @app.post("/v1/replies/refresh")
@@ -2319,6 +2322,20 @@ def create_app(
             "reason": binding_reason,
         }
         return result
+
+    @app.post('/v1/people/{person_id}/corrections/review')
+    async def person_correction_review(person_id:str,payload:dict[str,Any]=Body(...)):
+        from coworker.person_corrections import PersonCorrectionService,CorrectionConflict
+        try:return PersonCorrectionService(app.state.people).review(person_id,payload.get('changes'),payload.get('expected_version'))
+        except (TaskError,ValueError) as exc:
+            return JSONResponse({'error':str(exc),'code':getattr(exc,'code','invalid_person_details')},status_code=409 if isinstance(exc,TaskConflict) else 400)
+
+    @app.post('/v1/people/{person_id}/corrections')
+    async def person_correction_save(person_id:str,payload:dict[str,Any]=Body(...)):
+        from coworker.person_corrections import PersonCorrectionService,CorrectionConflict
+        try:return PersonCorrectionService(app.state.people).correct(person_id,changes=payload.get('changes'),expected_version=payload.get('expected_version'),operation_id=payload.get('operation_id'),reason=payload.get('reason'),source_refs=payload.get('source_refs',()),collision_token=payload.get('collision_token'),confirmed_duplicate_ids=payload.get('confirmed_duplicate_ids'))
+        except (TaskError,ValueError) as exc:
+            return JSONResponse({'error':str(exc),'code':getattr(exc,'code','invalid_person_details'),**({'review':exc.review} if getattr(exc,'review',None) else {})},status_code=409 if isinstance(exc,TaskConflict) else 400)
 
     @app.post("/v1/people/{person_id}/sequence")
     async def people_sequence(person_id: str, request: Request):

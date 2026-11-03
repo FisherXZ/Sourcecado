@@ -7,13 +7,15 @@ from typing import Any, Callable
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from coworker.apollo import enrichment_match
+from coworker.consequential_actions import ActionRefused, safe_enrichment_match
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
 
 _OUTCOMES = {'found', 'partial', 'no_match', 'failed', 'insufficient_credit', 'outcome_unknown'}
-_FIELDS = {'first_name', 'last_name', 'title', 'company', 'email', 'phone', 'linkedin_url'}
+_FIELDS = {'first_name', 'last_name', 'title', 'company', 'email', 'phone', 'linkedin_url', 'name'}
+_FIELD_ALIASES = {'organizationName':'company','linkedinUrl':'linkedin_url'}
 _MATCH_FIELDS = {'email', 'first_name', 'last_name', 'organization_name', 'apollo_id'}
+_REVIEW_CODES = {'provider_identity_mismatch', 'provider_identity_unverified'}
 
 
 def _cost(value: Any) -> int | float | None:
@@ -62,7 +64,7 @@ class EnrichmentView:
         result = item.get('execution_result')
         result = result if isinstance(result, dict) else {}
         state = _status(item)
-        fields = lambda key: sorted({field for field in result.get(key, []) if isinstance(field, str) and field in _FIELDS}) if isinstance(result.get(key, []), list) else []
+        fields = lambda key: sorted({_FIELD_ALIASES.get(field,field) for field in result.get(key, []) if isinstance(field, str) and _FIELD_ALIASES.get(field,field) in _FIELDS}) if isinstance(result.get(key, []), list) else []
         return {
             'id': item['id'], 'status': state, 'provider': 'apollo',
             'person': _text(resource.get('person')),
@@ -75,6 +77,8 @@ class EnrichmentView:
             'source_ref_id': _text(result.get('source_ref_id'), 200),
             'fields_found': fields('fields_found'), 'fields_applied': fields('fields_applied'),
             'conflicts': self._conflicts(result.get('conflicts')),
+            'review_required': result.get('review_required') is True,
+            'code': result.get('code') if result.get('code') in _REVIEW_CODES else None,
             'stale_identity': (resource.get('authority_version') != 2
                 or resource.get('identity_revision') != person.get('identity_revision')),
         }
@@ -92,7 +96,11 @@ class EnrichmentView:
         person = self.people.get(pid)
         if person is None or person.get('deleted_at'):
             return None
-        match = enrichment_match(person)
+        try:
+            match = safe_enrichment_match(self.people, pid)
+            match_problem = None
+        except ActionRefused as exc:
+            match, match_problem = None, exc.code
         items = [item for item in self.store.list_inbox(pending_only=False)
             if item.get('name') == 'apollo_enrich_contact' and isinstance(item.get('resource'), dict)
             and item['resource'].get('kind') == 'apollo_enrichment' and item['resource'].get('person_id') == pid]
@@ -102,7 +110,11 @@ class EnrichmentView:
         outstanding = next((attempt for attempt in attempts if attempt['status'] in {'awaiting_approval', 'running'}), None)
         latest = outstanding or (attempts[0] if attempts else None)
         state = latest['status'] if latest else 'not_enriched'
-        problem = 'apollo_not_configured' if not self.configured() else 'no_match_key' if match is None else None
+        problem = 'apollo_not_configured' if not self.configured() else match_problem
+        # A newer result does not settle an older unknown; only a review that names it does.
+        acknowledged = {item['resource'].get('acknowledged_unknown_id') for item in items}
+        unresolved = next((attempt['id'] for attempt in attempts
+            if attempt['status'] == 'outcome_unknown' and attempt['id'] not in acknowledged), None)
         return {
             'person': {'person_id': pid, 'name': ' '.join(str(person.get(k) or '') for k in ('first_name', 'last_name')).strip() or 'Unnamed person',
                 'title': person.get('title'), 'company': person.get('company'), 'version': person['version'],
@@ -111,7 +123,8 @@ class EnrichmentView:
             'match': _match(match), 'credits_estimated': None,
             'session_id': self.people.session_for_person(pid),
             'status': state, 'latest': latest, 'pending': latest if state == 'awaiting_approval' else None,
-            'can_request': problem is None and outstanding is None and state != 'outcome_unknown',
+            'can_request': problem is None and outstanding is None and unresolved is None,
+            'unresolved_unknown_id': unresolved,
             'attempts': attempts,
             'problem': problem,
         }

@@ -385,10 +385,16 @@ def test_stale_source_claim_negative_bites_when_the_claim_is_backed(tmp_path):
             ),
         ),
     )
+    # Identity writes now additionally require an exact director correction.
+    # Isolate the stale-version predicate with a supported non-identity write,
+    # so the stronger identity gate cannot make this bite check vacuous.
+    version_scene = _rewrite_call(scenario, "stale-2", fields={"target": "Updated sourcing context"})
+    stale_version = _run(tmp_path / "stale-version", version_scene)
     current_version = _run(
         tmp_path / "version",
-        _rewrite_call(scenario, "stale-2", expected_version="$EVAL_VERSION:nimbus-omar"),
+        _rewrite_call(version_scene, "stale-2", expected_version="$EVAL_VERSION:nimbus-omar"),
     )
+    assert stale_version.passed
 
     assert guarded.passed
     assert not with_reply.passed

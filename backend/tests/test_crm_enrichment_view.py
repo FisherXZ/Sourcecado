@@ -93,3 +93,21 @@ def test_a_reviewed_new_result_does_not_hide_the_older_unknown_history(tmp_path)
     result=read(app,pid).json()
     assert result['status']=='found' and result['latest']['id']=='new-result'
     assert [item['status'] for item in result['attempts']]==['found','outcome_unknown']
+    assert result['unresolved_unknown_id']=='older-unknown' and result['can_request'] is False
+
+
+def test_provider_field_aliases_are_readable_and_unrelated_metadata_is_omitted(tmp_path):
+    app,pid,_=setup(tmp_path);approval(app,pid)
+    app.state.inbox.decide_and_claim('enrich-one','allow',actor='director',scope='once',claimant='field-claim')
+    app.state.inbox.complete_execution('enrich-one',claimant='field-claim',ok=True,result={'status':'partial','fields_found':['name','organizationName','linkedinUrl','email','authorization']})
+    assert read(app,pid).json()['latest']['fields_found']==['company','email','linkedin_url','name']
+
+
+def test_unverified_provider_identity_has_a_safe_review_explanation(tmp_path):
+    app,pid,_=setup(tmp_path);approval(app,pid)
+    app.state.inbox.decide_and_claim('enrich-one','allow',actor='director',scope='once',claimant='review-claim')
+    app.state.inbox.complete_execution('enrich-one',claimant='review-claim',ok=True,result={'status':'no_match','review_required':True,'code':'provider_identity_mismatch','message':'raw-provider-secret','credits_actual':1})
+    data=read(app,pid).json()
+    assert data['latest']['review_required'] is True
+    assert data['latest']['code']=='provider_identity_mismatch'
+    assert 'raw-provider-secret' not in json.dumps(data)
