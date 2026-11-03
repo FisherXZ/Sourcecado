@@ -46,8 +46,70 @@ describe("Contacts attention and preview", () => {
     fireEvent.click(trigger);
     const preview = await screen.findByRole("region", { name: "Person preview" });
     expect(within(preview).getByRole("link", { name: "Open person file" }).getAttribute("href")).toBe("#/people/per_maya");
-    fireEvent.click(within(preview).getByRole("button", { name: "Back to Contacts" }));
+    fireEvent.click(within(preview).getByRole("button", { name: "Close preview" }));
     expect(screen.queryByRole("region", { name: "Person preview" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Preview Maya Patel" }));
+  });
+
+  it("moves the preview through the table's current order with N of M controls", async () => {
+    api.getPerson.mockImplementation(async (id: string) => ({ ...file(), person: id === "per_leo" ? leo : maya }));
+    render(<BoardView />);
+    fireEvent.click(await screen.findByRole("button", { name: "Preview Maya Patel" }));
+    const preview = await screen.findByRole("region", { name: "Person preview" });
+    await within(preview).findByRole("heading", { name: "Maya Patel" });
+    const pager = within(preview).getByRole("group", { name: "Move between people" });
+    expect(pager).toHaveTextContent("1 of 2");
+    expect(within(pager).getByRole("button", { name: "Previous person" })).toBeDisabled();
+    expect(screen.getByRole("row", { name: "Preview person Maya Patel" })).toHaveAttribute("aria-current", "true");
+
+    fireEvent.click(within(pager).getByRole("button", { name: "Next person" }));
+
+    const moved = await screen.findByRole("region", { name: "Person preview" });
+    await within(moved).findByRole("heading", { name: "Leo Chen" });
+    expect(within(moved).getByRole("group", { name: "Move between people" })).toHaveTextContent("2 of 2");
+    expect(within(moved).getByRole("button", { name: "Next person" })).toBeDisabled();
+    expect(api.getPerson).toHaveBeenLastCalledWith("per_leo");
+    // The last row has no next person, so focus stays inside the preview on Close.
+    expect(document.activeElement).toBe(within(moved).getByRole("button", { name: "Close preview" }));
+  });
+
+  it("keeps unsaved preview edits when moving to the next person", async () => {
+    render(<BoardView />);
+    fireEvent.click(await screen.findByRole("button", { name: "Preview Maya Patel" }));
+    const preview = await screen.findByRole("region", { name: "Person preview" });
+    const text = await within(preview).findByLabelText("Short description");
+    fireEvent.change(text, { target: { value: "Unsaved context" } });
+    fireEvent.click(within(preview).getByRole("button", { name: "Next person" }));
+    expect(screen.getByRole("alertdialog", { name: "Unsaved edits" })).toBeInTheDocument();
+    expect(within(preview).getByRole("group", { name: "Move between people" })).toHaveTextContent("1 of 2");
+    expect((text as HTMLTextAreaElement).value).toBe("Unsaved context");
+  });
+
+  it("shows the next task with a due chip and the saved summary on one line", async () => {
+    const task = { task_id: "task_maya", person_id: "per_maya", title: "Send examples", details: "", due_date: "2026-10-01",
+      due_timezone: null, state: "open", origin: "human", version: 1, protected_fields: [], created_at: "2026-10-01",
+      updated_at: "2026-10-01", completed_at: null, due_status: "overdue" } as const;
+    const general = { ...defaultPersonDescriptions().general, authority: "human" as const, text: "Warm intro from Lumen" };
+    api.getBoard.mockResolvedValue({ backlog: [], open: [{ ...maya, next_action: task,
+      descriptions: { ...defaultPersonDescriptions(), general } }, leo], in_conversation: [], done: [] });
+    render(<BoardView />);
+    const row = await screen.findByRole("row", { name: "Preview person Maya Patel" });
+    expect(within(row).getByText("Send examples")).toBeInTheDocument();
+    expect(row.querySelector(".contacts-due.is-overdue time")).toHaveAttribute("datetime", "2026-10-01");
+    expect(within(row).getByRole("button", { name: "Edit short description: Warm intro from Lumen" })).toHaveTextContent("Warm intro from Lumen");
+    const quiet = screen.getByRole("row", { name: "Preview person Leo Chen" });
+    expect(within(quiet).getByRole("button", { name: "Edit short description" }).textContent).toBe("");
+  });
+
+  it("shows one Gmail status chip instead of contradicting lines", async () => {
+    api.getBoard.mockResolvedValue({ backlog: [], open: [maya], in_conversation: [], done: [],
+      mail_sync: { status: "failed", last_success_at: null, last_attempt_at: "2026-11-02T10:00:00Z", warning: null } });
+    const { container } = render(<BoardView />);
+    await screen.findByText("Maya Patel");
+    expect(container.querySelectorAll(".contacts-mail-chip")).toHaveLength(1);
+    expect(container.querySelector(".contacts-mail-chip")).toHaveTextContent("Gmail check failed");
+    expect(container.querySelector(".contacts-mail-chip")).toHaveAttribute("title", expect.stringContaining("Saved activity remains available"));
+    expect(container).not.toHaveTextContent("Gmail has not been checked yet");
   });
 
   it("honors an empty saved attention list after dismissing a reply review", async () => {
@@ -64,7 +126,7 @@ describe("Contacts attention and preview", () => {
     render(<PersonPreview personId="per_maya" onClose={close} />);
     const text = await screen.findByLabelText("Short description");
     fireEvent.change(text, { target: { value: "Context from an offline meeting" } });
-    fireEvent.click(screen.getByRole("button", { name: "Back to Contacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
     expect(close).not.toHaveBeenCalled();
     expect(screen.getByRole("alertdialog", { name: "Unsaved edits" })).toBeTruthy();
     expect((text as HTMLTextAreaElement).value).toContain("offline meeting");
@@ -75,7 +137,7 @@ describe("Contacts attention and preview", () => {
   it("keeps table headers visible when filters match nobody", async () => {
     render(<BoardView />);
     fireEvent.change(await screen.findByRole("searchbox"), { target: { value: "Nobody" } });
-    expect(screen.getByRole("columnheader", { name: "Contact" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Person" })).toBeTruthy();
     expect(screen.getByText(/No contacts match/)).toBeTruthy();
   });
 

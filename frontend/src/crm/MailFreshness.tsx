@@ -1,8 +1,46 @@
+import type { ReactNode } from "react";
+
 import type { MailAnalysisState, MailSyncState } from "../api";
+import { Glyph } from "../generative/ResultCard";
 
 function checkedTime(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "time unknown" : date.toLocaleString();
+}
+
+/** Time of day for a check made today, otherwise the day. */
+function shortCheckedTime(date: Date): string {
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/**
+ * One chip for Gmail freshness on Contacts. A failure or an unfinished
+ * collection wins over the last good check, so the chip never says two
+ * contradicting things. The full detail is in the tooltip and for screen readers.
+ */
+export function MailStatusChip({ state }: { state?: MailSyncState }) {
+  const last = state?.last_success_at ? new Date(state.last_success_at) : null;
+  const checked = last && !Number.isNaN(last.getTime()) ? last : null;
+  const lastLine = checked
+    ? `Last successful check: ${checked.toLocaleString()}.`
+    : "No successful check yet.";
+  const bodies = state?.warning === "body_unavailable"
+    ? " Some message bodies are unavailable or incomplete." : "";
+  const chip: { warn: boolean; glyph: "failed" | "partial" | "mail"; label: ReactNode; detail: string } =
+    state?.status === "failed"
+      ? { warn: true, glyph: "failed", label: "Gmail check failed", detail: `${lastLine} Saved activity remains available.` }
+      : state?.status === "partial"
+        ? { warn: true, glyph: "partial", label: "Gmail unfinished", detail: `Collection is unfinished. Refresh again to continue. ${lastLine}` }
+        : checked
+          ? { warn: false, glyph: "mail", label: <>Gmail · <time dateTime={state?.last_success_at ?? ""}>{shortCheckedTime(checked)}</time></>, detail: lastLine }
+          : { warn: false, glyph: "mail", label: "Gmail not checked", detail: "Gmail has not been checked yet." };
+  return <span className={`contacts-mail-chip${chip.warn ? " is-warn" : ""}`} title={chip.detail + bodies}>
+    <Glyph name={chip.glyph} />
+    {chip.label}
+    <span className="sr-only"> {chip.detail}{bodies}</span>
+  </span>;
 }
 
 /** Collection and interpretation are separate facts, even while Gmail is offline. */

@@ -1,0 +1,788 @@
+/* Contacts: a records table in the Attio pattern. One title row, one toolbar
+   line, a dense table with hairline gridlines, and a count footer. Colour
+   appears only in sequence pills, due chips and real attention. */
+
+.contacts-workspace {
+  min-width: 0;
+}
+
+/* Title row: name, count and view switch on the left; Gmail state and icon
+   actions on the right. */
+.contacts-titlebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  min-height: 40px;
+}
+
+.contacts-heading,
+.contacts-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.contacts-heading {
+  gap: 10px;
+}
+
+.contacts-actions {
+  gap: 8px;
+}
+
+.contacts-count {
+  display: inline-flex;
+  min-width: 24px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border-radius: 9999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.contacts-view-switch {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 6px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.contacts-view-switch button {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.contacts-view-switch button[aria-pressed="true"] {
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.contacts-mail-result {
+  max-width: 320px;
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.contacts-mail-chip {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 8px;
+  border-radius: 9999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.contacts-mail-chip.is-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.contacts-icon-button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 80ms ease-out;
+}
+
+.contacts-icon-button:hover {
+  background: var(--raised);
+}
+
+.contacts-icon-button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+.contacts-icon-button.is-spinning svg {
+  animation: contacts-spin 0.9s linear infinite;
+}
+
+@keyframes contacts-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Toolbar: view tabs on the left, chips and search on the right. */
+.contacts-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: 16px 0 8px;
+}
+
+.contacts-filters,
+.contacts-toolbar-end {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.contacts-filters {
+  gap: 2px;
+}
+
+.contacts-toolbar-end {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.contacts-filters button,
+.contacts-chip {
+  display: inline-flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 80ms ease-out;
+}
+
+.contacts-filters button:hover,
+.contacts-chip:hover {
+  background: var(--raised);
+}
+
+.contacts-filters button[aria-pressed="true"] {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.contacts-filter-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.contacts-chip {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.contacts-chip[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.contacts-filters svg,
+.contacts-chip svg,
+.contacts-search svg,
+.contacts-view-switch svg,
+.contacts-mail-chip svg,
+.contacts-th svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
+}
+
+.contacts-chip[aria-pressed="true"] svg,
+.contacts-mail-chip.is-warn svg {
+  color: currentColor;
+}
+
+.contacts-sort {
+  padding-right: 4px;
+}
+
+.contacts-sort select {
+  height: 30px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.contacts-search {
+  display: inline-flex;
+  width: 200px;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.contacts-search input {
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.contacts-search input::placeholder {
+  color: var(--muted);
+}
+
+.contacts-icon-button:focus-visible,
+.contacts-chip:focus-visible,
+.contacts-filters button:focus-visible,
+.contacts-view-switch button:focus-visible,
+.contacts-search:focus-within,
+.contacts-sort:has(select:focus-visible),
+.contacts-table a:focus-visible,
+.contacts-table button:focus-visible,
+.contacts-attention summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.contacts-sort select:focus-visible {
+  outline: none;
+}
+
+/* Table */
+.contacts-list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.contacts-table-scroll {
+  overflow-x: auto;
+}
+
+.contacts-table {
+  width: 100%;
+  min-width: 960px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+}
+
+.has-preview .contacts-table {
+  min-width: 760px;
+}
+
+.contacts-table th {
+  height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.contacts-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.contacts-table th + th,
+.contacts-table td + td {
+  border-left: 1px solid var(--border);
+}
+
+.contacts-table th:nth-child(1) { width: 19%; }
+.contacts-table th:nth-child(2) { width: 14%; }
+.contacts-table th:nth-child(3) { width: 13%; }
+.contacts-table th:nth-child(4) { width: 12%; }
+.contacts-table th:nth-child(5) { width: 17%; }
+.contacts-table th:nth-child(6) { width: 12%; }
+.contacts-table th:nth-child(7) { width: 13%; }
+
+.contacts-table tbody tr {
+  height: 38px;
+  border-bottom: 1px solid var(--border);
+}
+
+.contacts-table tbody tr:last-child {
+  border-bottom: 0;
+}
+
+.contacts-table td {
+  overflow: hidden;
+  padding: 0 10px;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background-color 80ms ease-out;
+}
+
+.contacts-row {
+  cursor: pointer;
+}
+
+.contacts-row:hover > td {
+  background: var(--raised);
+}
+
+.contacts-row[aria-current="true"] > td {
+  background: var(--accent-tint);
+}
+
+/* Table rows do not paint outlines reliably in WebKit, so the ring is drawn
+   on the cells. */
+.contacts-row:focus-visible {
+  outline: none;
+}
+
+.contacts-row:focus-visible > td {
+  box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+
+.contacts-row:focus-visible > td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent), inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+
+.contacts-row:focus-visible > td:last-child {
+  box-shadow: inset -2px 0 0 var(--accent), inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+}
+
+.contacts-person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.contacts-avatar {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.contacts-table .contacts-avatar {
+  cursor: pointer;
+}
+
+.contacts-person a {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contacts-person a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.contacts-hidden-surname {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.contacts-hidden-surname svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Soft tinted pills: sequence and attention. */
+.contacts-pill {
+  display: inline-block;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 9999px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.contacts-sequence-open {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.contacts-sequence-in_conversation {
+  background: color-mix(in srgb, var(--pit) 16%, var(--surface));
+  color: color-mix(in srgb, var(--pit) 55%, var(--text));
+}
+
+.contacts-sequence-done {
+  background: color-mix(in srgb, var(--text) 8%, var(--surface));
+  color: var(--text);
+}
+
+.contacts-sequence-not_started {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, var(--surface));
+  color: var(--text);
+}
+
+.contacts-pill.is-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.contacts-task {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.contacts-task-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contacts-due {
+  flex: none;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 7%, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 22px;
+}
+
+.contacts-due.is-today {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.contacts-due.is-overdue {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.contacts-attention summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border-radius: 4px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.contacts-attention summary::-webkit-details-marker {
+  display: none;
+}
+
+.contacts-attention .contacts-pill {
+  min-width: 0;
+}
+
+.contacts-more {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.contacts-attention[open] {
+  padding: 8px 0;
+  white-space: normal;
+}
+
+.contacts-attention p {
+  margin: 6px 0 0;
+}
+
+/* Summary: one line, blank when there is none. A click edits it in place. */
+.contacts-description {
+  display: flex;
+  width: calc(100% + 12px);
+  min-height: 26px;
+  align-items: center;
+  gap: 4px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+
+.contacts-description span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contacts-description svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.contacts-description:hover {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.contacts-description:hover svg,
+.contacts-description:focus-visible svg {
+  opacity: 1;
+}
+
+.contacts-description-edit {
+  padding: 8px 0;
+  white-space: normal;
+}
+
+.contacts-footer,
+.contacts-filter-empty {
+  margin: 0;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.contacts-footer {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.contacts-filter-empty {
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.contacts-loading {
+  margin: 16px 0 0;
+  font-size: 13px;
+}
+
+/* Empty Contacts: an icon, one line and one way forward. */
+.contacts-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 48px 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.contacts-empty > svg {
+  width: 24px;
+  height: 24px;
+  color: var(--accent);
+}
+
+.contacts-empty h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Preview header in the Clay pattern: who, where in the list, and close. */
+.person-preview .preview-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 12px;
+}
+
+.person-preview .preview-titlebar h2 {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-titlebar-fill {
+  flex: 1;
+}
+
+.preview-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.preview-pager span {
+  padding: 0 4px;
+}
+
+.person-preview .preview-titlebar button,
+.person-preview .preview-icon-link {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.person-preview .preview-titlebar button:hover:not(:disabled),
+.person-preview .preview-icon-link:hover {
+  background: var(--raised);
+}
+
+.person-preview .preview-titlebar button:disabled {
+  cursor: default;
+  opacity: .4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contacts-icon-button.is-spinning svg {
+    animation: none;
+  }
+
+  .contacts-icon-button,
+  .contacts-filters button,
+  .contacts-chip,
+  .contacts-table td {
+    transition: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .person-preview .preview-titlebar button,
+  .person-preview .preview-icon-link {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+}
+
+/* Touch sizing below the shell's 768px tier. */
+@media (max-width: 767px) {
+  .contacts-actions,
+  .contacts-toolbar-end {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .contacts-heading {
+    flex-wrap: wrap;
+  }
+
+  .contacts-mail-result {
+    flex-basis: 100%;
+    max-width: none;
+    order: 1;
+    text-align: left;
+  }
+
+  .contacts-icon-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .contacts-view-switch button,
+  .contacts-filters button,
+  .contacts-chip,
+  .contacts-search {
+    height: 44px;
+  }
+
+  .contacts-filters {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .contacts-search {
+    width: auto;
+    flex: 1 1 160px;
+  }
+
+  .contacts-search input,
+  .contacts-sort select {
+    height: 42px;
+  }
+
+  .contacts-table tbody tr {
+    height: 44px;
+  }
+}

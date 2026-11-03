@@ -509,12 +509,6 @@ img.app-mark {
 }
 
 /* Saved-person finder (#242): reuses the command dialog surface. */
-.board-finder-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .find-saved-person-hint,
 .find-saved-person-error {
   margin: 10px 2px 0;

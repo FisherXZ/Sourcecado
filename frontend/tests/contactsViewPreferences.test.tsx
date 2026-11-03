@@ -27,16 +27,16 @@ function person(id: string, name: string, rank = 10, due: string | null = null) 
   };
 }
 function contactOrder() {
-  return within(screen.getByRole("table", { name: "Active sourcing contacts" }))
+  return within(screen.getByRole("table", { name: "Contacts" }))
     .getAllByRole("row")
     .slice(1)
     .map((row) => row.querySelector(".contacts-avatar")?.id);
 }
 function expectDefaults() {
-  expect(screen.getByRole("button", { name: "Contacts", exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "People", exact: true })).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByRole("button", { name: /^All / })).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByRole("button", { name: "Needs attention" })).toHaveAttribute("aria-pressed", "false");
-  expect(screen.getByRole("searchbox", { name: "Search active contacts" })).toHaveValue("");
+  expect(screen.getByRole("searchbox", { name: "Search contacts" })).toHaveValue("");
   expect(screen.getByRole("combobox", { name: "Sort contacts" })).toHaveValue("attention");
 }
 
@@ -53,7 +53,7 @@ describe("remembered Contacts view", () => {
 
   it("restores view, attention, status, search and sort after a fresh mount", async () => {
     const first = render(<BoardView />);
-    await screen.findByRole("table", { name: "Active sourcing contacts" });
+    await screen.findByRole("table", { name: "Contacts" });
     fireEvent.change(screen.getByRole("combobox", { name: "Sort contacts" }), { target: { value: "name" } });
     fireEvent.click(screen.getByRole("button", { name: /^Open / }));
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "Ada" } });
@@ -67,7 +67,7 @@ describe("remembered Contacts view", () => {
     expect(screen.getByRole("button", { name: /^Open / })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Needs attention" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("searchbox", { name: "Search tasks" })).toHaveValue("Ada");
-    fireEvent.click(screen.getByRole("button", { name: "Contacts", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "People", exact: true }));
     expect(screen.getByRole("combobox", { name: "Sort contacts" })).toHaveValue("name");
   });
 
@@ -79,7 +79,7 @@ describe("remembered Contacts view", () => {
     expectDefaults();
     first.unmount();
     render(<BoardView />);
-    await screen.findByRole("table", { name: "Active sourcing contacts" });
+    await screen.findByRole("table", { name: "Contacts" });
     expectDefaults();
   });
 
@@ -87,7 +87,7 @@ describe("remembered Contacts view", () => {
     "uses defaults for invalid saved preferences: %s", async (saved) => {
       localStorage.setItem(STORAGE_KEY, saved);
       render(<BoardView />);
-      await screen.findByRole("table", { name: "Active sourcing contacts" });
+      await screen.findByRole("table", { name: "Contacts" });
       expectDefaults();
     },
   );
@@ -95,7 +95,7 @@ describe("remembered Contacts view", () => {
   it("sorts by name with stable person IDs for equal names", async () => {
     api.getBoard.mockResolvedValue({ open: [person("z", "Zara"), person("b", "Ada"), person("a", "Ada")], in_conversation: [], done: [] });
     render(<BoardView />);
-    await screen.findByRole("table", { name: "Active sourcing contacts" });
+    await screen.findByRole("table", { name: "Contacts" });
     fireEvent.change(screen.getByRole("combobox", { name: "Sort contacts" }), { target: { value: "name" } });
     expect(contactOrder()).toEqual(["preview-a", "preview-b", "preview-z"]);
   });
@@ -103,7 +103,7 @@ describe("remembered Contacts view", () => {
   it("sorts next task dates first, undated last, and equal dates by person ID", async () => {
     api.getBoard.mockResolvedValue({ open: [person("none", "No date"), person("late", "Later", 10, "2026-11-06"), person("b", "Early", 10, "2026-11-03"), person("a", "Early", 10, "2026-11-03")], in_conversation: [], done: [] });
     render(<BoardView />);
-    await screen.findByRole("table", { name: "Active sourcing contacts" });
+    await screen.findByRole("table", { name: "Contacts" });
     fireEvent.change(screen.getByRole("combobox", { name: "Sort contacts" }), { target: { value: "due" } });
     expect(contactOrder()).toEqual(["preview-a", "preview-b", "preview-late", "preview-none"]);
   });
@@ -111,7 +111,7 @@ describe("remembered Contacts view", () => {
   it("keeps equal attention ranks in stable person ID order", async () => {
     api.getBoard.mockResolvedValue({ open: [person("z", "Zara", 2), person("b", "Bea", 1), person("a", "Ada", 1)], in_conversation: [], done: [] });
     render(<BoardView />);
-    await screen.findByRole("table", { name: "Active sourcing contacts" });
+    await screen.findByRole("table", { name: "Contacts" });
     expect(contactOrder()).toEqual(["preview-a", "preview-b", "preview-z"]);
   });
 
@@ -119,7 +119,7 @@ describe("remembered Contacts view", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("Unavailable"); });
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Unavailable"); });
     render(<BoardView />);
-    await screen.findByRole("table", { name: "Active sourcing contacts" });
+    await screen.findByRole("table", { name: "Contacts" });
     expectDefaults();
     fireEvent.click(screen.getByRole("button", { name: "Needs attention" }));
     expect(screen.getByRole("button", { name: "Needs attention" })).toHaveAttribute("aria-pressed", "true");
