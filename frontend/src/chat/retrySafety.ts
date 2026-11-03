@@ -24,6 +24,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "crm_list_tasks",
   "crm_list_attention",
   "crm_review_person_correction",
+  "crm_get_person",
   "board_search",
   "monid_catalog",
   "monid_inspect",

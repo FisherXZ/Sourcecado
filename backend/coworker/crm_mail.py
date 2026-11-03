@@ -5,6 +5,7 @@ the conversation. Ownership also needs the connected account, the original
 outreach thread, and one exact recipient. Ambiguity never carries message text.
 """
 
+import threading
 from typing import Any
 
 from coworker.reply_filing import (
@@ -76,6 +77,20 @@ def _content(reader: TrackedMailReader, message: dict[str, Any]) -> dict[str, An
         return {"body": body, "body_state": "partial" if full.get("truncated") or len(full_body) > 8000 else "present" if body else "missing"}
     except GmailError:
         return {"body": "", "body_state": "missing"}
+
+
+# One collection pass at a time per process: Refresh, maintenance and chat share it.
+_COLLECTION_LOCK = threading.Lock()
+
+
+def collect_tracked_mail(people: PersonStore, gmail: Any, *, wait: bool = True) -> dict[str, Any] | None:
+    """Run one read-only Gmail collection pass. Without ``wait``, None means one is running."""
+    if not _COLLECTION_LOCK.acquire(blocking=wait):
+        return None
+    try:
+        return refresh_mail(people, TrackedMailReader(gmail))
+    finally:
+        _COLLECTION_LOCK.release()
 
 
 def refresh_mail(people: PersonStore, reader: TrackedMailReader, *, max_threads: int = 50,

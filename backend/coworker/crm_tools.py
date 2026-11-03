@@ -12,26 +12,27 @@ from __future__ import annotations
 import re
 import json
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from coworker.crm_sources import sources_visible
 from coworker.crm_service import CrmService
 from coworker.crm_tasks import (
-    DEFAULT_TIMEZONE, TIMEZONE_SETTING, TASK_STATES, TASK_TRANSITIONS, TaskConflict, TaskNotFound,
-    TaskService, validate_timezone,
+    DEFAULT_TIMEZONE, TASK_STATES, TASK_TRANSITIONS, TaskConflict, TaskNotFound,
+    TaskService, operator_timezone,
 )
 from coworker.evidence_envelope import Directive
 from coworker.people import PersonStore
 
 
-def _schema(name: str, description: str, fields: dict, required: tuple = (), *, write: bool = False) -> dict:
+def _schema(name: str, description: str, fields: dict, required: tuple = (), *, write: bool = False,
+            person: bool = True) -> dict:
     properties = {
         "person_id": {"type": "string"},
         "person_name": {"type": "string", "description": "Exact first or full name. Required outside a person chat unless the director gave the person id; ambiguous names require clarification."},
         **fields,
-    }
+    } if person else dict(fields)
     if write:
         properties.update({
             "reason": {"type": "string", "minLength": 1, "maxLength": 500},
@@ -85,8 +86,18 @@ CRM_TOOL_SCHEMAS.extend([
     _schema("crm_review_person_correction","Review exact proposed changes and possible duplicate person files. Read-only; never merges files or spends credits.",{"changes":_CORRECTION_CHANGES,"expected_version":_VERSION},("changes","expected_version")),
     _schema("crm_correct_person","Save only the person's details explicitly corrected in the current director message. Use wording such as Change Maya's company to Lumen Labs and email to maya@example.com. Read the current version first; review duplicate links and ask for exact duplicate confirmation before saving a collision. Corrected fields remain protected from enrichment.",{"changes":_CORRECTION_CHANGES,"expected_version":_VERSION,"collision_token":{"type":"string"},"confirmed_duplicate_ids":{"type":"array","items":{"type":"string"}},"source_refs":{"type":"array","items":{"type":"string"}}},("changes","expected_version"),write=True),
 ])
+CRM_TOOL_SCHEMAS.extend([
+    _schema("crm_get_person", "Read one person's file as the Person File shows it: identity, sequence state and person version, attention, descriptions and their owner, open tasks, recent CRM changes with change ids and Undo availability, filed Gmail threads without bodies, enrichment status, saved Monid research sources and the operator timezone. A person chat reads its saved person. Read-only; never calls Gmail, Apollo or Monid. Report partial results.", {}),
+    _schema("crm_set_status", "Move the person's sequence to open, in_conversation or done through the app's status writer, so crm_undo_change can undo it. Requires an explicit director command such as 'Move Maya to In conversation', 'Mark Noor done' or 'Reopen Ada'. Read the person version with crm_get_person first. Use this instead of board_mutate transition.", {
+        "state": {"type": "string", "enum": ["open", "in_conversation", "done"]}, "expected_version": _VERSION,
+    }, ("state", "expected_version"), write=True),
+    _schema("crm_refresh_mail", "Check tracked Gmail threads and file new replies and sent messages into person files, like the Contacts Refresh button. Read-only toward Gmail: never sends, drafts or changes mail. Runs at most once a minute; evidence analysis follows in background maintenance.", {}, person=False),
+])
 CRM_TOOL_NAMES = frozenset(schema["function"]["name"] for schema in CRM_TOOL_SCHEMAS)
-CRM_READ_TOOLS = frozenset({"crm_list_attention", "crm_list_tasks", "crm_review_person_correction"})
+CRM_READ_TOOLS = frozenset({"crm_list_attention", "crm_list_tasks", "crm_review_person_correction", "crm_get_person"})
+# crm_refresh_mail files local activity, so it is not a read. It is observation and
+# needs no director command; the shared mail sync state limits it to once a minute.
+MAIL_REFRESH_INTERVAL_SECONDS = 60
 _SCHEMAS = {s["function"]["name"]: s["function"]["parameters"] for s in CRM_TOOL_SCHEMAS}
 
 
@@ -399,6 +410,7 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
         "crm_update_task": r"^(?:mark|complete|finish|reopen|cancel|change|edit|update|clear|move|reschedule)\b.*\b(?:task|reminder)\b",
         "crm_update_description": r"^(?:change|edit|update|set|clear|release)\b.*\bdescription\b",
         "crm_set_attention": r"^(?:set|flag|clear)\b.*\battention\b",
+        "crm_set_status": r"^(?:move|set|mark|change|put|reopen)\b",
         "crm_resolve_proposal": r"^(?:accept|dismiss)\s+(?:suggestion|proposal)\b",
         "crm_undo_change": r"^undo\b",
     }
@@ -458,6 +470,21 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
                 or args.get("until_date") != command[2]):
             raise CRMToolError("unverified_director_request", "Attention text and optional YYYY-MM-DD expiry must exactly match the director's explicit command.")
         if command[1] and _replacement(command[1]) not in {_replacement(str(args.get(field) or "")) for field in ("person_id", "person_name")}:
+            raise CRMToolError("unverified_director_request", "The named person must match the selected person in this conversation.")
+        return True
+    if name == "crm_set_status":
+        reopen = re.fullmatch(r"reopen(?:\s+(?P<who>.+?))?[.!]?", text)
+        command = reopen or re.fullmatch(r"(?:move|set|mark|change|put)(?:\s+(?P<who>.+?))??\s+"
+            r"(?:(?:back\s+)?(?:to|as|in|into)\s+)?(?P<state>open|in[ _-]conversation|done)[.!]?", text)
+        if not command:
+            raise CRMToolError("unverified_director_request", "Ask for one explicit status change, such as 'Move Maya to In conversation', 'Mark Noor done' or 'Reopen Ada'.")
+        requested = "open" if reopen else re.sub(r"[ -]", "_", command["state"])
+        if args.get("state") != requested:
+            raise CRMToolError("unverified_director_request", "The requested status does not match the director's command.")
+        who = re.sub(r"(?:['’]s(?:\s+(?:status|sequence|stage))?|\s+back)$", "", (command["who"] or "").strip())
+        first, last = (_normalized(str((person or {}).get(key) or "")) for key in ("first_name", "last_name"))
+        names = {first, f"{first} {last}".strip(), str((person or {}).get("person_id") or "")} - {""}
+        if who and who not in names | {"her", "him", "them", "this person", "that person", "the person", "this contact", "that contact"}:
             raise CRMToolError("unverified_director_request", "The named person must match the selected person in this conversation.")
         return True
     if name == "crm_resolve_proposal":
@@ -578,23 +605,40 @@ def _person(people: PersonStore, args: dict, sid: str | None, directive: Directi
     return str(requested)
 
 
+def _refresh_mail(people: PersonStore, gmail: Any) -> tuple[bool, dict]:
+    """Observation only: the shared Gmail collection pass, at most once a minute."""
+    # Lazy: permissions imports this module, and doctor must not load Gmail.
+    from coworker.crm_mail import collect_tracked_mail
+    from coworker.crm_mail_repository import MailRepository
+    if gmail is None:
+        raise CRMToolError("gmail_unavailable", "Gmail is not connected. Connect it in Connections before refreshing tracked mail.")
+    repository = MailRepository(people)
+    last = repository.sync_state().get("last_attempt_at")
+    if last and (datetime.now(UTC) - datetime.fromisoformat(last.replace("Z", "+00:00"))).total_seconds() < MAIL_REFRESH_INTERVAL_SECONDS:
+        return True, {"status": "recently_checked", "mail_sync": repository.public_sync_state()}
+    result = collect_tracked_mail(people, gmail, wait=False)
+    if result is None:
+        return True, {"status": "in_progress", "mail_sync": repository.public_sync_state()}
+    keys = ("status", "mode", "scanned", "filed", "outgoing", "unassigned", "content_partial", "remaining_threads", "mail_sync")
+    return result["status"] != "failed", {key: result[key] for key in keys if key in result}
+
+
 def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: Any = None,
                      session_id: str | None = None, run_id: str | None = None,
                      allowed_source_ids: set[str] | None = None,
                      directive: Directive | None = None,
-                     mutation_budget: CRMMutationBudget | None = None) -> tuple[bool, dict]:
+                     mutation_budget: CRMMutationBudget | None = None,
+                     gmail: Any = None, apollo_configured: bool = False) -> tuple[bool, dict]:
     try:
         args = arguments or {}
         schema = _SCHEMAS[name]
         _validate(args, schema)
+        if name == "crm_refresh_mail":
+            return _refresh_mail(people, gmail)
         if name not in CRM_READ_TOOLS and (not isinstance(args.get("reason"), str) or not args["reason"].strip() or len(args["reason"]) > 500):
             raise CRMToolError("invalid_arguments", "A reason of 1–500 characters is required.")
         pid = _person(people, args, session_id, directive, optional=name in CRM_READ_TOOLS)
-        saved_timezone = store.get_setting(TIMEZONE_SETTING) if store else None
-        try:
-            timezone = validate_timezone(saved_timezone)
-        except ValueError:
-            timezone = DEFAULT_TIMEZONE
+        timezone = operator_timezone(store)
         tasks = TaskService(people)
         service = CrmService(people)
         if name == "crm_list_attention":
@@ -612,6 +656,12 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
             partial = result["truncated"] or len(visible) != len(result["tasks"])
             return True, {**result, "tasks": visible, "partial": partial,
                           "status": "partial" if partial else "complete"}
+        if name == "crm_get_person":
+            from coworker.crm_person_file import person_file
+            if not pid:
+                raise CRMToolError("person_context_required", "Open a person conversation or provide the person's name.")
+            return True, person_file(people, pid, store=store, timezone=timezone,
+                allowed_source_ids=allowed_source_ids, apollo_configured=apollo_configured)
         if name=='crm_review_person_correction':
             from coworker.person_corrections import PersonCorrectionService
             if not pid:raise CRMToolError('person_required','Select one saved person to review a correction')
@@ -668,6 +718,9 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
                 expected_version=args.get("expected_version"), text=args.get("text"),
                 release=args.get("release", False), source_refs=args.get("source_refs"),
                 rationale_summary=args["reason"], **identity)
+        elif name == "crm_set_status":
+            result = service.set_status(pid, state=args["state"], expected_version=args["expected_version"],
+                rationale_summary=args["reason"], **identity)
         elif name == "crm_set_attention":
             result = service.set_attention(pid, reason=args.get("flag_reason"),
                 until=args.get("until_date"), expected_version=args["expected_version"],
@@ -694,6 +747,8 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
             raise CRMToolError("unknown_crm_tool", "Unknown CRM operation")
         if mutation_budget is not None:
             mutation_budget.consume(request)
+        if isinstance(result.get("status"), dict):
+            result = {**result, "sequence": result["status"]}  # The status receipt key; "status" reports the call.
         return True, {**result, "person_id": pid, "board_changed": bool(result.get("change")), "status": "complete"}
     except CRMToolError as exc:
         return False, {"status": "failed", "code": exc.code, "error": str(exc), **exc.details}
