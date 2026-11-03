@@ -35,9 +35,13 @@ describe("Contacts and person-file styles", () => {
     for (const size of contacts.matchAll(/font-size:\s*(\d+)px/g)) {
       expect(Number(size[1])).toBeGreaterThanOrEqual(13);
     }
-    expect(styles).toMatch(
-      /@import "\.\/styles\/contacts\.css";\s*@import "\.\/styles\/crm-details\.css";\s*@import "\.\/styles\/responsive\.css";/,
-    );
+    // Responsive overrides must load after the CRM sheets they adjust.
+    const responsive = styles.indexOf('@import "./styles/responsive.css";');
+    for (const sheet of ["contacts.css", "crm-details.css"]) {
+      const at = styles.indexOf(`@import "./styles/${sheet}";`);
+      expect(at).toBeGreaterThan(-1);
+      expect(at).toBeLessThan(responsive);
+    }
   });
 
   it("keeps person-file header controls touch sized on narrow screens", () => {

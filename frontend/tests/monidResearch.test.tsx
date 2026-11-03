@@ -9,7 +9,8 @@ vi.mock("../src/api", async importOriginal => ({
     brief: livingBrief(), timeline: [], versions: [], sourcing_chat: { session_id: "session_1" },
     meeting_evidence: { attached: [], proposed: [], rejected: [] } }),
 }));
-vi.mock("../src/Tasks", () => ({ TASKS_CHANGED: "sourcecado:tasks-changed", TaskList: () => null }));
+vi.mock("../src/Tasks", () => ({ TASKS_CHANGED: "sourcecado:tasks-changed", TaskList: () => null,
+  useOperationId: () => ({ forPayload: () => "op_test", reset: () => {} }) }));
 vi.mock("../src/EnrichmentPanel", () => ({ EnrichmentPanel: () => null }));
 afterEach(() => vi.unstubAllGlobals());
 
