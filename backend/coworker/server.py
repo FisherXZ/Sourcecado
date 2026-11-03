@@ -44,6 +44,9 @@ from coworker.agent_run_reconcile import (
 )
 from coworker.agent_run_repository import AgentRunRepository
 from coworker.agent_run_resume import restart as agent_run_restart
+from coworker.attachments import AttachmentStore
+from coworker.attachments_api import attachments_router
+from coworker.provider import provider_accepts_images
 from coworker.apollo import (
     ENRICH_CREDIT_COST,
     MISSING_KEY as APOLLO_MISSING_KEY,
@@ -431,12 +434,15 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app):
-        maintenance=asyncio.create_task(app.state.crm_refresh.run())
-        try:yield
+        maintenance = asyncio.create_task(app.state.crm_refresh.run())
+        try:
+            yield
         finally:
             maintenance.cancel()
-            try:await maintenance
-            except asyncio.CancelledError:pass
+            try:
+                await maintenance
+            except asyncio.CancelledError:
+                pass
 
     app = FastAPI(title="Club backend", version="0.0.2",lifespan=lifespan)
     app.state.token = token
@@ -493,6 +499,8 @@ def create_app(
             people=app.state.people,
         )
     )
+    app.state.attachments=AttachmentStore(root)
+    app.include_router(attachments_router(store=app.state.attachments,accepts_images=lambda:provider_accepts_images(app.state.provider)))
     app.state.agent_runs = AgentRunRepository(root)
     # This process becomes an Agent Run owner here, and it is the process that
     # starts the backend, so this is where the marker belongs. The marker holds
@@ -2098,7 +2106,7 @@ def create_app(
     mail_refresh_lock=threading.Lock()
     def collect_tracked_mail():
         with mail_refresh_lock:
-            return refresh_mail(app.state.people,TrackedMailReader(app.state.gmail))
+            return refresh_mail(app.state.people, TrackedMailReader(app.state.gmail))
     app.state.collect_tracked_mail=collect_tracked_mail
 
     def current_board():
@@ -2110,8 +2118,8 @@ def create_app(
                 "mail_sync": mail_repository.public_sync_state()}
 
 
-    @app.get('/v1/board')
-    def board_get(include_mail_state:bool=False):
+    @app.get("/v1/board")
+    def board_get(include_mail_state: bool = False):
         return current_board() if include_mail_state else app.state.people.list_board()
 
     def _operator_timezone() -> str:
@@ -2315,12 +2323,21 @@ def create_app(
             return _task_error(exc)
         return {"changes": app.state.tasks.changes(task_id)}
 
-    @app.post('/v1/people/{person_id}/crm-changes/{change_id}/undo')
-    async def people_change_undo(person_id:str,change_id:str,request:Request):
-        payload=await request.json()
-        if not isinstance(payload,dict):return JSONResponse({'error':'expected a JSON object'},status_code=400)
-        try:return app.state.crm.undo(person_id,change_id,operation_id=payload.get('operation_id'),reason=payload.get('reason'),actor='director')
-        except (TaskError,ValueError) as exc:return _task_error(exc)
+    @app.post("/v1/people/{person_id}/crm-changes/{change_id}/undo")
+    async def people_change_undo(person_id: str, change_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.crm.undo(
+                person_id,
+                change_id,
+                operation_id=payload.get("operation_id"),
+                reason=payload.get("reason"),
+                actor="director",
+            )
+        except (TaskError, ValueError) as exc:
+            return _task_error(exc)
 
     @app.post("/v1/replies/refresh")
     async def replies_refresh():
@@ -2392,16 +2409,24 @@ def create_app(
         }
         return result
 
-    @app.post('/v1/people/{person_id}/sequence')
-    async def people_sequence(person_id:str,request:Request):
-        payload=await request.json()
-        if not isinstance(payload,dict):return JSONResponse({'error':'expected a JSON object'},status_code=400)
-        person=app.state.people.get(person_id)
-        if person is None:return JSONResponse({'error':'not found'},status_code=404)
+    @app.post("/v1/people/{person_id}/sequence")
+    async def people_sequence(person_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
         try:
-            result=app.state.crm.set_status(person_id,state=payload.get('state'),expected_version=payload.get('expected_version',person['version']),operation_id=payload.get('operation_id') or 'sequence_'+uuid.uuid4().hex)
-            return {**result,'person':app.state.people.get(person_id)}
-        except (TaskError,ValueError) as exc:return _task_error(exc)
+            result = app.state.crm.set_status(
+                person_id,
+                state=payload.get("state"),
+                expected_version=payload.get("expected_version", person["version"]),
+                operation_id=payload.get("operation_id") or "sequence_" + uuid.uuid4().hex,
+            )
+            return {**result, "person": app.state.people.get(person_id)}
+        except (TaskError, ValueError) as exc:
+            return _task_error(exc)
 
     # IMPORTANT: static /v1/people/* routes MUST be declared before the
     # /v1/people/{person_id} param route below. Starlette matches in
@@ -2600,25 +2625,66 @@ def create_app(
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
-    @app.patch('/v1/people/{person_id}/descriptions/{slot}')
-    async def people_description(person_id:str,slot:str,request:Request):
-        if app.state.people.get(person_id) is None:return JSONResponse({'error':'not found'},status_code=404)
-        if slot not in DESCRIPTION_SLOTS:return JSONResponse({'error':'unknown description slot'},status_code=404)
-        payload=await request.json()
-        if not isinstance(payload,dict):return JSONResponse({'error':'expected a JSON object'},status_code=400)
-        expected=payload.get('expected_version');release=payload.get('release',False);text=payload.get('text')
-        if type(expected) is not int or type(release) is not bool:return JSONResponse({'error':'expected_version and release must have the correct types'},status_code=400)
-        if not release and not isinstance(text,str):return JSONResponse({'error':'text or release is required'},status_code=400)
-        current=app.state.people.descriptions(person_id)[slot]
-        if not payload.get('operation_id'):
-            if expected!=current['version']:return JSONResponse({'error':'stale record version'},status_code=409)
-            if (release and current['authority']=='assistant') or (not release and current['authority']=='human' and (current['text'] or '')==text):
-                return {'descriptions':app.state.people.descriptions(person_id),'description':current,'person':app.state.people.get(person_id,expand_sources=True),'versions':app.state.people.versions(person_id),'saved':False,'unchanged':True}
+    @app.patch("/v1/people/{person_id}/descriptions/{slot}")
+    async def people_description(person_id: str, slot: str, request: Request):
+        if app.state.people.get(person_id) is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if slot not in DESCRIPTION_SLOTS:
+            return JSONResponse({"error": "unknown description slot"}, status_code=404)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        expected = payload.get("expected_version")
+        release = payload.get("release", False)
+        text = payload.get("text")
+        if type(expected) is not int or type(release) is not bool:
+            return JSONResponse(
+                {"error": "expected_version and release must have the correct types"},
+                status_code=400,
+            )
+        if not release and not isinstance(text, str):
+            return JSONResponse({"error": "text or release is required"}, status_code=400)
+        current = app.state.people.descriptions(person_id)[slot]
+        if not payload.get("operation_id"):
+            if expected != current["version"]:
+                return JSONResponse({"error": "stale record version"}, status_code=409)
+            if (release and current["authority"] == "assistant") or (
+                not release
+                and current["authority"] == "human"
+                and (current["text"] or "") == text
+            ):
+                return {
+                    "descriptions": app.state.people.descriptions(person_id),
+                    "description": current,
+                    "person": app.state.people.get(person_id, expand_sources=True),
+                    "versions": app.state.people.versions(person_id),
+                    "saved": False,
+                    "unchanged": True,
+                }
         try:
-            result=app.state.crm.save_description(person_id,slot,text=text,release=release,expected_version=expected,operation_id=payload.get('operation_id') or 'description_'+uuid.uuid4().hex,actor='director',reason=payload.get('rationale_summary') or 'Director edited the description.')
-            return {**result,'descriptions':app.state.people.descriptions(person_id),'person':app.state.people.get(person_id,expand_sources=True),'versions':app.state.people.versions(person_id),'saved':True,'unchanged':False}
-        except (TaskError,ValueError) as exc:
-            if 'exceeds' in str(exc):return JSONResponse({'error':str(exc)},status_code=422)
+            result = app.state.crm.save_description(
+                person_id,
+                slot,
+                text=text,
+                release=release,
+                expected_version=expected,
+                operation_id=payload.get("operation_id")
+                or "description_" + uuid.uuid4().hex,
+                actor="director",
+                reason=payload.get("rationale_summary")
+                or "Director edited the description.",
+            )
+            return {
+                **result,
+                "descriptions": app.state.people.descriptions(person_id),
+                "person": app.state.people.get(person_id, expand_sources=True),
+                "versions": app.state.people.versions(person_id),
+                "saved": True,
+                "unchanged": False,
+            }
+        except (TaskError, ValueError) as exc:
+            if "exceeds" in str(exc):
+                return JSONResponse({"error": str(exc)}, status_code=422)
             return _task_error(exc)
 
     def _granola_meetings() -> dict[str, Any]:
@@ -3940,6 +4006,7 @@ def create_app(
                     run_trigger=(
                         "chat" if queue_item_id is None else "queued_chat"
                     ),
+                    attachments=app.state.attachments,
                 )
                 status = str(result.get("status") or "error")
                 if queue_item_id is not None:

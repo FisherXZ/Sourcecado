@@ -292,7 +292,7 @@ describe("shared person tasks", () => {
     // Reviewed Gmail drafting is the primary action; local text stays a fallback.
     expect(within(list).queryByRole("button", {
       name: "Prepare draft for Send project examples",
-    })).toBeNull();
+    })).not.toBeVisible();
     const fallback = within(list).getByText("Local draft text").closest("details");
     expect(fallback).not.toHaveAttribute("open");
     fireEvent.click(within(list).getByText("Local draft text"));

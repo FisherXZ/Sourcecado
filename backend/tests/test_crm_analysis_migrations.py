@@ -87,7 +87,10 @@ def test_snapshot_restore_retains_description_authority_and_sources(tmp_path):
     people.patch_description(pid, "general", expected_version=1, text="", actor="director", rationale_summary="Intentional blank")
     people.revert(pid, to_version=version, expected_version=people.get(pid)["version"], actor="director", rationale_summary="Restore sourced descriptions")
     restored = people.descriptions(pid)
-    assert restored == saved
+    for slot in saved:
+        assert {key:value for key,value in restored[slot].items() if key!='version'} == {key:value for key,value in saved[slot].items() if key!='version'}
+    assert restored['general']['version']==saved['general']['version']+2
+    assert restored['detailed']['version']==saved['detailed']['version']
     # Generated prose and its authority/source metadata travel together.
     assert restored["general"]["source_refs"] and restored["general"]["authority"] == "assistant"
 

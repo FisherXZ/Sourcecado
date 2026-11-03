@@ -19,6 +19,7 @@ from typing import Any
 from coworker.crm_sources import source_ids, sources_visible
 from coworker.crm_tasks import TaskConflict, DEFAULT_TIMEZONE, validate_timezone, TaskService
 from coworker.crm_email_tasks import EmailTaskWriter, original_body, validate_candidates
+from coworker.crm_legacy_compat import legacy_decision
 from coworker.evidence_envelope import seal
 from coworker.people import DESCRIPTION_LIMITS, PersonStore
 from coworker.reply_filing import OutboundIndex, _addresses_in, address_of, build_index, classify
@@ -146,14 +147,14 @@ class AnalysisService:
             sender = address_of(meta.get("from"))
             if (sender not in index.accounts or len(recipients) != 1
                     or set(meta.get("label_ids") or ()) & {"DRAFT", "TRASH"}
-                    or _addresses_in(meta.get("to"), meta.get("cc")) != recipients):
+                    or _addresses_in(meta.get("to"), meta.get("cc"), meta.get("bcc")) != recipients):
                 raise SourceInputChanged("ambiguous_attribution")
             # Apply the same shared-address, multi-person and forwarding refusals.
             judged = {**meta, "from": next(iter(recipients)), "to": sender, "label_ids": []}
         verdict = classify(judged, index)
         if verdict.person_id != pid or verdict.reason != "exact_thread_and_sender":
             raise SourceInputChanged("ambiguous_attribution")
-        addresses = _addresses_in(meta.get("from"), meta.get("to"), meta.get("cc"), meta.get("delivered_to"))
+        addresses = _addresses_in(meta.get("from"), meta.get("to"), meta.get("cc"), meta.get("bcc"), meta.get("delivered_to"))
         addresses.update(item.recipient for item in sent)
         return digest({
             "thread": sorted((item.person_id, item.recipient) for item in sent),
@@ -218,7 +219,8 @@ class AnalysisService:
                 break
             body = full.get("body")
             if (full.get("id") != mid or full.get("from") != meta.get("from")
-                    or full.get("to") != meta.get("to") or full.get("subject") != meta.get("subject")):
+                    or full.get("to") != meta.get("to") or full.get("subject") != meta.get("subject")
+                    or any(key in full and full.get(key)!=meta.get(key) for key in ("cc","bcc","thread_id"))):
                 partial, reason = True, "conflicting_context"
                 break
             if not isinstance(body, str) or not body.strip() or len(body) >= 8000 or full.get("truncated"):
@@ -564,6 +566,11 @@ class AnalysisService:
         for slot in DESCRIPTION_LIMITS:
             value = output[slot]
             support = [manifest[k] for k in sorted(set(value["sources"]))]
+            seen, pending = legacy_decision(self.people, pid, kind='description',
+                value={'slot': slot}, support=support, evidence=evidence, allowed=self.allowed)
+            if seen:
+                proposals.extend(pending)
+                continue
             refs = sorted({s["source_id"] for s in support})
             fingerprint = digest(sorted(({k: item[k] for k in ("source_id", "message_id", "body_fingerprint")} for item in support), key=lambda item: item["source_id"]))
             prior = self.people._conn.execute("SELECT * FROM crm_proposals WHERE person_id=? AND intent_key=? AND support_source_fingerprint=?",

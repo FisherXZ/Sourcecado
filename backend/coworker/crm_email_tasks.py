@@ -6,6 +6,8 @@ intentionally narrow English grammar; unsupported language remains reviewable.
 """
 from __future__ import annotations
 
+from coworker.crm_legacy_compat import legacy_decision
+
 from datetime import date, datetime, timedelta
 import hashlib
 import json
@@ -255,6 +257,11 @@ class EmailTaskWriter:
                 continue
             start, end = span
             request = original[start:end]
+            seen, pending = legacy_decision(self.people, pid, kind='task_create',
+                value={'title': item['title']}, support=[support], evidence=evidence, allowed=self.allowed)
+            if seen:
+                proposals.extend(pending)
+                continue
             identity = {k: support[k] for k in ("source_id", "message_id", "body_fingerprint")}
             identity.update(start=start, end=end)
             fingerprint = _hash(identity)
@@ -338,6 +345,13 @@ class EmailTaskWriter:
             else:
                 value = {"title": item["title"], "details": request, "due_date": due if clear else None}
                 reason = "A full attributed inbound message explicitly requests this work." if clear else "The cited request or deadline needs director review; no date was inferred."
+            if kind == 'task_update' and target is not None:
+                seen, pending = legacy_decision(self.people, pid, kind=kind,
+                    value={'task_id': target['task_id'], 'changes': value['changes']},
+                    support=[support], evidence=evidence, allowed=self.allowed)
+                if seen:
+                    proposals.extend(pending)
+                    continue
             if clear and not matches:
                 response = self.tasks._create_uncommitted(pid, **value, timezone=self.timezone, actor="assistant",
                     source_refs=refs, allowed_source_ids=self.allowed, operation_id="crm-analysis:" + proposal_id, reason=reason)

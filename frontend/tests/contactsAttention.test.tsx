@@ -6,7 +6,7 @@ import { TaskDraft } from "../src/crm/TaskDraft";
 import { defaultPersonDescriptions, type BoardPerson, type PersonFile } from "../src/api";
 import { livingBrief } from "./livingBrief";
 
-const api = vi.hoisted(() => ({ getBoard: vi.fn(), getPerson: vi.fn(), crmRequest: vi.fn(), startCrmRefresh: vi.fn() }));
+const api = vi.hoisted(() => ({ getBoard: vi.fn(), getPerson: vi.fn(), crmRequest: vi.fn(), startCrmRefresh: vi.fn(), listTasks: vi.fn() }));
 vi.mock("../src/api", async (original) => ({
   ...await original<typeof import("../src/api")>(),
   ...(await import("./taskApi")).taskApiMock(), ...api,
@@ -22,6 +22,7 @@ function file(): PersonFile {
 describe("Contacts attention and preview", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    api.listTasks.mockResolvedValue({ tasks: [], timezone: "America/Los_Angeles", today: "2026-11-02", truncated: false });
     vi.clearAllMocks();
     api.getBoard.mockResolvedValue({ backlog: [], open: [leo, maya], in_conversation: [], done: [] });
     api.getPerson.mockResolvedValue(file());
@@ -95,6 +96,7 @@ describe("Contacts attention and preview", () => {
 describe("Preview change review", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    api.listTasks.mockResolvedValue({ tasks: [], timezone: "America/Los_Angeles", today: "2026-11-02", truncated: false });
     vi.clearAllMocks();
     api.getPerson.mockResolvedValue(file());
     api.crmRequest.mockResolvedValue({});
@@ -120,6 +122,24 @@ describe("Preview change review", () => {
     render(<PersonPreview personId="per_maya" onClose={() => {}} />);
     expect(await screen.findByText("Protected current context")).toBeInTheDocument();
     expect(screen.getByText("Suggested new context")).toBeInTheDocument();
+  });
+
+
+  it("keeps unsaved preview edits before following a task draft link", async () => {
+    const startHash = window.location.hash;
+    api.listTasks.mockResolvedValue({tasks: [{task_id: "task_maya", person_id: "per_maya", title: "Send examples", details: "", due_date: null, due_timezone: null, state: "open", origin: "human", version: 1, protected_fields: [], source_refs: [], created_at: "2026-11-02", updated_at: "2026-11-02", completed_at: null}], truncated: false, timezone: "America/Los_Angeles", today: "2026-11-02"});
+    render(<PersonPreview personId="per_maya" onClose={() => {}} />);
+    fireEvent.change(await screen.findByLabelText("Attention reason"), {target: {value: "Keep this unsaved flag"}});
+    fireEvent.click(await screen.findByRole("link", {name: "Prepare a follow-up draft for Send examples"}));
+    expect(screen.getByRole("alertdialog", {name: "Unsaved edits"})).toBeInTheDocument();
+    expect(window.location.hash).toBe(startHash);
+    expect(screen.getByLabelText("Attention reason")).toHaveValue("Keep this unsaved flag");
+  });
+  it("does not offer Undo when the saved receipt cannot be undone", async () => {
+    api.getPerson.mockResolvedValue({...file(), crm_changes: [{change_id: "human_create", entity_type: "task", action: "create", reason: "Created a human task", actor: "director", can_undo: false}]});
+    render(<PersonPreview personId="per_maya" onClose={() => {}} />);
+    await screen.findByText("Created a human task");
+    expect(screen.queryByRole("button", {name: "Undo", hidden: true})).toBeNull();
   });
 
   it("uses a durable operation receipt when changing status", async () => {

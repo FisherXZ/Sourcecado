@@ -405,7 +405,7 @@ class TaskService:
             if permitted_only and not sources_visible(self._people, task["person_id"], task["source_refs"], allowed_source_ids):
                 continue
             task = self._project_task(task, allowed_source_ids)
-            task["due_status"] = due_status(task["due_date"], today)
+            task["due_status"] = due_status(task["due_date"], today_in(task["due_timezone"] or timezone, now=now))
             task["person"] = {
                 "person_id": task["person_id"],
                 "first_name": row["person_first_name"],

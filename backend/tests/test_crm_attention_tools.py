@@ -204,3 +204,26 @@ def test_global_chat_tasks_include_the_apps_kept_person_task(tmp_path):
     assert ok, result
     assert [task["task_id"] for task in result["tasks"]] == [saved["task_id"]]
     assert people.get(pid)["sequence_state"] is None
+
+
+def test_sourced_proposal_outcome_keeps_only_canonical_source_ids(tmp_path):
+    import json
+    from coworker.crm_tools import crm_outcome_references
+
+    people, pid, service = setup_person(tmp_path)
+    ref = people.upsert_attachment(pid, record_type="source_ref",
+        fields={"id": "reviewed-proposal-source", "provider": "Drive", "title": "Private source title"},
+        idempotency_key="proposal-outcome-source", actor="director", rationale_summary="File source")
+    proposal = service.propose(pid, kind="task_create", value={"title": "Sensitive proposed message"},
+        expected_version=0, sources=[ref["id"]], fingerprint="proposal-outcome", reason="Review suggestion")
+    resolution = service.resolve(pid, proposal["proposal_id"], decision="dismissed",
+        operation_id="dismiss-source-outcome", timezone="America/Los_Angeles")
+    assert resolution["proposal"]["source_refs"][0]["id"] == ref["id"]
+
+    references = crm_outcome_references({**resolution, "person_id": pid})
+
+    assert references["source_refs"] == [{"id": ref["id"], "provider": "sourcecado", "title": "CRM source reference"}]
+    encoded = json.dumps(references)
+    assert "Sensitive proposed message" not in encoded
+    assert "Private source title" not in encoded
+    assert '"url"' not in encoded and '"body"' not in encoded

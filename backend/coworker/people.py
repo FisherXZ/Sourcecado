@@ -448,6 +448,7 @@ class PersonStore:
         snapshot held in its untouched default (assistant-owned, no text,
         version 0) is left with no row, which reads back as that same default.
         """
+        previous = self._descriptions(person_id)
         self._conn.execute(
             "DELETE FROM person_descriptions WHERE person_id = ?", (person_id,)
         )
@@ -457,10 +458,17 @@ class PersonStore:
                 continue
             text = entry.get("text")
             authority = str(entry.get("authority") or "assistant")
-            slot_version = int(entry.get("version") or 0)
-            if text is None and authority == "assistant" and slot_version == 0:
-                continue  # the untouched default carries no row
             source_refs = entry.get("source_refs") or []
+            current = previous[slot]
+            same = (
+                current["text"] == text
+                and current["authority"] == authority
+                and current["source_refs"] == source_refs
+            )
+            slot_version = current["version"] if same else current["version"] + 1
+            if text is None and authority == "assistant" and slot_version == 0:
+                continue
+
             self._conn.execute(
                 """
                 INSERT INTO person_descriptions (
@@ -2383,10 +2391,13 @@ class PersonStore:
             # rather than replacing their evidence from a person snapshot.
             task_sources = set()
             for source_row in self._conn.execute("""SELECT source_refs FROM person_tasks WHERE person_id=?
-                UNION ALL SELECT source_refs FROM crm_changes WHERE person_id=? AND entity_type='task'
-                UNION ALL SELECT source_refs FROM crm_proposals WHERE person_id=? AND target_kind != 'description'""",
+                UNION ALL SELECT source_refs FROM crm_changes WHERE person_id=?
+                UNION ALL SELECT source_refs FROM crm_proposals WHERE person_id=?""",
                 (person_id, person_id, person_id)):
                 task_sources.update(json.loads(source_row[0]))
+            for desc in self._descriptions(person_id).values():
+                task_sources.update(desc['source_refs'])
+            task_sources.update(r[0] for r in self._conn.execute('SELECT id FROM person_attachments WHERE person_id=? AND restricted=1',(person_id,)))
             if self._conn.execute("SELECT 1 FROM sqlite_master WHERE name='crm_task_evidence'").fetchone():
                 task_sources.update(r[0] for r in self._conn.execute("""SELECT e.source_id FROM crm_task_evidence e
                     JOIN crm_proposals p ON p.proposal_id=e.proposal_id WHERE p.person_id=?""", (person_id,)))

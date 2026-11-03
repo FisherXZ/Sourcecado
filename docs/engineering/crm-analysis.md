@@ -247,3 +247,47 @@ task visible in Contacts and the person file. Person-file Undo cancelled that
 same task; refreshing unchanged evidence and reloading the global list preserved
 the cancellation. Source links and change reasons rendered without page errors.
 This check does not exercise the native shell or live connectors.
+
+## Integrated runtime and schema 8
+
+The desktop runtime uses one interpretation worker: `AnalysisService` in
+`crm_analysis.py`, with the conservative `EmailTaskWriter` policy from
+`crm_email_tasks.py`. `crm_maintenance.py` schedules that worker and coalesces
+collection requests. It does not contain a second model prompt or inference
+policy. Every dispatch retains current attribution, source-grant, budget,
+lease, retry and atomic checkpoint checks.
+
+`CrmService` provides attention, preview and suggestion-review projections for
+the UI. Its task and description mutations use the same guarded writers as
+chat and analysis. The compatibility proposal projection keeps `kind`, `value`,
+`expected_version` and a permission-filtered `current_value`; stored proposals
+use the canonical target and source-ID schema. A receipt replay revalidates
+both the original source sets and the exact target's saved/current sources.
+A previous successful operation never grants future access to private work.
+
+The collection revision and analysis input revision have separate meanings.
+`latest_evidence_revision` counts saved collection changes. `_prepare` captures
+`observed_collection_revision` while holding the same lock used to snapshot
+mail identity. `latest_revision` and `analyzed_revision` track the bounded,
+currently attributed analysis input. Mail arriving after preparation stays
+pending; the scheduler cannot mark that newer collection revision observed.
+
+Schema 8 recognizes the actual shapes of the independently developed v6 and
+v7 stores, including tracked-mail-only, guarded analysis/task, and attention
+layouts. The registered Doctor migration backs up first, converts source
+pointers and histories without reducing restrictions, preserves exact retry
+receipts, and retains otherwise incompatible legacy attempt records for audit.
+It reconnects accepted-proposal and automatic-creation Undo receipts to their
+original target changes. Legacy interpretation fingerprints suppress unchanged
+accepted, dismissed or undone work; changed evidence remains eligible. Migration
+itself does not call a model or create outreach tasks.
+
+Status and attention Undo compare the changed field and its later receipts,
+not the whole person's version. Unrelated descriptions, flags and tasks remain
+intact. Accepting a proposal records the target mutation and its resolution
+atomically. Undoing an unchanged accepted task creation cancels that exact task
+and suppresses the interpretation; later human edits cause a conflict.
+
+`crm_schema.py` describes the historical attention layout for upgrade fixtures.
+It is not a second active schema or worker. Frozen historical migration steps
+remain separate from the shape-aware schema-8 unification.

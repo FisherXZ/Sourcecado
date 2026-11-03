@@ -17,7 +17,8 @@ flowchart LR
 ```
 
 `crm_tasks.py` owns task validation, lifecycle, versions and retry receipts.
-`crm_service.py` owns descriptions, manual flags, suggestions and scoped undo.
+`crm_service.py` provides manual flags, suggestions and scoped undo, and delegates
+description writes to the canonical person-slot writer.
 `crm_tools.py` adapts assistant calls to these services. HTTP request bodies
 cannot choose the execution actor. Direct chat edits protect human wording
 while retaining the assistant as execution actor in the receipt.
@@ -65,23 +66,25 @@ Contacts requests a check when its previous success is more than one minute old.
 Overlapping requests share one refresh. Synchronous Gmail I/O runs through
 `asyncio.to_thread`; model calls run outside database write transactions.
 
-Latest and analyzed evidence revisions are saved independently. Pending work
+Collection and analyzed-input revisions have separate checkpoints; see
+[the schema-8 integration guide](crm-analysis.md#integrated-runtime-and-schema-8). Pending work
 survives restart. Failures use bounded backoff, three attempts per revision and
 an explicit Retry afterward. Per-attempt status and usage are retained in
 `crm_analysis_attempts`, without copying message bodies or prompts. Cancellation and interrupted attempts remain
 restartable. Provider exception text is not persisted because it may contain
-credentials or message bodies. Bounded model usage is saved with analysis state.
+credentials or message bodies. Bounded model usage is saved with each durable analysis attempt.
 
-Automatic changes require owned, complete evidence and unquoted supporting
-text. Explicit ISO or named-month dates with a year can be resolved; ambiguous
-dates remain suggestions. Task fulfillment must match the actual task and its
-tracked conversation. Human-protected fields remain protected. Dismissed or
-undone interpretations cannot reappear from unchanged evidence. Task ownership
-uses message direction: inbound requests and outbound director commitments can
-qualify; mixed request/promise cues stay suggestions. Task identity combines the
-source fingerprint with the normalized obligation, independently of an extracted
-date, so removing a deadline cannot resurrect undone work. Other obligations in
-the same message remain eligible.
+Automatic task creation requires an owned, complete inbound message, an exact
+unquoted request span and the conservative positive request/context grammar in
+`crm_email_tasks.py`. Supported ISO dates, weekdays and today/tomorrow resolve
+from trusted Gmail time and the saved operator timezone. Named-month dates and
+unsupported prose remain review suggestions. Fulfillment stays a suggestion
+until a validated task-to-send binding exists; arbitrary outgoing mail cannot
+complete work. Human-protected fields remain protected. Dismissed or undone
+interpretations cannot reappear from unchanged source/body/span evidence, and
+separate obligations remain separate. Changed evidence resembling finished work
+requires target review. Saved v7 attention decisions retain their suppression
+through an explicit compatibility check against unchanged permitted full mail.
 
 ## Draft preparation and sending
 

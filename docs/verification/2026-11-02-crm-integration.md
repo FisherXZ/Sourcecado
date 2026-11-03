@@ -1,6 +1,6 @@
 # CRM integration verification — November 2, 2026
 
-Status: implementation and verification in progress. This record does not certify release acceptance.
+Status: first integration milestone verified locally. This record does not certify release acceptance.
 
 ## Scope
 
@@ -21,7 +21,23 @@ Features: saved-person search and Apollo identity recognition (#293), task-based
 
 ## Verification results
 
-Final integrated results will be recorded after the combined suite, build, evaluations and local browser pass complete. Per-feature branch results are supporting evidence, not a substitute for the integrated checks.
+- Full Python 3.14 backend: **2,817 passed, 3 skipped**. One existing Starlette/httpx deprecation warning.
+- Full Node 24.21.0 frontend: **1,383 passed**, 99 files. TypeScript and the Vite production build passed. The existing bundle-size warning remains.
+- Deterministic sourcing scenes: **15/15 passed**.
+- Local browser, real React/FastAPI with isolated synthetic state: remembered sorting after reload; flag/status save and scoped Undo; suggestion acceptance and saved-task Undo; unsaved-preview protection on follow-up navigation; kept-person search; focused-person keyboard activation; 390px page containment; no browser page errors.
+- Upgrade fixtures cover original v5, both v6 layouts and both v7 layouts, preserved human blanks, tasks/proposals, source restrictions, operation receipts and registered backup/rollback. Legacy unchanged dismissed/undone analysis stays suppressed; changed or unauthorized evidence cannot inherit that suppression.
+- Independent failure reproductions cover wrong-thread send, MCP error normalization, credential replacement during renewal, changed ownership during mail reads, source revocation during draft generation and cached receipt replay, scoped Undo and post-prepare collection timing.
+
+The full backend run preceded the final narrow legacy-description-retry compatibility fix; its final affected-suite results are recorded below. Per-feature branch test counts overlap with these totals and are not additive.
+
+### Browser evidence
+
+- [Desktop Contacts](evidence/2026-11-02-crm/contacts-1440.png)
+- [390px Contacts](evidence/2026-11-02-crm/contacts-390.png)
+- [390px person preview](evidence/2026-11-02-crm/preview-390.png)
+- [Observed browser checks](evidence/2026-11-02-crm/browser-checks.txt)
+
+All screenshots use fictional people and isolated fake services. They are implementation evidence, not a new reference-design decision.
 
 ## Acceptance limits
 

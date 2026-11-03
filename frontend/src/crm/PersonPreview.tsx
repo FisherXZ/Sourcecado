@@ -91,6 +91,13 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
   const descriptions = file?.descriptions ?? defaultPersonDescriptions();
   const person = file?.person;
   return <aside ref={panel} className="person-preview" role="region" aria-label="Person preview"
+    onClick={event => {
+      if (event.defaultPrevented || !(event.target instanceof Element)) return;
+      const link = event.target.closest<HTMLAnchorElement>('a[href^="#/"]');
+      if (!link) return;
+      event.preventDefault();
+      navigate(() => { window.location.hash = link.getAttribute("href")!; });
+    }}
     onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); navigate(onClose); } }}>
     <header className="preview-header">
       <button type="button" ref={back} onClick={() => navigate(onClose)}>Back to Contacts</button>
@@ -171,7 +178,7 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
       <details className="preview-section"><summary>Recent changes</summary>
         {!file.crm_changes?.length ? <p>No CRM changes recorded yet.</p> : <ol className="preview-changes">{file.crm_changes.map(change => <li key={change.change_id}>
           <p>{change.reason} <span className="person-timeline-meta">· {change.actor === "assistant" ? "Assistant" : "You"}</span></p>
-          {change.entity_type === "task" || change.entity_type === "description" || change.entity_type === "attention" || change.entity_type === "status" || (change.entity_type === "proposal" && change.action === "accept") ? <button type="button" disabled={busy}
+          {change.can_undo !== false && (change.entity_type === "task" || change.entity_type === "description" || change.entity_type === "attention" || change.entity_type === "status" || (change.entity_type === "proposal" && change.action === "accept")) ? <button type="button" disabled={busy}
             onClick={() => void mutate(`${prefix}/crm-changes/${change.change_id}/undo`, {})}>Undo</button> : null}
         </li>)}</ol>}
       </details>

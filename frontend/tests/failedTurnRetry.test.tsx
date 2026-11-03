@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { backendPermissionNames } from "./backendPermissions";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -429,9 +429,7 @@ describe("failed turn rules", () => {
   });
 
   it("keeps the read-only list equal to RETRY_SAFE in the backend", () => {
-    const source = readFileSync("../backend/coworker/permissions.py", "utf8");
-    const list = source.match(/RETRY_SAFE = frozenset\(\s*\{([^}]*)\}/)?.[1] ?? "";
-    const backend = [...list.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]).sort();
+    const backend = [...backendPermissionNames("RETRY_SAFE")].sort();
     expect(backend.length).toBeGreaterThan(5);
     expect([...READ_ONLY_TOOLS].sort()).toEqual(backend);
   });

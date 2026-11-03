@@ -672,6 +672,7 @@ export type CrmProposal = {
 
 export type CrmChange = {
   change_id: string;
+  can_undo?: boolean;
   entity_type: string;
   action: string;
   reason: string;

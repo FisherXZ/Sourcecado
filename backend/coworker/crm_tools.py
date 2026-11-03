@@ -123,11 +123,13 @@ def crm_outcome_references(result: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(change, dict) or not change.get("change_id"):
         return {}
     entity = result.get("task") or result.get("description") or result.get("proposal") or {}
+    refs = [ref.get("id") if isinstance(ref, dict) else ref
+            for ref in entity.get("source_refs", [])[:50]]
     return {
         "outcome_ref": change["change_id"], "person_id": result.get("person_id"),
         "artifact_refs": [{"id": change["change_id"], "artifact_type": "crm_change", "title": "CRM change"}],
         "source_refs": [{"id": ref, "provider": "sourcecado", "title": "CRM source reference"}
-                        for ref in entity.get("source_refs", [])[:50]],
+                        for ref in refs if isinstance(ref, str) and ref],
     }
 
 

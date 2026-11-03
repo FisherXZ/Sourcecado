@@ -1,36 +1,56 @@
 """Lifecycle scheduling for the single guarded CRM analysis worker."""
+
 from __future__ import annotations
 import asyncio
 import time
+from coworker.people import CrmMigrationRequired
 
 
 class AnalysisMaintenance:
-    def __init__(self,people,factory):
-        self.people,self.factory=people,factory
-        self._lock=asyncio.Lock()
+    def __init__(self, people, factory):
+        self.people, self.factory = people, factory
+        self._lock = asyncio.Lock()
 
-    def retry(self,pid):
-        service=self.factory();service._require_schema();service._prepare(pid)
+    def retry(self, pid):
+        service = self.factory()
+        service._require_schema()
+        service._prepare(pid)
         with self.people.crm_transaction() as conn:
-            conn.execute("UPDATE crm_analysis_state SET attempts=0,next_retry_at=NULL,failure_code=NULL WHERE person_id=?",(pid,))
+            conn.execute(
+                "UPDATE crm_analysis_state SET attempts=0,next_retry_at=NULL,failure_code=NULL WHERE person_id=?",
+                (pid,),
+            )
 
     def recover_interrupted(self):
-        self._lock=asyncio.Lock()
+        self._lock = asyncio.Lock()
         self.people.require_crm_schema()
         with self.people.crm_transaction() as conn:
-            conn.execute("UPDATE crm_analysis_attempts SET outcome='interrupted',failure_code='interrupted',updated_at=? WHERE outcome='running'",(self.people._now(),))
-            conn.execute("UPDATE crm_analysis_state SET lease_token=NULL,lease_until=NULL,outcome='pending' WHERE lease_token IS NOT NULL")
+            conn.execute(
+                "UPDATE crm_analysis_attempts SET outcome='interrupted',failure_code='interrupted',updated_at=? WHERE outcome='running'",
+                (self.people._now(),),
+            )
+            conn.execute(
+                "UPDATE crm_analysis_state SET lease_token=NULL,lease_until=NULL,outcome='pending' WHERE lease_token IS NOT NULL"
+            )
 
     def retry_delay(self):
         with self.people._lock:
-            row=self.people._conn.execute('SELECT min(next_retry_at) FROM crm_analysis_state WHERE latest_revision!=analyzed_revision AND attempts<3').fetchone()
-        return max(1.,min(300.,row[0]-time.time())) if row and row[0] else 300.
+            row = self.people._conn.execute(
+                "SELECT min(next_retry_at) FROM crm_analysis_state WHERE latest_revision!=analyzed_revision AND attempts<3"
+            ).fetchone()
+        return max(1.0, min(300.0, row[0] - time.time())) if row and row[0] else 300.0
 
     async def run_pending(self):
         async with self._lock:
-            service=self.factory();service._require_schema()
+            service = self.factory()
+            service._require_schema()
             with self.people._lock:
-                changed=[r[0] for r in self.people._conn.execute('SELECT s.person_id FROM crm_analysis_state s JOIN people p ON p.person_id=s.person_id WHERE p.deleted_at IS NULL AND latest_evidence_revision>observed_collection_revision ORDER BY s.updated_at LIMIT 100')]
+                changed = [
+                    r[0]
+                    for r in self.people._conn.execute(
+                        "SELECT s.person_id FROM crm_analysis_state s JOIN people p ON p.person_id=s.person_id WHERE p.deleted_at IS NULL AND latest_evidence_revision>observed_collection_revision ORDER BY s.updated_at LIMIT 100"
+                    )
+                ]
             for pid in changed:
                 service._prepare(pid)
             for pid in service.pending():
@@ -39,6 +59,7 @@ class AnalysisMaintenance:
 
 class RefreshCoordinator:
     """Share overlapping refresh requests; one lifecycle-owned task does maintenance."""
+
     def __init__(self, collect, analysis, *, connected=lambda: True):
         self.collect, self.analysis, self.connected = collect, analysis, connected
         self._current = None
@@ -71,8 +92,11 @@ class RefreshCoordinator:
         await self.analysis.run_pending()
 
     async def run(self):
-        self._wake=asyncio.Event()
-        self.analysis.recover_interrupted()
+        self._wake = asyncio.Event()
+        try:
+            self.analysis.recover_interrupted()
+        except CrmMigrationRequired:
+            return  # Manual analysis reports the typed repair requirement; never spend on an old schema.
         loop = asyncio.get_running_loop()
         next_collection = 0.0
         try:
@@ -86,7 +110,9 @@ class RefreshCoordinator:
                         await self.analysis.run_pending()
                 except Exception:
                     next_collection = loop.time() + 300
-                delay = min(max(1.0, next_collection - loop.time()), self.analysis.retry_delay())
+                delay = min(
+                    max(1.0, next_collection - loop.time()), self.analysis.retry_delay()
+                )
                 try:
                     await asyncio.wait_for(self._wake.wait(), timeout=delay)
                 except TimeoutError:

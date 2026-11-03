@@ -132,6 +132,7 @@
 
 .contacts-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -212,6 +213,12 @@
 }
 
 .contacts-workspace { min-width: 0; }
+.has-preview .board-page-header { grid-template-columns: minmax(0, 1fr); }
+.has-preview .board-page-header .board-page-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 12px; }
+.contacts-controls > * { max-width: 100%; }
+.contacts-controls .contacts-filters { flex-wrap: wrap; }
+.contacts-search { min-width: 160px; max-width: 280px; flex: 1 1 180px; }
+.contacts-search input { width: 100%; box-sizing: border-box; }
 .board-page.has-preview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 42%); gap: 16px; align-items: start; }
 .person-preview { position: sticky; top: 0; max-height: calc(100vh - 48px); overflow-y: auto; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
 .preview-header, .preview-actions, .preview-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
@@ -225,7 +232,7 @@
 .preview-section h3 { font-size: 14px; margin: 0 0 8px; }
 .preview-section summary { cursor: pointer; font-weight: 500; }
 .preview-flag { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; margin-top: 16px; }
-.person-preview label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.person-preview label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .person-preview input, .person-preview select, .person-preview textarea { max-width: 100%; box-sizing: border-box; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
 .person-preview button { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--surface); cursor: pointer; }
 .person-preview button:disabled { cursor: default; opacity: .6; }
@@ -234,7 +241,7 @@
 .preview-suggestion { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .preview-suggestion strong { display: block; white-space: pre-wrap; font-size: 13px; }
 .preview-suggestion .preview-actions { justify-content: start; margin-top: 8px; }
-.preview-changes { padding-left: 16px; font-size: 12px; }
+.preview-changes { padding-left: 16px; font-size: 13px; }
 .preview-changes li { margin-bottom: 12px; }
 .contacts-attention-reasons summary { cursor: pointer; list-style: none; }
 .contacts-attention-reasons p { white-space: normal; }

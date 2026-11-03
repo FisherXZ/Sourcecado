@@ -1,4 +1,8 @@
-"""Versioned CRM additions. Statements run inside the owning transaction."""
+"""Frozen v7 attention layout, retained for shape-aware upgrade fixtures.
+
+The active schema is assembled by crm_unified_schema; no runtime worker uses
+this historical analysis/proposal schema.
+"""
 
 CRM_SCHEMA = (
     """CREATE TABLE IF NOT EXISTS crm_analysis_attempts (
