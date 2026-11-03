@@ -1852,6 +1852,29 @@ class ConversationStore:
             )
             self._conn.commit()
 
+    def update_job(
+        self,
+        job_id: int,
+        *,
+        name: str,
+        prompt: str,
+        cadence: str,
+        cron: str,
+        next_run_at: str | None,
+    ) -> dict[str, Any] | None:
+        """Replace a job's editable fields. A None next run pauses the job."""
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE jobs SET name = ?, prompt = ?, cadence = ?, cron = ?,
+                                next_run_at = ?
+                WHERE id = ?
+                """,
+                (name, prompt, cadence, cron, next_run_at, job_id),
+            )
+            self._conn.commit()
+        return self.get_job(job_id)
+
     def memory_forget(self, memory_id: int) -> bool:
         with self._lock:
             cursor = self._conn.execute(

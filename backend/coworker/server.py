@@ -24,10 +24,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 import coworker.turn as turn_runtime
 from coworker.automation.scheduler import (
+    CADENCES,
     ROUTINE_TEMPLATES,
     SUPPORTED_CADENCES,
     Scheduler,
-    next_monday_0900,
+    cadence_id,
+    next_run_for,
     now_iso,
 )
 from coworker.agent_run_dispatch import (
@@ -1600,6 +1602,32 @@ def create_app(
         runs = app.state.scheduler.tick()
         return {"runs": runs}
 
+    def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+        # A paused job has no next run; due_jobs already skips it.
+        return {
+            **job,
+            "cadence": cadence_id(job),
+            "enabled": job.get("next_run_at") is not None,
+        }
+
+    def _routine_field_errors(
+        payload: dict[str, Any], keys: set[str]
+    ) -> dict[str, str]:
+        fields: dict[str, str] = {}
+        if "name" in keys:
+            name = str(payload.get("name") or "").strip()
+            if not name or len(name) > 80:
+                fields["name"] = "Enter a name up to 80 characters."
+        if "prompt" in keys:
+            prompt = str(payload.get("prompt") or "").strip()
+            if not prompt or len(prompt) > 2000:
+                fields["prompt"] = "Enter instructions up to 2,000 characters."
+        if "cadence" in keys and str(payload.get("cadence") or "").strip() not in CADENCES:
+            fields["cadence"] = "Choose a supported cadence."
+        if "enabled" in keys and not isinstance(payload.get("enabled"), bool):
+            fields["enabled"] = "Choose active or paused."
+        return fields
+
     @app.post("/v1/schedule", status_code=201)
     async def schedule_create(request: Request):
         payload = await request.json()
@@ -1608,15 +1636,9 @@ def create_app(
         name = str(payload.get("name") or "").strip()
         prompt = str(payload.get("prompt") or "").strip()
         template_ids = {str(item["id"]) for item in ROUTINE_TEMPLATES}
-        fields: dict[str, str] = {}
+        fields = _routine_field_errors(payload, {"name", "prompt", "cadence"})
         if template_id not in template_ids:
             fields["template_id"] = "Choose a supported template."
-        if cadence not in SUPPORTED_CADENCES:
-            fields["cadence"] = "Choose a supported cadence."
-        if not name or len(name) > 80:
-            fields["name"] = "Enter a name up to 80 characters."
-        if not prompt or len(prompt) > 2000:
-            fields["prompt"] = "Enter instructions up to 2,000 characters."
         if fields:
             return JSONResponse(
                 {"error": "invalid_routine", "fields": fields}, status_code=400
@@ -1624,17 +1646,54 @@ def create_app(
         job = app.state.store.add_job(
             SUPPORTED_CADENCES[cadence],
             prompt,
-            next_run_at=next_monday_0900(now_iso()),
+            next_run_at=next_run_for(cadence, now_iso()),
             name=name,
             template_id=template_id,
             cadence=cadence,
         )
-        return {"job": job}
+        return {"job": _public_job(job)}
 
-    @app.post("/v1/schedule/{job_id}/run")
+    @app.patch("/v1/schedule/{job_id}")
+    async def schedule_update(job_id: int, request: Request):
+        job = app.state.store.get_job(job_id)
+        if job is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            payload = {}
+        keys = set(payload) & {"name", "prompt", "cadence", "enabled"}
+        fields = _routine_field_errors(payload, keys)
+        if fields:
+            return JSONResponse(
+                {"error": "invalid_routine", "fields": fields}, status_code=400
+            )
+        cadence = str(payload["cadence"]).strip() if "cadence" in keys else cadence_id(job)
+        enabled = payload["enabled"] if "enabled" in keys else job["next_run_at"] is not None
+        next_run_at = job["next_run_at"]
+        if not enabled:
+            next_run_at = None
+        elif next_run_at is None or cadence != cadence_id(job):
+            # Resuming or changing the cadence starts from the next slot, so a
+            # paused job never catches up on the runs it skipped.
+            next_run_at = next_run_for(cadence, now_iso())
+        updated = app.state.store.update_job(
+            job_id,
+            name=str(payload["name"]).strip() if "name" in keys else str(job["name"]),
+            prompt=str(payload["prompt"]).strip() if "prompt" in keys else str(job["prompt"]),
+            cadence=cadence,
+            cron=SUPPORTED_CADENCES[cadence],
+            next_run_at=next_run_at,
+        )
+        if updated is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"job": _public_job(updated)}
+
+    @app.post("/v1/schedule/{job_id}/run", status_code=202)
     def schedule_run(job_id: int):
+        # Returns the running receipt at once; the run finishes in the
+        # background and the page reads its outcome from GET /v1/schedule.
         try:
-            run = app.state.scheduler.run_job(job_id)
+            run = app.state.scheduler.start_job(job_id)
         except KeyError:
             return JSONResponse({"error": "not found"}, status_code=404)
         except RuntimeError:
@@ -1649,16 +1708,24 @@ def create_app(
 
     @app.get("/v1/schedule")
     def schedule():
-        return {**app.state.store.list_schedule(), "templates": list(ROUTINE_TEMPLATES)}
+        listing = app.state.store.list_schedule()
+        return {
+            "jobs": [_public_job(job) for job in listing["jobs"]],
+            "runs": listing["runs"],
+            "templates": list(ROUTINE_TEMPLATES),
+            "cadences": [
+                {"id": key, "label": value["label"]} for key, value in CADENCES.items()
+            ],
+        }
 
     @app.get("/v1/connectors")
     def connectors():
         return _connector_catalog()
 
     @app.post("/v1/connectors/check")
-    def connectors_check():
+    def connectors_check(force: bool = False):
         # Read-only probes; Apollo is never probed, so no credit is spent.
-        app.state.connector_probes.check()
+        app.state.connector_probes.check(force=force)
         return _connector_catalog()
 
     def _connector_catalog() -> dict[str, Any]:
@@ -1732,7 +1799,7 @@ def create_app(
                     "category": "configure" if manual_configuration else "connect",
                     "action_label": "View setup guide" if manual_configuration else "Connect",
                     "message": (
-                        "Set APOLLO_API_KEY in the local Sourcecado environment, then restart Sourcecado."
+                        "Add APOLLO_API_KEY to ~/.config/club/.env, then restart Sourcecado."
                         if manual_configuration
                         else "Start authorization, then return to this detail page."
                     ),
@@ -1907,8 +1974,15 @@ def create_app(
     def granola_connect():
         try:
             return app.state.mcp_oauth.start("granola")
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception:
+            # The page shows this text, and exception text can carry a URL or
+            # a response body, so the message is fixed.
+            return JSONResponse(
+                {
+                    "error": "Granola sign-in couldn't start. Check that this device is online, then try again."
+                },
+                status_code=400,
+            )
 
     @app.post("/v1/connectors/granola/disconnect")
     def granola_disconnect():

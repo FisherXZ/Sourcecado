@@ -8,6 +8,8 @@
 @import "./styles/monid.css";
 @import "./styles/person-file.css";
 @import "./styles/contacts.css";
+@import "./styles/connections.css";
+@import "./styles/scheduled.css";
 @import "./styles/responsive.css";
 
 .person-mail-activity .person-timeline-entry,

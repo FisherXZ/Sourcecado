@@ -134,7 +134,7 @@ describe("ConnectionsPage", () => {
     expect(within(available).getAllByRole("link").map((link) => link.textContent)).toEqual([
       expect.stringContaining("Gmail"),
       expect.stringContaining("Granola"),
-      expect.stringContaining("Monid sources"),
+      expect.stringContaining("Monid"),
     ]);
   });
 
@@ -149,7 +149,7 @@ describe("ConnectionsPage", () => {
     expect(screen.queryByRole("link", { name: /Gmail/ })).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: "nothing here" } });
-    expect(screen.getByRole("heading", { name: "No connectors match" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No connections match" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
 
     expect(search).toHaveValue("");
@@ -221,7 +221,7 @@ describe("ConnectionsPage", () => {
     await waitFor(() =>
       expect(within(detail).getByText("operator@example.com")).toBeInTheDocument(),
     );
-    expect(within(detail).getByText("Ready")).toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: "Disconnect Gmail" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/connections/gmail");
   });
 
@@ -278,8 +278,8 @@ describe("ConnectionsPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Connect Gmail" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Authorization window didn’t open");
-    expect(within(alert).getByRole("link", { name: "Open Gmail authorization" })).toHaveAttribute(
+    expect(alert).toHaveTextContent("The sign-in window didn’t open.");
+    expect(within(alert).getByRole("link", { name: "Open Gmail sign-in" })).toHaveAttribute(
       "href",
       "https://provider.example/authorize",
     );
@@ -297,11 +297,40 @@ describe("ConnectionsPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Connect Gmail" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("provider or OAuth callback");
-    expect(alert).toHaveTextContent("try again");
+    expect(alert).toHaveTextContent("Sign-in didn’t finish. Try again.");
     expect(container).not.toHaveTextContent("oauth-secret");
     expect(container).not.toHaveTextContent("/Users/operator");
     expect(screen.getByRole("button", { name: "Connect Gmail" })).toBeEnabled();
+  });
+
+  it("shows the backend's own reason when it refuses to start a sign-in", async () => {
+    window.location.hash = "#/connections/gmail";
+    api.getConnectors.mockResolvedValue({ connectors: [gmailAvailable] });
+    const refusal = new Error(
+      "GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are not set in ~/.config/club/.env",
+    );
+    refusal.name = "ConnectorStartError";
+    api.connectConnector.mockRejectedValue(refusal);
+
+    render(<ConnectionsPage connectorId="gmail" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect Gmail" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are not set",
+    );
+    expect(screen.getByRole("button", { name: "Connect Gmail" })).toBeEnabled();
+  });
+
+  it("forces a new live check from the title bar", async () => {
+    api.getConnectors.mockResolvedValue({ connectors: [gmailAvailable] });
+    api.checkConnectors.mockResolvedValue({ connectors: [gmailAvailable] });
+
+    render(<ConnectionsPage />);
+    const check = await screen.findByRole("button", { name: "Check connections" });
+    await waitFor(() => expect(check).toBeEnabled());
+    fireEvent.click(check);
+
+    await waitFor(() => expect(api.checkConnectors).toHaveBeenCalledWith({ force: true }));
   });
 
   it("explains an unchanged OAuth return as a callback or provider recovery", async () => {
@@ -321,8 +350,7 @@ describe("ConnectionsPage", () => {
     fireEvent.focus(window);
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("provider or OAuth callback");
-    expect(alert).toHaveTextContent("provider redirect URL");
+    expect(alert).toHaveTextContent("Sign-in didn’t finish. Try again.");
     expect(window.location.hash).toBe("#/connections/gmail");
   });
 
@@ -359,7 +387,7 @@ describe("ConnectionsPage", () => {
 
     fireEvent.focus(window);
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Authorization didn’t complete");
+    expect(alert).toHaveTextContent("Sign-in didn’t finish. Try again.");
 
     fireEvent.focus(window);
 
@@ -417,7 +445,7 @@ describe("ConnectionsPage", () => {
     render(<ConnectionsPage connectorId="gmail" />);
 
     const recovery = await screen.findByRole("alert");
-    expect(recovery).toHaveTextContent("Reconnect Gmail to restore access");
+    expect(recovery).toHaveTextContent("Google rejected the saved authorization.");
     expect(screen.getByRole("button", { name: "Reconnect Gmail" })).toBeEnabled();
     expect(screen.getByRole("link", { name: /Gmail, Reconnect required/ })).toBeInTheDocument();
   });
@@ -445,7 +473,9 @@ describe("ConnectionsPage", () => {
     render(<ConnectionsPage connectorId="gmail" />);
 
     expect(await screen.findByRole("link", { name: /Gmail, Connection failed/ })).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Reconnect Gmail to restore access");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The saved authorization could not be verified.",
+    );
     expect(screen.getByRole("button", { name: "Reconnect Gmail" })).toBeEnabled();
   });
 
@@ -457,7 +487,7 @@ describe("ConnectionsPage", () => {
       recovery: {
         category: "configure",
         actionLabel: "View setup guide",
-        message: "Set APOLLO_API_KEY in the local Sourcecado environment, then restart Sourcecado.",
+        message: "Add APOLLO_API_KEY to ~/.config/club/.env, then restart Sourcecado.",
       },
       supportedActions: ["Search people", "Enrich contacts"],
       availableActions: ["view_guidance"],
@@ -468,8 +498,10 @@ describe("ConnectionsPage", () => {
     const { container } = render(<ConnectionsPage connectorId="apollo" />);
 
     const detail = await screen.findByRole("region", { name: "Apollo connection details" });
-    expect(within(detail).getByText("How to configure Apollo")).toBeInTheDocument();
-    expect(within(detail).getByText(/does not display or edit API keys/)).toBeInTheDocument();
+    expect(
+      within(detail).getByText("Add APOLLO_API_KEY to ~/.config/club/.env, then restart Sourcecado."),
+    ).toBeInTheDocument();
+    expect(within(detail).queryByRole("button")).not.toBeInTheDocument();
     expect(within(detail).queryByRole("textbox")).not.toBeInTheDocument();
     expect(container).not.toHaveTextContent("sk-");
   });
@@ -498,7 +530,7 @@ describe("ConnectionsPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Disconnect Gmail" }));
 
     const confirmation = screen.getByRole("alertdialog", { name: "Disconnect Google account?" });
-    expect(confirmation).toHaveTextContent("Gmail, Google Drive, and Google Calendar");
+    expect(confirmation).toHaveTextContent("Gmail, Drive and Calendar share this sign-in.");
     expect(api.disconnectConnector).not.toHaveBeenCalled();
     fireEvent.click(within(confirmation).getByRole("button", { name: "Disconnect all three" }));
 

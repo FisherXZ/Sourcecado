@@ -13,6 +13,16 @@ from coworker.store import ConversationStore
 TOKEN = "test-token-schedule"
 
 
+def _wait_for_finished_run(store, run_id, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        run = next(r for r in store.list_schedule()["runs"] if r["id"] == run_id)
+        if run["status"] != "running":
+            return run
+        time.sleep(0.02)
+    raise AssertionError(f"run {run_id} never finished")
+
+
 def test_create_routine_api_validates_supported_template_cadence_and_prompt(tmp_path):
     client = TestClient(create_app(token=TOKEN, state=tmp_path))
 
@@ -290,8 +300,10 @@ def test_post_schedule_run_fires_undue_job(tmp_path):
     res = TestClient(application).post(
         f"/v1/schedule/{job['id']}/run", headers={TOKEN_HEADER: TOKEN}
     )
-    assert res.status_code == 200
-    assert res.json()["run"]["status"] == "success"
+    assert res.status_code == 202
+    assert res.json()["run"]["status"] == "running"
+    finished = _wait_for_finished_run(application.state.store, res.json()["run"]["id"])
+    assert finished["status"] == "success"
     assert application.state.store.list_schedule()["jobs"][0]["next_run_at"] == "2099-01-01T09:00:00-08:00"
 
 
@@ -698,3 +710,183 @@ def test_scheduled_run_statuses_stay_inside_the_shared_contract(tmp_path):
     statuses = [run["status"] for run in reopened.list_schedule()["runs"]]
     assert "interrupted" in statuses
     assert set(statuses) <= SCHEDULE_RUN_STATUSES
+
+
+def _create(client, **overrides):
+    body = {
+        "template_id": "weekly_sourcing_review",
+        "cadence": "weekly_monday_0900",
+        "name": "Weekly priority review",
+        "prompt": "Review the highest-priority sourcing work for this week.",
+        **overrides,
+    }
+    response = client.post("/v1/schedule", headers={TOKEN_HEADER: TOKEN}, json=body)
+    assert response.status_code == 201
+    return response.json()["job"]
+
+
+@pytest.mark.parametrize(
+    ("cadence", "now", "expected"),
+    [
+        # Friday after 9:00 moves to Monday for weekly and weekday cadences.
+        ("weekly_monday_0900", "2026-11-06T10:00:00-08:00", "2026-11-09T09:00:00-08:00"),
+        ("weekdays_0900", "2026-11-06T10:00:00-08:00", "2026-11-09T09:00:00-08:00"),
+        ("daily_0900", "2026-11-06T10:00:00-08:00", "2026-11-07T09:00:00-08:00"),
+        # Before 9:00 on a matching day, the same day's slot is next.
+        ("weekdays_0900", "2026-11-04T08:59:00-08:00", "2026-11-04T09:00:00-08:00"),
+        # Exactly 9:00 is not "after now", so the slot moves on.
+        ("daily_0900", "2026-11-04T09:00:00-08:00", "2026-11-05T09:00:00-08:00"),
+        # Daylight saving ends on 2026-11-01; the slot stays at 9:00 local.
+        ("daily_0900", "2026-10-31T10:00:00-07:00", "2026-11-01T09:00:00-08:00"),
+    ],
+)
+def test_next_run_for_each_preset_cadence(cadence, now, expected):
+    from coworker.automation.scheduler import next_run_for
+
+    assert next_run_for(cadence, now) == expected
+
+
+def test_schedule_lists_cadences_and_reads_legacy_cron_jobs_as_presets(tmp_path):
+    application = create_app(token=TOKEN, state=tmp_path)
+    application.state.store.add_job(
+        "0 9 * * 1", "weekly sourcing check-in", next_run_at="2099-01-05T09:00:00-08:00"
+    )
+    application.state.store.add_job("0 9 * * 1", "never scheduled")
+
+    body = TestClient(application).get("/v1/schedule", headers={TOKEN_HEADER: TOKEN}).json()
+
+    assert [c["id"] for c in body["cadences"]] == [
+        "weekly_monday_0900",
+        "weekdays_0900",
+        "daily_0900",
+    ]
+    assert body["cadences"][0]["label"] == "Every Monday at 9:00 AM"
+    assert [job["cadence"] for job in body["jobs"]] == ["weekly_monday_0900"] * 2
+    assert [job["enabled"] for job in body["jobs"]] == [True, False]
+
+
+def test_edit_routine_changes_prompt_name_and_cadence_and_survives_restart(tmp_path):
+    client = TestClient(create_app(token=TOKEN, state=tmp_path))
+    job = _create(client)
+
+    response = client.patch(
+        f"/v1/schedule/{job['id']}",
+        headers={TOKEN_HEADER: TOKEN},
+        json={
+            "name": "  Daily replies  ",
+            "prompt": "Check replies from open sequences.",
+            "cadence": "weekdays_0900",
+        },
+    )
+
+    assert response.status_code == 200
+    edited = response.json()["job"]
+    assert edited["name"] == "Daily replies"
+    assert edited["prompt"] == "Check replies from open sequences."
+    assert edited["cadence"] == "weekdays_0900"
+    assert edited["cron"] == "0 9 * * 1-5"
+    assert edited["enabled"] is True
+    from datetime import datetime
+
+    assert datetime.fromisoformat(edited["next_run_at"]).weekday() < 5
+    restarted = TestClient(create_app(token=TOKEN, state=tmp_path)).get(
+        "/v1/schedule", headers={TOKEN_HEADER: TOKEN}
+    ).json()
+    assert restarted["jobs"] == [edited]
+
+
+def test_edit_routine_rejects_invalid_fields_without_changing_the_job(tmp_path):
+    client = TestClient(create_app(token=TOKEN, state=tmp_path))
+    job = _create(client)
+
+    response = client.patch(
+        f"/v1/schedule/{job['id']}",
+        headers={TOKEN_HEADER: TOKEN},
+        json={"name": " ", "prompt": "x" * 2001, "cadence": "hourly", "enabled": "no"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_routine"
+    assert set(response.json()["fields"]) == {"name", "prompt", "cadence", "enabled"}
+    listing = client.get("/v1/schedule", headers={TOKEN_HEADER: TOKEN}).json()
+    assert listing["jobs"] == [job]
+    missing = client.patch(
+        "/v1/schedule/999", headers={TOKEN_HEADER: TOKEN}, json={"enabled": False}
+    )
+    assert missing.status_code == 404
+
+
+def test_pause_stops_ticks_and_resume_starts_from_the_next_slot(tmp_path):
+    application = create_app(token=TOKEN, state=tmp_path)
+    client = TestClient(application)
+    store = application.state.store
+    job = store.add_job(
+        "0 9 * * 1",
+        "weekly",
+        next_run_at="2020-01-06T09:00:00-08:00",
+        name="Weekly",
+        template_id="weekly_sourcing_review",
+        cadence="weekly_monday_0900",
+    )
+
+    paused = client.patch(
+        f"/v1/schedule/{job['id']}", headers={TOKEN_HEADER: TOKEN}, json={"enabled": False}
+    ).json()["job"]
+    assert paused["enabled"] is False
+    assert paused["next_run_at"] is None
+    assert application.state.scheduler.tick(now="2020-01-06T10:00:00-08:00") == []
+
+    resumed = client.patch(
+        f"/v1/schedule/{job['id']}", headers={TOKEN_HEADER: TOKEN}, json={"enabled": True}
+    ).json()["job"]
+    assert resumed["enabled"] is True
+    # Resume never catches up on the 2020 slot it skipped while paused.
+    from datetime import UTC, datetime
+
+    assert datetime.fromisoformat(resumed["next_run_at"]) > datetime.now(UTC)
+    assert store.list_schedule()["runs"] == []
+
+
+def test_pausing_during_a_tick_run_keeps_the_job_paused(tmp_path):
+    store = ConversationStore(tmp_path)
+    scheduler = Scheduler(store, Inbox(store))
+    job = store.add_job("0 9 * * 1", "weekly", next_run_at="2020-01-06T09:00:00-08:00")
+
+    def pause_mid_run(current):
+        store.set_job_next_run(int(current["id"]), None)
+        return {"status": "ok", "result": "done"}
+
+    ran = scheduler.tick(now="2020-01-06T10:00:00-08:00", runner=pause_mid_run)
+
+    assert [run["status"] for run in ran] == ["success"]
+    assert store.get_job(int(job["id"]))["next_run_at"] is None
+
+
+def test_start_job_returns_running_receipt_then_finishes_in_background(tmp_path):
+    store = ConversationStore(tmp_path)
+    scheduler = Scheduler(store, Inbox(store))
+    job = store.add_job("0 9 * * 1", "weekly", next_run_at="2099-01-05T09:00:00-08:00")
+    release = threading.Event()
+
+    def slow(_job):
+        release.wait(timeout=5)
+        return {"status": "ok", "result": "Two replies need a response."}
+
+    running = scheduler.start_job(int(job["id"]), runner=slow)
+
+    assert running["status"] == "running"
+    assert running["session_id"] == f"sched-{job['id']}"
+    with pytest.raises(RuntimeError):
+        scheduler.start_job(int(job["id"]), runner=slow)
+    release.set()
+    finished = _wait_for_finished_run(store, running["id"])
+    assert finished["status"] == "success"
+    assert finished["summary"] == "Two replies need a response."
+    assert store.get_job(int(job["id"]))["next_run_at"] == "2099-01-05T09:00:00-08:00"
+    # The slot is free again once the background run finishes.
+    deadline = time.monotonic() + 2
+    while int(job["id"]) in scheduler._running and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert int(job["id"]) not in scheduler._running
+    with pytest.raises(KeyError):
+        scheduler.start_job(999)

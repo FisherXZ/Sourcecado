@@ -1,0 +1,84 @@
+saved connections-loading-1440.png
+saved connections-loading-390.png
+saved connections-load-error-1440.png
+saved connections-load-error-390.png
+saved connections-not-connected-1440.png
+saved connections-not-connected-390.png
+saved connections-no-match-1440.png
+saved connections-no-match-390.png
+saved connections-gmail-not-connected-1440.png
+saved connections-gmail-not-connected-390.png
+saved connections-connecting-1440.png
+saved connections-connecting-390.png
+saved connections-setup-error-1440.png
+saved connections-setup-error-390.png
+saved connections-popup-blocked-1440.png
+saved connections-popup-blocked-390.png
+callback /v1/gmail/callback -> 200 Gmail connected. You can close this tab and go back to Sourcecado.
+saved connections-missing-permission-1440.png
+saved connections-missing-permission-390.png
+callback /v1/gmail/callback -> 200 Gmail connected. You can close this tab and go back to Sourcecado.
+saved connections-google-connected-1440.png
+saved connections-google-connected-390.png
+saved connections-google-disconnect-confirm-1440.png
+saved connections-google-disconnect-confirm-390.png
+callback /v1/mcp/oauth/callback -> 200 Granola connected. You can close this tab.
+saved connections-granola-connected-1440.png
+saved connections-granola-connected-390.png
+saved connections-reconnect-required-1440.png
+saved connections-reconnect-required-1440.png
+saved connections-reconnect-required-390.png
+saved connections-monid-not-connected-1440.png
+saved connections-monid-not-connected-390.png
+saved connections-monid-connected-1440.png
+saved connections-monid-connected-390.png
+saved connections-apollo-guidance-1440.png
+saved connections-apollo-guidance-390.png
+saved connections-all-1440.png
+saved connections-all-390.png
+saved scheduled-loading-1440.png
+saved scheduled-loading-390.png
+saved scheduled-load-error-1440.png
+saved scheduled-load-error-390.png
+saved scheduled-empty-1440.png
+saved scheduled-empty-390.png
+saved scheduled-new-task-1440.png
+saved scheduled-new-task-390.png
+saved scheduled-validation-1440.png
+saved scheduled-validation-390.png
+created through the form -> http://localhost:5181/#/scheduled/1
+saved scheduled-created-1440.png
+saved scheduled-created-390.png
+saved scheduled-running-1440.png
+saved scheduled-completed-1440.png
+saved scheduled-running-390.png
+saved scheduled-completed-390.png
+created by API: 201 #2, 201 #3, 201 #4
+run Follow-up drafts -> 202 running
+run Referral check -> 202 running
+pause weekly -> 200 enabled=false
+saved scheduled-list-1440.png
+saved scheduled-list-390.png
+saved scheduled-search-1440.png
+saved scheduled-search-390.png
+saved scheduled-editing-1440.png
+saved scheduled-editing-390.png
+saved scheduled-paused-1440.png
+saved scheduled-paused-390.png
+saved scheduled-waiting-approval-1440.png
+saved scheduled-waiting-approval-390.png
+saved scheduled-failed-1440.png
+saved scheduled-failed-390.png
+saved scheduled-not-found-1440.png
+saved scheduled-not-found-390.png
+job #1 Daily reply check | daily_0900 | enabled=true | next=2026-11-03T09:00:00-08:00 | List open sequences with a reply waiting, newest first.
+job #2 Weekly sourcing review | weekly_monday_0900 | enabled=true | next=2026-11-09T09:00:00-08:00 | Review the highest-priority sourcing work for this week.
+job #3 Follow-up drafts | daily_0900 | enabled=true | next=2026-11-03T09:00:00-08:00 | Draft a follow-up for each open sequence with no reply in a week. [qa-draft]
+job #4 Referral check | weekdays_0900 | enabled=true | next=2026-11-03T09:00:00-08:00 | Check referral requests that have no answer yet. [qa-fail]
+run #1 job 1 | success | 6414ms | waiting=0 | sched-1
+run #2 job 1 | success | 7110ms | waiting=0 | sched-1
+run #3 job 3 | waiting_approval | 6107ms | waiting=1 | sched-3
+run #4 job 4 | failed | 6072ms | waiting=0 | sched-4
+saved scheduled-thread-1440.png
+saved scheduled-thread-390.png
+done

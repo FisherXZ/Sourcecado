@@ -19,13 +19,3 @@
 .monid-heading .monid-settings { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
 .monid-note { margin: 8px 0; padding: 8px 12px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); }
 .monid-card .monid-endpoint a { display: inline-flex; align-items: center; gap: 6px; }
-/* Monid in Connections: the same detail panel as the other connectors. */
-.monid-detail .connection-back .action-icon { margin: 0; }
-.monid-key-form { display: grid; gap: 8px; margin-top: 18px; font-size: 13px; }
-.monid-key-form .task-field { font-size: 13px; font-weight: 600; color: var(--text); }
-.monid-key-form input { min-height: 40px; }
-.monid-key-form .connection-controls { margin-top: 8px; }
-.monid-key-form .connection-controls button { display: inline-flex; align-items: center; gap: 6px; }
-.monid-hint { margin: 0; color: var(--text); font-size: 13px; }
-.monid-manage { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-top: 8px; color: var(--accent-deep); font-weight: 600; }
-.monid-detail [role="alert"] { margin: 12px 0 0; color: var(--error); line-height: 1.5; }
