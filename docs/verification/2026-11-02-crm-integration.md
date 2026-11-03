@@ -21,14 +21,14 @@ Features: saved-person search and Apollo identity recognition (#293), task-based
 
 ## Verification results
 
-- Full Python 3.14 backend: **2,817 passed, 3 skipped**. One existing Starlette/httpx deprecation warning.
+- Full Python 3.14 backend: **2,820 passed, 3 skipped**. One existing Starlette/httpx deprecation warning.
 - Full Node 24.21.0 frontend: **1,383 passed**, 99 files. TypeScript and the Vite production build passed. The existing bundle-size warning remains.
 - Deterministic sourcing scenes: **15/15 passed**.
 - Local browser, real React/FastAPI with isolated synthetic state: remembered sorting after reload; flag/status save and scoped Undo; suggestion acceptance and saved-task Undo; unsaved-preview protection on follow-up navigation; kept-person search; focused-person keyboard activation; 390px page containment; no browser page errors.
 - Upgrade fixtures cover original v5, both v6 layouts and both v7 layouts, preserved human blanks, tasks/proposals, source restrictions, operation receipts and registered backup/rollback. Legacy unchanged dismissed/undone analysis stays suppressed; changed or unauthorized evidence cannot inherit that suppression.
 - Independent failure reproductions cover wrong-thread send, MCP error normalization, credential replacement during renewal, changed ownership during mail reads, source revocation during draft generation and cached receipt replay, scoped Undo and post-prepare collection timing.
 
-The full backend run preceded the final narrow legacy-description-retry compatibility fix; its final affected-suite results are recorded below. Per-feature branch test counts overlap with these totals and are not additive.
+The final backend run used an isolated Python 3.14 environment installed from the hash-locked dependencies, including the pypdf 6.21.4 security patch and final legacy-description-retry compatibility fix. Backend and frontend dependency audits reported no known vulnerabilities. Per-feature branch test counts overlap with these totals and are not additive.
 
 ### Browser evidence
 
