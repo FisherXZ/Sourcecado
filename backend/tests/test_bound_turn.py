@@ -617,6 +617,7 @@ def _enrich_http():
         {
             MATCH_URL: {
                 "person": {
+                    "id":"ada",
                     "name": "Ada Lovelace",
                     "title": "Founder",
                     "organization": {"name": "Analytic"},

@@ -286,6 +286,16 @@ class ConsequentialActions:
         except Exception:
             raise EnrichmentOutcomeUnknown('Apollo did not provide an observable outcome.') from None
         fields = sorted(key for key in ('name','title','organizationName','email','linkedinUrl','phone') if result.get(key))
+        approved_id = str(match.get('apollo_id') or '').strip()
+        returned_id = str(result.get('apolloId') or '').strip()
+        if approved_id and returned_id != approved_id and (fields or returned_id):
+            # The lookup completed and may have charged. Its unrelated facts
+            # must not become this person's identity or a matched source claim.
+            return True, {**base, 'status':'no_match', 'review_required':True,
+                'code':'provider_identity_mismatch' if returned_id else 'provider_identity_unverified',
+                'message':'Apollo did not verify the approved person identity. No fields were applied; review the lookup before another attempt.',
+                'approved_apollo_id':approved_id, 'returned_apollo_id':returned_id or None,
+                'credits_actual':result.get('credits_actual'), 'credits':result.get('credits_actual')}
         outcome = 'found' if result.get('email') else 'partial' if fields else 'no_match'
         base.update(status=outcome, fields_found=fields, credits_actual=result.get('credits_actual'))
         try:

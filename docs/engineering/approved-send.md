@@ -81,6 +81,12 @@ invalid metadata remains null. This internal normalization contract does not
 promise that Apollo always reports usage. Success, returned fields or a historic
 one-credit assumption cannot establish an actual charge.
 
+An exact Apollo-id lookup must return that same provider id before any facts
+are applied. A different id, or nonempty facts without a returned id, produces a
+completed `no_match` outcome with `review_required`, the reported actual cost and
+no person/source mutation. No automatic retry follows this result. An entirely
+empty response remains a normal no-match.
+
 An enrichment request with no observed response propagates uncertainty to the
 existing effect fence. Repeated approval submissions cannot call it again. A new
 lookup is blocked by default; a director may explicitly acknowledge a previous

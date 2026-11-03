@@ -197,3 +197,43 @@ def test_identity_correction_during_live_gmail_review_refuses_before_send(tmp_pa
     outcome=_decide(client,approval).json()
     assert not outcome['ok'] and outcome['result']['code']=='identity_changed',outcome
     assert gmail.send_attempts==[]
+
+
+@pytest.mark.parametrize('returned_id',['grace-provider-id',None])
+def test_exact_id_enrichment_never_applies_a_different_or_unverified_provider_identity(tmp_path,returned_id):
+    app,client,pid,sid,gmail,http=setup(tmp_path)
+    other=app.state.people.keep_from_apollo(apollo_id='grace-provider-id',first_name='Grace',
+        last_name_obfuscated='Hopper',title='Admiral',company='Navy')
+    app.state.people.apply_enrichment(other['person_id'],email='known-grace@example.test')
+    before=app.state.people.get(pid,expand_sources=True)
+    before_other=app.state.people.get(other['person_id'],expand_sources=True)
+    http.routes[MATCH_URL]={'credits_used':3,'person':{'id':returned_id,'name':'Grace Hopper',
+        'email':'wrong-grace@example.test','title':'Different record','organization':{'name':'Wrong company'}}}
+    parked=client.post(f'/v1/people/{pid}/enrich-approval',headers=HEADERS,
+        json={'session_id':sid,'operation_id':'verify-provider-id'}).json()['item']
+    assert parked['resource']['match']=={'apollo_id':'ada'}
+    response=_decide(client,parked['id']).json()
+    assert response['ok'],response  # The paid lookup completed; this is not permission to retry it.
+    result=response['result']
+    assert result['status']=='no_match' and result['review_required'],result
+    assert result['credits_actual']==3
+    assert result['fields_applied']==[] and result['source_ref_id'] is None
+    assert app.state.people.get(pid,expand_sources=True)==before
+    assert app.state.people.get(other['person_id'],expand_sources=True)==before_other
+    _decide(client,parked['id'])
+    assert len(http.calls)==1
+
+
+def test_empty_exact_id_response_remains_a_completed_no_match_with_truthful_cost(tmp_path):
+    app,client,pid,sid,gmail,http=setup(tmp_path)
+    before=app.state.people.get(pid)
+    http.routes[MATCH_URL]={'credits_used':2,'person':None}
+    item=client.post(f'/v1/people/{pid}/enrich-approval',headers=HEADERS,json={'session_id':sid}).json()['item']
+    result=_decide(client,item['id']).json()
+    assert result['ok'] and result['result']['status']=='no_match',result
+    assert not result['result'].get('review_required',False)
+    assert result['result']['credits_actual']==2
+    current=app.state.people.get(pid)
+    assert {key:current[key] for key in ('first_name','last_name','company','email','identity_revision')}=={
+        key:before[key] for key in ('first_name','last_name','company','email','identity_revision')}
+    assert len(http.calls)==1

@@ -16,7 +16,7 @@ HEADERS = {TOKEN_HEADER: TOKEN}
 
 APOLLO_PERSON = {
     "person": {
-        "id": "apollo_person_77",
+        "id": "ada",
         "name": "Ada Lovelace",
         "title": "Head of Data",
         "organization": {"name": "Analytic Engines"},
@@ -172,7 +172,7 @@ def test_an_approved_enrichment_updates_only_that_person_and_files_the_receipt(
     sources = [row for row in person["sources"] if row["fields"]["source"] == "apollo"]
     assert len(sources) == 1
     fields = sources[0]["fields"]
-    assert fields["apollo_id"] == "apollo_person_77"
+    assert fields["apollo_id"] == "ada"
     assert fields["approval_id"] == item_id
     assert fields["credits"] is None
     assert fields["matched_on"] == "apollo_id"
@@ -203,7 +203,7 @@ def test_verified_enrichment_promotes_the_full_name_across_person_surfaces(tmp_p
     client = TestClient(app)
     person_id, session_id = _person(
         app,
-        apollo_id="apollo_person_77",
+        apollo_id="ada",
         first="Ada",
         last="L***e",
     )
@@ -323,7 +323,7 @@ def test_a_masked_surname_parks_no_approval_and_spends_nothing(tmp_path):
 
 def test_a_kept_candidate_enriches_through_its_stored_apollo_id(tmp_path):
     """Keep stores the Apollo ID. A masked surname must not strand it."""
-    http = FakeHttp({MATCH_URL: APOLLO_PERSON})
+    http = FakeHttp({MATCH_URL:{"person":{**APOLLO_PERSON["person"],"id":"679c7e37","name":"Fisher Zhang","email":"fisher@thehog.example"}}})
     app = _app(tmp_path, http)
     client = TestClient(app)
     person_id, session_id = _person(
@@ -348,7 +348,7 @@ def test_a_kept_candidate_enriches_through_its_stored_apollo_id(tmp_path):
     body = calls[0]["json"]
     assert body.get("id") == "679c7e37"
     assert body.get("last_name") is None
-    assert app.state.people.get(person_id)["email"] == "ada@analytic.example"
+    assert app.state.people.get(person_id)["email"] == "fisher@thehog.example"
 
 
 def test_a_real_surname_still_matches_on_name(tmp_path):

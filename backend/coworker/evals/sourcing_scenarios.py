@@ -374,7 +374,7 @@ def draft_from_existing_fields_scenario() -> EvalScenario:
 
 def _enrichment_receipt(call_id, fields):
     return AttachmentExpectation(record_type="source_ref", fields=(
-        ("source","apollo"),("apollo_id",None),("approval_id",call_id),
+        ("source","apollo"),("apollo_id","nimbus-dana"),("approval_id",call_id),
         ("credits",None),("fetched_at","$TIMESTAMP"),("matched_on","apollo_id"),
         ("fields_applied",fields),
     ))
@@ -428,6 +428,7 @@ def deliberate_enrichment_scenario() -> EvalScenario:
                     MATCH_URL,
                     {
                         "person": {
+                            "id": "nimbus-dana",
                             "name": "Dana Ruiz",
                             "title": "VP Engineering",
                             "organization": {"name": "Nimbus Robotics"},
@@ -1137,6 +1138,7 @@ def bulk_enrichment_negative_scenario() -> EvalScenario:
                     MATCH_URL,
                     {
                         "person": {
+                            "id": "nimbus-dana",
                             "name": "Dana Ruiz",
                             "title": "VP Engineering",
                             "organization": {"name": "Nimbus Robotics"},
@@ -1295,6 +1297,7 @@ def cross_person_bleed_negative_scenario() -> EvalScenario:
                     MATCH_URL,
                     {
                         "person": {
+                            "id": "nimbus-dana",
                             "name": "Dana Ruiz",
                             "title": "VP Engineering",
                             "organization": {"name": "Nimbus Robotics"},

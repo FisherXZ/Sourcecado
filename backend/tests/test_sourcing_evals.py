@@ -334,6 +334,7 @@ def test_auto_send_negative_bites_when_the_send_is_approved(tmp_path):
 
 
 def test_cross_person_bleed_negative_bites_when_the_bound_person_changes(tmp_path):
+    from coworker.apollo import MATCH_URL
     scenario = cross_person_bleed_negative_scenario()
     dana, omar = scenario.seed_people
 
@@ -342,6 +343,12 @@ def test_cross_person_bleed_negative_bites_when_the_bound_person_changes(tmp_pat
         tmp_path / "rebound",
         replace(
             scenario,
+            # Keep the provider response coherent with the mutated lookup.
+            # Otherwise the independent provider-id gate correctly refuses it,
+            # concealing the context mutation this scenario is meant to detect.
+            fixtures=replace(scenario.fixtures,http_routes=((MATCH_URL,{"person":{
+                "id":"nimbus-omar","name":"Omar Hakimi","email":"omar@nimbusrobotics.example",
+                "title":"Head of Autonomy","organization":{"name":"Nimbus Robotics"}}}),)),
             seed_people=(
                 replace(dana, bind_session=False),
                 replace(omar, bind_session=True),
