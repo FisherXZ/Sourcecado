@@ -5,12 +5,11 @@ routes, the send authority, and the at-most-once guarantee. Production approval
 dispatch also uses the [external-effect fence](agent-runs.md): an external call
 whose outcome is unknown is quarantined for human review, not replayed.
 
-The generic chat-tool paths remain separate. They require approval and use the
-effect fence, but generic `gmail_send` does not enforce the person-bound
-reviewed-content authority described here, and generic enrichment does not
-produce the same person-bound credit/provenance receipt. Unifying these paths is
-[#165](https://github.com/FisherXZ/Sourcecado/issues/165); see the
-[architecture review](../audit/2026-09-21-onboarding-architecture-review.md).
+`ConsequentialActions` is the shared boundary for person-file HTTP actions and
+chat tools. Inbox owns the durable one-action decision/claim; Agent Runs owns
+dispatch and unknown-outcome quarantine. HTTP handlers and `tools.execute` cannot
+send or enrich by calling a connector around that boundary. Unsupported opaque
+MCP actions fail closed; this does not expose a Sourcecado MCP server.
 
 ## Domain words
 
@@ -43,30 +42,46 @@ registered migration; it must share this helper rather than broad person version
 
 ## The chain
 
-1. `POST /v1/people/{id}/outreach/draft` creates a Gmail draft. The recipient
-   comes from the person file. The request cannot supply one. The route refuses
-   unless `session_id` names a sourcing chat bound to this person. With
-   `thread_id` the draft is a reply in that conversation (see
-   [Follow-up replies](#follow-up-replies)).
-2. `GET /v1/people/{id}/outreach/draft/{draft_id}` re-reads the live draft, so
-   an edit made in Gmail becomes visible and the director reviews the version
-   that exists right now. `PUT` on the same path saves an edit made inside
-   Sourcecado, checked against the body digest the edit started from.
-3. `POST /v1/people/{id}/outreach/send-approval` parks one approval. The caller
-   sends `reviewed_body_digest` — the version they read — and, for a reply,
-   `expected_thread_id`. The route re-reads the draft and refuses if it has
-   changed since or sits in another conversation, so no approval is ever
-   created for a body or thread nobody reviewed. It also refuses a draft
-   addressed to anyone other than this person. The approval binds Gmail's
-   actual draft thread, including a newly created conversation when no existing
-   reply thread was selected. Nothing is sent here.
-4. `POST /v1/inbox/{approval_id}` with `allow` decides it. This is the existing
-   approval route; the send is not a special case of it.
+1. A person-bound draft is written/read through the existing outreach routes.
+   Read and display its full plain-text body before requesting approval.
+2. `ConsequentialActions.prepare_send` snapshots the account, saved person,
+   recipient, subject, reviewed digest and actual thread, plus identity revision.
+   `prepare_enrichment` snapshots `safe_enrichment_match`: prefer a saved exact
+   Apollo id; otherwise reject shared local email/name matches or insufficient
+   identity. The approved match is immutable and never recomputed as a substitute.
+3. Both park an Inbox resource with `authority_version=2`. Stable `operation_id`
+   retries return that exact approval, including after success. A changed request
+   under the same id conflicts. Existing v1 authorities need a fresh review;
+   historical completed outcomes remain historical.
+4. Allow must use `scope=once`. The common store rejects Always for sends and
+   paid enrichment before it records the decision. A boolean passed to a tool
+   cannot supply approval authority. Runtime dispatch must supply the stored
+   approval id and actual execution claimant.
+5. The existing effect fence records dispatch, then the service checks the live
+   person/session/revision and live Gmail content or exact enrichment match.
+   Only the owner of that execution claim can call the connector. An identity
+   correction, A→B→A or Undo requires a new review; unrelated CRM edits do not.
+6. The service records the domain result/source under the approved person.
+   The turn loop leaves that receipt alone instead of duplicating it as a generic
+   tool event. Tool calls and failures still appear in the run/transcript ledger.
 
-Apollo enrichment follows the same shape:
-`POST /v1/people/{id}/enrich-approval` parks an approval whose resource names
-the exact person file, the match key, and the credit cost, then the same inbox
-route decides it.
+The bounded send editor refuses Cc/Bcc, a different From identity, attachments and
+HTML parts it cannot show for exact review. Adding them externally after review
+also refuses the send. Gmail read failures do not authorize a send.
+
+Enrichment pricing is unknown unless supplied explicitly. Both the estimate and
+actual cost are nullable. The Apollo adapter preserves a finite non-negative
+numeric `credits_used` response metadata field as `credits_actual`; absent or
+invalid metadata remains null. This internal normalization contract does not
+promise that Apollo always reports usage. Success, returned fields or a historic
+one-credit assumption cannot establish an actual charge.
+
+An enrichment request with no observed response propagates uncertainty to the
+existing effect fence. Repeated approval submissions cannot call it again. A new
+lookup is blocked by default; a director may explicitly acknowledge a previous
+unknown approval id, review a new cost-unknown lookup and approve the new action
+once. That new authority preserves the acknowledgement/history and never replays
+the old paid call. An executing request cannot be acknowledged as a retry.
 
 ## At most once
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coworker.consequential_policy import requires_once
+
 import json
 import os
 import re
@@ -1289,6 +1291,8 @@ class ConversationStore:
             ).fetchone()
             if row is None or row["state"] != "pending":
                 return None
+            if requires_once(row["name"]) and scope != "once":
+                raise ValueError("Sending and paid enrichment require a once-only action decision.")
             self._conn.execute(
                 """
                 UPDATE inbox SET
@@ -1331,6 +1335,8 @@ class ConversationStore:
             ).fetchone()
             if row is None:
                 return None
+            if requires_once(row["name"]) and scope != "once":
+                raise ValueError("Sending and paid enrichment require a once-only action decision.")
             decision_recorded = False
             if row["state"] == "pending":
                 self._conn.execute(

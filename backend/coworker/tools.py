@@ -35,6 +35,7 @@ from coworker.gmail import (
 )
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
 from coworker.crm_tools import CRM_TOOL_NAMES, CRM_TOOL_SCHEMAS, execute_crm_tool
+from coworker.consequential_policy import ACTION_TOOLS, supported_mcp_read
 from coworker.drive_ingestion import DRIVE_INDEX_QUERY_SCHEMA, DriveIngestionStore
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
@@ -347,10 +348,10 @@ GMAIL_SEND_SCHEMA: dict[str, Any] = {
         "parameters": {
             "type": "object",
             "properties": {
-                "draft_id": {
-                    "type": "string",
-                    "description": "The Gmail draft id to send.",
-                }
+                "draft_id": {"type": "string", "description": "The Gmail draft id to send."},
+                "person_id": {"type": "string"},
+                "reviewed_body_digest": {"type": "string", "description": "Reviewed body digest from the person-file draft view. Missing review information is refused."},
+                "expected_thread_id": {"type": "string"}
             },
             "required": ["draft_id"],
             "additionalProperties": False,
@@ -619,8 +620,17 @@ def execute(
     approval_fingerprint: str | None = None,
     crm_directive: Any = None,
     crm_mutation_budget: Any = None,
+    consequential_actions: Any = None,
+    approval_id: str | None = None,
+    approval_claimant: str | None = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
+    if name in ACTION_TOOLS:
+        if consequential_actions is None:
+            return False, {"code":"approval_binding_required","error":"Use the person-file reviewed action flow; this tool has no claimed authority."}
+        return consequential_actions.execute_claimed(approval_id, approval_claimant, expected_name=name, arguments=args)
+    if name.startswith("mcp__") and not supported_mcp_read(name):
+        return False, {"code":"approval_binding_required","error":"This unknown external action cannot bypass Sourcecado's reviewed approval flow."}
     if name in CRM_TOOL_NAMES:
         if people is None:
             return False, {"status": "unavailable", "code": "people_unavailable", "error": "The local person store is unavailable."}
@@ -778,25 +788,6 @@ def execute(
         result = dict(result)
         result["sent"] = False
         return True, result
-    if name == "gmail_send":
-        draft_id = str(args.get("draft_id") or "").strip()
-        if not draft_id:
-            return False, {"error": "draft_id is required"}
-        client = gmail if gmail is not None else MissingGmail()
-        try:
-            result = client.send(draft_id=draft_id)
-        except GmailOutcomeUnknown:
-            # `ok=False` says nothing happened. Gmail never answered, so that
-            # is not something this layer knows. `guarded_call` quarantines it.
-            raise
-        except GmailError as exc:
-            return False, {"error": str(exc)}
-        except Exception as exc:
-            return False, {"error": str(exc)}
-        result = dict(result)
-        result["sent"] = True
-        result["draft_id"] = draft_id
-        return True, result
     if name in {"remember", "memory_update", "memory_forget"}:
         if store is None:
             return False, {"error": "memory store missing"}
@@ -820,66 +811,19 @@ def execute(
         if not store.memory_forget(mid):
             return False, {"error": f"no memory #{mid}"}
         return True, {"forgotten": True, "id": mid}
-    if name in {"apollo_search_people", "apollo_enrich_contact"}:
+    if name == "apollo_search_people":
         if not apollo_key:
             return False, {"error": MISSING_KEY}
         from coworker.apollo import LiveHttp
-
-        client = http if http is not None else LiveHttp()
+        titles = args.get("personTitles")
+        if isinstance(titles, str):
+            titles = [titles]
         try:
-            if name == "apollo_search_people":
-                titles = args.get("personTitles")
-                if isinstance(titles, str):
-                    titles = [titles]
-                return True, search_people(
-                    http=client,
-                    api_key=apollo_key,
-                    organization_name=str(args.get("organizationName") or "") or None,
-                    person_titles=list(titles) if titles else None,
-                    limit=int(args.get("limit") or 10),
-                )
-            person_id = str(args.get("person_id") or "") or None
-            if person_id is None and people is not None and session_id:
-                person_id = people.person_for_session(session_id)
-            if not person_id:
-                return False, {"error": "Bind a person before enriching."}
-            person = people.get(person_id) if people is not None else None
-            if people is not None and person is None:
-                return False, {"error": "unknown person"}
-            match = {
-                "email": str(args.get("email") or "") or None,
-                "first_name": str(args.get("firstName") or "") or None,
-                "last_name": str(args.get("lastName") or "") or None,
-                "organization_name": str(args.get("organizationName") or "") or None,
-            }
-            usable = bool(match["email"]) or bool(
-                match["first_name"]
-                and match["last_name"]
-                and not masked_name(match["last_name"])
-            )
-            if not usable and person is not None:
-                # The shortlist hands the model an obfuscated surname. The
-                # person file knows its own Apollo ID, so take the match key
-                # from the file rather than letting the model guess a name.
-                match = enrichment_match(person) or match
-            result = enrich_contact(
-                http=client,
-                api_key=apollo_key,
-                **match,
-            )
-            if people is not None:
-                people.apply_enrichment(
-                    person_id,
-                    name=result.get("name"),
-                    title=result.get("title"),
-                    company=result.get("organizationName"),
-                    email=result.get("email"),
-                    linkedin_url=result.get("linkedinUrl"),
-                    phone=result.get("phone"),
-                )
-            return True, result
-        except Exception as exc:
-            return False, {"error": str(exc)}
+            return True, search_people(http=http or LiveHttp(), api_key=apollo_key,
+                organization_name=str(args.get("organizationName") or "") or None,
+                person_titles=list(titles) if titles else None, limit=int(args.get("limit") or 10))
+        except Exception:
+            return False, {"error":"Apollo search failed."}
     if name == "people_keep":
         if people is None:
             return False, {"error": "people store missing"}

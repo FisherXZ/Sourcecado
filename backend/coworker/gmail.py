@@ -379,6 +379,10 @@ class FakeGmail:
         return {
             "id": item["id"],
             "to": item["to"],
+            "cc": item.get("cc"),
+            "bcc": item.get("bcc"),
+            "from": item.get("from"),
+            "unreviewed_parts": bool(item.get("unreviewed_parts")),
             "subject": item["subject"],
             "body": item["body"],
             "thread_id": item.get("thread_id"),
@@ -839,6 +843,10 @@ class GmailApi:
         return {
             "id": draft_id,
             "to": headers.get("to", ""),
+            "cc": headers.get("cc"),
+            "bcc": headers.get("bcc"),
+            "from": headers.get("from"),
+            "unreviewed_parts": _has_unreviewed_parts(payload),
             "subject": headers.get("subject", ""),
             "body": _flatten_body(payload),
             "thread_id": str(message.get("threadId") or "") or None,
@@ -1043,6 +1051,14 @@ def _flatten_body(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _has_unreviewed_parts(payload: dict[str, Any]) -> bool:
+    """The bounded plain-text editor cannot review attachments or HTML content."""
+    mime = str(payload.get("mimeType") or "")
+    return bool(payload.get("filename") or (payload.get("body") or {}).get("attachmentId")
+        or mime and not mime.startswith(("text/plain", "multipart/"))
+        or any(_has_unreviewed_parts(part) for part in payload.get("parts") or [] if isinstance(part, dict)))
+
+
 def _b64(data: str) -> str:
     pad = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode(data + pad).decode("utf-8", errors="replace")
@@ -1168,6 +1184,10 @@ def draft_snapshot(client: Any, *, draft_id: str) -> dict[str, Any]:
     return {
         "draft_id": str(draft.get("id") or draft_id),
         "to": str(draft.get("to") or ""),
+        "cc": str(draft.get("cc") or ""),
+        "bcc": str(draft.get("bcc") or ""),
+        "from": str(draft.get("from") or ""),
+        "unreviewed_parts": bool(draft.get("unreviewed_parts")),
         "subject": str(draft.get("subject") or ""),
         "body": body,
         "body_digest": body_digest(body),
