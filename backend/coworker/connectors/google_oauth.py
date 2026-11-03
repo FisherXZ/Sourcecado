@@ -6,9 +6,17 @@ before users.drafts.send.
 
 from __future__ import annotations
 
+import threading
 from urllib.parse import urlencode
 from typing import Any
 
+from coworker.connectors.token_renewal import (
+    CredentialRejected,
+    RenewalUnavailable,
+    access_from,
+    classify_token_error,
+    credential_fingerprint,
+)
 from coworker.secrets import SecretStore
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -122,3 +130,68 @@ def google_client_credentials() -> tuple[str, str]:
         os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET") or os.environ.get("GOOGLE_CLIENT_SECRET") or ""
     ).strip()
     return client_id, client_secret
+
+
+_RENEW_LOCK = threading.Lock()
+
+
+class GoogleTokens:
+    """The one way Drive, Calendar and the connection check renew Google access.
+
+    Renewal is serialized: a caller whose token was refused passes it as
+    ``rejected``, and if another caller already replaced it the new token is
+    reused instead of spending a second exchange.
+    """
+
+    def __init__(
+        self,
+        secrets: SecretStore,
+        http: Any,
+        *,
+        client_id: str,
+        client_secret: str,
+    ) -> None:
+        self.secrets = secrets
+        self.http = http
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.credential_fingerprint: str | None = None
+
+    def renew(self, *, rejected: str | None = None) -> str:
+        with _RENEW_LOCK:
+            expected = {key: self.secrets.get(key) for key in (GOOGLE_KEY, GMAIL_KEY)}
+            profile = expected[GOOGLE_KEY] or expected[GMAIL_KEY] or {}
+            self.credential_fingerprint = credential_fingerprint(profile.get("refresh_token"))
+            current = str(profile.get("access_token") or "")
+            if rejected is not None and current and current != rejected:
+                return current
+            refresh = str(profile.get("refresh_token") or "")
+            if not refresh:
+                raise CredentialRejected("Google is not connected.")
+            if not self.client_id or not self.client_secret:
+                raise RenewalUnavailable(
+                    "Google sign-in is not configured on this device.", kind="setup"
+                )
+            try:
+                tokens = refresh_access_token(
+                    self.http,
+                    client_id=self.client_id,
+                    client_secret=self.client_secret,
+                    refresh_token=refresh,
+                )
+            except Exception as exc:
+                raise classify_token_error(exc, provider="Google") from None
+            access, rotated = access_from(tokens, provider="Google")
+            profile = dict(profile)
+            profile["access_token"] = access
+            if rotated:
+                profile["refresh_token"] = rotated
+            if not self.secrets.replace_if_unchanged(
+                expected, {GOOGLE_KEY: profile, GMAIL_KEY: profile}
+            ):
+                raise RenewalUnavailable(
+                    "Google sign-in changed during renewal. Check the connection again.",
+                    kind="unreachable",
+                )
+            self.credential_fingerprint = credential_fingerprint(profile.get("refresh_token"))
+            return access

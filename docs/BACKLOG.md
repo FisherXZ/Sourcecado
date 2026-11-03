@@ -74,7 +74,7 @@ Their original descriptions and comments remain available for reopening.
 
 ## Parts kept for later
 
-- #181 delivered shared status wording and existing Connect/Fix actions. #256 adds live probes for #222; last-verified timestamps remain outside that slice.
+- #181 delivered shared status wording and existing Connect/Fix actions. #256 adds on-demand Google and Granola probes for #222; Apollo stays Configured until a credit-free check exists. Background probes and last-verified timestamps remain outside that slice.
 - #165 includes the send/enrich service extraction from #167. Other router,
   client and store refactoring remains deferred.
 - Closing #134 does not certify a release. Its acceptance checklist and prior

@@ -53,3 +53,17 @@ class SecretStore:
             if key in data:
                 del data[key]
                 self._save(data)
+
+    def replace_if_unchanged(
+        self,
+        expected: dict[str, dict[str, Any] | None],
+        updates: dict[str, dict[str, Any]],
+    ) -> bool:
+        """Save renewed profiles only if sign-in/disconnect has not replaced them."""
+        with self._lock:
+            data = self._load()
+            if any(data.get(key) != profile for key, profile in expected.items()):
+                return False
+            data.update(updates)
+            self._save(data)
+            return True

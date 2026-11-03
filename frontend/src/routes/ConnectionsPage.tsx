@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  checkConnectors,
   connectConnector,
   disconnectConnector,
   getConnectors,
@@ -361,10 +362,12 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
   const [confirmGoogleDisconnect, setConfirmGoogleDisconnect] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
 
+  const loadSequence = useRef(0);
+
   const loadConnections = useCallback(async (options?: { initial?: boolean; oauthReturn?: boolean }) => {
+    const sequence = ++loadSequence.current;
     if (options?.initial) setState({ status: "loading" });
-    try {
-      const body = await getConnectors();
+    const apply = (body: { connectors: Connector[] }) => {
       setState({ status: "loaded", connectors: body.connectors });
       setInteraction((current) => {
         if (!current) return current;
@@ -384,7 +387,9 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
         }
         return current;
       });
-      return true;
+    };
+    try {
+      apply(await getConnectors());
     } catch {
       if (options?.initial) setState({ status: "failed" });
       setInteraction((current) =>
@@ -394,6 +399,15 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
       );
       return false;
     }
+    // The saved-credential view renders first; the live check then replaces
+    // it in the background. A failed check leaves that view in place.
+    void checkConnectors().then(
+      (checked) => {
+        if (sequence === loadSequence.current) apply(checked);
+      },
+      () => {},
+    );
+    return true;
   }, []);
 
   useEffect(() => {
