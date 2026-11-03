@@ -21,36 +21,47 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-it("shows honest Not connected and saves a password field without exposing or persisting the key", async () => {
+it("lists Monid as a normal connection row with the shared status pill", async () => {
   render(<ConnectionsPage />);
-  await screen.findByRole("heading", { name: "Monid sources" });
-  expect(await screen.findByText("Not connected", { exact: true })).toBeVisible();
+  const available = await screen.findByRole("region", { name: "Available connections" });
+  const row = await within(available).findByRole("link", { name: "Monid sources, Not connected" });
+  expect(row).toHaveAttribute("href", "#/connections/monid");
+  expect(row.querySelector(".connection-status")).toHaveTextContent("Not connected");
+  expect(screen.queryByLabelText("Monid API key")).toBeNull();
+});
+
+it("shows honest Not connected and saves a password field without exposing or persisting the key", async () => {
+  render(<ConnectionsPage connectorId="monid" />);
+  const card = await screen.findByRole("region", { name: "Monid sources" });
+  expect(await within(card).findByText("Not connected", { exact: true })).toBeVisible();
   const input = screen.getByLabelText("Monid API key");
   expect(input).toHaveAttribute("type", "password");
   fireEvent.change(input, { target: { value: "mk_fake_ui_credential_only" } });
   fireEvent.click(screen.getByRole("button", { name: "Save Monid key" }));
-  await screen.findByText("Key saved — check connection");
+  await within(card).findByText("Key saved — check connection");
   expect(input).toHaveValue("");
   expect(document.body.textContent).not.toContain("mk_fake_ui_credential_only");
   expect(JSON.stringify(localStorage)).not.toContain("mk_fake_ui_credential_only");
   expect(calls.filter(call => call.url.endsWith("/check"))).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Check Monid connection" }));
-  await screen.findByText("Connected", { exact: true });
-  expect(screen.getByText("Sample workspace")).toBeVisible();
+  await within(card).findByText("Connected", { exact: true });
+  expect(within(card).getByText("Sample workspace")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Disconnect Monid" }));
-  await waitFor(() => expect(screen.getByText("Not connected", { exact: true })).toBeVisible());
+  await waitFor(() => expect(within(card).getByText("Not connected", { exact: true })).toBeVisible());
   expect(calls.some(call => call.url.endsWith("/run"))).toBe(false);
 });
 
 it("does not keep claiming Connected after an explicit credential check fails", async () => {
   profile = {configured:true,verified:true,workspace:"Sample workspace",spend_paused:false};
-  render(<ConnectionsPage />);
+  render(<ConnectionsPage connectorId="monid" />);
   const card=await screen.findByRole("region",{name:"Monid sources"});
   await within(card).findByText("Connected",{exact:true});
   vi.mocked(fetch).mockRejectedValueOnce(new Error("Never display a provider authorization header"));
   fireEvent.click(screen.getByRole("button",{name:"Check Monid connection"}));
   await screen.findByRole("alert");
-  expect(screen.queryByText("Connected",{exact:true})).toBeNull();
-  expect(screen.getByText("Key saved — check connection")).toBeVisible();
+  expect(within(card).queryByText("Connected",{exact:true})).toBeNull();
+  expect(within(card).getByText("Key saved — check connection")).toBeVisible();
+  // The catalog row uses the shared vocabulary and stops claiming Connected too.
+  expect(screen.getByRole("link",{name:"Monid sources, Configured"})).toBeInTheDocument();
   expect(document.body.textContent).not.toContain("provider authorization header");
 });
