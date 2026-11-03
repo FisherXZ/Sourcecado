@@ -303,6 +303,65 @@ def test_get_person_lists_are_bounded(tmp_path):
     assert all(len(item["sources"]) == 5 for item in result["monid_research"]["items"])
 
 
+def test_get_person_lists_versions_with_who_saved_each_one(tmp_path):
+    people, pid = bound(tmp_path)
+    people.patch(pid, fields={"title": "CTO"}, expected_version=people.get(pid)["version"],
+                 actor="director", rationale_summary="Director corrected the title")
+    people.patch(pid, fields={"handoff_who": "Maya, CTO at Lumen"}, expected_version=people.get(pid)["version"],
+                 actor="assistant", rationale_summary="Recorded who Maya is")
+    file_sent_mail(people, pid)
+    assert board_transition(people, pid, "in_conversation")[0]
+    people.patch_description(pid, "general", text="Seed founder", expected_version=0, actor="director",
+                             rationale_summary="Director description")
+    ok, result = invoke(people, "crm_get_person", {}, store=ConversationStore(tmp_path / "conversations"))
+    assert ok, result
+    saved = {entry["version"]: entry["created_at"] for entry in people.versions(pid)}
+    assert result["versions"] == {"truncated": False, "items": [
+        {"version": version, "created_at": saved[version], "actor": actor, "summary": summary}
+        for version, actor, summary in (
+            # Description receipts count slot versions, so this one stays unattributed.
+            (6, None, None),
+            (5, "assistant", "Moved to in conversation"),
+            (4, "assistant", "Recorded who Maya is"),
+            (3, "director", "Director corrected the title"),
+            (2, "director", "Director changed relationship status"),
+            # Keeping a new person writes its first version without a receipt.
+            (1, None, None),
+        )]}
+    assert result["sequence"]["version"] == 6 and result["partial"] is False
+
+
+def test_get_person_versions_are_the_newest_ten(tmp_path):
+    people, pid = bound(tmp_path)
+    for index in range(12):
+        people.patch(pid, fields={"handoff_wanted": f"Intro {index}"}, expected_version=people.get(pid)["version"],
+                     actor="assistant", rationale_summary=f"Handoff {index} " + "x" * 300)
+    ok, result = invoke(people, "crm_get_person", {})
+    assert ok, result
+    assert result["versions"]["truncated"] is True
+    items = result["versions"]["items"]
+    assert [item["version"] for item in items] == list(range(14, 4, -1))
+    assert items[0]["summary"] == ("Handoff 11 " + "x" * 300)[:200]
+    assert all(set(item) == {"version", "created_at", "actor", "summary"} for item in items)
+
+
+def test_get_person_versions_hide_who_saved_a_restricted_source(tmp_path):
+    people, pid = bound(tmp_path)
+    ref = people.upsert_attachment(pid, record_type="source_ref",
+        fields={"id": "gmail:private", "sensitivity": "restricted", "title": "Private"},
+        idempotency_key="private", actor="director", rationale_summary="Filed the confidential board memo")
+    version = people.get(pid)["version"]
+    store = ConversationStore(tmp_path / "conversations")
+    ok, hidden = invoke(people, "crm_get_person", {}, store=store)
+    assert ok and hidden["partial"] is True, hidden
+    assert hidden["versions"]["items"][0] == {"version": version, "created_at": people.versions(pid)[-1]["created_at"],
+                                              "restricted": True}
+    assert "confidential board memo" not in json.dumps(hidden)
+    ok, visible = invoke(people, "crm_get_person", {}, store=store, allowed_source_ids={ref["id"]})
+    assert ok and visible["partial"] is False, visible
+    assert visible["versions"]["items"][0]["summary"] == "Filed the confidential board memo"
+
+
 def test_get_person_fences_mail_subjects_and_research_sources_only(tmp_path):
     people, pid = bound(tmp_path)
     people.record_approved_send(pid, message_id="sent-1", thread_id="thread-maya", draft_id="draft-1",
