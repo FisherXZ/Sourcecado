@@ -72,6 +72,16 @@ describe("deliberate person enrichment",()=>{
   await waitFor(()=>expect(api.preparePersonEnrichment).toHaveBeenCalledWith("maya",expect.anything(),expect.any(String),"older-unknown"));
   expect(api.decideApproval).not.toHaveBeenCalled();
  });
+ it("does not ask for a person review after an ordinary successful lookup",async()=>{
+  const found=terminal();api.getPersonEnrichment.mockResolvedValue({...found,latest:{...found.latest,stale_identity:true}});render(<EnrichmentPanel personId="maya"/>);
+  await screen.findByText("Contact details found");
+  expect(screen.queryByRole("link",{name:"Review person details"})).toBeNull();
+ });
+ it("explains an unconfirmed provider identity and links to the person's details",async()=>{
+  const missed=terminal("no_match");api.getPersonEnrichment.mockResolvedValue({...missed,latest:{...missed.latest,fields_applied:[],review_required:true,code:"provider_identity_mismatch"}});render(<EnrichmentPanel personId="maya"/>);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Apollo couldn’t confirm this is the same person. No details were saved.");
+  expect(screen.getByRole("link",{name:"Review person details"})).toHaveAttribute("href","#/people/maya");
+ });
  it("reuses the preparation operation after a lost preparation response",async()=>{
   api.preparePersonEnrichment.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(review);
   render(<EnrichmentPanel personId="maya"/>);fireEvent.click(await screen.findByRole("button",{name:"Review lookup"}));

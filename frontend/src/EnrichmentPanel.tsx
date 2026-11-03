@@ -128,7 +128,7 @@ export function EnrichmentPanel({personId}:{personId:string}) {
         </div> : null}
       </>}
       {context.problem==="apollo_not_configured" ? <a href="#/connections/apollo"><Icon name="edit"/>Connect Apollo</a> : null}
-      {(["no_match_key","ambiguous_match"].includes(context.problem??"") || context.pending?.stale_identity || latest?.stale_identity || latest?.conflicts.length) ? <a href={`#/people/${encodeURIComponent(personId)}`}><Icon name="edit"/>Review person details</a> : null}
+      {(["no_match_key","ambiguous_match"].includes(context.problem??"") || context.pending?.stale_identity || latest?.review_required || latest?.conflicts.length) ? <a href={`#/people/${encodeURIComponent(personId)}`}><Icon name="edit"/>Review person details</a> : null}
     </> : null}
     {context?.attempts && context.attempts.length>1 ? <details className="enrichment-history"><summary>Lookup history</summary><ol>{context.attempts.map(attempt=><li key={attempt.id}>{STATUS[attempt.status]??"Lookup result"} · {attempt.fetched_at??attempt.created_at??"Time not recorded"} · {attempt.credits_actual===null ? "Actual cost not reported" : `${attempt.credits_actual} credits`}</li>)}</ol></details> : null}
     {problem ? <p role="alert">{problem}</p> : null}
