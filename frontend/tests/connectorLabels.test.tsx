@@ -11,6 +11,7 @@ import {
 } from "./connectorFixtures";
 
 const api = vi.hoisted(() => ({
+  checkConnectors: vi.fn(),
   connectConnector: vi.fn(),
   disconnectConnector: vi.fn(),
   getConnectors: vi.fn(),
@@ -60,6 +61,8 @@ describe("connector labels across Connections and Settings", () => {
     window.location.hash = "#/connections";
     api.getConnectors.mockReset();
     api.getConnectors.mockResolvedValue({ connectors });
+    api.checkConnectors.mockReset();
+    api.checkConnectors.mockResolvedValue({ connectors });
     api.getSettings.mockReset();
     api.getSettings.mockResolvedValue({
       persona: { id: "sourcing", name: "Sourcecado Sourcing Agent" },

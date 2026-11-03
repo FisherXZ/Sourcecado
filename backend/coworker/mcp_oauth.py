@@ -11,13 +11,21 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets as pysecrets
+import threading
 from typing import Any, Callable
 from urllib.parse import urlencode
 
+from coworker.connectors.token_renewal import (
+    CredentialRejected,
+    RenewalUnavailable,
+    access_from,
+    classify_token_error,
+)
 from coworker.secrets import SecretStore
 
 RESOURCE = "https://mcp.granola.ai/mcp"
 PRM_URL = "https://mcp.granola.ai/.well-known/oauth-protected-resource"
+_RENEW_LOCK = threading.Lock()
 
 
 def _open_browser(url: str) -> bool:
@@ -54,8 +62,7 @@ class McpOAuth:
 
         return self.http if self.http is not None else LiveHttp()
 
-    def start(self, server: str) -> dict[str, Any]:
-        http = self._client()
+    def _discover(self, http: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         prm = http.get(PRM_URL)
         if not isinstance(prm, dict):
             raise RuntimeError("granola metadata failed")
@@ -66,6 +73,11 @@ class McpOAuth:
         meta = http.get(f"{issuer}/.well-known/oauth-authorization-server")
         if not isinstance(meta, dict):
             raise RuntimeError("granola authorization metadata failed")
+        return prm, meta
+
+    def start(self, server: str) -> dict[str, Any]:
+        http = self._client()
+        prm, meta = self._discover(http)
         auth_endpoint = str(meta.get("authorization_endpoint") or "")
         token_endpoint = str(meta.get("token_endpoint") or "")
         register_endpoint = str(meta.get("registration_endpoint") or "")
@@ -150,5 +162,67 @@ class McpOAuth:
                 "refresh_token": refresh,
                 "server": server,
                 "client_id": client_id,
+                "token_url": pending["token_url"],
             },
         )
+
+    def renew(self, server: str = "granola", *, rejected: str | None = None) -> str:
+        """Exchange the saved refresh token for a new access token.
+
+        Serialized, and a caller whose token was refused passes it as
+        ``rejected`` so a token another caller already replaced is reused
+        rather than spending the refresh token twice.
+        """
+        key = f"mcp-oauth:{server}"
+        with _RENEW_LOCK:
+            saved = dict(self.secrets.get(key) or {})
+            current = str(saved.get("access_token") or "")
+            if rejected is not None and current and current != rejected:
+                return current
+            refresh = str(saved.get("refresh_token") or "")
+            client_id = str(saved.get("client_id") or "")
+            if not refresh or not client_id:
+                raise CredentialRejected(
+                    "Granola no longer accepts the saved sign-in. Reconnect to restore access."
+                )
+            http = self._client()
+            token_url = str(saved.get("token_url") or "")
+            if not token_url:
+                # Grants saved before the token URL was kept: look it up again.
+                try:
+                    _, meta = self._discover(http)
+                except Exception:
+                    raise RenewalUnavailable(
+                        "Sourcecado could not reach Granola.", kind="unreachable"
+                    ) from None
+                token_url = str(meta.get("token_endpoint") or "")
+                if not token_url:
+                    raise RenewalUnavailable(
+                        "Granola did not publish a token address.", kind="unreachable"
+                    )
+            try:
+                tokens = http.post(
+                    token_url,
+                    data={
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh,
+                        "client_id": client_id,
+                        "resource": RESOURCE,
+                    },
+                )
+            except Exception as exc:
+                outcome = classify_token_error(exc, provider="Granola")
+                # A registered public client that is refused is only fixed by
+                # signing in again, which registers a new one.
+                if isinstance(outcome, RenewalUnavailable) and outcome.kind == "setup":
+                    outcome = CredentialRejected(
+                        "Granola no longer accepts the saved sign-in. Reconnect to restore access."
+                    )
+                raise outcome from None
+            access, rotated = access_from(tokens, provider="Granola")
+            saved["access_token"] = access
+            if rotated:
+                saved["refresh_token"] = rotated
+            saved["token_url"] = token_url
+            self.secrets.put(key, saved)
+            return access

@@ -8,10 +8,10 @@ from coworker.apollo import HttpError
 from coworker.connectors.google_oauth import (
     google_client_credentials,
     has_calendar_access,
+    GoogleTokens,
     load_google,
-    refresh_access_token,
-    save_google,
 )
+from coworker.connectors.token_renewal import RenewalError
 from coworker.evidence_envelope import (
     EvidenceParts,
     combine,
@@ -127,20 +127,37 @@ class CalendarApi:
             raise GmailError("Calendar is not connected.")
 
     def _request(self, method: str, url: str, **kwargs: Any) -> Any:
-        profile = load_google(self.secrets)
-        token = str(profile.get("access_token") or "")
+        tokens = GoogleTokens(
+            self.secrets,
+            self.http,
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+        )
+        token = str(load_google(self.secrets).get("access_token") or "")
         if not token:
-            token = self._refresh(profile)
+            token = self._renew(tokens)
         headers = dict(kwargs.pop("headers", None) or {})
         headers["Authorization"] = f"Bearer {token}"
         try:
             return self._dispatch(method, url, headers=headers, **kwargs)
         except HttpError as exc:
-            if exc.status == 401:
-                token = self._refresh(load_google(self.secrets))
-                headers["Authorization"] = f"Bearer {token}"
-                return self._dispatch(method, url, headers=headers, **kwargs)
+            if exc.status != 401:
+                raise GmailError(f"Calendar API returned HTTP {exc.status}.") from exc
+        # Google refused the token: renew once, retry once.
+        token = self._renew(tokens, rejected=token)
+        headers["Authorization"] = f"Bearer {token}"
+        try:
+            return self._dispatch(method, url, headers=headers, **kwargs)
+        except HttpError as exc:
             raise GmailError(f"Calendar API returned HTTP {exc.status}.") from exc
+
+    def _renew(self, tokens: GoogleTokens, *, rejected: str | None = None) -> str:
+        if not load_google(self.secrets).get("refresh_token"):
+            raise GmailError("Calendar is not connected.")
+        try:
+            return tokens.renew(rejected=rejected)
+        except RenewalError as exc:
+            raise GmailError(str(exc)) from None
 
     def _dispatch(self, method: str, url: str, **kwargs: Any) -> Any:
         if method == "get":
@@ -148,22 +165,6 @@ class CalendarApi:
         if method == "patch":
             return self.http.patch(url, **kwargs)
         return self.http.post(url, **kwargs)
-
-    def _refresh(self, profile: dict[str, Any]) -> str:
-        refresh = str(profile.get("refresh_token") or "")
-        if not refresh:
-            raise GmailError("Calendar is not connected.")
-        tokens = refresh_access_token(
-            self.http,
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-            refresh_token=refresh,
-        )
-        access = str(tokens.get("access_token") or "")
-        profile = dict(profile)
-        profile["access_token"] = access
-        save_google(self.secrets, profile)
-        return access
 
 
 def calendar_from_secrets(secrets: SecretStore, *, http: Any | None = None) -> CalendarApi | None:

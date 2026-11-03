@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  checkConnectors,
   connectConnector,
   disconnectConnector,
   getConnectors,
@@ -112,6 +113,34 @@ describe("connector API boundary", () => {
     expect(byId.calendar.verified).toBe(false);
     expect(byId.apollo.verified).toBe(false);
     expect(byId.granola.status).toBe("failed");
+  });
+
+  it("runs the live check through its own endpoint and normalizes the result", async () => {
+    fetchMock.mockResolvedValue(
+      response({
+        connectors: [
+          {
+            id: "granola",
+            title: "Granola",
+            status: "reconnect_required",
+            verified: false,
+            access_token: "oauth-secret-never-render",
+          },
+        ],
+      }),
+    );
+
+    const body = await checkConnectors();
+
+    expect(fetchMock).toHaveBeenCalledWith("http://backend.test/v1/connectors/check", {
+      method: "POST",
+      headers: { "X-Club-Token": "review-token" },
+    });
+    expect(body.connectors[0].status).toBe("reconnect_required");
+    expect(JSON.stringify(body)).not.toContain("oauth-secret-never-render");
+
+    fetchMock.mockResolvedValue(response({}, { ok: false, status: 500 }));
+    await expect(checkConnectors()).rejects.toThrow("connectors check 500");
   });
 
   it("starts each supported connector through its existing endpoint", async () => {
