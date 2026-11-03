@@ -172,7 +172,7 @@ describe("App shell routing", () => {
     render(<App />);
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Create sourcing chat" }),
+      await screen.findByRole("button", { name: "Start chat" }),
     );
 
     await waitFor(() =>

@@ -13,6 +13,7 @@ import {
   subscribeDescriptionDraft,
   writeDescriptionDraft,
 } from "./descriptionDrafts";
+import { Icon } from "./icons";
 
 const LIMITS: Record<DescriptionSlot, number> = { general: 500, detailed: 8000 };
 const SLOT_LABEL: Record<DescriptionSlot, string> = {
@@ -191,11 +192,18 @@ export function DescriptionEditor({
         <span className={`description-count${overLimit ? " is-over" : ""}`}>
           {value.length} / {limit}
         </span>
-        <span className="description-authority">
-          {description.authority === "human"
-            ? "Human-written · protected"
-            : "Assistant-maintained"}
-        </span>
+        {description.authority === "human" ? (
+          <span
+            className="description-authority is-human"
+            title="Protected from assistant updates"
+          >
+            Human-edited
+          </span>
+        ) : (
+          <span className="description-authority" title="Maintained by the assistant">
+            Assistant
+          </span>
+        )}
       </div>
       {description.source_refs?.length ? <details className="description-sources" aria-label="Description sources">
         <summary>Sources ({description.source_refs.length})</summary>
@@ -212,12 +220,15 @@ export function DescriptionEditor({
           onClick={() => void save()}
           disabled={busy || overLimit || !dirty}
         >
+          <Icon name="save" />
           {busy ? "Saving…" : "Save"}
         </button>
         <button type="button" onClick={cancel} disabled={busy || !dirty}>
+          <Icon name="close" />
           Cancel
         </button>
         <button type="button" onClick={clear} disabled={busy || value.length === 0}>
+          <Icon name="deny" />
           Clear
         </button>
         {description.authority === "human" ? (
@@ -227,6 +238,7 @@ export function DescriptionEditor({
             onClick={() => void release()}
             disabled={busy}
           >
+            <Icon name="assistant" />
             Let the assistant maintain this
           </button>
         ) : null}

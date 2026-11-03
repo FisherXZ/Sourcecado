@@ -9,19 +9,19 @@ const review={...base,status:"awaiting_approval",latest:pending,pending,can_requ
 function terminal(status="found") {return {...base,status,latest:{...pending,status,credits_actual:null,fetched_at:"2026-11-02T12:00:00Z",fields_found:["email"],fields_applied:["email"]},known:{...base.known,email:"maya@example.test"}};}
 beforeEach(()=>{vi.clearAllMocks();localStorage.clear();api.getPersonEnrichment.mockResolvedValue(base);api.preparePersonEnrichment.mockResolvedValue(review);api.decideApproval.mockResolvedValue({ok:true,result:{status:"found"}});});
 describe("deliberate person enrichment",()=>{
- it("opens local details without preparing or spending and shows unknown estimated cost",async()=>{
-  render(<EnrichmentPanel personId="maya"/>);await screen.findByText("Not enriched");
-  expect(screen.getByText("Unknown",{exact:true})).toBeInTheDocument();
-  expect(screen.getByText("Missing email")).toBeInTheDocument();
+ it("opens a one-line status without preparing or spending",async()=>{
+  render(<EnrichmentPanel personId="maya"/>);await screen.findByText("Not looked up");
+  expect(screen.getByRole("button",{name:"Find contact details"})).toBeEnabled();
   expect(api.preparePersonEnrichment).not.toHaveBeenCalled();expect(api.decideApproval).not.toHaveBeenCalled();
  });
- it("reviews exactly one selected person before explicit approval",async()=>{
-  render(<EnrichmentPanel personId="maya"/>);fireEvent.click(await screen.findByRole("button",{name:"Review lookup"}));
+ it("reviews exactly one selected person and its unknown estimated cost before explicit approval",async()=>{
+  render(<EnrichmentPanel personId="maya"/>);fireEvent.click(await screen.findByRole("button",{name:"Find contact details"}));
   await screen.findByRole("button",{name:"Approve lookup once"});expect(screen.getByText("Maya Patel",{exact:true})).toBeInTheDocument();
+  expect(screen.getByText("Unknown",{exact:true})).toBeInTheDocument();
   expect(api.decideApproval).not.toHaveBeenCalled();
   api.getPersonEnrichment.mockResolvedValue(terminal());fireEvent.click(screen.getByRole("button",{name:"Approve lookup once"}));
-  await screen.findByText("Contact details found");expect(api.decideApproval).toHaveBeenCalledExactlyOnceWith("lookup-1","allow");
-  expect(screen.getByText("Actual credits not reported")).toBeInTheDocument();
+  await screen.findByText(/^Found via Apollo/);expect(api.decideApproval).toHaveBeenCalledExactlyOnceWith("lookup-1","allow");
+  expect(screen.getByRole("status")).toHaveTextContent("credits not reported");
  });
  it("cancel denies the waiting lookup and never pays",async()=>{
   api.getPersonEnrichment.mockResolvedValue(review);render(<EnrichmentPanel personId="maya"/>);
@@ -50,8 +50,8 @@ describe("deliberate person enrichment",()=>{
   await waitFor(()=>expect(api.preparePersonEnrichment).toHaveBeenCalledWith("maya",expect.anything(),expect.any(String),"lookup-1"));
   expect(api.decideApproval).not.toHaveBeenCalled();
  });
- it.each([["partial","Some details found"],["no_match","No match found"],["failed","Lookup failed"],["insufficient_credit","Not enough credits"]])("shows %s honestly without automatic retry",async(status,label)=>{
-  api.getPersonEnrichment.mockResolvedValue(terminal(status));render(<EnrichmentPanel personId="maya"/>);await screen.findByText(label);
+ it.each([["partial","Partly found via Apollo · credits not reported"],["no_match","No match found"],["failed","Lookup failed"],["insufficient_credit","Not enough credits"]])("shows %s honestly without automatic retry",async(status,label)=>{
+  api.getPersonEnrichment.mockResolvedValue(terminal(status));render(<EnrichmentPanel personId="maya"/>);await screen.findByText(new RegExp(`^${label}`));
   expect(api.preparePersonEnrichment).not.toHaveBeenCalled();expect(api.decideApproval).not.toHaveBeenCalled();
  });
  it("blocks stale identity approval and offers correction navigation",async()=>{
@@ -67,14 +67,20 @@ describe("deliberate person enrichment",()=>{
  });
  it("keeps an older unknown stopped while displaying the newer known result",async()=>{
   api.getPersonEnrichment.mockResolvedValue({...terminal(),can_request:false,unresolved_unknown_id:"older-unknown"});render(<EnrichmentPanel personId="maya"/>);
-  await screen.findByText("Contact details found");fireEvent.click(screen.getByRole("button",{name:"Review a new lookup"}));
+  await screen.findByText(/^Found via Apollo/);fireEvent.click(screen.getByRole("button",{name:"Review a new lookup"}));
   fireEvent.click(screen.getByRole("checkbox",{name:"I understand this is a new paid attempt"}));fireEvent.click(screen.getByRole("button",{name:"Review new attempt"}));
   await waitFor(()=>expect(api.preparePersonEnrichment).toHaveBeenCalledWith("maya",expect.anything(),expect.any(String),"older-unknown"));
   expect(api.decideApproval).not.toHaveBeenCalled();
  });
+ it("shows a found lookup as one line: provider, actual credits, and date",async()=>{
+  const found=terminal();api.getPersonEnrichment.mockResolvedValue({...found,latest:{...found.latest,credits_actual:1}});render(<EnrichmentPanel personId="maya"/>);
+  const chip=await screen.findByText(/^Found via Apollo · 1 credit · /);
+  expect(chip).toHaveAttribute("title","Updated: Email");
+  expect(screen.queryByText("Missing email")).toBeNull();
+ });
  it("does not ask for a person review after an ordinary successful lookup",async()=>{
   const found=terminal();api.getPersonEnrichment.mockResolvedValue({...found,latest:{...found.latest,stale_identity:true}});render(<EnrichmentPanel personId="maya"/>);
-  await screen.findByText("Contact details found");
+  await screen.findByText(/^Found via Apollo/);
   expect(screen.queryByRole("link",{name:"Review person details"})).toBeNull();
  });
  it("explains an unconfirmed provider identity and links to the person's details",async()=>{
@@ -84,8 +90,8 @@ describe("deliberate person enrichment",()=>{
  });
  it("reuses the preparation operation after a lost preparation response",async()=>{
   api.preparePersonEnrichment.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(review);
-  render(<EnrichmentPanel personId="maya"/>);fireEvent.click(await screen.findByRole("button",{name:"Review lookup"}));
-  await screen.findByRole("alert");fireEvent.click(screen.getByRole("button",{name:"Review lookup"}));
+  render(<EnrichmentPanel personId="maya"/>);fireEvent.click(await screen.findByRole("button",{name:"Find contact details"}));
+  await screen.findByRole("alert");fireEvent.click(screen.getByRole("button",{name:"Find contact details"}));
   await screen.findByRole("button",{name:"Approve lookup once"});
   expect(api.preparePersonEnrichment.mock.calls[0][2]).toBe(api.preparePersonEnrichment.mock.calls[1][2]);
   expect(api.decideApproval).not.toHaveBeenCalled();

@@ -6,24 +6,8 @@
 @import "./styles/afterSendReminder.css";
 @import "./styles/enrichment.css";
 @import "./styles/monid.css";
+@import "./styles/person-file.css";
 @import "./styles/responsive.css";
-
-.person-section-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 16px 0;
-}
-
-.person-section-nav button {
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--raised);
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-}
 
 .person-mail-activity .person-timeline-entry,
 .person-mail-source {
@@ -63,8 +47,7 @@
 
 .person-mail-activity a { color: var(--accent); text-underline-offset: 3px; }
 
-.person-mail-filters button:focus-visible,
-.person-section-nav button:focus-visible {
+.person-mail-filters button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -117,7 +100,6 @@
 }
 
 .person-summary-card,
-.person-sequence,
 .person-section {
   min-width: 0;
   border: 1px solid var(--border);
@@ -584,85 +566,9 @@
   font-size: 13px;
 }
 
-.person-back-link {
-  display: inline-flex;
-  min-height: 44px;
-  align-items: center;
-  margin-bottom: 12px;
-  color: var(--accent-deep);
-  font-weight: 600;
-  text-decoration: none;
-}
-
-.person-chat-action {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-top: 16px;
-}
-
-.person-chat-action button {
-  min-height: 44px;
-  padding: 0 15px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: var(--accent);
-  color: var(--surface);
-  font: inherit;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.person-chat-action button:disabled {
-  cursor: wait;
-  opacity: .65;
-}
-
-.person-chat-action [role="alert"] {
-  margin: 0;
-  color: var(--error);
-  line-height: 1.45;
-}
-
-.person-sequence,
 .person-section {
   margin-top: 20px;
   padding: 20px;
-}
-
-.person-sequence-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-}
-
-.person-sequence-action {
-  min-height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.person-sequence-action.is-active {
-  border-color: var(--accent);
-  background: var(--accent-tint);
-  color: var(--accent-deep);
-}
-
-.person-sequence-action:disabled {
-  cursor: wait;
-  opacity: .65;
-}
-
-.person-sequence-error {
-  margin: 12px 0 0;
-  color: var(--error);
 }
 
 .person-summary-grid {
@@ -1379,19 +1285,6 @@
     min-height: 44px;
     min-width: 44px;
     width: 100%;
-  }
-
-  .person-sequence-actions {
-    display: grid;
-  }
-
-  .person-sequence-action {
-    width: 100%;
-  }
-
-  .person-chat-action {
-    align-items: stretch;
-    flex-direction: column;
   }
 }
 

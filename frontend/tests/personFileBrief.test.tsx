@@ -79,10 +79,26 @@ describe("the living brief on the person file", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      within(screen.getByRole("region", { name: "Knowledge gaps" })).getByText(
+      within(screen.getByRole("region", { name: "Gaps" })).getByText(
         "No email address is recorded for this person.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("collects what the brief does not know into one Gaps list instead of cards", async () => {
+    render(<PersonFileView personId="person one" />);
+
+    const gaps = await screen.findByRole("region", { name: "Gaps" });
+    // The default brief has no outcome, no contact and no wants yet.
+    expect(within(gaps).getByText("No outreach outcome is recorded yet.")).toBeInTheDocument();
+    expect(within(gaps).getByText("No outreach sent and no reply received.")).toBeInTheDocument();
+    expect(within(gaps).getByText("What this person wants is not recorded.")).toBeInTheDocument();
+    expect(within(gaps).getByText("No email address is recorded for this person.")).toBeInTheDocument();
+    expect(gaps).not.toHaveTextContent("No source reference");
+    expect(screen.queryByRole("region", { name: "Outcome" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "What they want" })).not.toBeInTheDocument();
+    // What the brief does know stays a card.
+    expect(screen.getByRole("region", { name: "Sources" })).toHaveTextContent("apollo");
   });
 
   it("shows every claim with its state and its source references", async () => {
@@ -216,7 +232,10 @@ describe("the living brief on the person file", () => {
     render(<PersonFileView personId="person one" />);
 
     const section = await screen.findByRole("region", { name: "Successor handoff" });
-    expect(section).toHaveTextContent("Drafted from the claims below.");
+    expect(within(section).getByText("Draft")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Drafted from the brief claims"),
+    );
     const form = within(section);
     expect(form.getByLabelText("Who this is")).toHaveValue("Alyssa Lee");
     expect(form.getByLabelText("What happened")).toHaveValue("Led university sourcing.");
@@ -264,7 +283,8 @@ describe("the living brief on the person file", () => {
     render(<PersonFileView personId="person one" />);
 
     const section = await screen.findByRole("region", { name: "Successor handoff" });
-    expect(section).toHaveTextContent("Saved at version 7.");
+    expect(within(section).getByText("Version 7")).toBeInTheDocument();
+    expect(within(section).queryByText("Draft")).not.toBeInTheDocument();
     expect(within(section).getByLabelText("What they want")).toHaveValue(
       "A date after the 15th",
     );
@@ -294,10 +314,8 @@ describe("the living brief on the person file", () => {
     render(<PersonFileView personId="person one" />);
 
     const section = await screen.findByRole("region", { name: "Successor handoff" });
-    expect(section).toHaveTextContent(
-      "Saved handoff. Its saved version was not recorded; review every field.",
-    );
-    expect(section).not.toHaveTextContent("Saved at version");
+    expect(section).toHaveTextContent("Saved version not recorded. Review every field.");
+    expect(section).not.toHaveTextContent(/Version \d/);
   });
 
   it("labels stale saved handoff fields without rewriting them", async () => {

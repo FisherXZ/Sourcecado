@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { getAfterSendReminder, saveAfterSendReminder, type AfterSendReminderContext, type PersonTask } from "./api";
+import { Glyph } from "./generative/ResultCard";
 import { Icon } from "./icons";
 import { TASKS_CHANGED } from "./Tasks";
 import "./styles/afterSendReminder.css";
@@ -73,7 +74,7 @@ export function AfterSendReminder({ personId, sent }: {
       <p>Follow-up saved: {task.title} · {task.due_date} ({task.due_timezone}).</p>
       <a href={`#/people/${encodeURIComponent(personId)}`}>View person’s tasks</a>
     </div> : context ? <form onSubmit={event => void save(event)} aria-label="Set follow-up">
-      <p>Choose a date in {context.timezone}. This reminder never sends email.</p>
+      <p className="after-send-hint"><Glyph name="clock" />{context.timezone} · Reminder only, never sends email</p>
       <fieldset disabled={busy}>
         <label className="task-field">Follow-up task<input ref={heading} value={title} maxLength={200} required onChange={event => setTitle(event.currentTarget.value)} /></label>
         <label className="task-field">Follow-up date<input type="date" value={date} required onChange={event => setDate(event.currentTarget.value)} /></label>

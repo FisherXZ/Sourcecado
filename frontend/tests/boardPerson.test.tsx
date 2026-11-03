@@ -387,7 +387,11 @@ describe("Contacts and person-file routes", () => {
     board.unmount();
 
     const person = render(<PersonFileView personId="person one" />);
-    expect(await screen.findByText(/Enrich to verify the full name/i)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Hudson" })).toBeInTheDocument();
+    expect(screen.getByText("Surname hidden by Apollo")).toHaveAttribute(
+      "title",
+      "Enrich to verify the full name.",
+    );
     expect(person.container).not.toHaveTextContent("***");
   });
 
@@ -417,12 +421,13 @@ describe("Contacts and person-file routes", () => {
     expect(screen.getAllByRole("row")).toHaveLength(1);
   });
 
-  it("updates a person sequence through labeled pressed-state controls", async () => {
+  it("updates a person sequence through the labeled sequence select", async () => {
     const { container } = render(<PersonFileView personId="person one" />);
 
     expect(await screen.findByRole("heading", { level: 1, name: "Alyssa Lee" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open" })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: "In conversation" }));
+    const sequence = screen.getByRole("combobox", { name: "Sequence state" });
+    expect(sequence).toHaveValue("open");
+    fireEvent.change(sequence, { target: { value: "in_conversation" } });
 
     await waitFor(() =>
       expect(api.setPersonSequence).toHaveBeenCalledWith(
@@ -496,14 +501,16 @@ describe("Contacts and person-file routes", () => {
     await screen.findByRole("heading", { level: 1, name: "Alyssa Lee" });
 
     // Change the status in the Person File.
-    fireEvent.click(screen.getByRole("button", { name: "In conversation" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Sequence state" }), {
+      target: { value: "in_conversation" },
+    });
     await waitFor(() =>
       expect(api.setPersonSequence).toHaveBeenCalledWith("person one", "in_conversation"),
     );
 
     // Navigate back to Contacts through the real back link — no event is
     // dispatched here by the test; the remount alone must refresh the view.
-    fireEvent.click(screen.getByRole("link", { name: "← Contacts" }));
+    fireEvent.click(screen.getByRole("link", { name: "Back to Contacts" }));
 
     const updatedFilters = await screen.findByRole("group", {
       name: "Filter contacts by sequence status",
@@ -534,7 +541,7 @@ describe("Contacts and person-file routes", () => {
     window.location.hash = "#/people/person%20one";
     render(<PersonFileView personId="person one" />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Create sourcing chat" }),
+      await screen.findByRole("button", { name: "Start chat" }),
     );
 
     await waitFor(() =>
@@ -555,10 +562,10 @@ describe("Contacts and person-file routes", () => {
     render(<PersonFileView personId="person one" />);
 
     expect(
-      await screen.findByRole("button", { name: "Open sourcing chat" }),
+      await screen.findByRole("button", { name: "Open chat" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Create sourcing chat" }),
+      screen.queryByRole("button", { name: "Start chat" }),
     ).not.toBeInTheDocument();
   });
 
@@ -567,7 +574,7 @@ describe("Contacts and person-file routes", () => {
     api.openPersonSourcingChat.mockRejectedValueOnce(new Error("stale version"));
     render(<PersonFileView personId="person one" />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Create sourcing chat" }),
+      await screen.findByRole("button", { name: "Start chat" }),
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -584,7 +591,7 @@ describe("Contacts and person-file routes", () => {
       "Couldn’t load this person file",
     );
     expect(
-      screen.queryByRole("button", { name: /sourcing chat/i }),
+      screen.queryByRole("button", { name: /chat/i }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to Contacts" })).toHaveAttribute(
       "href",

@@ -20,6 +20,7 @@ import {
 } from "./api";
 import { followUpHash } from "./app/route";
 import { Icon } from "./icons";
+import { Glyph } from "./generative/ResultCard";
 
 /** Fired after any task save so every mounted list reloads the same records. */
 export const TASKS_CHANGED = "sourcecado:tasks-changed";
@@ -262,9 +263,11 @@ function TaskComposer({
       <TaskFieldsForm idPrefix="task-new" draft={draft} onChange={setDraft} disabled={busy} />
       <div className="task-form-actions">
         <button type="submit" disabled={busy}>
+          <Icon name="save" />
           {busy ? "Saving…" : "Save task"}
         </button>
         <button type="button" disabled={busy} onClick={onClose}>
+          <Icon name="close" />
           Cancel
         </button>
       </div>
@@ -351,9 +354,11 @@ function TaskEditor({ task, onClose }: { task: PersonTask; onClose: () => void }
       <TaskFieldsForm idPrefix={idPrefix} draft={draft} onChange={setDraft} disabled={busy} />
       <div className="task-form-actions">
         <button type="submit" disabled={busy}>
+          <Icon name="save" />
           {busy ? "Saving…" : "Save"}
         </button>
         <button type="button" disabled={busy} onClick={onClose}>
+          <Icon name="close" />
           Cancel
         </button>
       </div>
@@ -419,6 +424,7 @@ function TaskHistory({ task, onClose }: { task: PersonTask; onClose: () => void 
         <div className="task-list-error" role="alert">
           <p>Couldn’t load changes.</p>
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            <Icon name="refresh" />
             Retry
           </button>
         </div>
@@ -446,6 +452,7 @@ function TaskHistory({ task, onClose }: { task: PersonTask; onClose: () => void 
                   disabled={busy !== null}
                   onClick={() => void undo(change)}
                 >
+                  <Icon name="reply" />
                   {busy === change.change_id ? "Undoing…" : "Undo"}
                 </button>
               ) : null}
@@ -455,6 +462,7 @@ function TaskHistory({ task, onClose }: { task: PersonTask; onClose: () => void 
       ) : null}
       {notice ? <p role="alert">{notice}</p> : null}
       <button type="button" className="task-row-action" onClick={onClose}>
+        <Icon name="close" />
         Hide changes
       </button>
     </div>
@@ -544,6 +552,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
                 disabled={busy}
                 onClick={() => void setState("open")}
               >
+                <Icon name="refresh" />
                 Reopen
               </button>
             ) : (
@@ -563,6 +572,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
                   disabled={busy}
                   onClick={() => void setState("completed")}
                 >
+                  <Icon name="approve" />
                   Done
                 </button>
                 <button
@@ -572,6 +582,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
                   disabled={busy}
                   onClick={() => void setState("cancelled")}
                 >
+                  <Icon name="deny" />
                   Cancel
                 </button>
                 <button
@@ -582,6 +593,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
                   disabled={busy}
                   onClick={() => setEditing(true)}
                 >
+                  <Icon name="edit" />
                   Edit
                 </button>
               </>
@@ -594,6 +606,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
               aria-expanded={history}
               onClick={() => setHistory((value) => !value)}
             >
+              <Glyph name="clock" />
               Changes
             </button>
           </div>
@@ -702,6 +715,7 @@ export function TaskList({
             onClick={() => setAdding(true)}
             disabled={!personId && people.length === 0}
           >
+            <Icon name="add" />
             Add task
           </button>
         )}
@@ -729,6 +743,7 @@ export function TaskList({
               : "Couldn’t refresh tasks. Showing what was last loaded."}
           </p>
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            <Icon name="refresh" />
             Retry
           </button>
         </div>
@@ -777,7 +792,7 @@ export function TaskList({
         </details>
       ) : null}
       {listing?.truncated ? (
-        <p className="task-list-status">Showing the first {listing.tasks.length} tasks. <button type="button" disabled={loading} onClick={() => setPages(n => n + 1)}>Load more tasks</button></p>
+        <p className="task-list-status">Showing the first {listing.tasks.length} tasks. <button type="button" disabled={loading} onClick={() => setPages(n => n + 1)}><Icon name="add" />Load more tasks</button></p>
       ) : null}
       {listing ? (
         <p className="task-list-timezone">New task dates use {listing.timezone}. Existing tasks keep their saved timezone.</p>

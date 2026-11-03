@@ -22,13 +22,14 @@ describe("Contacts and person-file styles", () => {
     );
   });
 
-  it("keeps person sequence and chat controls touch sized", () => {
-    expect(styles).toMatch(
-      /\.person-sequence-action\s*\{[^}]*min-height:\s*44px;/,
+  it("keeps person-file header controls touch sized on narrow screens", () => {
+    // The sequence pill, Open chat and Edit details live in person-file.css.
+    const personFile = readFileSync("src/styles/person-file.css", "utf8");
+    expect(personFile).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.pf-btn,\s*\.pf-sequence select,[^{]*\{[^}]*min-height:\s*44px;/,
     );
-    expect(styles).toMatch(
-      /\.person-chat-action button\s*\{[^}]*min-height:\s*44px;/,
-    );
+    expect(personFile).toMatch(/\.pf-panel\.is-inactive\s*\{[^}]*display:\s*none;/);
+    expect(personFile).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });
 
   it("keeps the follow-up flag on warm tokens and the reply check touch sized", () => {

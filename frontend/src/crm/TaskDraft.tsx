@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Icon } from "../icons";
 import { crmRequest, newOperationId, type PersonTask } from "../api";
 
 export function TaskDraft({ task, proposalId }: { task: Pick<PersonTask, "task_id" | "person_id" | "title" | "version">; proposalId?: string }) {
@@ -29,7 +30,7 @@ export function TaskDraft({ task, proposalId }: { task: Pick<PersonTask, "task_i
 
   return <div className="task-draft">
     <button type="button" className="task-row-action" disabled={busy} onClick={() => void prepare()}
-      aria-label={`Prepare draft for ${task.title}`}>{busy ? "Preparing…" : "Prepare draft"}</button>
+      aria-label={`Prepare draft for ${task.title}`}><Icon name="draft" />{busy ? "Preparing…" : "Prepare draft"}</button>
     {draft ? <div className="task-prepared" role="region" aria-label={`Prepared draft for ${task.title}`}>
       <strong>{draft.subject}</strong>
       <textarea aria-label="Prepared message text" value={draft.body} readOnly rows={5} />
@@ -39,7 +40,7 @@ export function TaskDraft({ task, proposalId }: { task: Pick<PersonTask, "task_i
       <button type="button" onClick={async () => {
         try { await navigator.clipboard.writeText(draft.body); setNotice("Draft text copied."); }
         catch { setNotice("Select and copy the prepared text above."); }
-      }}>Copy draft text</button>
+      }}><Icon name="copy" />Copy draft text</button>
     </div> : null}
     {notice ? <p role="status">{notice}</p> : null}
   </div>;

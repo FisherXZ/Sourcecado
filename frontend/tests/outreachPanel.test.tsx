@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OutreachPanel } from "../src/OutreachPanel";
@@ -162,11 +162,18 @@ describe("Outreach panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Allow once and send" }));
 
-    await screen.findByText("Sent");
+    const card = (await screen.findByText("Sent")).closest(".person-outreach-sent") as HTMLElement;
     expect(api.decideApproval).toHaveBeenCalledWith("send_1", "allow");
     expect(api.decideApproval).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("msg_1")).toBeTruthy();
-    expect(screen.getByText("thread_1")).toBeTruthy();
+    // Recipient and the reviewed subject sit in one aligned grid.
+    expect(within(card).getByText("ada@analytic.example")).toBeInTheDocument();
+    expect(within(card).getByText("Thursday?")).toBeInTheDocument();
+    // Raw Gmail ids stay off screen; the Open in Gmail link carries them.
+    expect(screen.queryByText("msg_1")).toBeNull();
+    const gmail = screen.getByRole("link", { name: "Open in Gmail" });
+    expect(gmail).toHaveAttribute("href", "https://mail.google.com/mail/u/0/#all/thread_1");
+    expect(gmail).toHaveAttribute("title", expect.stringContaining("msg_1"));
+    expect(gmail).toHaveAttribute("title", expect.stringContaining("thread_1"));
   });
 
   it("reports a refused send without claiming anything went out", async () => {
