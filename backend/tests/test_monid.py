@@ -307,3 +307,68 @@ def test_a_person_identity_correction_requires_a_new_research_review(tmp_path):
         actor="director",rationale_summary="Correct the saved identity before researching.")
     assert allow(client,item).json()["ok"] is False
     assert paid_calls(http) == []
+
+
+def test_a_human_may_approve_after_the_quote_window_because_price_is_rechecked_at_dispatch(tmp_path, monkeypatch):
+    app, client, http, pid, sid = setup(tmp_path)
+    connect(client)
+    item = park(client, quoted(client, pid, sid), sid)
+    import coworker.monid as monid
+    later = monid.time.time() + 600
+    monkeypatch.setattr(monid.time, "time", lambda: later)
+    response = allow(client, item)
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True, response.text
+    assert len(paid_calls(http)) == 1
+
+
+def test_a_price_change_while_waiting_for_approval_still_stops_the_run(tmp_path, monkeypatch):
+    app, client, http, pid, sid = setup(tmp_path)
+    connect(client)
+    item = park(client, quoted(client, pid, sid), sid)
+    http.detail["price"]["amount"]["value"] = 0.015
+    response = allow(client, item)
+    assert response.json()["ok"] is False
+    assert paid_calls(http) == []
+
+
+def test_an_expired_quote_cannot_be_sent_for_approval(tmp_path, monkeypatch):
+    app, client, http, pid, sid = setup(tmp_path)
+    connect(client)
+    quote = quoted(client, pid, sid)
+    import coworker.monid as monid
+    later = monid.time.time() + 600
+    monkeypatch.setattr(monid.time, "time", lambda: later)
+    response = client.post("/v1/monid/approvals", headers=HEADERS, json={"quote_id": quote["quote_id"], "session_id": sid})
+    assert response.status_code >= 400
+    assert paid_calls(http) == []
+
+
+def test_saved_research_is_listed_after_restart_with_readable_titles(tmp_path):
+    app, client, http, pid, sid = setup(tmp_path)
+    connect(client)
+    item = park(client, quoted(client, pid, sid), sid)
+    assert allow(client, item).json()["ok"] is True
+    restarted = create_app(token="monid-local-test", provider=None, state=tmp_path, http=http, gmail=FakeGmail(), apollo_key="")
+    response = TestClient(restarted).get(f"/v1/people/{pid}/monid/results", headers=HEADERS)
+    assert response.status_code == 200, response.text
+    results = response.json()["results"]
+    assert [row["approval_id"] for row in results] == [item["id"]]
+    assert results[0]["status"] == "completed" and results[0]["actual_cost_usd"] == "0.01"
+    assert results[0]["output"]["results"][0]["title"] == "Sample research"
+    assert KEY not in response.text
+    attachments = restarted.state.people.get(pid, expand_sources=True)["attachments"]
+    titles = {row["fields"].get("artifact_type") or row["type"]: row["fields"].get("title") for row in attachments}
+    assert titles["monid_quote"] == "Monid quote: exa search, USD 0.01 (maximum USD 0.02)"
+    assert titles["monid_research"] == "Monid research: exa search, completed"
+    assert titles["source_ref"] == "Monid exa search run remote-run-1"
+    assert len(paid_calls(http)) == 1
+
+
+def test_saved_research_for_another_person_is_not_listed(tmp_path):
+    app, client, http, pid, sid = setup(tmp_path)
+    connect(client)
+    assert allow(client, park(client, quoted(client, pid, sid), sid)).json()["ok"] is True
+    other = app.state.people.keep_from_apollo(apollo_id="noor", first_name="Noor", last_name_obfuscated="Lee", title=None, company=None)
+    response = client.get(f"/v1/people/{other['person_id']}/monid/results", headers=HEADERS)
+    assert response.status_code == 200 and response.json()["results"] == []

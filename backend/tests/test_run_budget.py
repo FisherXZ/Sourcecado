@@ -221,6 +221,11 @@ def _turn(
         execution['consequential_actions']=ConsequentialActions(people=person_store,inbox=actual_inbox,
             gmail=lambda:gmail,http=lambda:None,apollo_key=lambda:'fixture-key')
 
+    if isinstance(provider,ApprovalProvider) and provider.tool_name == "monid_research":
+        from monid_fixture import prepared_monid
+        execution["monid_actions"], provider.arguments = prepared_monid(tmp_path, people=person_store,
+            store=conv, inbox=actual_inbox, sid=sid)
+
     async def _wait(_call_id: str) -> str:
         return wait or "allow"
 

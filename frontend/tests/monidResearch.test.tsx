@@ -10,6 +10,7 @@ vi.mock("../src/api", async importOriginal => ({
     meeting_evidence: { attached: [], proposed: [], rejected: [] } }),
 }));
 vi.mock("../src/Tasks", () => ({ TASKS_CHANGED: "sourcecado:tasks-changed", TaskList: () => null }));
+vi.mock("../src/EnrichmentPanel", () => ({ EnrichmentPanel: () => null }));
 afterEach(() => vi.unstubAllGlobals());
 
 it("lets the director review exact person-bound input and cost before one lookup approval", async () => {
@@ -33,7 +34,7 @@ it("lets the director review exact person-bound input and cost before one lookup
   fireEvent.change(screen.getByLabelText("Research query"),{target:{value:quote.input.body.query}});
   expect(screen.getByLabelText("Maximum USD for this lookup")).toHaveValue(null);
   fireEvent.change(screen.getByLabelText("Maximum USD for this lookup"),{target:{value:"0.02"}});
-  fireEvent.click(screen.getByRole("button",{name:"Review lookup"}));
+  fireEvent.click(screen.getByRole("button",{name:"Review Monid lookup"}));
   await screen.findByText("USD 0.01",{exact:true});
   expect(calls.some(call=>call.url.includes("/inbox/"))).toBe(false);
   expect(screen.getByText(/"numResults": 3/)).toBeVisible();
@@ -43,4 +44,21 @@ it("lets the director review exact person-bound input and cost before one lookup
   expect(screen.getByText("Sample source",{exact:true})).toBeVisible();
   expect(calls.filter(call=>call.url.includes("/inbox/"))).toEqual([{url:expect.stringContaining("/v1/inbox/approval_1"),body:{decision:"allow",scope:"once",actor:"director"}}]);
   expect(screen.queryByRole("button",{name:/Always allow/})).toBeNull();
+});
+
+it("shows the person's saved research after reopening without contacting Monid", async () => {
+  const calls: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url) => {
+    calls.push(String(url));
+    const body = String(url).endsWith("/monid/results")
+      ? { results: [{ approval_id:"approval_9", status:"completed", remote_provider:"exa", endpoint:"search", actual_cost_usd:"0.01",
+          saved_at:"2026-11-02T12:00:00Z", output:{ results:[{ title:"Saved platform post", url:"https://example.test/post", text:"Saved text" }] } }] }
+      : {};
+    return { ok:true, json:async()=>body };
+  }));
+  render(<PersonFileView personId="person_1" />);
+  expect(await screen.findByText("Saved platform post")).toBeVisible();
+  expect(screen.getByText("Actual cost: USD 0.01")).toBeVisible();
+  expect(screen.getByText(/^Saved research/)).toBeVisible();
+  expect(calls.some(url=>url.includes("monid.ai")||url.includes("/inbox/")||url.includes("/quote"))).toBe(false);
 });

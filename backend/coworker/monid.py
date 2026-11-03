@@ -205,12 +205,13 @@ class MonidResearchActions:
         person = self.people.get(pid)
         quote["identity_revision"] = person["identity_revision"]
         quote["person_label"] = " ".join(str(person.get(k) or "") for k in ("first_name","last_name")).strip() or "Saved person"
-        self.people.upsert_attachment(pid, record_type="artifact", fields={"artifact_type": "monid_quote", "quote": quote},
+        title = f"Monid quote: {provider} {endpoint}, USD {price} (maximum USD {cap})"
+        self.people.upsert_attachment(pid, record_type="artifact", fields={"artifact_type": "monid_quote", "title": title, "quote": quote},
             idempotency_key=quote["quote_id"], actor="assistant", rationale_summary="Prepared a bounded Monid research quote; no paid call.",
             session_id=sid, run_id=run_id)
         return quote
 
-    def approval_resource(self, args, session_id):
+    def approval_resource(self, args, session_id, *, check_expiry=True):
         qid = args.get("quote_id") if isinstance(args, dict) else None
         with self.people._lock:
             row = self.people._conn.execute("SELECT fields_json FROM person_attachments WHERE record_type='artifact' AND idempotency_key=?", (qid,)).fetchone()
@@ -221,7 +222,9 @@ class MonidResearchActions:
         self._bound(quote["person_id"], session_id)
         if self.people.get(quote["person_id"])["identity_revision"] != quote.get("identity_revision"):
             raise MonidError("The selected person’s identity changed. Review a new research quote.")
-        if quote["session_id"] != session_id or quote["expires_at"] < time.time():
+        # The window bounds how long a quote may wait before review; after a human
+        # approves, dispatch rechecks the live price and contract instead.
+        if quote["session_id"] != session_id or (check_expiry and quote["expires_at"] < time.time()):
             raise MonidError("This Monid quote expired or belongs to a different chat. Review a fresh quote.")
         if quote["credential_fingerprint"] != fingerprint(self._profile(verified=True)["api_key"]):
             raise MonidError("The Monid connection changed. Review a fresh quote.")
@@ -242,7 +245,7 @@ class MonidResearchActions:
             return False, {"error": "A specific once-approved, durably claimed Monid lookup is required.", "code": "approval_required"}
         dispatched = False
         try:
-            quote = self.approval_resource(args, session_id)
+            quote = self.approval_resource(args, session_id, check_expiry=False)
             resource = item.get("resource") or {}
             if not all(resource.get(k) == value for k, value in quote.items()):
                 raise MonidError("The approved lookup does not match its saved quote.")
@@ -299,16 +302,34 @@ class MonidResearchActions:
         # Each status refresh is its own immutable, person/run-bound evidence.
         identity = fingerprint(json.dumps(output, sort_keys=True))
         source = self.people.upsert_attachment(quote["person_id"], record_type="source_ref",
-            fields={"provider":"Monid","provider_run_id":data["runId"],"endpoint":quote["endpoint"]},
+            fields={"provider":"Monid","provider_run_id":data["runId"],"endpoint":quote["endpoint"],
+                    "title":f"Monid {quote['provider']} {quote['endpoint']} run {data['runId']}"},
             idempotency_key=f"monid:run:{data['runId']}:{identity}", actor="director", rationale_summary="Read approved Monid research source.",
             session_id=quote["session_id"],run_id=run_id)
-        artifact = self.people.upsert_attachment(quote["person_id"], record_type="artifact", fields={"artifact_type":"monid_research",**output,"source_ref_id":source["id"]},
+        artifact = self.people.upsert_attachment(quote["person_id"], record_type="artifact", fields={"artifact_type":"monid_research","title":f"Monid research: {quote['provider']} {quote['endpoint']}, {output['status']}",**output,"source_ref_id":source["id"]},
             idempotency_key=f"monid:result:{item['id']}:{identity}",actor="director",rationale_summary="Saved untrusted Monid research; identity unchanged.",
             session_id=quote["session_id"],run_id=run_id)
         if output["over_budget"]:
             profile = self.secrets.get("monid") or {}
             self.secrets.replace_if_unchanged({"monid": profile}, {"monid": {**profile, "spend_paused": True}})
         return {**output,"source_ref_id":source["id"],"artifact_id":artifact["id"]}
+
+    def saved_results(self, pid):
+        """Saved research for one person, newest first; local read only, never calls Monid."""
+        person = self.people.get(pid, expand_sources=True)
+        if person is None:
+            raise MonidError("This person is unavailable.")
+        rows = [row for row in person.get("attachments") or []
+                if row.get("type") == "artifact" and (row.get("fields") or {}).get("artifact_type") == "monid_research"]
+        rows.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+        latest = {}
+        for row in rows:
+            fields = row["fields"]
+            latest.setdefault(fields.get("approval_id"), {
+                **{key: fields.get(key) for key in ("approval_id", "status", "remote_provider", "endpoint", "quoted_cost_usd",
+                    "max_cost_usd", "actual_cost_usd", "cost_unknown", "over_budget", "output")},
+                "saved_at": row.get("updated_at") or row.get("created_at")})
+        return list(latest.values())[:20]
 
     def read_result(self, pid, approval_id):
         item = self.inbox.get(approval_id) or {}

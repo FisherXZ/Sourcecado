@@ -70,6 +70,13 @@ def monid_router(actions: MonidResearchActions):
         except MonidError as exc:
             return refuse(exc)
 
+    @router.get("/v1/people/{person_id}/monid/results")
+    def saved(person_id: str):
+        try:
+            return {"results": actions.saved_results(person_id)}
+        except MonidError as exc:
+            return refuse(exc)
+
     @router.post("/v1/people/{person_id}/monid/results/{approval_id}")
     def result(person_id: str, approval_id: str):
         try:

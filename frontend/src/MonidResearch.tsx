@@ -19,7 +19,17 @@ export function MonidResearch({personId,sessionId}:{personId:string;sessionId:st
   const queryInput=useRef<HTMLInputElement>(null);
   const reviewHeading=useRef<HTMLHeadingElement>(null);
   const resultHeading=useRef<HTMLHeadingElement>(null);
-  useEffect(()=>{if(result)resultHeading.current?.focus();else if(quote)reviewHeading.current?.focus();else if(selected)queryInput.current?.focus();},[quote,approval,result,selected]);
+  const [savedAt,setSavedAt]=useState<string|null>(null);
+  useEffect(()=>{if(result&&!savedAt)resultHeading.current?.focus();else if(quote)reviewHeading.current?.focus();else if(selected)queryInput.current?.focus();},[quote,approval,result,selected]);
+  useEffect(()=>{
+    let live=true;setResult(null);setSavedAt(null);
+    // Saved research is a local read; it never contacts Monid.
+    monidRequest(`people/${encodeURIComponent(personId)}/monid/results`).then(found=>{
+      const latest=Array.isArray(found?.results)?found.results[0]:null;
+      if(live&&latest){setResult((current:any)=>current??latest);setSavedAt(latest.saved_at??"");}
+    }).catch(()=>{/* The live flow still works without saved history. */});
+    return()=>{live=false;};
+  },[personId]);
   async function run(work:()=>Promise<void>) {
     if(busy)return;setBusy(true);setProblem(null);
     try {await work();}catch(error){setProblem(error instanceof Error?error.message:"The lookup could not be completed.");}
@@ -41,7 +51,7 @@ export function MonidResearch({personId,sessionId}:{personId:string;sessionId:st
     {items?.length===0?<p role="status">No catalog sources match.</p>:null}
     {items?.map((item,index)=><div className="monid-endpoint" key={`${item.provider}:${item.endpoint}:${index}`}>
       <strong>{item.displayName||`${item.provider} ${item.endpoint}`}</strong><span>{item.provider} · {item.endpoint}</span>
-      {item.supported?<button type="button" disabled={busy||Boolean(quote)} onClick={()=>{setSelected(item);setResult(null);}}><Icon name="reply"/>Use {item.provider} {item.endpoint}</button>:<span>Catalog only — not executable in this version</span>}
+      {item.supported?<button type="button" disabled={busy||Boolean(quote)} onClick={()=>{setSelected(item);setResult(null);setSavedAt(null);}}><Icon name="reply"/>Use {item.provider} {item.endpoint}</button>:<span>Catalog only — not executable in this version</span>}
     </div>)}
     {selected&&!result?<>
       {!sessionId?<p>Open this person’s sourcing chat before reviewing a lookup.</p>:<form onSubmit={event=>{event.preventDefault();void run(async()=>{
@@ -52,7 +62,7 @@ export function MonidResearch({personId,sessionId}:{personId:string;sessionId:st
           <label className="task-field">Research query<input ref={queryInput} value={query} maxLength={1000} required onChange={event=>setQuery(event.currentTarget.value)}/></label>
           <label className="task-field">Maximum results<input type="number" min={1} max={10} value={count} required onChange={event=>setCount(Number(event.currentTarget.value))}/></label>
           <label className="task-field">Maximum USD for this lookup<input type="number" min={0} max={10} step="0.001" value={maximum} required onChange={event=>setMaximum(event.currentTarget.value)}/></label>
-          <button type="submit" disabled={!query.trim()||maximum===""}><Icon name="approve"/>Review lookup</button>
+          <button type="submit" disabled={!query.trim()||maximum===""}><Icon name="approve"/>Review Monid lookup</button>
         </fieldset>
       </form>}
     </>:null}
@@ -65,12 +75,13 @@ export function MonidResearch({personId,sessionId}:{personId:string;sessionId:st
         const parked=await monidRequest("monid/approvals","POST",{quote_id:quote.quote_id,session_id:sessionId});setApproval(parked.item.id);
       })}><Icon name="approve"/>Request lookup approval</button>:<button type="button" disabled={busy} onClick={()=>void run(async()=>{
         const outcome=await monidRequest(`inbox/${encodeURIComponent(approval)}`,"POST",{decision:"allow",scope:"once",actor:"director"});
-        setApproval(null);setResult(outcome.result);if(!outcome.ok)setProblem(outcome.result.error||"The result is unavailable; no automatic retry will run.");
+        setApproval(null);setSavedAt(null);setResult(outcome.result);if(!outcome.ok)setProblem(outcome.result.error||"The result is unavailable; no automatic retry will run.");
       })}><Icon name="approve"/>Allow one lookup</button>}
       <button type="button" disabled={busy} onClick={()=>void run(discard)}><Icon name="close"/>{approval?"Deny lookup":"Discard quote"}</button></div>
     </div>:null}
     {result?<div className="monid-result" role="region" aria-label="Monid research result">
       <h3 ref={resultHeading} tabIndex={-1}>Monid research result</h3>
+      {savedAt!==null?<p>Saved research{savedAt?` · ${new Date(savedAt).toLocaleString()}`:""}</p>:null}
       <p>Status: {{completed:"Completed",running:"Running",failed:"Failed",outcome_unknown:"Outcome unknown — review required"}[String(result.status||result.code)]||"Unknown"}</p><p>Actual cost: {result.actual_cost_usd==null?"Unknown":`USD ${result.actual_cost_usd}`}</p>
       <p>Untrusted research source — verify before using.</p>
       {result.code==="outcome_unknown"?<a href="#/quarantine">Review uncertain action</a>:null}
