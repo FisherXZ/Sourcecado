@@ -1651,7 +1651,11 @@ export type SkillInfo = {
   source: "builtin" | "workspace";
   status: "ready";
   instructions: string;
+  /** A built-in skill of this name sits under a workspace copy. */
+  builtinDefault: boolean;
 };
+
+export type SkillDraft = Pick<SkillInfo, "name" | "purpose" | "useWhen" | "instructions">;
 
 function normalizeSkill(value: unknown): SkillInfo | null {
   if (!value || typeof value !== "object") return null;
@@ -1665,7 +1669,63 @@ function normalizeSkill(value: unknown): SkillInfo | null {
     source: raw.source === "builtin" ? "builtin" : "workspace",
     status: "ready",
     instructions: typeof raw.instructions === "string" ? raw.instructions : "",
+    builtinDefault: raw.builtin_default === true,
   };
+}
+
+/** A save or delete the backend refused, with its reason. */
+export class SaveError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "SaveError";
+    this.status = status;
+  }
+}
+
+async function send(path: string, method: string, body?: unknown): Promise<unknown> {
+  const headers: Record<string, string> = { "X-Club-Token": apiToken() };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const res = await fetch(`${httpBase()}${path}`, {
+    method,
+    headers,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const data = await res.json().catch(() => ({})) as { error?: unknown };
+  if (!res.ok) {
+    throw new SaveError(
+      res.status,
+      typeof data.error === "string" ? data.error : "Sourcecado didn’t take that change. Try again.",
+    );
+  }
+  return data;
+}
+
+function savedSkill(data: unknown): SkillInfo {
+  const skill = normalizeSkill((data as { skill?: unknown }).skill);
+  if (!skill) throw new SaveError(500, "The saved skill came back empty.");
+  return skill;
+}
+
+export async function createSkill(draft: SkillDraft): Promise<SkillInfo> {
+  return savedSkill(await send("/v1/skills", "POST", {
+    name: draft.name,
+    purpose: draft.purpose,
+    use_when: draft.useWhen,
+    instructions: draft.instructions,
+  }));
+}
+
+export async function updateSkill(draft: SkillDraft): Promise<SkillInfo> {
+  return savedSkill(await send(`/v1/skills/${encodeURIComponent(draft.name)}`, "PUT", {
+    purpose: draft.purpose,
+    use_when: draft.useWhen,
+    instructions: draft.instructions,
+  }));
+}
+
+export async function deleteSkill(name: string): Promise<void> {
+  await send(`/v1/skills/${encodeURIComponent(name)}`, "DELETE");
 }
 
 export async function getSkills(): Promise<{ skills: SkillInfo[] }> {
@@ -1699,23 +1759,38 @@ export async function getMemoryBacklog(): Promise<MemoryBacklog> {
   return res.json();
 }
 
+export type MemoryItem = {
+  id: number;
+  content: string;
+  created_at: string;
+  updated_at: string | null;
+  /** The memory reaches the assistant's prompt. */
+  in_use: boolean;
+};
+
+export async function getMemories(): Promise<{ items: MemoryItem[]; maxChars: number }> {
+  const res = await get("/v1/memory");
+  if (!res.ok) throw new Error(`memory ${res.status}`);
+  const body = await res.json() as { items?: MemoryItem[]; max_chars?: number };
+  return { items: body.items ?? [], maxChars: body.max_chars ?? 140 };
+}
+
+export async function createMemory(content: string): Promise<MemoryItem> {
+  return ((await send("/v1/memory", "POST", { content })) as { memory: MemoryItem }).memory;
+}
+
+export async function updateMemory(id: number, content: string): Promise<MemoryItem> {
+  return ((await send(`/v1/memory/${id}`, "PATCH", { content })) as { memory: MemoryItem }).memory;
+}
+
 export async function classifyMemory(id: number): Promise<{ memory: MemoryRow }> {
-  const res = await fetch(`${httpBase()}/v1/memory/${id}/classification`, {
-    method: "POST",
-    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
-    body: JSON.stringify({ category: "operator_preference" }),
-  });
-  if (!res.ok) throw new Error(`memory classify ${res.status}`);
-  return res.json();
+  return (await send(`/v1/memory/${id}/classification`, "POST", {
+    category: "operator_preference",
+  })) as { memory: MemoryRow };
 }
 
 export async function forgetMemory(id: number): Promise<{ forgotten: boolean; id: number }> {
-  const res = await fetch(`${httpBase()}/v1/memory/${id}`, {
-    method: "DELETE",
-    headers: { "X-Club-Token": apiToken() },
-  });
-  if (!res.ok) throw new Error(`memory forget ${res.status}`);
-  return res.json();
+  return (await send(`/v1/memory/${id}`, "DELETE")) as { forgotten: boolean; id: number };
 }
 
 const SCHEDULE_RUN_STATUSES = new Set<ScheduleRunStatus>([

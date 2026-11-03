@@ -28,6 +28,9 @@ const PATHS = {
   close: "M5.5 5.5l9 9M14.5 5.5l-9 9",
   flag: "M5.5 17V3.5M5.5 4.5h9l-2 3.5 2 3.5h-9",
   assistant: "M10 3.5l1.5 4 4 1.5-4 1.5-1.5 4-1.5-4-4-1.5 4-1.5zM15 13.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z",
+  trash: "M4.5 6h11M8 6V4.5h4V6M6 6l.7 10h6.6L14 6M8.5 9v4.5M11.5 9v4.5",
+  skill: "M11 3.5 5.5 11H10l-1 5.5L14.5 9H10z",
+  memory: "M6 3.5h8v13l-4-3-4 3z",
 } as const;
 
 export type IconName = keyof typeof PATHS;

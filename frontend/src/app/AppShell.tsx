@@ -170,9 +170,11 @@ export function AppShell() {
     };
     refreshMemory();
     window.addEventListener("focus", refreshMemory);
+    window.addEventListener("sourcecado:memory-changed", refreshMemory);
     return () => {
       active = false;
       window.removeEventListener("focus", refreshMemory);
+      window.removeEventListener("sourcecado:memory-changed", refreshMemory);
     };
   }, [route]);
   useEffect(() => {

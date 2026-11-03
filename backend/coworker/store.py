@@ -112,6 +112,30 @@ def _memory_line(memory_id: int, excerpt: str, state: str) -> str:
     return f"[#{memory_id}] {excerpt} ({_memory_source_ref(memory_id)}, {state})"
 
 
+# The longest memory the director can save from the Memory page. At 140
+# characters the prompt line still fits the per-item cap whole, even with a
+# six-digit id and the longest evidence state, so the model never reads a
+# clipped copy of what the director wrote.
+MEMORY_MAX_CHARS = 140
+
+
+def memory_fits_prompt(content: str) -> bool:
+    line = _memory_line(999_999, content, ContextState.CONFLICTING.value)
+    return projection_tokens(line) <= _MEMORY_ITEM_TOKENS
+
+
+def _memory_in_use(row: dict[str, Any]) -> bool:
+    """The same predicate `memory_projection_items` applies in SQL."""
+    return (
+        row.get("classification_status") == MEMORY_CLASSIFIED
+        and row.get("category") == MEMORY_CATEGORY_PREFERENCE
+        and not row.get("person_id")
+        and not row.get("session_id")
+        and (row.get("sensitivity") or MEMORY_SENSITIVITY_STANDARD)
+        == MEMORY_SENSITIVITY_STANDARD
+    )
+
+
 def _clip_memory_line(row: sqlite3.Row, state: ContextState) -> tuple[str, bool]:
     """Render one preference, clipped at a word boundary to the per-item cap.
 
@@ -920,6 +944,18 @@ class ConversationStore:
             "classified": len(rows) - len(waiting),
             "items": waiting,
         }
+
+    def memory_page(self) -> dict[str, Any]:
+        """Every memory row for the Memory page, newest first.
+
+        `in_use` says whether the row reaches the prompt; a row waiting for
+        review is shown with it, so nothing Sourcecado holds is hidden.
+        """
+        items = [
+            {**row, "in_use": _memory_in_use(row)}
+            for row in reversed(self.list_memories())
+        ]
+        return {"items": items, "max_chars": MEMORY_MAX_CHARS}
 
     def memory_projection_items(
         self, *, now: datetime | None = None
