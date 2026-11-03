@@ -79,8 +79,14 @@ CRM_TOOL_SCHEMAS = [
         "change_id": {"type": "string"}, "expected_version": _VERSION,
     }, ("change_id",), write=True),
 ]
+_PERSON_DETAIL_FIELDS={field:{"type":["string","null"]} for field in ("first_name","last_name","title","company","email","phone","linkedin_url")}
+_CORRECTION_CHANGES={"type":"object","properties":_PERSON_DETAIL_FIELDS,"additionalProperties":False}
+CRM_TOOL_SCHEMAS.extend([
+    _schema("crm_review_person_correction","Review exact proposed changes and possible duplicate person files. Read-only; never merges files or spends credits.",{"changes":_CORRECTION_CHANGES,"expected_version":_VERSION},("changes","expected_version")),
+    _schema("crm_correct_person","Save only the person's details explicitly corrected in the current director message. Use wording such as Change Maya's company to Lumen Labs and email to maya@example.com. Read the current version first; review duplicate links and ask for exact duplicate confirmation before saving a collision. Corrected fields remain protected from enrichment.",{"changes":_CORRECTION_CHANGES,"expected_version":_VERSION,"collision_token":{"type":"string"},"confirmed_duplicate_ids":{"type":"array","items":{"type":"string"}},"source_refs":{"type":"array","items":{"type":"string"}}},("changes","expected_version"),write=True),
+])
 CRM_TOOL_NAMES = frozenset(schema["function"]["name"] for schema in CRM_TOOL_SCHEMAS)
-CRM_READ_TOOLS = frozenset({"crm_list_attention", "crm_list_tasks"})
+CRM_READ_TOOLS = frozenset({"crm_list_attention", "crm_list_tasks", "crm_review_person_correction"})
 _SCHEMAS = {s["function"]["name"]: s["function"]["parameters"] for s in CRM_TOOL_SCHEMAS}
 
 
@@ -371,7 +377,10 @@ def _validate(value: Any, schema: dict, path: str = "arguments") -> None:
 
 
 def _human_request(name: str, args: dict, directive: Directive | None, *, timezone: str = DEFAULT_TIMEZONE,
-                   saved_operation: dict | None = None, undo_kind: str | None = None) -> bool:
+                   saved_operation: dict | None = None, undo_kind: str | None = None, person: dict | None = None) -> bool:
+    if name=='crm_correct_person':
+        from coworker.person_corrections import verify_director_correction
+        return isinstance(directive,Directive) and verify_director_correction(directive.text,args.get('changes'),person or {},args.get('confirmed_duplicate_ids'))
     supplied_quote = args.get("request_quote")
     if not isinstance(directive, Directive):
         if supplied_quote:
@@ -417,10 +426,10 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
     if name == "crm_undo_change":
         if undo_kind and undo_kind != "task":
             command = re.fullmatch(
-                r"undo\s+(?:(?:the|that)\s+)?(?:(description|status|attention|proposal|suggestion)"
+                r"undo\s+(?:(?:the|that)\s+)?(?:(description|status|attention|proposal|suggestion|details)"
                 r"\s+(?:(?:change|flag|resolution)\s+)?)?(chg_[0-9a-f]{32})[.!?]?", text)
             if (not command or command[2] != args["change_id"]
-                    or command[1] and {"suggestion": "proposal"}.get(command[1], command[1]) != undo_kind):
+                    or command[1] and {"suggestion": "proposal","details":"person_details"}.get(command[1], command[1]) != undo_kind):
                 raise CRMToolError("unverified_director_request", "Name the exact local change id and its matching entity before Undo. External effects cannot be undone.")
             return True
         task_command = re.match(r"^undo\s+(?:(?:the|that|last|latest)\s+)?task\b", text)
@@ -603,6 +612,10 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
             partial = result["truncated"] or len(visible) != len(result["tasks"])
             return True, {**result, "tasks": visible, "partial": partial,
                           "status": "partial" if partial else "complete"}
+        if name=='crm_review_person_correction':
+            from coworker.person_corrections import PersonCorrectionService
+            if not pid:raise CRMToolError('person_required','Select one saved person to review a correction')
+            return True,PersonCorrectionService(people).review(pid,args['changes'],args['expected_version'])
         saved_operation = _saved_task_operation(people, pid, args["operation_id"])
         undo_kind = None
         if name in {"crm_undo_change", "crm_resolve_proposal"}:
@@ -631,7 +644,7 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
             sort_keys=True, separators=(",", ":"))
         replay_authority = mutation_budget.check(request) if mutation_budget is not None else False
         human = _human_request(name, args, directive, timezone=timezone,
-            saved_operation=saved_operation, undo_kind=undo_kind)
+            saved_operation=saved_operation, undo_kind=undo_kind,person=people.get(pid))
         if not human:
             raise CRMToolError("unverified_director_request", "Chat CRM writes require an explicit current director command. Ask for wording such as 'Remind me to send examples', 'Mark that task done', or 'Change the description to: …'. Nothing was saved.")
         if not replay_authority and (name != "crm_undo_change" or undo_kind == "task"):
@@ -639,7 +652,10 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
         identity = dict(actor="assistant", human_requested=human, session_id=session_id,
                         run_id=run_id, allowed_source_ids=allowed_source_ids,
                         operation_id=args.get("operation_id"))
-        if name == "crm_create_task":
+        if name=='crm_correct_person':
+            from coworker.person_corrections import PersonCorrectionService
+            result=PersonCorrectionService(people).correct(pid,changes=args['changes'],expected_version=args['expected_version'],reason=args['reason'],source_refs=args.get('source_refs',()),collision_token=args.get('collision_token'),confirmed_duplicate_ids=args.get('confirmed_duplicate_ids'),**identity)
+        elif name == "crm_create_task":
             result = tasks.create(pid, title=args.get("title"), details=args.get("details"),
                 due_date=args.get("due_date"), source_refs=args.get("source_refs"),
                 timezone=timezone, reason=args["reason"], **identity)

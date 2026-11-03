@@ -49,8 +49,10 @@ from coworker.agent_run_reconcile import (
 )
 from coworker.agent_run_repository import AgentRunRepository
 from coworker.agent_run_resume import ResumeAction, classify_resume, restart
-from coworker.gmail import FakeGmail
+from coworker.gmail import FakeGmail, GmailError
 from coworker.inbox import Inbox
+from coworker.consequential_actions import ConsequentialActions
+from coworker.gmail import body_digest
 from coworker.people import PersonStore
 from coworker.permissions import ASK, AUTO, RETRY_SAFE
 from coworker.provider import FakeProvider, StreamChunk, ToolCall
@@ -123,6 +125,23 @@ def _turn(
     conv = store if store is not None else ConversationStore(tmp_path / "conv")
     person_store = people if people is not None else PersonStore(tmp_path / "people")
 
+    inbox = Inbox(conv)
+    execution = {"people":person_store}
+    if isinstance(provider,OneToolProvider) and provider.tool_name in {"gmail_send","apollo_enrich_contact"}:
+        bound = person_store.person_for_session(sid)
+        if bound is None:
+            person = person_store.keep_from_apollo(apollo_id="action-fixture",first_name="Ada",
+                last_name_obfuscated="Lovelace",title="Lead",company="Analytic")
+            bound = person["person_id"]
+            person_store.bind_session(sid,bound)
+        person_store.apply_enrichment(bound,email=ADA_EMAIL)
+        gmail = _gmail()
+        draft = gmail.create_draft(to=ADA_EMAIL,subject=SUBJECT,body=BODY)
+        if provider.tool_name == "gmail_send":
+            provider.arguments = {"draft_id":draft["id"],"reviewed_body_digest":body_digest(BODY),**provider.arguments}
+        execution["consequential_actions"] = ConsequentialActions(people=person_store,inbox=inbox,
+            gmail=lambda:gmail,http=lambda:None,apollo_key=lambda:"fixture",agent_runs=repository)
+
     async def _wait(_call_id: str) -> str:
         return wait or "allow"
 
@@ -134,9 +153,9 @@ def _turn(
             provider=provider,
             persona=None,
             skills=None,
-            inbox=Inbox(conv),
+            inbox=inbox,
             openai_tools=OPENAI_TOOLS,
-            execute_kwargs={"people": person_store},
+            execute_kwargs=execution,
             wait_permission=_wait if wait is not None else None,
             agent_runs=repository,
             run_owner=owner,
@@ -329,7 +348,7 @@ def test_a_send_that_fails_is_failed_and_not_ambiguous(tmp_path):
     class RefusingGmail(FakeGmail):
         def send(self, *, draft_id: str):
             self.send_attempts.append(draft_id)
-            raise RuntimeError("Gmail refused the submission.")
+            raise GmailError("Gmail refused the submission.")
 
     app = _app(tmp_path, _gmail(RefusingGmail))
     client = TestClient(app)

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PreparedText } from "./crm/SavedTaskDrafts";
+import { AfterSendReminder } from "./AfterSendReminder";
 
 import {
   createOutreachDraft,
@@ -104,6 +105,7 @@ export function OutreachPanel({
               </dd>
             </div>
           </dl>
+          <AfterSendReminder key={String(sent.message_id)} personId={personId} sent={sent} />
         </div>
       ) : null}
 

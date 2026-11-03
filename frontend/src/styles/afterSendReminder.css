@@ -1,0 +1,21 @@
+.after-send-reminder {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text);
+}
+.after-send-reminder fieldset {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.after-send-reminder .task-field { font-size: 13px; }
+.after-send-reminder input { min-width: 0; max-width: 100%; }
+.after-send-reminder .action-icon { margin-right: 4px; vertical-align: middle; }
+@media (max-width: 600px) {
+  .after-send-reminder input, .after-send-reminder button { min-height: 44px; }
+}

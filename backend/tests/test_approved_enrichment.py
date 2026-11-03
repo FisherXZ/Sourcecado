@@ -16,7 +16,7 @@ HEADERS = {TOKEN_HEADER: TOKEN}
 
 APOLLO_PERSON = {
     "person": {
-        "id": "apollo_person_77",
+        "id": "ada",
         "name": "Ada Lovelace",
         "title": "Head of Data",
         "organization": {"name": "Analytic Engines"},
@@ -93,9 +93,9 @@ def test_the_enrichment_approval_names_the_person_and_the_credit_cost(tmp_path):
     assert resource["person_id"] == person_id
     assert resource["person"] == "Ada Lovelace"
     assert resource["company"] == "Analytic"
-    assert resource["credits"] == 1
-    assert resource["matched_on"] == "name"
-    assert "1 Apollo credit" in resource["reason"]
+    assert resource["credits"] is None
+    assert resource["matched_on"] == "apollo_id"
+    assert "Credit cost is unknown" in resource["reason"]
     assert "Ada Lovelace" in resource["reason"]
     # Parking an approval spends nothing.
     assert _match_calls(http) == []
@@ -159,8 +159,8 @@ def test_an_approved_enrichment_updates_only_that_person_and_files_the_receipt(
     assert res.status_code == 200, res.text
     assert res.json()["ok"] is True
     assert len(_match_calls(http)) == 1
-    assert _match_calls(http)[0]["json"]["first_name"] == "Ada"
-    assert _match_calls(http)[0]["json"]["last_name"] == "Lovelace"
+    assert _match_calls(http)[0]["json"]["id"] == "ada"
+    assert _match_calls(http)[0]["json"]["last_name"] is None
 
     person = app.state.people.get(person_id, expand_sources=True)
     assert person["email"] == "ada@analytic.example"
@@ -172,10 +172,10 @@ def test_an_approved_enrichment_updates_only_that_person_and_files_the_receipt(
     sources = [row for row in person["sources"] if row["fields"]["source"] == "apollo"]
     assert len(sources) == 1
     fields = sources[0]["fields"]
-    assert fields["apollo_id"] == "apollo_person_77"
+    assert fields["apollo_id"] == "ada"
     assert fields["approval_id"] == item_id
-    assert fields["credits"] == 1
-    assert fields["matched_on"] == "name"
+    assert fields["credits"] is None
+    assert fields["matched_on"] == "apollo_id"
     assert fields["fields_applied"] == [
         "company",
         "email",
@@ -190,7 +190,7 @@ def test_an_approved_enrichment_updates_only_that_person_and_files_the_receipt(
     ]
     assert len(enrich_events) == 1
     assert enrich_events[0]["payload"]["approval_id"] == item_id
-    assert enrich_events[0]["payload"]["credits"] == 1
+    assert enrich_events[0]["payload"]["credits"] is None
     assert enrich_events[0]["run_id"] == "run-enrich-1"
     assert enrich_events[0]["session_id"] == session_id
 
@@ -203,7 +203,7 @@ def test_verified_enrichment_promotes_the_full_name_across_person_surfaces(tmp_p
     client = TestClient(app)
     person_id, session_id = _person(
         app,
-        apollo_id="apollo_person_77",
+        apollo_id="ada",
         first="Ada",
         last="L***e",
     )
@@ -323,7 +323,7 @@ def test_a_masked_surname_parks_no_approval_and_spends_nothing(tmp_path):
 
 def test_a_kept_candidate_enriches_through_its_stored_apollo_id(tmp_path):
     """Keep stores the Apollo ID. A masked surname must not strand it."""
-    http = FakeHttp({MATCH_URL: APOLLO_PERSON})
+    http = FakeHttp({MATCH_URL:{"person":{**APOLLO_PERSON["person"],"id":"679c7e37","name":"Fisher Zhang","email":"fisher@thehog.example"}}})
     app = _app(tmp_path, http)
     client = TestClient(app)
     person_id, session_id = _person(
@@ -335,7 +335,7 @@ def test_a_kept_candidate_enriches_through_its_stored_apollo_id(tmp_path):
     assert parked.status_code == 201, parked.text
     resource = parked.json()["item"]["resource"]
     assert resource["matched_on"] == "apollo_id"
-    assert "1 Apollo credit" in resource["reason"]
+    assert "Credit cost is unknown" in resource["reason"]
     # Parking still spends nothing.
     assert _match_calls(http) == []
 
@@ -348,7 +348,7 @@ def test_a_kept_candidate_enriches_through_its_stored_apollo_id(tmp_path):
     body = calls[0]["json"]
     assert body.get("id") == "679c7e37"
     assert body.get("last_name") is None
-    assert app.state.people.get(person_id)["email"] == "ada@analytic.example"
+    assert app.state.people.get(person_id)["email"] == "fisher@thehog.example"
 
 
 def test_a_real_surname_still_matches_on_name(tmp_path):
@@ -357,7 +357,7 @@ def test_a_real_surname_still_matches_on_name(tmp_path):
     app = _app(tmp_path, http)
     client = TestClient(app)
     person_id, session_id = _person(
-        app, apollo_id="ada", first="Ada", last="Lovelace"
+        app, apollo_id=None, first="Ada", last="Lovelace"
     )
 
     parked = _park(client, person_id, session_id)

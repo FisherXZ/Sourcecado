@@ -7,7 +7,7 @@ import pytest
 
 from coworker import migrations
 from coworker.crm_tasks import CRM_CHANGES_V5_COLUMNS, TaskService
-from coworker.people import PersonStore
+from coworker.people import PersonStore, SCHEMA_VERSION
 from test_crm_analysis import DescriptionModel, tracked_person, worker
 
 
@@ -44,7 +44,7 @@ def test_real_v5_requires_registered_migration_before_model_spend_and_preserves_
     assert outcome.error is None
     assert outcome.backup_id
     reopened = PersonStore(tmp_path)
-    assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert reopened._conn.execute("PRAGMA foreign_key_check").fetchall() == []
     columns = {row["name"]: row for row in reopened._conn.execute("PRAGMA table_info(crm_proposals)")}
     assert columns["resolution_receipt_json"]["notnull"] == 0
@@ -111,7 +111,7 @@ def test_fresh_description_write_survives_doctor_plan_apply_and_restart(tmp_path
     report = doctor.diagnose(tmp_path)
     assert not any(f.store_id == "people_db" and "migration" in f.check for f in report.findings)
     reopened = PersonStore(tmp_path)
-    assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert reopened.descriptions(pid)["general"]["text"] == "A saved human overview."
     replay = reopened.patch_description(pid, "general", **kwargs)
     assert replay["replayed"] and replay["change"]["change_id"] == saved["change"]["change_id"]
@@ -123,7 +123,7 @@ def test_only_fresh_unversioned_empty_database_is_stamped_current(tmp_path, prec
     if precreate_empty:
         sqlite3.connect(tmp_path / "people.db").close()
     people = PersonStore(tmp_path)
-    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 @pytest.mark.parametrize("version", [0, 5, 99])

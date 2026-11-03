@@ -8,6 +8,7 @@ from typing import Any
 
 from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES
 from coworker.crm_tools import CRM_READ_TOOLS, CRM_TOOL_NAMES
+from coworker.consequential_policy import supported_mcp_read
 
 AUTO = frozenset(
     {
@@ -150,6 +151,8 @@ def decide(
         last = name.rsplit("__", 1)[-1]
         if _MCP_WRITE.search(last):
             return Decision(False, False, "granola writes are out of v1")
+        if not supported_mcp_read(name):
+            return Decision(False, False, "external actions require a Sourcecado-owned reviewed approval")
         return Decision(True, False, "auto")
     if name in AUTO:
         return Decision(True, False, "auto")

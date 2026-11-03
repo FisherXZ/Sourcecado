@@ -26,7 +26,7 @@ from coworker.gmail import (
     GmailError,
     GmailOutcomeUnknown,
 )
-from coworker.gmail import FakeGmail
+from coworker.gmail import FakeGmail, body_digest
 from coworker.secrets import SecretStore
 from coworker.server import TOKEN_HEADER, create_app
 
@@ -265,7 +265,18 @@ def test_the_operator_is_told_the_outcome_is_unknown_not_that_it_failed(tmp_path
 # ==========================================================================
 
 
-def test_the_gmail_send_tool_does_not_turn_an_unknown_into_ok_false():
+def _claimed_send(tmp_path, gmail):
+    from test_approved_send import _bound_person
+    app = create_app(token=TOKEN,provider=None,state=tmp_path,gmail=gmail)
+    pid,sid = _bound_person(app)
+    draft = gmail.create_draft(to=ADA_EMAIL,subject=SUBJECT,body=BODY)
+    item = app.state.consequential_actions.prepare_send(pid,session_id=sid,
+        draft_id=draft['id'],reviewed_body_digest=body_digest(BODY))
+    app.state.inbox.decide_and_claim(item['id'],'allow',actor='director',scope='once',claimant='fixture-claim')
+    return app,dict(consequential_actions=app.state.consequential_actions,approval_id=item['id'],approval_claimant='fixture-claim')
+
+
+def test_the_gmail_send_tool_does_not_turn_an_unknown_into_ok_false(tmp_path):
     """`execute` is the other side of the fence and swallowed this too.
 
     A tool result of `ok=False` is a statement that nothing happened. The tool
@@ -276,12 +287,13 @@ def test_the_gmail_send_tool_does_not_turn_an_unknown_into_ok_false():
 
     gmail = TimingOutGmail()
     gmail.account_email = ACCOUNT
+    _app, authority = _claimed_send(tmp_path,gmail)
     with pytest.raises(GmailOutcomeUnknown):
-        execute("gmail_send", {"draft_id": "draft_1"}, gmail=gmail)
+        execute("gmail_send", {"draft_id":"draft_1"}, **authority)
     assert gmail.send_attempts == ["draft_1"]
 
 
-def test_a_send_gmail_rejected_is_still_an_ordinary_tool_failure():
+def test_a_send_gmail_rejected_is_still_an_ordinary_tool_failure(tmp_path):
     """The inverse guard. A rejection is a fact and stays a plain failure."""
     from coworker.tools import execute
 
@@ -289,9 +301,12 @@ def test_a_send_gmail_rejected_is_still_an_ordinary_tool_failure():
         def send(self, *, draft_id: str):
             raise GmailError("Request had insufficient scopes.")
 
-    ok, result = execute("gmail_send", {"draft_id": "draft_1"}, gmail=RejectingGmail())
+    gmail = RejectingGmail()
+    gmail.account_email=ACCOUNT
+    _app, authority = _claimed_send(tmp_path,gmail)
+    ok, result = execute("gmail_send", {"draft_id":"draft_1"}, **authority)
     assert ok is False
-    assert "insufficient scopes" in result["error"]
+    assert result["code"] == "gmail_failed"
 
 
 def test_a_turn_whose_send_outcome_is_unknown_does_not_tell_the_operator_it_failed(
@@ -326,7 +341,7 @@ def test_a_turn_whose_send_outcome_is_unknown_does_not_tell_the_operator_it_fail
                     ToolCall(
                         id="call_send",
                         name="gmail_send",
-                        arguments={"draft_id": "draft_1"},
+                        arguments={"draft_id":"draft_1","reviewed_body_digest":body_digest(BODY)},
                     )
                 ]
             )
@@ -336,6 +351,14 @@ def test_a_turn_whose_send_outcome_is_unknown_does_not_tell_the_operator_it_fail
     repository = AgentRunRepository(tmp_path / "runs")
     owner = repository.registry.register()
     conversations = ConversationStore(tmp_path / "conv")
+    people = PersonStore(tmp_path / "people")
+    person = people.keep_from_apollo(apollo_id='ada',first_name='Ada',last_name_obfuscated='Lovelace',title=None,company=None)
+    people.apply_enrichment(person['person_id'],email=ADA_EMAIL)
+    people.bind_session('sess-unknown-outcome',person['person_id'])
+    gmail.create_draft(to=ADA_EMAIL,subject=SUBJECT,body=BODY)
+    inbox = Inbox(conversations)
+    from coworker.consequential_actions import ConsequentialActions
+    actions = ConsequentialActions(people=people,inbox=inbox,gmail=lambda:gmail,http=lambda:None,apollo_key=lambda:None,agent_runs=repository)
     seen: list[dict] = []
 
     async def _emit(event):
@@ -352,10 +375,11 @@ def test_a_turn_whose_send_outcome_is_unknown_does_not_tell_the_operator_it_fail
             provider=AsksToSend(),
             persona=None,
             skills=None,
-            inbox=Inbox(conversations),
+            inbox=inbox,
             openai_tools=OPENAI_TOOLS,
             execute_kwargs={
-                "people": PersonStore(tmp_path / "people"),
+                "people": people,
+                "consequential_actions":actions,
                 "gmail": gmail,
             },
             emit=_emit,

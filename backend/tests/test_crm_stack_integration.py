@@ -4,7 +4,7 @@ import json
 import sqlite3
 import pytest
 from coworker import migrations
-from coworker.people import PersonStore
+from coworker.people import PersonStore, SCHEMA_VERSION
 from coworker.crm_tasks import TaskService
 
 
@@ -61,7 +61,7 @@ def test_all_crm_branch_stores_upgrade_to_one_schema_without_losing_work(
     outcome = migrations.apply_migrations(tmp_path)
     assert outcome.error is None, outcome
     p = PersonStore(tmp_path)
-    assert p._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert p._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     p.require_crm_schema()
     assert TaskService(p).get(pid, task["task_id"])["title"] == "Preserve human promise"
     assert (

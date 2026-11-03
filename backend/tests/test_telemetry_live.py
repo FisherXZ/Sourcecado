@@ -527,7 +527,7 @@ def test_inconsistent_context_metadata_cannot_change_the_turn_outcome(tmp_path):
 
 def test_invalid_auto_allowed_tool_name_cannot_change_the_turn_outcome(tmp_path):
     name = "mcp__granola__list meetings"
-    assert decide(name).allowed is True
+    assert decide(name).allowed is False
 
     def make_provider():
         return StepProvider(

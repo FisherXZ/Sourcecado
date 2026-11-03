@@ -10,11 +10,13 @@ import queue
 import time
 import uuid
 from dataclasses import asdict
+from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 from coworker.events import TurnIdentity
+from coworker.consequential_actions import ConsequentialActions
 from coworker.evals.environment import (
     EvalEnvironment,
     sensitive_environment_keys,
@@ -363,6 +365,8 @@ def _seed_people(
             target=seed.target,
         )
         person_id = str(person["person_id"])
+        if seed.email:
+            environment.people.apply_enrichment(person_id,email=seed.email)
         for attachment in seed.attachments:
             environment.people.upsert_attachment(
                 person_id,
@@ -615,6 +619,8 @@ class EvalRunner:
                     execute_kwargs={
                         "store": environment.store,
                         "gmail": environment.connectors.gmail,
+                        "consequential_actions": ConsequentialActions(people=environment.people,inbox=environment.inbox,
+                            gmail=lambda:environment.connectors.gmail,http=lambda:environment.connectors.http,apollo_key=lambda:environment.apollo_key),
                         "drive": environment.connectors.drive,
                         "calendar": environment.connectors.calendar,
                         "http": environment.connectors.http,
@@ -967,10 +973,19 @@ class EvalRunner:
                     ),
                 )
             )
+            def attachment_fields(item):
+                fields = dict(item["fields"])
+                if fields.get("source") == "apollo" and "fetched_at" in fields:
+                    try:
+                        if datetime.fromisoformat(fields["fetched_at"]).tzinfo is not None:
+                            fields["fetched_at"] = "$TIMESTAMP"
+                    except (TypeError,ValueError):
+                        pass  # Invalid timestamps still fail the exact receipt comparison.
+                return fields
             actual_attachments = sorted(
                 (
                     str(item["type"]),
-                    json.dumps(item["fields"], sort_keys=True),
+                    json.dumps(attachment_fields(item), sort_keys=True),
                 )
                 for item in (person or {}).get("attachments", ())
             )

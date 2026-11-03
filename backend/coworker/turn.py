@@ -40,6 +40,8 @@ from coworker.evidence_envelope import (
 from coworker.inbox import Inbox
 from coworker.ledger import record_tool_on_person
 from coworker.permissions import RETRY_SAFE, decide
+from coworker.consequential_policy import ACTION_TOOLS
+from coworker.consequential_actions import ActionRefused
 from coworker.person_identity import sanitize_apollo_name_masks
 from coworker.provider import (
     ModelUsage,
@@ -942,7 +944,8 @@ async def run_turn(
             result=result,
             ok=ok,
         )
-        _record_person_file(sid, call, ok, result, execute_kwargs)
+        if call.name not in ACTION_TOOLS:
+            _record_person_file(sid, call, ok, result, execute_kwargs)
 
     def _end_run(state: str, text_so_far: str) -> None:
         """Close the durable run in the same shape the operator was told.
@@ -1594,12 +1597,24 @@ async def run_turn(
                     _record_call_outcome(call, False, result)
                     continue
                 if gate.needs_user:
-                    resource = approval_resource(
-                        call.name,
-                        call.arguments,
-                        execute_kwargs.get("gmail"),
-                        execute_kwargs.get("workspace_runtime"),
-                    )
+                    try:
+                        actions = execute_kwargs.get("consequential_actions")
+                        if call.name in ACTION_TOOLS:
+                            if actions is None:
+                                raise ActionRefused("approval_binding_required", "Open this person's reviewed action flow before sending or enriching.")
+                            resource = actions.tool_resource(call.name, call.arguments, session_id=sid)
+                        else:
+                            resource = approval_resource(call.name, call.arguments,
+                                execute_kwargs.get("gmail"), execute_kwargs.get("workspace_runtime"))
+                    except ActionRefused as exc:
+                        result = {"error":str(exc),"code":exc.code}
+                        had_tool_failure = True
+                        await _emit(_tool_finished_event(call, ok=False, result=result, identity=events.identity))
+                        refused = _stamp(_tool_result_message(call,result))
+                        history.append(refused)
+                        _persist_message(refused)
+                        _record_call_outcome(call,False,result)
+                        continue
                     # What the operator is about to approve may have been
                     # copied out of something a stranger wrote. Say so on the
                     # request, by reference and never by body, and refuse to
@@ -1803,6 +1818,8 @@ async def run_turn(
                     kw["approval_granted"] = approval_claimant is not None
                     kw["approval_scope"] = approval_scope
                     kw["approval_fingerprint"] = approval_fingerprint
+                    kw["approval_id"] = call.id if approval_claimant is not None else None
+                    kw["approval_claimant"] = approval_claimant
                     if approval_claimant is not None:
                         kw["actor"] = str(claim.item.get("actor") or "operator")
 

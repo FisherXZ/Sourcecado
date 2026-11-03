@@ -30,9 +30,11 @@ _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # crm_changes and crm_operations tables (ticket #200); v5 adds task lifecycle
 # actions (ticket #201); v6 adds durable analysis, proposals and description
 # history (#209); v7 adds canonical task evidence and analysis stage tracking
-# (#210). The constructor creates fresh tables. Existing databases use
+# (#210); v9 adds approval identity revisions and v10 protected person corrections
+# (#243). The constructor creates fresh tables. Existing databases use
 # the registered migrations with backup and rollback before the new writer runs.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
+APPROVAL_IDENTITY_FIELDS = ("first_name", "last_name", "company", "email", "apollo_id")
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -132,6 +134,7 @@ class PersonStore:
                 handoff_happened TEXT,
                 handoff_they_want TEXT,
                 version INTEGER NOT NULL DEFAULT 1,
+                identity_revision INTEGER NOT NULL DEFAULT 0 CHECK(identity_revision >= 0),
                 outcome TEXT,
                 deleted_at TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -206,6 +209,8 @@ class PersonStore:
         if fresh_database:
             add_task_analysis_schema(self._conn)
             additions(self._conn)
+            from coworker.person_corrections import add_schema
+            add_schema(self._conn)
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()
 
@@ -306,8 +311,33 @@ class PersonStore:
             else "missing"
         )
         person["version"] = int(person.get("version") or 1)
+        person["identity_revision"] = int(person.get("identity_revision") or 0)
         person["restricted"] = False
+        from coworker.person_corrections import projection
+        person['identity_field_controls'],person['identity_conflicts']=projection(self,person['person_id'])
         return person
+
+    def _bump_identity_revision(self, person_id: str, before: Any) -> int:
+        """After a caller-owned identity UPDATE, bump once from its fresh prior row.
+
+        Call under the people lock, before committing and snapshotting. The
+        current revision prevents a repeated call for the same update bumping
+        twice. Corrections/Undo and provider merges share this narrow helper.
+        Historical stores remain on their registered migration path.
+        """
+        old = dict(before)
+        current = dict(self._load_person_row(person_id))
+        if "identity_revision" not in current:
+            return 0
+        def facts(row: dict) -> tuple:
+            return tuple((_clean(str(row.get(field) or "")) or "").casefold()
+                         if field == "email" else _clean(str(row.get(field) or ""))
+                         for field in APPROVAL_IDENTITY_FIELDS)
+        revision = int(current["identity_revision"])
+        if facts(old) != facts(current) and revision == int(old.get("identity_revision") or 0):
+            self._conn.execute("UPDATE people SET identity_revision=identity_revision+1 WHERE person_id=?", (person_id,))
+            revision += 1
+        return revision
 
     def _attachment_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
@@ -571,6 +601,8 @@ class PersonStore:
                     (apollo,),
                 ).fetchone()
             if existing is not None:
+                incoming,_conflicts=self._filter_provider_fields(existing['person_id'],{'first_name':first_name,'last_name':incoming_last_name,'title':title,'company':company})
+                first_name,incoming_last_name,title,company=(incoming.get(field) for field in ('first_name','last_name','title','company'))
                 restoring = bool(existing["deleted_at"])
                 now = self._now()
                 stored_last_name = _clean(existing["last_name"])
@@ -621,6 +653,9 @@ class PersonStore:
                         existing["person_id"],
                     ),
                 )
+                from coworker.person_corrections import note_field_changes
+                note_field_changes(self,existing["person_id"],existing)
+                self._bump_identity_revision(existing["person_id"], existing)
                 if restoring:
                     self._receipt(
                         existing["person_id"],
@@ -678,7 +713,15 @@ class PersonStore:
             ).fetchone()
         return self._person_dict(row)
 
-    def apply_enrichment(
+    def _filter_provider_fields(self,person_id,incoming,*,provider='apollo',source_ref_id=None):
+        from coworker.person_corrections import filter_provider_fields
+        return filter_provider_fields(self,person_id,incoming,provider=provider,source_ref_id=source_ref_id)
+
+    def apply_enrichment(self,person_id,*,name=None,title=None,company=None,email=None,linkedin_url=None,phone=None):
+        with self.crm_transaction():
+            return self._apply_enrichment_uncommitted(person_id,name=name,title=title,company=company,email=email,linkedin_url=linkedin_url,phone=phone)
+
+    def _apply_enrichment_uncommitted(
         self,
         person_id: str,
         *,
@@ -689,6 +732,8 @@ class PersonStore:
         linkedin_url: str | None = None,
         phone: str | None = None,
     ) -> dict[str, Any] | None:
+        if not self._conn.in_transaction:
+            raise RuntimeError("Enrichment filing requires a caller-owned transaction")
         first_name = None
         last_name = None
         if name:
@@ -699,11 +744,13 @@ class PersonStore:
                 last_name = None
         with self._lock:
             exists = self._conn.execute(
-                "SELECT 1 FROM people WHERE person_id = ?",
+                "SELECT * FROM people WHERE person_id = ?",
                 (person_id,),
             ).fetchone()
             if exists is None:
                 return None
+            incoming,conflicts=self._filter_provider_fields(person_id,{'first_name':first_name,'last_name':last_name,'title':title,'company':company,'email':email,'linkedin_url':linkedin_url,'phone':phone})
+            first_name,last_name,title,company,email,linkedin_url,phone=(incoming.get(field) for field in ('first_name','last_name','title','company','email','linkedin_url','phone'))
             self._conn.execute(
                 """
                 UPDATE people SET
@@ -728,16 +775,24 @@ class PersonStore:
                     person_id,
                 ),
             )
-            self._conn.commit()
+            from coworker.person_corrections import note_field_changes
+            note_field_changes(self,person_id,exists)
+            self._bump_identity_revision(person_id, exists)
         return self.get(person_id)
 
-    def record_apollo_enrichment(
+
+    def record_apollo_enrichment(self,person_id,*,result,approval_id,credits: int | float | None,matched_on,actor="director",session_id=None,run_id=None):
+        """Commit applied facts, protection conflicts, source and receipt together."""
+        with self.crm_transaction():
+            return self._record_apollo_enrichment_uncommitted(person_id,result=result,approval_id=approval_id,credits=credits,matched_on=matched_on,actor=actor,session_id=session_id,run_id=run_id)
+
+    def _record_apollo_enrichment_uncommitted(
         self,
         person_id: str,
         *,
         result: dict[str, Any],
         approval_id: str,
-        credits: int,
+        credits: int | float | None,
         matched_on: str,
         actor: str = "director",
         session_id: str | None = None,
@@ -749,7 +804,15 @@ class PersonStore:
         the facts came from and what the spend bought, so a later reader can
         tell an enriched field from a typed one.
         """
-        person = self.apply_enrichment(
+        digest=_fingerprint({key:result.get(key) for key in ("apolloId","name","title","organizationName","email","linkedinUrl","phone")})
+        filed=self.get_apollo_enrichment_receipt(person_id,approval_id)
+        if filed is not None:
+            # A retried completion replays its receipt; it never reapplies facts over later corrections.
+            if filed["result_digest"] not in (None,digest):
+                raise TaskConflict("approval id already filed different provider facts",code="operation_conflict")
+            return {**filed,"person":self.get(person_id),"replayed":True}
+        before=self.get(person_id)
+        person = self._apply_enrichment_uncommitted(
             person_id,
             name=result.get("name"),
             title=result.get("title"),
@@ -760,18 +823,26 @@ class PersonStore:
         )
         if person is None:
             return None
-        applied = sorted(
-            field
-            for field, value in (
-                ("name", result.get("name")),
-                ("title", result.get("title")),
-                ("company", result.get("organizationName")),
-                ("email", result.get("email")),
-                ("linkedin_url", result.get("linkedinUrl")),
-                ("phone", result.get("phone")),
-            )
-            if value
-        )
+        supplied={field:value for field,value in (("name",result.get("name")),("title",result.get("title")),("company",result.get("organizationName")),("email",result.get("email")),("linkedin_url",result.get("linkedinUrl")),("phone",result.get("phone"))) if value}
+        found=sorted(supplied)
+        controls=(before or {}).get('identity_field_controls',{})
+        applied=[]
+        for field,value in supplied.items():
+            if field=='name':
+                parts=str(value).split(None,1)
+                first=parts[0];last=parts[1] if len(parts)>1 else None
+                if not any(controls.get(f,{}).get('protected') for f in ('first_name','last_name')) and person.get('first_name')==first and person.get('last_name')==last:applied.append('name')
+                else:
+                    for key,incoming in (('first_name',first),('last_name',last)):
+                        if incoming and not controls.get(key,{}).get('protected') and person.get(key)==incoming:applied.append(key)
+            elif not controls.get(field,{}).get('protected') and person.get(field)==value:applied.append(field)
+        applied=sorted(applied)
+        conflicts=[]
+        for item in person.get('identity_conflicts',[]):
+            field=item['field'];supplied_value=supplied.get(field)
+            if field in ('first_name','last_name') and supplied.get('name'):
+                parts=str(supplied['name']).split(None,1);supplied_value=parts[0] if field=='first_name' else parts[1] if len(parts)>1 else None
+            if supplied_value==item['provider_value']:conflicts.append(item)
         source = self.upsert_attachment(
             person_id,
             record_type="source_ref",
@@ -780,8 +851,10 @@ class PersonStore:
                 "apollo_id": str(result.get("apolloId") or "") or None,
                 "matched_on": matched_on,
                 "approval_id": approval_id,
-                "credits": int(credits),
+                "credits": credits,
                 "fields_applied": applied,
+                "fields_found": found,
+                "fields_conflicting": sorted({item["field"] for item in conflicts}),
                 "fetched_at": self._now(),
             },
             idempotency_key=f"apollo:enrich:{approval_id}",
@@ -791,28 +864,53 @@ class PersonStore:
             run_id=run_id,
         )
         with self._lock:
+            for item in conflicts:
+                self._conn.execute('UPDATE person_correction_conflicts SET source_ref_id=? WHERE conflict_id=?',(source['id'],item['conflict_id']))
+                item['source_ref_id']=source['id']
             self._receipt(
                 person_id,
                 kind="enrich",
-                summary=f"Enriched from Apollo ({credits} credit)",
+                summary=f"Enriched from Apollo ({credits} credit{'' if credits == 1 else 's'})" if credits is not None else "Enriched from Apollo (actual credit cost not reported)",
                 payload={
                     "approval_id": approval_id,
                     "apollo_id": str(result.get("apolloId") or "") or None,
-                    "credits": int(credits),
+                    "credits": credits,
                     "matched_on": matched_on,
                     "fields_applied": applied,
                     "source_ref_id": source["id"],
+                    "result_digest": digest,
                 },
                 actor=actor,
                 session_id=session_id,
                 run_id=run_id,
                 tool="apollo_enrich_contact",
             )
-            self._conn.commit()
         return {
             "person": self.get(person_id),
             "source_ref": source,
             "fields_applied": applied,
+            "fields_found": found,
+            "conflicts": conflicts,
+        }
+
+    def get_apollo_enrichment_receipt(self,person_id,approval_id):
+        """The filed receipt for one approved lookup, or None before it is filed."""
+        with self._lock:
+            rows=self._conn.execute("SELECT payload FROM events WHERE person_id=? AND kind='enrich' AND tool='apollo_enrich_contact'",(person_id,)).fetchall()
+        payload=next((data for data in (json.loads(row[0] or "{}") for row in rows) if data.get("approval_id")==approval_id),None)
+        if payload is None:
+            return None
+        with self._lock:
+            source=next((item for item in self._attachments_for(person_id) if item["id"]==payload.get("source_ref_id")),None)
+        if source is None:
+            return None
+        person=self.get(person_id) or {}
+        return {
+            "source_ref": source,
+            "fields_applied": payload.get("fields_applied",[]),
+            "fields_found": source["fields"].get("fields_found",[]),
+            "conflicts": [item for item in person.get("identity_conflicts",[]) if item.get("source_ref_id")==source["id"]],
+            "result_digest": payload.get("result_digest"),
         }
 
     def record_approved_send(
@@ -1900,6 +1998,13 @@ class PersonStore:
     ) -> dict[str, Any]:
         if not isinstance(fields, dict) or not fields:
             raise ValueError("fields must be an object")
+        from coworker.person_corrections import FIELDS,PersonCorrectionService
+        identity_fields=set(fields)&set(FIELDS)
+        if identity_fields:
+            if set(fields)-set(FIELDS):raise ValueError('Correct person details separately from other person edits')
+            if expected_version!=self._load_person_row(person_id)['version']:raise ValueError('stale record version')
+            if actor!='director':raise ValueError('Use the verified person correction operation for identity changes')
+            return PersonCorrectionService(self).correct(person_id,changes=fields,expected_version=expected_version,operation_id='person-patch:'+uuid.uuid4().hex,reason=rationale_summary,actor=actor,session_id=session_id,run_id=run_id)['person']
         unknown = set(fields) - PERSON_PATCH_FIELDS
         if unknown:
             raise ValueError(f"unsupported person fields {sorted(unknown)}")
@@ -1937,6 +2042,7 @@ class PersonStore:
             if cursor.rowcount != 1:
                 self._conn.rollback()
                 raise ValueError("stale record version")
+            self._bump_identity_revision(person_id, row)
             self._receipt(
                 person_id,
                 kind="patch",
@@ -2200,7 +2306,7 @@ class PersonStore:
                 }
             return record
 
-        with self._lock:
+        with self.crm_transaction():
             row = self._load_person_row(person_id)
             existing = self._conn.execute(
                 """
@@ -2253,11 +2359,11 @@ class PersonStore:
                 run_id=run_id,
             )
             self._snapshot(person_id, next_version, now)
-            self._conn.commit()
             stored = self._conn.execute(
                 "SELECT * FROM person_attachments WHERE id = ?", (record_id,)
             ).fetchone()
         return _public(self._attachment_dict(stored))
+
 
     def capture_outcome(
         self,
@@ -2339,6 +2445,8 @@ class PersonStore:
             if apollo_surname_is_masked(target_last_name):
                 target_hidden_last_name = target_last_name
                 target_last_name = None
+            if actor!='director' and any(row[field] != (target_last_name if field=='last_name' else target.get(field)) for field in ('first_name','last_name','title','company')):
+                raise ValueError('Use the verified field-scoped person correction Undo for identity changes')
             attachments = json.loads(str(snapshot["attachments_json"]))
             # Snapshots carry description rows under person_json["descriptions"]
             # (text + per-slot authority + sources). Restore them below so a
@@ -2386,6 +2494,9 @@ class PersonStore:
             if cursor.rowcount != 1:
                 self._conn.rollback()
                 raise ValueError("stale record version")
+            from coworker.person_corrections import note_field_changes
+            note_field_changes(self,person_id,row,human=actor=="director",reason=rationale_summary)
+            self._bump_identity_revision(person_id, row)
             # Tasks and their history are independently versioned. Preserve the
             # current source rows they depend on, including current restrictions,
             # rather than replacing their evidence from a person snapshot.

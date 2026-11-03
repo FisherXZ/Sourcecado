@@ -221,9 +221,11 @@ def test_a_mail_demanding_a_send_still_stops_at_the_human_gate(tmp_path):
     assert MAIL_DEMAND in json.dumps(provider.calls[1])
 
     kinds = [event["type"] for event in events]
-    assert "permission_required" in kinds
-    requested = next(e for e in events if e["type"] == "permission_required")
-    assert requested["name"] == "gmail_send"
+    # No person-bound reviewed authority exists. Refusing before parking is
+    # stronger than accepting a source's claim that review already happened.
+    refused = next(e for e in events if e["type"] == "tool_finished" and e["name"] == "gmail_send")
+    assert not refused["ok"]
+    assert refused["result"]["code"] == "approval_binding_required"
     assert gmail.sends == []
 
 

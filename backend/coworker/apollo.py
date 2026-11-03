@@ -7,6 +7,7 @@ return a verified email. Missing key fails clearly.
 from __future__ import annotations
 
 from typing import Any
+import math
 
 from coworker.evidence_envelope import (
     EvidenceParts,
@@ -24,9 +25,7 @@ MATCH_URL = "https://api.apollo.io/api/v1/people/match"
 
 MISSING_KEY = "APOLLO_API_KEY is not configured."
 
-# One people/match call spends one Apollo credit. The approval card states the
-# cost before the director allows it; nothing here decides to spend on its own.
-ENRICH_CREDIT_COST = 1
+# Enrichment cost varies with returned data. Missing per-request pricing is unknown.
 
 # How the approval card says a match key was chosen.
 MATCH_LABELS = {"email": "email", "apollo_id": "Apollo ID", "name": "name"}
@@ -329,8 +328,13 @@ def enrich_contact(
     person = (data or {}).get("person") or {}
     phones = person.get("phone_numbers") or []
     phone = phones[0].get("raw_number") if phones else None
+    # Only explicit endpoint usage metadata is actual cost. An identity field,
+    # success status or advertised estimate cannot establish a charge.
+    reported = data.get("credits_used") if isinstance(data, dict) else None
+    actual = reported if isinstance(reported, (int,float)) and not isinstance(reported,bool) and math.isfinite(reported) and reported >= 0 else None
     return {
         "apolloId": person.get("id") or None,
+        "credits_actual": actual,
         "name": person.get("name") or None,
         "title": person.get("title") or None,
         "organizationName": (person.get("organization") or {}).get("name") or None,
@@ -396,11 +400,12 @@ def enrichment_resource(
         "title": person.get("title") or None,
         "company": person.get("company") or None,
         "matched_on": matched_on,
-        "credits": ENRICH_CREDIT_COST,
+        "credits": None,
+        "credits_estimated": None,
         "reason": (
-            f"Spends {ENRICH_CREDIT_COST} Apollo credit to look up "
+            f"Looks up "
             f"{approval_display} by {MATCH_LABELS[matched_on]} and write the result "
-            "to this person file only."
+            "to this person file only. Credit cost is unknown."
         ),
     }
 def apollo_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:

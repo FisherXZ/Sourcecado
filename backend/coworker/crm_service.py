@@ -469,6 +469,9 @@ class CrmService:
             kind = row["entity_type"]
             before = json.loads(row["before_json"]) if row["before_json"] else None
             after = json.loads(row["after_json"])
+            if kind == 'person_details':
+                from coworker.person_corrections import PersonCorrectionService
+                return PersonCorrectionService(self.people).can_undo(row)
             if kind == "task":
                 return self.tasks._can_undo(row)
             if kind == "proposal" and row["action"] == "accept":
@@ -840,6 +843,9 @@ class CrmService:
                 json.loads(original["source_refs"]),
                 allowed_source_ids,
             )
+            if original['entity_type']=='person_details':
+                from coworker.person_corrections import PersonCorrectionService
+                return PersonCorrectionService(self.people).undo(pid,change_id,operation_id=operation_id,actor=actor,human_requested=human_requested,reason=reason,allowed_source_ids=allowed_source_ids,**audit)
             if original["entity_type"] == "task":
                 return self.tasks.undo(
                     pid,

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { DescriptionEditor } from "./DescriptionEditor";
+import {PersonDetailsEditor} from "./crm/PersonDetailsEditor";
 import { FollowUpPanel } from "./FollowUpPanel";
+import { EnrichmentPanel } from "./EnrichmentPanel";
 import { OutreachPanel } from "./OutreachPanel";
 import { TaskList } from "./Tasks";
 import { MailActivity } from "./crm/MailActivity";
@@ -396,6 +398,8 @@ export function PersonFileView({
         </div>
       </header>
 
+      <EnrichmentPanel personId={personId} />
+
       <nav className="person-section-nav" aria-label="Person file sections">
         {[["person-mail-heading", "Gmail activity"], ["person-tasks", "Tasks"],
           ["person-description-heading", "Description"], ["person-handoff-heading", "Handoff"]].map(([id, label]) =>
@@ -414,6 +418,7 @@ export function PersonFileView({
         </p>
       ) : null}
 
+      <PersonDetailsEditor key={personId} person={file.person} history={file.crm_changes} onSaved={person=>setFile(current=>current?.person.person_id===person.person_id?{...current,person}:current)}/>
       <section className="person-sequence" aria-labelledby="person-sequence-heading">
         <h2 id="person-sequence-heading">Sequence state</h2>
         <div className="person-sequence-actions">

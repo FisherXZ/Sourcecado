@@ -19,7 +19,7 @@ import html
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
-from typing import Any, Protocol
+from typing import Any, Protocol, Callable
 
 from coworker.apollo import HttpError, LiveHttp
 from coworker.evidence_envelope import (
@@ -379,6 +379,10 @@ class FakeGmail:
         return {
             "id": item["id"],
             "to": item["to"],
+            "cc": item.get("cc"),
+            "bcc": item.get("bcc"),
+            "from": item.get("from"),
+            "unreviewed_parts": bool(item.get("unreviewed_parts")),
             "subject": item["subject"],
             "body": item["body"],
             "thread_id": item.get("thread_id"),
@@ -839,6 +843,10 @@ class GmailApi:
         return {
             "id": draft_id,
             "to": headers.get("to", ""),
+            "cc": headers.get("cc"),
+            "bcc": headers.get("bcc"),
+            "from": headers.get("from"),
+            "unreviewed_parts": _has_unreviewed_parts(payload),
             "subject": headers.get("subject", ""),
             "body": _flatten_body(payload),
             "thread_id": str(message.get("threadId") or "") or None,
@@ -1043,6 +1051,14 @@ def _flatten_body(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _has_unreviewed_parts(payload: dict[str, Any]) -> bool:
+    """The bounded plain-text editor cannot review attachments or HTML content."""
+    mime = str(payload.get("mimeType") or "")
+    return bool(payload.get("filename") or (payload.get("body") or {}).get("attachmentId")
+        or mime and not mime.startswith(("text/plain", "multipart/"))
+        or any(_has_unreviewed_parts(part) for part in payload.get("parts") or [] if isinstance(part, dict)))
+
+
 def _b64(data: str) -> str:
     pad = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode(data + pad).decode("utf-8", errors="replace")
@@ -1168,6 +1184,10 @@ def draft_snapshot(client: Any, *, draft_id: str) -> dict[str, Any]:
     return {
         "draft_id": str(draft.get("id") or draft_id),
         "to": str(draft.get("to") or ""),
+        "cc": str(draft.get("cc") or ""),
+        "bcc": str(draft.get("bcc") or ""),
+        "from": str(draft.get("from") or ""),
+        "unreviewed_parts": bool(draft.get("unreviewed_parts")),
         "subject": str(draft.get("subject") or ""),
         "body": body,
         "body_digest": body_digest(body),
@@ -1252,7 +1272,7 @@ def verify_send_authority(client: Any, authority: SendAuthority) -> dict[str, An
     return snapshot
 
 
-def send_reviewed_draft(client: Any, authority: SendAuthority) -> dict[str, Any]:
+def send_reviewed_draft(client: Any, authority: SendAuthority, *, before_send: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """The only sanctioned path to a real send.
 
     Verifies the binding, then makes exactly one send call. This function does
@@ -1260,7 +1280,9 @@ def send_reviewed_draft(client: Any, authority: SendAuthority) -> dict[str, Any]
     approval claim in ConversationStore.decide_and_claim_inbox_execution, which
     hands the work to exactly one caller.
     """
-    verify_send_authority(client, authority)
+    snapshot = verify_send_authority(client, authority)
+    if before_send is not None:
+        before_send(snapshot)
     result = client.send(draft_id=authority.draft_id) or {}
     message_id = str(result.get("id") or "")
     if not message_id:

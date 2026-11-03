@@ -319,7 +319,7 @@ def test_the_send_approval_binds_account_draft_recipient_subject_and_body_versio
 
     item = app.state.inbox.get(item_id)
     resource = item["resource"]
-    assert resource == {
+    assert {key: resource[key] for key in ("kind","person_id","draft_id","account","to","subject","body_digest","sent")} == {
         "kind": "gmail_send_authority",
         "person_id": person_id,
         "draft_id": draft["id"],
@@ -784,13 +784,11 @@ def test_a_send_whose_receipt_cannot_be_filed_is_still_reported_as_sent(tmp_path
     person_id, session_id = _bound_person(app)
     draft = _draft(client, person_id, session_id)
     item_id = _park(client, person_id, session_id, draft)
-    # The person file goes away between approval and send.
-    app.state.people.delete(
-        person_id,
-        expected_version=int(app.state.people.get(person_id)["version"]),
-        actor="director",
-        rationale_summary="Removed mid-flight",
-    )
+    # Fail local filing after Gmail accepted the send, rather than deleting
+    # the person before dispatch (which must now refuse the action).
+    def fail_receipt(*args, **kwargs):
+        raise ValueError("Injected local filing failure")
+    app.state.people.record_approved_send = fail_receipt
 
     res = _decide(client, item_id)
 
@@ -798,7 +796,7 @@ def test_a_send_whose_receipt_cannot_be_filed_is_still_reported_as_sent(tmp_path
     assert res.json()["ok"] is True
     assert res.json()["result"]["message_id"] == "msg_1"
     assert res.json()["result"]["person_event_id"] is None
-    assert "unknown person" in res.json()["result"]["receipt_error"]
+    assert "could not be saved" in res.json()["result"]["receipt_error"]
 
 
 def test_gmail_send_is_never_replayed_by_a_provider_retry(tmp_path):

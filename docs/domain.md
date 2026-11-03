@@ -19,6 +19,12 @@ An individual the director may research or work. The active product is person-ce
 **Person File**
 The durable record for one person: identity, company context, Apollo results, Gmail, Drive, Calendar, meeting notes, web evidence, actions, outcomes, and a short handoff. This is the primary domain object.
 
+**Person Correction**
+An explicit director correction to a saved person's supported identity/contact
+fields. It keeps the same Person File and attached work, protects each corrected
+field from provider replacement, and records a scoped, retry-safe change. Possible
+duplicate identifiers require review; corrections do not merge person files.
+
 **Sequence**
 A person the director is actively working. A sequence moves through exactly three operating states: Open, In conversation, and Done. It is not a sales deal, forecast, or automated drip campaign.
 

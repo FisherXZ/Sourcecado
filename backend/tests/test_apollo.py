@@ -8,6 +8,7 @@ from coworker.apollo import (
     FakeHttp,
     LiveHttp,
     enrichment_match,
+    enrich_contact,
     enrichment_resource,
     apollo_evidence,
     search_people,
@@ -108,28 +109,11 @@ def test_apollo_enrich_returns_contact(tmp_path):
             }
         }
     )
-    people = PersonStore(tmp_path)
-    person = people.keep_from_apollo(
-        apollo_id="tim",
-        first_name="Tim",
-        last_name_obfuscated="Z",
-        title="CEO",
-        company="Apollo",
-    )
-    people.bind_session("sess-tim", person["person_id"])
-    ok, result = execute(
-        "apollo_enrich_contact",
-        {"firstName": "Tim", "lastName": "Zheng", "organizationName": "Apollo"},
-        http=http,
-        apollo_key="test-key",
-        people=people,
-        session_id="sess-tim",
-    )
-    assert ok is True
+    result = enrich_contact(http=http, api_key="test-key", first_name="Tim", last_name="Zheng", organization_name="Apollo")
     assert result["name"] == "Tim Zheng"
     assert result["email"] == "tim@apollo.io"
     assert result["organizationName"] == "Apollo.io"
-    assert people.get(person["person_id"])["email"] == "tim@apollo.io"
+    assert result["credits_actual"] is None
 
 
 def test_apollo_missing_key_fails_clearly():
@@ -142,7 +126,7 @@ def test_apollo_missing_key_fails_clearly():
         http=FakeHttp(),
     )
     assert ok is False
-    assert "APOLLO_API_KEY" in result["error"]
+    assert result["code"] == "approval_binding_required"
 
 
 @pytest.mark.skipif(not os.environ.get("CLUB_RUN_LIVE_SMOKE"), reason="live apollo")
@@ -184,22 +168,14 @@ def test_a_masked_surname_falls_back_to_the_person_files_apollo_id(tmp_path):
     )
     people.bind_session("sess-hog", person["person_id"])
 
-    ok, result = execute(
-        "apollo_enrich_contact",
-        # Exactly what the shortlist gives the model.
-        {"firstName": "Fisher", "lastName": "Zh***g", "organizationName": "The Hog"},
-        http=http,
-        apollo_key="test-key",
-        people=people,
-        session_id="sess-hog",
-    )
-
-    assert ok is True, result
+    match = enrichment_match(person)
+    assert match == {"apollo_id":"679c7e37"}
+    result = enrich_contact(http=http, api_key="test-key", **match)
     body = [c for c in http.calls if c["url"] == MATCH_URL][0]["json"]
-    assert body["id"] == "679c7e37"
-    # The mask must never travel to Apollo.
-    assert body["last_name"] is None
-    assert people.get(person["person_id"])["email"] == "fisher@thehog.example"
+    assert body["id"] == "679c7e37" and body["last_name"] is None
+    assert result["email"] == "fisher@thehog.example"
+    # The transport normalizer itself never mutates a person file.
+    assert people.get(person["person_id"])["email"] is None
 
 
 def test_enrichment_approval_names_an_incomplete_person_without_the_mask(tmp_path):
@@ -242,5 +218,5 @@ def test_a_masked_surname_with_no_apollo_id_refuses_rather_than_spending(tmp_pat
     )
 
     assert ok is False
-    assert "obfuscated" in result["error"]
+    assert result["code"] == "approval_binding_required"
     assert [c for c in http.calls if c["url"] == MATCH_URL] == []

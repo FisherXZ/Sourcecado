@@ -24,6 +24,8 @@ from coworker.compaction import (
     transcript_defects,
 )
 from coworker.inbox import Inbox
+from coworker.consequential_actions import ConsequentialActions
+from coworker.gmail import FakeGmail, body_digest
 from coworker.people import PersonStore
 from coworker.permissions import ASK, AUTO, RETRY_SAFE, decide
 from coworker.provider import (
@@ -203,6 +205,22 @@ def _turn(
     conv = store if store is not None else ConversationStore(tmp_path)
     person_store = people if people is not None else PersonStore(tmp_path)
 
+    actual_inbox = inbox if inbox is not None else Inbox(conv)
+    execution = {"people":person_store,"gmail":gmail}
+    if isinstance(provider,ApprovalProvider) and provider.tool_name in {"gmail_send","apollo_enrich_contact"}:
+        pid = person_store.person_for_session(sid)
+        if pid is None:
+            pid=person_store.keep_from_apollo(apollo_id='budget-person',first_name='Ada',last_name_obfuscated='Lovelace',title=None,company=None)['person_id']
+            person_store.bind_session(sid,pid)
+        person_store.apply_enrichment(pid,email='ada@example.test')
+        gmail = gmail or FakeGmail()
+        gmail.account_email='director@example.test'
+        if provider.tool_name=='gmail_send':
+            draft=gmail.create_draft(to='ada@example.test',subject='Budget review',body='Reviewed message')
+            provider.arguments={'draft_id':draft['id'],'reviewed_body_digest':body_digest('Reviewed message')}
+        execution['consequential_actions']=ConsequentialActions(people=person_store,inbox=actual_inbox,
+            gmail=lambda:gmail,http=lambda:None,apollo_key=lambda:'fixture-key')
+
     async def _wait(_call_id: str) -> str:
         return wait or "allow"
 
@@ -214,9 +232,9 @@ def _turn(
             provider=provider,
             persona=None,
             skills=None,
-            inbox=inbox if inbox is not None else Inbox(conv),
+            inbox=actual_inbox,
             openai_tools=OPENAI_TOOLS,
-            execute_kwargs={"people": person_store, "gmail": gmail},
+            execute_kwargs=execution,
             wait_permission=_wait if wait is not None else None,
             **kwargs,
         )
@@ -745,7 +763,7 @@ class ApprovalProvider(SourcingProvider):
         yield StreamChunk(finish_reason="tool_calls")
         yield StreamChunk(
             tool_calls=[
-                ToolCall(id="call_gated", name=self.tool_name, arguments={})
+                ToolCall(id="call_gated", name=self.tool_name, arguments=dict(self.arguments or {}))
             ]
         )
 

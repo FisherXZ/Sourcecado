@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 from coworker import migrations
-from coworker.people import PersonStore
+from coworker.people import PersonStore, SCHEMA_VERSION
 from test_crm_analysis import tracked_person, worker
 from test_crm_email_tasks import TaskMail, TaskModel, saved_tasks
 
@@ -35,7 +35,7 @@ def test_registered_v7_upgrade_preserves_v6_history_and_schedules_task_stage(tmp
     result = migrations.apply_migrations(tmp_path)
     assert result.error is None and result.backup_id
     people = PersonStore(tmp_path)
-    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert [tuple(row) for row in people._conn.execute("SELECT * FROM crm_changes")] == history
     assert people._conn.execute("SELECT count(*) FROM crm_task_evidence").fetchone()[0] == 0
     service = worker(people, TaskModel(), TaskMail())
