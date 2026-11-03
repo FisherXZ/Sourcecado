@@ -25,6 +25,11 @@ DEAD = ProbeResult("rejected", "Granola no longer accepts the saved sign-in. Rec
 DOWN = ProbeResult("unreachable", "Sourcecado could not reach Granola.")
 
 
+def granola_grant(client_id="granola-client-1", access=GRANOLA_ACCESS):
+    """A Granola grant as sign-in saves it: renewal keeps client_id, reconnect replaces it."""
+    return {"access_token": access, "refresh_token": "granola-rt-secret", "client_id": client_id}
+
+
 class CountingProbe:
     def __init__(self, result: ProbeResult) -> None:
         self.result = result
@@ -47,7 +52,7 @@ def make_app(tmp_path, *, google=True, granola=True, apollo_key="sk-apollo-secre
             },
         )
     if granola:
-        app.state.secrets.put("mcp-oauth:granola", {"access_token": GRANOLA_ACCESS})
+        app.state.secrets.put("mcp-oauth:granola", granola_grant())
     return app
 
 
@@ -163,8 +168,8 @@ def test_catalog_reads_the_last_check_for_the_current_credential(tmp_path):
     check(app)
     assert catalog(app)["granola"]["status"] == "reconnect_required"
 
-    # A new grant is a different credential, so the old failure no longer applies.
-    app.state.secrets.put("mcp-oauth:granola", {"access_token": "granola-new-secret"})
+    # Reconnecting is a new grant, so the old failure no longer applies.
+    app.state.secrets.put("mcp-oauth:granola", granola_grant("granola-client-2", "granola-new-secret"))
     assert catalog(app)["granola"]["status"] == "connected"
 
     TestClient(app).post("/v1/connectors/granola/disconnect", headers={TOKEN_HEADER: TOKEN})
@@ -185,7 +190,7 @@ def test_checks_are_cached_until_they_expire_or_the_credential_changes(tmp_path)
     check(app)
     assert (google.calls, granola.calls) == (2, 2)
 
-    app.state.secrets.put("mcp-oauth:granola", {"access_token": "granola-new-secret"})
+    app.state.secrets.put("mcp-oauth:granola", granola_grant("granola-client-2", "granola-new-secret"))
     check(app)
     assert (google.calls, granola.calls) == (2, 3)
 
@@ -196,7 +201,8 @@ def test_a_probe_that_renews_its_token_keeps_its_result(tmp_path):
 
     def renew_then_fail() -> ProbeResult:
         calls.append(1)
-        app.state.secrets.put("mcp-oauth:granola", {"access_token": "granola-renewed-secret"})
+        # Renewal: same grant (client_id), new access token.
+        app.state.secrets.put("mcp-oauth:granola", granola_grant(access="granola-renewed-secret"))
         return DOWN
 
     install(app, google=CountingProbe(OK), granola=renew_then_fail)
@@ -204,7 +210,59 @@ def test_a_probe_that_renews_its_token_keeps_its_result(tmp_path):
     check(app)
     assert catalog(app)["granola"]["status"] == "failed"
     check(app)
-    assert len(calls) == 1  # still fresh for the renewed credential
+    assert len(calls) == 1  # still fresh for the renewed grant
+
+
+def test_a_google_probe_that_rotates_the_refresh_token_is_checked_again(tmp_path):
+    app = make_app(tmp_path, granola=False)
+    calls = []
+
+    def renew_and_rotate() -> ProbeResult:
+        calls.append(1)
+        profile = dict(app.state.secrets.get("google"))
+        profile["refresh_token"] = f"rt-rotated-{len(calls)}"
+        app.state.secrets.put("google", profile)
+        return OK
+
+    install(app, google=renew_and_rotate, granola=CountingProbe(OK))
+
+    check(app)
+    # Never attributed to the rotated token: the safe direction is to check again.
+    assert app.state.connector_probes.result("google") is None
+    check(app)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("old_result", [OK, DEAD])
+def test_an_in_flight_result_never_lands_on_a_replacement_grant(tmp_path, old_result):
+    """Review #256: an old grant's probe finishing after a reconnect must not apply."""
+    app = make_app(tmp_path)
+    started, release = threading.Event(), threading.Event()
+    probed = []
+
+    def granola() -> ProbeResult:
+        probed.append(app.state.secrets.get("mcp-oauth:granola")["client_id"])
+        if len(probed) == 1:
+            started.set()
+            release.wait(5)
+            return old_result
+        return DOWN
+
+    install(app, google=CountingProbe(OK), granola=granola)
+    in_flight = threading.Thread(target=lambda: app.state.connector_probes.check())
+    in_flight.start()
+    assert started.wait(5)
+    app.state.secrets.put("mcp-oauth:granola", granola_grant("granola-client-2", "granola-new-secret"))
+    release.set()
+    in_flight.join(5)
+
+    # The replacement has no result of its own yet: it reads its saved-grant view.
+    assert app.state.connector_probes.result("granola") is None
+    assert catalog(app)["granola"]["status"] == "connected"
+
+    # Checking again probes the replacement instead of trusting the old result.
+    assert check(app)["granola"]["status"] == "failed"
+    assert probed == ["granola-client-1", "granola-client-2"]
 
 
 def test_a_hung_probe_times_out_without_holding_the_request(tmp_path):
@@ -374,3 +432,100 @@ def test_granola_probe_times_out(tmp_path, monkeypatch):
     result = live.probe(timeout=0.2)
 
     assert result == ProbeResult("unreachable", "Granola did not respond in time.")
+
+
+# Real SDK result shapes through LiveMcp._async_call ----------------------------
+# Only the network transport is replaced; the SDK's CallToolResult and the
+# adapter's conversion run for real (review #256).
+
+from contextlib import asynccontextmanager  # noqa: E402
+
+from mcp.types import CallToolResult, TextContent  # noqa: E402
+
+import coworker.mcp as mcp_module  # noqa: E402
+from coworker.mcp import GRANOLA_TOOL_ERROR  # noqa: E402
+
+GRANOLA_REASON = "Grant expired: please reconnect"
+
+
+def sdk_session_returning(result):
+    class Session:
+        def __init__(self, read, write):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def initialize(self):
+            return None
+
+        async def call_tool(self, name, arguments):
+            return result
+
+    @asynccontextmanager
+    async def transport(url, http_client=None):
+        yield (None, None, None)
+
+    return lambda: (Session, transport)
+
+
+def live_with_sdk_result(tmp_path, monkeypatch, result):
+    app = make_app(tmp_path, google=False)
+    monkeypatch.setattr(mcp_module, "_import_mcp_sdk", sdk_session_returning(result))
+    return app, LiveMcp(secrets=app.state.secrets, config_path=tmp_path / "mcp.json")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        CallToolResult(isError=True, content=[TextContent(type="text", text=GRANOLA_REASON)]),
+        CallToolResult(
+            isError=True,
+            content=[TextContent(type="text", text=GRANOLA_REASON)],
+            structuredContent={"meetings": []},
+        ),
+    ],
+)
+def test_an_sdk_error_result_never_checks_as_connected(tmp_path, monkeypatch, result):
+    app, live = live_with_sdk_result(tmp_path, monkeypatch, result)
+
+    probe = live.probe()
+    called = live.call("mcp__granola__list_meetings", {})
+
+    assert probe == ProbeResult("unreachable", GRANOLA_TOOL_ERROR)
+    assert called == {"error": GRANOLA_TOOL_ERROR, "tool_error": True}
+    assert GRANOLA_REASON not in probe.detail  # Granola's text is untrusted
+
+
+def test_an_sdk_error_result_reads_connection_failed_on_the_catalog(tmp_path, monkeypatch):
+    error = CallToolResult(isError=True, content=[TextContent(type="text", text=GRANOLA_REASON)])
+    app, live = live_with_sdk_result(tmp_path, monkeypatch, error)
+    app.state.mcp = live
+    app.state.connector_probes = ConnectorProbes(
+        google=CountingProbe(OK),
+        granola=lambda: app.state.mcp.probe(),
+        fingerprints=default_fingerprints(app.state.secrets),
+    )
+
+    granola = check(app)["granola"]
+
+    assert granola["status"] == "failed"
+    assert granola["verified"] is False
+    assert granola["health"]["message"] == GRANOLA_TOOL_ERROR
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        CallToolResult(content=[], structuredContent={"meetings": []}),
+        CallToolResult(content=[TextContent(type="text", text='{"meetings": []}')]),
+    ],
+)
+def test_an_sdk_success_result_checks_as_connected(tmp_path, monkeypatch, result):
+    _, live = live_with_sdk_result(tmp_path, monkeypatch, result)
+
+    assert live.probe().outcome == "ok"
+    assert live.call("mcp__granola__list_meetings", {}) == {"ok": True, "meetings": []}

@@ -20,6 +20,18 @@ GRANOLA_URL = "https://mcp.granola.ai/mcp"
 _WRITE = re.compile(r"write|create|delete|update", re.I)
 
 
+GRANOLA_TOOL_ERROR = (
+    "Granola returned an error for this sign-in. Reconnect if it keeps happening."
+)
+
+
+def tool_reported_error(result: Any) -> bool:
+    """True when an MCP tool result is flagged as an error (CallToolResult.isError)."""
+    if isinstance(result, dict):
+        return result.get("isError") is True
+    return getattr(result, "isError", False) is True
+
+
 def tool_result_payload(result: Any) -> dict[str, Any]:
     if isinstance(result, dict):
         return dict(result)
@@ -234,6 +246,8 @@ class LiveMcp:
         if outcome == "timeout":
             return ProbeResult("unreachable", "Granola did not respond in time.")
         if outcome == "ok":
+            if isinstance(result, dict) and result.get("tool_error"):
+                return ProbeResult("unreachable", GRANOLA_TOOL_ERROR)
             # A missing SDK comes back as an error payload, not an exception.
             if isinstance(result, dict) and not result.get("error"):
                 return ProbeResult("ok", "This connection is ready to use.")
@@ -267,6 +281,9 @@ class LiveMcp:
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     out = await session.call_tool(tool, arguments)
+                    if tool_reported_error(out):
+                        # The tool's own error text is untrusted; keep fixed wording.
+                        return {"error": GRANOLA_TOOL_ERROR, "tool_error": True}
                     return {"ok": True, **tool_result_payload(out)}
 
 

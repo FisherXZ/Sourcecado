@@ -46,12 +46,24 @@ def credential_fingerprint(*parts: object) -> str | None:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+# A fingerprint names the grant, not the current access token: renewing a
+# token keeps the grant, while reconnecting replaces it. Probe results are
+# filed under the grant that was probed, so a reconnect never inherits them.
+
+
 def google_fingerprint(secrets: Any) -> str | None:
+    # A reconnect issues a new refresh token. Google rarely rotates it on renewal;
+    # if it does, the result stays with the old token and the next check re-probes.
     return credential_fingerprint(load_google(secrets).get("refresh_token"))
 
 
 def granola_fingerprint(secrets: Any) -> str | None:
     tokens = secrets.get("mcp-oauth:granola") or {}
+    if not (tokens.get("access_token") or tokens.get("refresh_token")):
+        return None
+    # Every Granola sign-in registers a new client; renewal keeps it.
+    if tokens.get("client_id"):
+        return credential_fingerprint("client", tokens["client_id"])
     return credential_fingerprint(tokens.get("access_token"), tokens.get("refresh_token"))
 
 
@@ -153,11 +165,10 @@ class ConnectorProbes:
                     result = future.result(timeout=max(0.0, deadline - self._clock()))
                 except FutureTimeout:
                     result = ProbeResult("unreachable", "The connection check timed out.")
-                # A probe may renew the token it checks, so file the result
-                # under the credential as it stands after the probe.
-                fingerprint = self._fingerprints[key]() or due[key]
+                # File under the grant that was probed. If it was replaced
+                # mid-probe, the replacement has no result and is probed next.
                 with self._lock:
-                    self._results[key] = (fingerprint, self._clock(), result)
+                    self._results[key] = (due[key], self._clock(), result)
         finally:
             # A hung probe must not hold the request open past its deadline.
             pool.shutdown(wait=False, cancel_futures=True)
