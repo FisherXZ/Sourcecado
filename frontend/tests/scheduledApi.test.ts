@@ -5,6 +5,7 @@ import {
   createScheduleJob,
   getSchedule,
   runScheduleJob,
+  updateScheduleJob,
 } from "../src/api";
 
 const fetchMock = vi.fn();
@@ -95,6 +96,7 @@ describe("schedule API boundary", () => {
       prompt: "Review priority sourcing work.",
       createdAt: "2026-08-25T10:00:00Z",
       nextRunAt: "2026-08-31T09:00:00-07:00",
+      enabled: true,
     });
     expect(schedule.runs[0]).toEqual({
       id: 9,
@@ -239,5 +241,48 @@ describe("schedule API boundary", () => {
     expect(error).toBeInstanceOf(ScheduleApiError);
     expect(error.code).toBe("already_running");
     expect(error.message).toBe("This routine is already running. Wait for its current receipt.");
+  });
+
+  it("reads cadences and treats a job with no next run as paused", async () => {
+    fetchMock.mockResolvedValue(
+      response({
+        jobs: [{ id: 5, name: "Old routine", cron: "0 9 * * 1", prompt: "Check", next_run_at: null }],
+        runs: [],
+        templates: [],
+        cadences: [{ id: "daily_0900", label: "Every day at 9:00 AM" }, { label: "no id" }],
+      }),
+    );
+
+    const schedule = await getSchedule();
+
+    expect(schedule.jobs[0].enabled).toBe(false);
+    expect(schedule.cadences).toEqual([{ id: "daily_0900", label: "Every day at 9:00 AM" }]);
+  });
+
+  it("edits a routine with PATCH and maps field validation", async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({
+        job: { id: 4, name: "Daily", cadence: "daily_0900", cron: "0 9 * * *", prompt: "Check", next_run_at: null, enabled: false },
+      }),
+    );
+
+    const job = await updateScheduleJob(4, { enabled: false });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://backend.test/v1/schedule/4",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ enabled: false }) }),
+    );
+    expect(job.enabled).toBe(false);
+
+    fetchMock.mockResolvedValueOnce(
+      response(
+        { error: "invalid_routine", fields: { name: "Enter a name up to 80 characters." } },
+        { ok: false, status: 400 },
+      ),
+    );
+    await expect(updateScheduleJob(4, { name: " " })).rejects.toMatchObject({
+      code: "invalid_routine",
+      fieldErrors: { name: "Enter a name up to 80 characters." },
+    });
   });
 });

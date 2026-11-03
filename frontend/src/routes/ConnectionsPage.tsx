@@ -7,7 +7,9 @@ import {
   getConnectors,
   type Connector,
 } from "../api";
+import { BackToConnections, ConnectorMark, StatusPill } from "../connectionParts";
 import { connectorStatus } from "../connectorStatus";
+import { Icon } from "../icons";
 import {
   MonidConnection,
   monidRowStatus,
@@ -23,62 +25,66 @@ type PageState =
 type ConnectorInteraction =
   | { connectorId: string; kind: "connecting" | "awaiting_return" | "disconnecting" }
   | { connectorId: string; kind: "popup_blocked"; url: string }
-  | { connectorId: string; kind: "authorization_failed" | "disconnect_failed" };
+  | { connectorId: string; kind: "authorization_failed"; message?: string }
+  | { connectorId: string; kind: "disconnect_failed" };
 
-const CONNECTOR_MARKS: Record<string, string> = {
-  gmail: "GM",
-  drive: "DR",
-  calendar: "CAL",
-  apollo: "AP",
-  granola: "GR",
-};
-
-function ConnectorMark({ connector }: { connector: Connector }) {
-  return (
-    <span className="connection-mark" aria-hidden="true">
-      {CONNECTOR_MARKS[connector.id] || connector.title.slice(0, 2).toUpperCase()}
-    </span>
-  );
-}
-
-function ConnectorRow({ connector }: { connector: Connector }) {
-  const status = connectorStatus(connector);
+function CatalogRow({
+  id,
+  title,
+  account,
+  href,
+  status,
+  selected,
+}: {
+  id: string;
+  title: string;
+  account: string | null;
+  href: string;
+  status: { label: string; tone: string };
+  selected: boolean;
+}) {
   return (
     <li>
       <a
-        className="connection-row"
-        href={connector.repairRoute}
-        aria-label={`${connector.title}, ${status.label}`}
+        className={`connection-row${account ? "" : " has-no-account"}`}
+        href={href}
+        aria-label={`${title}, ${status.label}`}
+        aria-current={selected ? "page" : undefined}
       >
-        <ConnectorMark connector={connector} />
-        <span className="connection-row-copy">
-          <strong>{connector.title}</strong>
-          <span>{connector.email || connector.description}</span>
-        </span>
-        <span className={`connection-status tone-${status.tone}`}>{status.label}</span>
+        <ConnectorMark id={id} />
+        <strong>{title}</strong>
+        <span className="connection-row-account">{account}</span>
+        <StatusPill label={status.label} tone={status.tone} />
+        <Icon name="next" />
       </a>
     </li>
+  );
+}
+
+function ConnectorRow({ connector, selectedId }: { connector: Connector; selectedId?: string }) {
+  return (
+    <CatalogRow
+      selected={connector.id === selectedId}
+      id={connector.id}
+      title={connector.title}
+      account={connector.email}
+      href={connector.repairRoute}
+      status={connectorStatus(connector)}
+    />
   );
 }
 
 /** Monid is not a backend connector, so its row is built here with the same parts. */
-function MonidRow({ monid }: { monid: MonidState }) {
-  const status = monidRowStatus(monid);
+function MonidRow({ monid, selectedId }: { monid: MonidState; selectedId?: string }) {
   return (
-    <li>
-      <a
-        className="connection-row"
-        href="#/connections/monid"
-        aria-label={`Monid sources, ${status.label}`}
-      >
-        <span className="connection-mark" aria-hidden="true">MO</span>
-        <span className="connection-row-copy">
-          <strong>Monid sources</strong>
-          <span>{monid.status?.workspace || "Paid research sources"}</span>
-        </span>
-        <span className={`connection-status tone-${status.tone}`}>{status.label}</span>
-      </a>
-    </li>
+    <CatalogRow
+      selected={selectedId === "monid"}
+      id="monid"
+      title="Monid"
+      account={monid.status?.workspace || null}
+      href="#/connections/monid"
+      status={monidRowStatus(monid)}
+    />
   );
 }
 
@@ -86,29 +92,26 @@ function ConnectorGroup({
   id,
   title,
   connectors,
+  selectedId,
   extra,
 }: {
   id: string;
   title: string;
   connectors: Connector[];
+  selectedId?: string;
   extra?: ReactNode;
 }) {
   const count = connectors.length + (extra ? 1 : 0);
   if (!count) return null;
-  const headingId = `${id}-connections-heading`;
   return (
-    <section
-      className="connection-group"
-      role="region"
-      aria-label={`${title} connections`}
-    >
-      <div className="connection-group-heading">
-        <h2 id={headingId}>{title}</h2>
-        <span>{count}</span>
-      </div>
+    <section className="connection-group" role="region" aria-label={`${title} connections`}>
+      <h2 id={`${id}-connections-heading`}>
+        {title}
+        <span className="connection-count">{count}</span>
+      </h2>
       <ul>
         {connectors.map((connector) => (
-          <ConnectorRow key={connector.id} connector={connector} />
+          <ConnectorRow key={connector.id} connector={connector} selectedId={selectedId} />
         ))}
         {extra}
       </ul>
@@ -118,93 +121,82 @@ function ConnectorGroup({
 
 function LoadingCatalog() {
   return (
-    <div className="connections-loading" aria-busy="true">
-      <p className="visually-hidden" role="status">
+    <div className="connections-catalog" aria-busy="true">
+      <p className="sr-only" role="status">
         Loading connections…
       </p>
-      <section className="connection-group" aria-labelledby="loading-connected-heading">
-        <div className="connection-group-heading">
-          <h2 id="loading-connected-heading">Connected</h2>
-        </div>
-        <div className="connection-skeleton-list" aria-hidden="true">
-          <span className="connection-skeleton-row" />
-          <span className="connection-skeleton-row" />
-        </div>
-      </section>
-      <section className="connection-group" aria-labelledby="loading-available-heading">
-        <div className="connection-group-heading">
-          <h2 id="loading-available-heading">Available</h2>
-        </div>
-        <div className="connection-skeleton-list" aria-hidden="true">
-          <span className="connection-skeleton-row" />
-          <span className="connection-skeleton-row" />
-          <span className="connection-skeleton-row" />
-        </div>
-      </section>
+      {(["Connected", "Available"] as const).map((title, index) => (
+        <section className="connection-group" key={title}>
+          <h2>{title}</h2>
+          <div className="connection-skeleton-list" aria-hidden="true">
+            {Array.from({ length: index ? 3 : 2 }, (_, row) => (
+              <span className="connection-skeleton-row" key={row} />
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }
 
-function ConnectionsCatalog({ connectors, monid }: { connectors: Connector[]; monid: MonidState }) {
-  const [query, setQuery] = useState("");
+function ConnectionsCatalog({
+  connectors,
+  monid,
+  query,
+  selectedId,
+  onClearQuery,
+}: {
+  connectors: Connector[];
+  monid: MonidState;
+  query: string;
+  selectedId?: string;
+  onClearQuery: () => void;
+}) {
+  const needle = query.trim().toLocaleLowerCase();
   const matching = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
     if (!needle) return connectors;
     return connectors.filter((connector) =>
-      [connector.title, connector.description, connector.email || ""]
-        .join(" ")
-        .toLocaleLowerCase()
-        .includes(needle),
+      [connector.title, connector.email || ""].join(" ").toLocaleLowerCase().includes(needle),
     );
-  }, [connectors, query]);
+  }, [connectors, needle]);
   const connected = matching.filter((connector) => connector.catalogGroup === "connected");
   const available = matching.filter((connector) => connector.catalogGroup === "available");
-  const needle = query.trim().toLocaleLowerCase();
   const monidShown =
     !needle ||
-    ["Monid sources", "Paid research sources", monid.status?.workspace ?? ""]
-      .join(" ")
-      .toLocaleLowerCase()
-      .includes(needle);
-  const monidRow = monidShown ? <MonidRow monid={monid} /> : null;
+    ["Monid", monid.status?.workspace ?? ""].join(" ").toLocaleLowerCase().includes(needle);
+  const monidRow = monidShown ? <MonidRow monid={monid} selectedId={selectedId} /> : null;
   const monidConnected = monidRowStatus(monid).connected;
 
-  return (
-    <div className="connections-catalog">
-      <div className="connections-search" role="search">
-        <label htmlFor="connections-search">Search connections</label>
-        <input
-          id="connections-search"
-          type="search"
-          value={query}
-          placeholder="Search by product or account"
-          onChange={(event) => setQuery(event.target.value)}
-        />
-      </div>
-      {matching.length === 0 && !monidShown ? (
-        <section className="route-empty connection-empty">
-          <h2>No connectors match</h2>
-          <p>Try another product or account name.</p>
-          <button type="button" onClick={() => setQuery("")}>
+  if (matching.length === 0 && !monidShown) {
+    return (
+      <div className="connections-catalog">
+        <section className="connection-empty">
+          <Icon name="search" />
+          <h2>No connections match</h2>
+          <button type="button" className="connection-button" onClick={onClearQuery}>
+            <Icon name="close" />
             Clear search
           </button>
         </section>
-      ) : (
-        <div className="connection-groups">
-          <ConnectorGroup
-            id="connected"
-            title="Connected"
-            connectors={connected}
-            extra={monidConnected ? monidRow : null}
-          />
-          <ConnectorGroup
-            id="available"
-            title="Available"
-            connectors={available}
-            extra={monidConnected ? null : monidRow}
-          />
-        </div>
-      )}
+      </div>
+    );
+  }
+  return (
+    <div className="connections-catalog">
+      <ConnectorGroup
+        id="connected"
+        title="Connected"
+        connectors={connected}
+        selectedId={selectedId}
+        extra={monidConnected ? monidRow : null}
+      />
+      <ConnectorGroup
+        id="available"
+        title="Available"
+        connectors={available}
+        selectedId={selectedId}
+        extra={monidConnected ? null : monidRow}
+      />
     </div>
   );
 }
@@ -233,61 +225,60 @@ function ConnectorDetail({
     activeInteraction?.kind === "connecting" ||
     activeInteraction?.kind === "awaiting_return";
   const disconnecting = activeInteraction?.kind === "disconnecting";
+  const reconnect = connector.availableActions.includes("reconnect");
   const canConnect =
     connector.id !== "apollo" &&
-    (connector.availableActions.includes("connect") ||
-      connector.availableActions.includes("reconnect"));
+    (connector.availableActions.includes("connect") || reconnect);
   const canDisconnect =
     connector.id !== "apollo" && connector.availableActions.includes("disconnect");
-  const connectLabel = connector.availableActions.includes("reconnect")
-    ? connector.recovery?.category === "grant_scopes"
-      ? connector.recovery.actionLabel
-      : `Reconnect ${connector.title}`
-    : `Connect ${connector.title}`;
+  const finishSetup = reconnect && connector.recovery?.category === "grant_scopes";
+  const connectText = finishSetup ? connector.recovery!.actionLabel : reconnect ? "Reconnect" : "Connect";
+  const connectLabel = finishSetup ? connectText : `${connectText} ${connector.title}`;
+  const broken = connector.status === "failed" || connector.status === "reconnect_required";
 
   return (
-    <section
-      className="connection-detail"
-      aria-label={`${connector.title} connection details`}
-    >
-      <a className="connection-back" href="#/connections">
-        <span aria-hidden="true">←</span> Back to Connections
-      </a>
+    <section className="connection-detail" aria-label={`${connector.title} connection details`}>
+      <BackToConnections />
       <header className="connection-detail-header">
-        <ConnectorMark connector={connector} />
-        <div>
-          <p className="connection-eyebrow">Connection</p>
-          <h2>{connector.title}</h2>
-        </div>
-        <span className={`connection-status tone-${status.tone}`}>{status.label}</span>
+        <ConnectorMark id={connector.id} />
+        <h2>{connector.title}</h2>
+        <StatusPill label={status.label} tone={status.tone} />
       </header>
 
-      <p className="connection-description">{connector.description}</p>
+      {connector.email && (
+        <p className="connection-attr">
+          <Icon name="draft" />
+          <span>{connector.email}</span>
+        </p>
+      )}
 
-      <dl className="connection-facts">
-        <div>
-          <dt>Account</dt>
-          <dd>{connector.email || "No account connected"}</dd>
-        </div>
-        <div>
-          <dt>Health</dt>
-          <dd>
-            <strong>{connector.health.label}</strong>
-            <span>{connector.health.message}</span>
-          </dd>
-        </div>
-      </dl>
+      {broken && (
+        <p className="connection-alert" role="alert">
+          <Icon name="warn" />
+          <span>{connector.health.message}</span>
+        </p>
+      )}
+
+      {connector.id === "apollo" && connector.recovery?.category === "configure" && (
+        <p className="connection-attr">
+          <Icon name="key" />
+          <span>{connector.recovery.message}</span>
+        </p>
+      )}
 
       {connector.requiredScopes.length > 0 && (
         <section className="connection-detail-section" aria-labelledby="connection-scopes-heading">
           <h3 id="connection-scopes-heading">Permissions</h3>
-          <ul className="connection-permissions">
+          <ul className="connection-list">
             {connector.requiredScopes.map((scope) => {
-              const missing = connector.missingScopes.includes(scope);
+              // Before the first sign-in nothing is granted, and nothing is "missing" yet.
+              const granted = !connector.missingScopes.includes(scope);
+              const missing = !granted && connector.status !== "available";
               return (
-                <li key={scope}>
+                <li key={scope} className={missing ? "is-missing" : undefined}>
+                  <Icon name={granted ? "check" : missing ? "warn" : "key"} />
                   <span>{scope}</span>
-                  <strong>{missing ? "Missing" : "Granted"}</strong>
+                  {missing && <StatusPill label="Missing" tone="warn" />}
                 </li>
               );
             })}
@@ -295,90 +286,72 @@ function ConnectorDetail({
         </section>
       )}
 
-      <section className="connection-detail-section" aria-labelledby="connection-actions-heading">
-        <h3 id="connection-actions-heading">Supported actions</h3>
-        {connector.supportedActions.length > 0 ? (
-          <ul className="connection-supported-actions">
+      {connector.supportedActions.length > 0 && (
+        <section className="connection-detail-section" aria-labelledby="connection-actions-heading">
+          <h3 id="connection-actions-heading">Actions</h3>
+          <ul className="connection-list">
             {connector.supportedActions.map((action) => (
-              <li key={action}>{action}</li>
+              <li key={action}>
+                <Icon name="assistant" />
+                <span>{action}</span>
+              </li>
             ))}
           </ul>
-        ) : (
-          <p>No agent actions are currently advertised.</p>
-        )}
-      </section>
-
-      {connector.recovery && connector.status !== "available" && (
-        <aside
-          className="connection-recovery"
-          role={
-            connector.status === "failed" || connector.status === "reconnect_required"
-              ? "alert"
-              : undefined
-          }
-        >
-          <strong>{connector.recovery.actionLabel}</strong>
-          <p>{connector.recovery.message}</p>
-        </aside>
-      )}
-
-      {connector.id === "apollo" && connector.recovery?.category === "configure" && (
-        <aside className="connection-recovery">
-          <strong>How to configure Apollo</strong>
-          <p>{connector.recovery.message}</p>
-          <p>Sourcecado does not display or edit API keys here.</p>
-        </aside>
+        </section>
       )}
 
       {activeInteraction?.kind === "popup_blocked" && (
-        <aside className="connection-action-error" role="alert">
-          <strong>Authorization window didn’t open</strong>
-          <p>Open the authorization page, finish there, then return to Sourcecado.</p>
+        <p className="connection-alert" role="alert">
+          <Icon name="warn" />
+          <span>The sign-in window didn’t open.</span>
           <a href={activeInteraction.url} target="_blank" rel="noopener noreferrer">
-            Open {connector.title} authorization
+            <Icon name="external" />
+            Open {connector.title} sign-in
           </a>
-        </aside>
+        </p>
       )}
       {activeInteraction?.kind === "authorization_failed" && (
-        <aside className="connection-action-error" role="alert">
-          <strong>Authorization didn’t complete</strong>
-          <p>
-            The provider or OAuth callback rejected the connection. Check the provider redirect
-            URL, then try again.
-          </p>
-        </aside>
+        <p className="connection-alert" role="alert">
+          <Icon name="warn" />
+          <span>{activeInteraction.message || "Sign-in didn’t finish. Try again."}</span>
+        </p>
       )}
       {activeInteraction?.kind === "disconnect_failed" && (
-        <aside className="connection-action-error" role="alert">
-          <strong>Disconnect didn’t complete</strong>
-          <p>Check that Sourcecado is available, then try disconnecting again.</p>
-        </aside>
+        <p className="connection-alert" role="alert">
+          <Icon name="warn" />
+          <span>Couldn’t disconnect. Try again.</span>
+        </p>
       )}
 
-      <div className="connection-controls">
-        {canConnect && (
-          <button
-            type="button"
-            className="connection-primary-action"
-            aria-label={connecting ? `Connecting ${connector.title}` : connectLabel}
-            aria-busy={connecting || undefined}
-            disabled={connecting || disconnecting}
-            onClick={onConnect}
-          >
-            {connecting ? "Connecting…" : connectLabel}
-          </button>
-        )}
-        {canDisconnect && (
-          <button
-            type="button"
-            className="connection-secondary-action"
-            disabled={connecting || disconnecting}
-            onClick={onDisconnect}
-          >
-            {disconnecting ? "Disconnecting…" : `Disconnect ${connector.title}`}
-          </button>
-        )}
-      </div>
+      {(canConnect || canDisconnect) && (
+        <div className="connection-controls">
+          {canConnect && (
+            <button
+              type="button"
+              className="connection-button is-primary"
+              aria-label={connecting ? `Connecting ${connector.title}` : connectLabel}
+              aria-busy={connecting || undefined}
+              disabled={connecting || disconnecting}
+              onClick={onConnect}
+            >
+              <Icon name={reconnect && !finishSetup ? "refresh" : "link"} />
+              {connecting ? "Connecting…" : connectText}
+            </button>
+          )}
+          {canDisconnect && (
+            <button
+              type="button"
+              className="connection-button"
+              aria-label={`Disconnect ${connector.title}`}
+              disabled={connecting || disconnecting}
+              onClick={onDisconnect}
+            >
+              <Icon name="unlink" />
+              {disconnecting ? "Disconnecting…" : "Disconnect"}
+            </button>
+          )}
+        </div>
+      )}
 
       {confirmGoogleDisconnect && (
         <div
@@ -389,15 +362,18 @@ function ConnectorDetail({
           aria-describedby="google-disconnect-description"
         >
           <h3 id="google-disconnect-heading">Disconnect Google account?</h3>
-          <p id="google-disconnect-description">
-            Gmail, Google Drive, and Google Calendar share this authorization. Disconnecting it
-            removes access from all three connections.
-          </p>
-          <div>
-            <button type="button" onClick={onCancelDisconnect}>
-              Keep connected
+          <p id="google-disconnect-description">Gmail, Drive and Calendar share this sign-in.</p>
+          <div className="connection-controls">
+            <button type="button" className="connection-button" onClick={onCancelDisconnect}>
+              <Icon name="close" />
+              Cancel
             </button>
-            <button type="button" onClick={onConfirmGoogleDisconnect}>
+            <button
+              type="button"
+              className="connection-button is-danger"
+              onClick={onConfirmGoogleDisconnect}
+            >
+              <Icon name="unlink" />
               Disconnect all three
             </button>
           </div>
@@ -412,11 +388,13 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
   const [interaction, setInteraction] = useState<ConnectorInteraction | null>(null);
   const [confirmGoogleDisconnect, setConfirmGoogleDisconnect] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [checking, setChecking] = useState(false);
+  const [query, setQuery] = useState("");
   const monid = useMonidStatus();
 
   const loadSequence = useRef(0);
 
-  const loadConnections = useCallback(async (options?: { initial?: boolean; oauthReturn?: boolean }) => {
+  const loadConnections = useCallback(async (options?: { initial?: boolean; oauthReturn?: boolean; force?: boolean }) => {
     const sequence = ++loadSequence.current;
     if (options?.initial) setState({ status: "loading" });
     const apply = (body: { connectors: Connector[] }) => {
@@ -430,7 +408,7 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
         // A window regaining focus is not evidence authorization failed --
         // but a connector actually reading connected IS evidence it
         // succeeded, no matter which interaction state this was left in.
-        // Otherwise a stale "didn't complete" banner can outlive the
+        // Otherwise a stale "didn't finish" alert can outlive the
         // `awaiting_return` state that produced it and contradict a
         // catalog row that has since flipped to Connected.
         if (authorized) return null;
@@ -453,12 +431,17 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
     }
     // The saved-credential view renders first; the live check then replaces
     // it in the background. A failed check leaves that view in place.
-    void checkConnectors().then(
-      (checked) => {
-        if (sequence === loadSequence.current) apply(checked);
-      },
-      () => {},
-    );
+    setChecking(true);
+    void (options?.force ? checkConnectors({ force: true }) : checkConnectors())
+      .then(
+        (checked) => {
+          if (sequence === loadSequence.current) apply(checked);
+        },
+        () => {},
+      )
+      .finally(() => {
+        if (sequence === loadSequence.current) setChecking(false);
+      });
     return true;
   }, []);
 
@@ -488,8 +471,11 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
         return;
       }
       setInteraction({ connectorId: connector.id, kind: "awaiting_return" });
-    } catch {
-      setInteraction({ connectorId: connector.id, kind: "authorization_failed" });
+    } catch (error) {
+      // Only a refusal the backend explained is shown; other errors stay generic.
+      const message =
+        error instanceof Error && error.name === "ConnectorStartError" ? error.message : undefined;
+      setInteraction({ connectorId: connector.id, kind: "authorization_failed", message });
     }
   }
 
@@ -516,25 +502,58 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
 
   return (
     <main className={`route-page connections-page${connectorId ? " has-detail" : ""}`}>
-      <header className="connections-page-header">
-        <div>
+      <header className="connections-titlebar">
+        <div className="connections-heading">
           <h1>Connections</h1>
-          <p>Manage the sources Sourcecado can use for research and review-ready work.</p>
+        </div>
+        <div className="connections-actions">
+          <label className="connections-search">
+            <Icon name="search" />
+            <input
+              type="search"
+              aria-label="Search connections"
+              placeholder="Search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className={`connection-icon-button${checking ? " is-spinning" : ""}`}
+            aria-label="Check connections"
+            title={checking ? "Checking connections…" : "Check connections"}
+            aria-busy={checking || undefined}
+            disabled={checking || state.status !== "loaded"}
+            onClick={() => void loadConnections({ force: true })}
+          >
+            <Icon name="refresh" />
+          </button>
         </div>
       </header>
       {state.status === "loading" && <LoadingCatalog />}
       {state.status === "failed" && (
         <section className="route-error" role="alert">
           <h2>Connections couldn’t be loaded</h2>
-          <p>Check that Sourcecado is available, then try again.</p>
-          <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
-            Retry loading connections
+          <button
+            type="button"
+            className="connection-button"
+            aria-label="Retry loading connections"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+          >
+            <Icon name="refresh" />
+            Retry
           </button>
         </section>
       )}
       {state.status === "loaded" && (
         <div className="connections-layout">
-          <ConnectionsCatalog connectors={state.connectors} monid={monid} />
+          <ConnectionsCatalog
+            connectors={state.connectors}
+            monid={monid}
+            query={query}
+            selectedId={connectorId}
+            onClearQuery={() => setQuery("")}
+          />
           {connectorId === "monid" ? <MonidConnection {...monid} /> : null}
           {connectorId && selectedConnector && (
             <ConnectorDetail
@@ -548,14 +567,9 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
             />
           )}
           {connectorId && connectorId !== "monid" && !selectedConnector && (
-            <section className="connection-detail connection-not-found">
-              <a className="connection-back" href="#/connections">
-                <span aria-hidden="true">←</span> Back to Connections
-              </a>
+            <section className="connection-detail" aria-label="Connection not found">
+              <BackToConnections />
               <h2>Connection not found</h2>
-              <p>
-                <code>{connectorId}</code> is not available in the current Sourcecado catalog.
-              </p>
             </section>
           )}
         </div>

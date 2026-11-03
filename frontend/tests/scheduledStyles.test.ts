@@ -1,59 +1,42 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { styles as css } from "./cssBundle";
+import { styles as bundle } from "./cssBundle";
 
-describe("Scheduled route styles", () => {
-  it("keeps schedule actions and form controls at least 44px tall", () => {
-    expect(css).toMatch(/\.scheduled-page button[\s\S]*?min-height:\s*44px;/);
-    expect(css).toMatch(
-      /\.schedule-create-form :where\(input, select\)[\s\S]*?min-height:\s*44px;/,
-    );
-    expect(css).toMatch(/\.schedule-thread-link[\s\S]*?min-height:\s*44px;/);
-    expect(css).toMatch(/\.schedule-history button[\s\S]*?min-height:\s*44px;/);
+const css = readFileSync("src/styles/scheduled.css", "utf8");
+const narrow = css.slice(css.indexOf("@media (max-width: 767px)"));
+
+describe("Scheduled styles", () => {
+  it("gives buttons, links and fields a 44px touch target on narrow screens", () => {
+    expect(narrow).toMatch(/\.scheduled-button\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/);
+    expect(narrow).toMatch(/\.scheduled-run-thread\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px;/);
+    expect(narrow).toMatch(/\.scheduled-field :where\(input, select\)\s*\{[^}]*min-height:\s*44px;/);
   });
 
-  it("uses compact task cards and a dedicated history-detail grid", () => {
-    expect(css).toMatch(/\.schedule-task-list\s*\{[^}]*display:\s*grid;/);
-    expect(css).toMatch(/\.scheduled-page\s*\{[^}]*max-width:\s*900px;/);
-    expect(css).toMatch(/\.schedule-task-card\s*\{[^}]*max-width:\s*405px;/);
-    expect(css).toMatch(
-      /\.schedule-detail-grid\s*\{[^}]*grid-template-columns:\s*320px\s+minmax\(0,\s*1fr\);[^}]*gap:\s*42px;/,
-    );
-    expect(css).toMatch(/\.schedule-markdown-table\s*\{[^}]*overflow-x:\s*auto;/);
+  it("turns table rows into two-line cards on narrow screens", () => {
+    expect(narrow).toMatch(/\.scheduled-row\s*\{[^}]*display:\s*grid;/);
+    expect(narrow).toMatch(/\.scheduled-cell svg\s*\{[^}]*display:\s*block;/);
   });
 
-  it("stacks list and detail actions on narrow screens", () => {
+  it("stacks the run list above the receipt below 1024px", () => {
+    expect(css).toMatch(/\.scheduled-history-grid\s*\{[^}]*grid-template-columns:\s*320px minmax\(0, 1fr\);/);
     expect(css).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.scheduled-page-header,[\s\S]*?\.schedule-detail-header[\s\S]*?flex-direction:\s*column;/,
-    );
-    expect(css).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.schedule-detail-grid[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+      /@media \(max-width: 1023px\)[\s\S]*?\.scheduled-history-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/,
     );
   });
 
-  it("keeps keyboard focus visible and disabled lifecycle stubs honest", () => {
-    expect(css).toMatch(/\.schedule-task-card:focus-visible[\s\S]*?outline:/);
+  it("marks failed and attention receipts with a tinted border", () => {
+    expect(css).toMatch(/\.scheduled-receipt\.receipt-failed\s*\{[^}]*var\(--error\)/);
     expect(css).toMatch(
-      /\.schedule-detail-actions button:disabled[\s\S]*?cursor:\s*not-allowed;/,
+      /\.scheduled-receipt\.receipt-waiting_approval,\s*\.scheduled-receipt\.receipt-partial,\s*\.scheduled-receipt\.receipt-unknown\s*\{[^}]*var\(--warn\)/,
     );
-    expect(css).toMatch(
-      /\.schedule-active-switch input\s*\{[^}]*appearance:\s*none;[^}]*border-radius:\s*999px;/,
-    );
-    expect(css).toMatch(/\.schedule-active-switch input\s*\{[^}]*width:\s*39px;[^}]*height:\s*23px;/);
-    expect(css).toMatch(/\.schedule-markdown a\s*\{[^}]*color:\s*var\(--accent-deep\);/);
   });
 
-  it("visually distinguishes waiting, partial, failed, and unknown receipts", () => {
-    expect(css).toMatch(/\.schedule-receipt\.receipt-waiting_approval\s*\{[^}]*border-color:\s*var\(--warn\);/);
-    expect(css).toMatch(/\.schedule-receipt\.receipt-partial\s*\{[^}]*border-color:\s*var\(--warn\);/);
-    expect(css).toMatch(/\.schedule-receipt\.receipt-failed\s*\{[^}]*border-color:\s*var\(--error\);/);
-    expect(css).toMatch(/\.schedule-receipt\.receipt-unknown\s*\{[^}]*border-color:\s*var\(--warn\);/);
-  });
-
-  it("disables schedule skeleton animation for reduced motion and styles the rail Inbox badge", () => {
+  it("keeps focus visible and stops motion for reduced-motion users", () => {
+    expect(css).toMatch(/\.scheduled-button:focus-visible,[\s\S]*?outline:\s*2px solid var\(--accent\);/);
     expect(css).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.schedule-job-skeleton[\s\S]*?animation:\s*none;/,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.scheduled-skeleton span\s*\{\s*animation:\s*none;/,
     );
-    expect(css).toMatch(/\.rail-inbox-badge\s*\{[^}]*min-width:\s*20px;/);
+    expect(bundle).toMatch(/\.rail-inbox-badge\s*\{[^}]*min-width:\s*20px;/);
   });
 });

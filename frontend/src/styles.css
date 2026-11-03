@@ -10,6 +10,8 @@
 @import "./styles/contacts.css";
 @import "./styles/crm-interactions.css";
 @import "./styles/crm-details.css";
+@import "./styles/connections.css";
+@import "./styles/scheduled.css";
 @import "./styles/responsive.css";
 
 .person-mail-activity .person-timeline-entry,

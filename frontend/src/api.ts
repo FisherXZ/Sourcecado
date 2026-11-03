@@ -58,6 +58,8 @@ export type ScheduleJob = {
   prompt: string;
   createdAt: string;
   nextRunAt: string | null;
+  /** A paused job has no next run. */
+  enabled: boolean;
 };
 
 export type ScheduleArtifact = {
@@ -90,10 +92,13 @@ export type ScheduleTemplate = {
   defaultPrompt: string;
 };
 
+export type ScheduleCadence = { id: string; label: string };
+
 export type Schedule = {
   jobs: ScheduleJob[];
   runs: ScheduleRun[];
   templates: ScheduleTemplate[];
+  cadences: ScheduleCadence[];
 };
 
 export type Hello = { message: string; piece: string; window: string };
@@ -1818,6 +1823,8 @@ function normalizeScheduleJob(value: unknown): ScheduleJob {
     prompt: text(raw.prompt),
     createdAt: text(raw.created_at),
     nextRunAt: typeof raw.next_run_at === "string" ? raw.next_run_at : null,
+    enabled:
+      typeof raw.enabled === "boolean" ? raw.enabled : typeof raw.next_run_at === "string",
   };
 }
 
@@ -1912,6 +1919,14 @@ export async function getSchedule(): Promise<Schedule> {
     templates: Array.isArray(body.templates)
       ? body.templates.map(normalizeScheduleTemplate)
       : [],
+    cadences: Array.isArray(body.cadences)
+      ? body.cadences
+          .map((value: unknown) => {
+            const raw = record(value);
+            return { id: text(raw.id), label: text(raw.label, text(raw.id)) };
+          })
+          .filter((cadence: ScheduleCadence) => cadence.id)
+      : [],
   };
 }
 
@@ -1945,6 +1960,31 @@ export async function createScheduleJob(input: {
   return normalizeScheduleJob(body.job);
 }
 
+/** Edit a saved routine. `enabled: false` pauses it; true resumes from the next slot. */
+export async function updateScheduleJob(
+  id: number,
+  patch: Partial<{ name: string; prompt: string; cadence: string; enabled: boolean }>,
+): Promise<ScheduleJob> {
+  const res = await fetch(`${httpBase()}/v1/schedule/${id}`, {
+    method: "PATCH",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const body = record(await res.json());
+  if (!res.ok) {
+    if (body.error === "invalid_routine") {
+      throw new ScheduleApiError(
+        "invalid_routine",
+        "Review the highlighted routine fields.",
+        safeFieldErrors(body.fields),
+      );
+    }
+    throw new ScheduleApiError("request_failed", "The routine could not be saved.");
+  }
+  return normalizeScheduleJob(body.job);
+}
+
+/** Start a run now. The backend answers with the running receipt at once. */
 export async function runScheduleJob(id: number): Promise<{ run: ScheduleRun }> {
   const res = await fetch(`${httpBase()}/v1/schedule/${id}/run`, {
     method: "POST",
@@ -1971,13 +2011,31 @@ export async function getGmail(): Promise<GmailStatus> {
   return res.json();
 }
 
+/**
+ * The backend refused to start a sign-in and said why, for example that the
+ * Google client credentials are not set. The message is written for the operator.
+ */
+export class ConnectorStartError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConnectorStartError";
+  }
+}
+
+function connectorStartFailure(body: unknown, fallback: string): Error {
+  const message = record(body).error;
+  return typeof message === "string" && message
+    ? new ConnectorStartError(message)
+    : new Error(fallback);
+}
+
 export async function connectGmail(): Promise<{ url: string; opened?: boolean; redirect_uri?: string }> {
   const res = await fetch(`${httpBase()}/v1/gmail/connect`, {
     method: "POST",
     headers: { "X-Club-Token": apiToken() },
   });
   const body = await res.json();
-  if (!res.ok) throw new Error(body.error || `gmail connect ${res.status}`);
+  if (!res.ok) throw connectorStartFailure(body, `gmail connect ${res.status}`);
   return body;
 }
 
@@ -2420,10 +2478,14 @@ export async function getConnectors(): Promise<{ connectors: Connector[] }> {
 
 /**
  * Run the backend's read-only connector probes and return the refreshed
- * catalog. Results are cached server-side, so repeated calls are cheap.
+ * catalog. Results are cached server-side, so repeated calls are cheap;
+ * `force` asks for a new probe anyway.
  */
-export async function checkConnectors(): Promise<{ connectors: Connector[] }> {
-  const res = await fetch(`${httpBase()}/v1/connectors/check`, {
+export async function checkConnectors(
+  options: { force?: boolean } = {},
+): Promise<{ connectors: Connector[] }> {
+  const query = options.force ? "?force=true" : "";
+  const res = await fetch(`${httpBase()}/v1/connectors/check${query}`, {
     method: "POST",
     headers: { "X-Club-Token": apiToken() },
   });
@@ -2441,7 +2503,7 @@ export async function connectDrive(): Promise<{ url: string; opened?: boolean }>
     headers: { "X-Club-Token": apiToken() },
   });
   const body = await res.json();
-  if (!res.ok) throw new Error(body.error || `drive connect ${res.status}`);
+  if (!res.ok) throw connectorStartFailure(body, `drive connect ${res.status}`);
   return body;
 }
 
@@ -2451,7 +2513,7 @@ export async function connectCalendar(): Promise<{ url: string; opened?: boolean
     headers: { "X-Club-Token": apiToken() },
   });
   const body = await res.json();
-  if (!res.ok) throw new Error(body.error || `calendar connect ${res.status}`);
+  if (!res.ok) throw connectorStartFailure(body, `calendar connect ${res.status}`);
   return body;
 }
 
@@ -2461,7 +2523,7 @@ export async function connectGranola(): Promise<{ started: boolean; url?: string
     headers: { "X-Club-Token": apiToken() },
   });
   const body = await res.json();
-  if (!res.ok) throw new Error(body.error || `granola connect ${res.status}`);
+  if (!res.ok) throw connectorStartFailure(body, `granola connect ${res.status}`);
   return body;
 }
 

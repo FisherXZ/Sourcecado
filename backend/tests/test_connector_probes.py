@@ -190,6 +190,20 @@ def test_checks_are_cached_until_they_expire_or_the_credential_changes(tmp_path)
     assert (google.calls, granola.calls) == (2, 3)
 
 
+def test_a_forced_check_ignores_the_cache(tmp_path):
+    app = make_app(tmp_path)
+    google, granola = CountingProbe(OK), CountingProbe(OK)
+    install(app, google=google, granola=granola, cache_seconds=60)
+
+    check(app)
+    response = TestClient(app).post(
+        "/v1/connectors/check?force=true", headers={TOKEN_HEADER: TOKEN}
+    )
+
+    assert response.status_code == 200
+    assert (google.calls, granola.calls) == (2, 2)
+
+
 def test_a_hung_probe_times_out_without_holding_the_request(tmp_path):
     app = make_app(tmp_path)
     release = threading.Event()

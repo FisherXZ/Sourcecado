@@ -123,8 +123,11 @@ class ConnectorProbes:
             return None
         return cached[2]
 
-    def check(self) -> None:
-        """Probe every connector with a saved credential and no fresh result."""
+    def check(self, *, force: bool = False) -> None:
+        """Probe every connector with a saved credential and no fresh result.
+
+        `force` ignores the cache: the operator asked for a new check.
+        """
         now = self._clock()
         due: dict[str, str] = {}
         for key in self._probes:
@@ -134,7 +137,8 @@ class ConnectorProbes:
             with self._lock:
                 cached = self._results.get(key)
             fresh = (
-                cached is not None
+                not force
+                and cached is not None
                 and cached[0] == fingerprint
                 and now - cached[1] < self._cache_seconds
             )
