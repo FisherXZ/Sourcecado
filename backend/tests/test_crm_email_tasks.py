@@ -380,13 +380,50 @@ def test_automatic_creation_undo_is_version_checked_and_human_creation_still_can
         TaskService(people).undo(pid, human["change"]["change_id"], operation_id="human-undo-rejected", actor="director")
 
 
-def test_task_source_links_are_safe_current_and_shared_by_http_and_chat(tmp_path):
+def test_task_source_links_are_safe_current_and_shared_by_http_and_chat(tmp_path, monkeypatch):
+    import threading
     from coworker.crm_tools import execute_crm_tool
-    app = create_app(token="email-tasks", state=tmp_path, provider=TaskModel(), gmail=TaskMail())
+
+    class HeldTaskModel(TaskModel):
+        def __init__(self):
+            super().__init__()
+            self.entered = threading.Event()
+            self.release = asyncio.Event()
+
+        async def astream(self, **kwargs):
+            self.entered.set()
+            await asyncio.wait_for(self.release.wait(), timeout=10)
+            async for chunk in super().astream(**kwargs):
+                yield chunk
+
+    model = HeldTaskModel()
+    app = create_app(token="email-tasks", state=tmp_path, provider=model, gmail=TaskMail())
     people = app.state.people
     pid = tracked_person(people)
+    app.state.crm_analysis.factory()._prepare(pid)
+    # This fixture already has verified mail. Keep unrelated mailbox collection
+    # out of the link/privacy test while the real lifespan analysis worker runs.
+    monkeypatch.setattr(app.state.crm_refresh, "collect", lambda: {"status": "ok"})
     with TestClient(app) as client:
-        assert client.post(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "email-tasks"}, json={}).json()["status"] == "analyzed"
+        assert model.entered.wait(timeout=5), "lifespan analysis never reached the provider"
+
+        async def finish_background_analysis():
+            model.release.set()
+            await asyncio.wait_for(asyncio.shield(app.state.crm_refresh._current), timeout=5)
+
+        try:
+            # An overlapping request truthfully reports the existing worker's
+            # lease. Its response is not the task/checkpoint completion signal.
+            response = client.post(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "email-tasks"}, json={})
+            assert response.status_code == 200
+            assert response.json()["status"] == "running"
+        finally:
+            client.portal.call(finish_background_analysis)
+        state = client.get(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "email-tasks"}).json()
+        assert state["outcome"] == "analyzed"
+        assert state["analyzed_revision"] == state["latest_revision"] > 0
+        assert state["lease_until"] is None
+        assert len(model.calls) == 1
         person_tasks = client.get(f"/v1/crm/tasks?person_id={pid}", headers={TOKEN_HEADER: "email-tasks"}).json()["tasks"]
         global_tasks = client.get("/v1/crm/tasks", headers={TOKEN_HEADER: "email-tasks"}).json()["tasks"]
         assert person_tasks[0]["source_links"] == global_tasks[0]["source_links"]
