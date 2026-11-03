@@ -41,8 +41,6 @@ from coworker.agent_run_reconcile import (
     review_queue,
 )
 from coworker.agent_run_repository import AgentRunRepository
-from coworker.attachments import AttachmentStore
-from coworker.attachments_api import attachments_router
 from coworker.agent_run_resume import restart as agent_run_restart
 from coworker.apollo import (
     ENRICH_CREDIT_COST,
@@ -129,10 +127,11 @@ from coworker.brief import (
     project,
     prompt_context,
 )
-from coworker.people import DESCRIPTION_SLOTS, PersonStore
+from coworker.people import DESCRIPTION_SLOTS, CrmMigrationRequired, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
-from coworker.crm_mail import TrackedMailReader, refresh_mail
-from coworker.crm_mail_repository import MailRepository
+from coworker.reply_filing import InboundReader, refresh_replies
+from coworker.crm_analysis import AnalysisService, ConversationReader
+from coworker.crm_descriptions import DescriptionService
 from coworker.prompt_contract import (
     AssembledSystemPrompt,
     PromptDefinition,
@@ -143,7 +142,6 @@ from coworker.prompt_contract import (
 from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
 from coworker.provider import (
     ToolCall,
-    provider_accepts_images,
     provider_model_metadata,
     provider_verifications,
     safe_model_identifier,
@@ -467,13 +465,6 @@ def create_app(
             store=app.state.drive_ingestions,
             coordinator=app.state.drive_ingestion_coordinator,
             people=app.state.people,
-        )
-    )
-    app.state.attachments = AttachmentStore(root)
-    app.include_router(
-        attachments_router(
-            store=app.state.attachments,
-            accepts_images=lambda: provider_accepts_images(app.state.provider),
         )
     )
     app.state.agent_runs = AgentRunRepository(root)
@@ -2036,23 +2027,9 @@ def create_app(
             )
         return HTMLResponse("<p>Gmail connected. You can close this tab and go back to Sourcecado.</p>")
 
-    mail_repository = MailRepository(app.state.people)
-    mail_refresh_lock = threading.Lock()
-
-    def collect_tracked_mail():
-        # #208's local loop can use this same collection boundary. Serializing
-        # writers keeps checkpoints monotonic while local reads stay immediate.
-        with mail_refresh_lock:
-            return refresh_mail(app.state.people, TrackedMailReader(app.state.gmail))
-
-    app.state.collect_tracked_mail = collect_tracked_mail
-
-    def current_board():
-        return {**app.state.people.list_board(), "mail_sync": mail_repository.public_sync_state()}
-
     @app.get("/v1/board")
-    def board_get(include_mail_state: bool = False):
-        return current_board() if include_mail_state else app.state.people.list_board()
+    def board_get():
+        return app.state.people.list_board()
 
     def _operator_timezone() -> str:
         """The director's saved IANA timezone; task dates are days in it."""
@@ -2154,6 +2131,14 @@ def create_app(
         if not isinstance(payload, dict):
             return JSONResponse({"error": "expected a JSON object"}, status_code=400)
         try:
+            with app.state.people._lock:
+                entity = app.state.people._conn.execute(
+                    "SELECT entity_type FROM crm_changes WHERE person_id=? AND change_id=?",
+                    (person_id, change_id),
+                ).fetchone()
+            if entity and entity[0] == "description":
+                return DescriptionService(app.state.people).undo(person_id, change_id,
+                    operation_id=payload.get("operation_id"), reason=payload.get("reason") or "Director undid a description change.")
             return app.state.tasks.undo(
                 person_id,
                 change_id,
@@ -2166,9 +2151,13 @@ def create_app(
 
     @app.post("/v1/replies/refresh")
     def replies_refresh():
-        """Collect tracked incoming/outgoing mail through a read-only boundary."""
-        result = collect_tracked_mail()
-        return {"refresh": result, "board": current_board()}
+        """Read inbound Gmail since the cursor and file what it can attribute.
+
+        Read and filing only. The reader handed to the refresh exposes four
+        Gmail read calls, so nothing on this path can enrich, draft, or send.
+        """
+        result = refresh_replies(app.state.people, InboundReader(app.state.gmail))
+        return {"refresh": result, "board": app.state.people.list_board()}
 
     @app.post("/v1/apollo/curate")
     async def apollo_curate(request: Request):
@@ -2269,8 +2258,6 @@ def create_app(
             # from the ledger can reappear through the brief.
             "brief": brief_payload(project(person, timeline, session_id=session_id)),
             "timeline": timeline,
-            "mail_sync": mail_repository.public_sync_state(),
-            "mail_analysis": mail_repository.analysis_state(person_id),
             "versions": app.state.people.versions(person_id),
             "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
             "sourcing_chat": (
@@ -2347,6 +2334,57 @@ def create_app(
             "saved": True,
             "unchanged": False,
         }
+
+    def _crm_analysis() -> AnalysisService:
+        return AnalysisService(app.state.people, provider=app.state.provider,
+            failovers=app.state.provider_failovers, reader=ConversationReader(app.state.gmail))
+
+    @app.get("/v1/people/{person_id}/descriptions/{slot}/changes")
+    def people_description_changes(person_id: str, slot: str):
+        if slot not in DESCRIPTION_SLOTS:
+            return JSONResponse({"error": "unknown description slot"}, status_code=404)
+        try:
+            return {"changes": DescriptionService(app.state.people).changes(person_id, slot)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/v1/people/{person_id}/analysis")
+    def people_analysis_state(person_id: str):
+        try:
+            return _crm_analysis().state(person_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/v1/people/{person_id}/analysis")
+    async def people_analyze(person_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) - {"retry"} or ("retry" in payload and type(payload["retry"]) is not bool):
+            return JSONResponse({"error": "expected an object with optional boolean retry"}, status_code=400)
+        try:
+            return await _crm_analysis().analyze(person_id, retry=payload.get("retry", False))
+        except CrmMigrationRequired as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/v1/people/{person_id}/proposals")
+    def people_proposals(person_id: str, state: str = "pending"):
+        try:
+            return {"proposals": _crm_analysis().proposals(person_id, state=state)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/v1/people/{person_id}/proposals/{proposal_id}/resolve")
+    async def people_resolve_proposal(person_id: str, proposal_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) != {"action", "expected_version"} or type(payload.get("expected_version")) is not int:
+            return JSONResponse({"error": "action and expected_version are required"}, status_code=400)
+        try:
+            return _crm_analysis().resolve(person_id, proposal_id, action=payload["action"], expected_version=payload["expected_version"])
+        except TaskConflict as exc:
+            return _task_error(exc)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     @app.patch("/v1/people/{person_id}/descriptions/{slot}")
     async def people_description(person_id: str, slot: str, request: Request):
@@ -3537,7 +3575,6 @@ def create_app(
                     run_trigger=(
                         "chat" if queue_item_id is None else "queued_chat"
                     ),
-                    attachments=app.state.attachments,
                 )
                 status = str(result.get("status") or "error")
                 if queue_item_id is not None:

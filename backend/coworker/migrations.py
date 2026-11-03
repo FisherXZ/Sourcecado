@@ -37,15 +37,16 @@ from pathlib import Path
 from typing import Any
 
 from coworker.agent_run_approval import EFFECT_STATEMENTS
-from coworker.crm_mail_repository import MAIL_SCHEMA
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
 from coworker.crm_tasks import (
     CRM_CHANGES_COLUMNS,
+    CRM_CHANGES_V5_COLUMNS,
     CRM_CHANGES_INDEX_STATEMENTS,
     CRM_TASK_STATEMENTS,
 )
 from coworker.mcp import SCHEMA_VERSION as MCP_CONFIG_VERSION
 from coworker.people import SCHEMA_VERSION as PEOPLE_DB_VERSION
+from coworker.crm_analysis_schema import CRM_ANALYSIS_STATEMENTS
 from coworker.person_identity import (
     apollo_surname_is_masked,
     without_apollo_name_masks,
@@ -834,7 +835,7 @@ def _count_crm_changes(context: MigrationContext) -> int:
     return _row_count(conn, "crm_changes")
 
 
-def _widen_crm_changes(context: MigrationContext) -> int:
+def _widen_crm_changes(context: MigrationContext, columns: str = CRM_CHANGES_V5_COLUMNS) -> int:
     """Rebuild crm_changes so it can record task state changes and undo.
 
     SQLite cannot alter a CHECK, so the table is rebuilt: create the new
@@ -848,7 +849,7 @@ def _widen_crm_changes(context: MigrationContext) -> int:
     conn = context.connection
     assert conn is not None
     copied = _row_count(conn, "crm_changes")
-    conn.execute(f"CREATE TABLE crm_changes_new ({CRM_CHANGES_COLUMNS})")
+    conn.execute(f"CREATE TABLE crm_changes_new ({columns})")
     conn.execute(
         """
         INSERT INTO crm_changes_new (
@@ -867,6 +868,14 @@ def _widen_crm_changes(context: MigrationContext) -> int:
     for statement in CRM_CHANGES_INDEX_STATEMENTS:
         conn.execute(statement)
     return copied
+
+def _add_crm_analysis(context: MigrationContext) -> int:
+    copied = _widen_crm_changes(context, CRM_CHANGES_COLUMNS)
+    assert context.connection is not None
+    for statement in CRM_ANALYSIS_STATEMENTS:
+        context.connection.execute(statement)
+    return copied
+
 
 
 # DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
@@ -999,13 +1008,6 @@ def _adopt(description: str, count: Callable, apply: Callable) -> tuple[Migratio
             apply=apply,
         ),
     )
-
-
-def _add_tracked_mail(context: MigrationContext) -> int:
-    assert context.connection is not None
-    for statement in MAIL_SCHEMA:
-        context.connection.execute(statement)
-    return 0
 
 
 # --- the registry --------------------------------------------------------
@@ -1143,9 +1145,9 @@ REGISTRY: tuple[StoreSpec, ...] = (
             Migration(
                 from_version=5,
                 to_version=6,
-                description="Add tracked Gmail evidence, collection progress and pending analysis revisions.",
-                count=lambda context: 0,
-                apply=_add_tracked_mail,
+                description="Add durable CRM analysis and proposals, and description change history.",
+                count=_count_crm_changes,
+                apply=_add_crm_analysis,
             ),
         ),
         json_columns=(
@@ -1160,6 +1162,13 @@ REGISTRY: tuple[StoreSpec, ...] = (
             ("crm_changes", "after_json"),
             ("crm_changes", "source_refs"),
             ("crm_operations", "response_json"),
+            ("crm_analysis_attempts", "manifest_json"),
+            ("crm_analysis_attempts", "usage_json"),
+            ("crm_analysis_attempts", "budget_json"),
+            ("crm_analysis_attempts", "change_ids"),
+            ("crm_analysis_attempts", "proposal_ids"),
+            ("crm_proposals", "source_refs"),
+            ("crm_proposals", "resolution_receipt_json"),
         ),
     ),
     StoreSpec(
@@ -1482,11 +1491,10 @@ def _plan_store(root: Path, spec: StoreSpec) -> StorePlan:
     )
 
 
-def plan_migrations(root: str | Path, *, store_ids: Iterable[str] | None = None) -> MigrationPlan:
+def plan_migrations(root: str | Path) -> MigrationPlan:
     """Read every registered store and report what it would take to bring it current."""
     root = Path(root).expanduser()
-    specs = REGISTRY if store_ids is None else tuple(spec_for(store_id) for store_id in store_ids)
-    return MigrationPlan(tuple(_plan_store(root, spec) for spec in specs))
+    return MigrationPlan(tuple(_plan_store(root, spec) for spec in REGISTRY))
 
 
 # --- backup and restore --------------------------------------------------
