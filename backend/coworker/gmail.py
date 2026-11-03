@@ -19,7 +19,7 @@ import html
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
-from typing import Any, Protocol
+from typing import Any, Protocol, Callable
 
 from coworker.apollo import HttpError, LiveHttp
 from coworker.evidence_envelope import (
@@ -1272,7 +1272,7 @@ def verify_send_authority(client: Any, authority: SendAuthority) -> dict[str, An
     return snapshot
 
 
-def send_reviewed_draft(client: Any, authority: SendAuthority) -> dict[str, Any]:
+def send_reviewed_draft(client: Any, authority: SendAuthority, *, before_send: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     """The only sanctioned path to a real send.
 
     Verifies the binding, then makes exactly one send call. This function does
@@ -1280,7 +1280,9 @@ def send_reviewed_draft(client: Any, authority: SendAuthority) -> dict[str, Any]
     approval claim in ConversationStore.decide_and_claim_inbox_execution, which
     hands the work to exactly one caller.
     """
-    verify_send_authority(client, authority)
+    snapshot = verify_send_authority(client, authority)
+    if before_send is not None:
+        before_send(snapshot)
     result = client.send(draft_id=authority.draft_id) or {}
     message_id = str(result.get("id") or "")
     if not message_id:

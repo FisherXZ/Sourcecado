@@ -94,6 +94,7 @@ class SeedPerson:
     sequence_state: str | None = None
     outcome: str | None = None
     bind_session: bool = False
+    email: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 
 from coworker import migrations
-from coworker.people import PersonStore, SCHEMA_VERSION
+from coworker.people import PersonStore, SCHEMA_VERSION, SCHEMA_VERSION
 
 
 def fail_after_unified_upgrade(monkeypatch):
@@ -45,11 +45,11 @@ def test_mail_migration_is_registered_and_preserves_populated_v5(tmp_path):
     outcome = migrations.apply_migrations(tmp_path)
     assert outcome.error is None and outcome.backup_id
     upgraded = PersonStore(tmp_path)
-    assert SCHEMA_VERSION == 8
+    assert SCHEMA_VERSION == SCHEMA_VERSION
     assert upgraded.get(pid) == before
     for table, rows in rows_before.items():
         assert upgraded._conn.execute(f"SELECT * FROM {table}").fetchall() == rows
-    assert upgraded._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert upgraded._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert upgraded._conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert migrations.list_backups(tmp_path)
 

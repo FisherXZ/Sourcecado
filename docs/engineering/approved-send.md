@@ -65,6 +65,11 @@ registered migration; it must share this helper rather than broad person version
    The turn loop leaves that receipt alone instead of duplicating it as a generic
    tool event. Tool calls and failures still appear in the run/transcript ledger.
 
+After the last live Gmail read, the final pre-send callback checks current person
+identity again and checks the verified snapshot’s headers/thread. This catches a
+correction that commits while Gmail is being read, without keeping a SQLite
+transaction open across network I/O. Provider read errors use fixed safe text.
+
 The bounded send editor refuses Cc/Bcc, a different From identity, attachments and
 HTML parts it cannot show for exact review. Adding them externally after review
 also refuses the send. Gmail read failures do not authorize a send.

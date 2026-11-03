@@ -789,6 +789,8 @@ def test_http_resolve_returns_202_outcome_pending_for_a_live_slow_execution(
 
 
 def test_gmail_send_approval_carries_recipient_subject_and_account(tmp_path):
+    from coworker.gmail import body_digest
+    from test_approved_send import _bound_person
     gmail = FakeGmail()
     gmail.account_email = "director@club.test"
     gmail.create_draft(
@@ -801,7 +803,7 @@ def test_gmail_send_approval_carries_recipient_subject_and_account(tmp_path):
                     ToolCall(
                         id="call-send",
                         name="gmail_send",
-                        arguments={"draft_id": "draft_1"},
+                        arguments={"draft_id":"draft_1","reviewed_body_digest":body_digest("secret body")},
                     )
                 ]
             },
@@ -810,9 +812,10 @@ def test_gmail_send_approval_carries_recipient_subject_and_account(tmp_path):
     )
     app = create_app(token=TOKEN, provider=fake, state=tmp_path, gmail=gmail)
     client = TestClient(app)
+    _pid, sid = _bound_person(app)
 
     with client.websocket_connect("/ws/chat", subprotocols=["club", TOKEN]) as ws:
-        ws.send_json({"type": "chat", "text": "send it"})
+        ws.send_json({"type":"chat","text":"send it","session_id":sid})
         permission = None
         while permission is None:
             event = ws.receive_json()
@@ -826,8 +829,8 @@ def test_gmail_send_approval_carries_recipient_subject_and_account(tmp_path):
                 break
 
     resource = permission["resource"]
-    assert resource == {
-        "kind": "gmail_draft",
+    assert {key:resource[key] for key in ("kind","draft_id","to","subject","account")} == {
+        "kind":"gmail_send_authority",
         "draft_id": "draft_1",
         "to": "ada@analytic.example",
         "subject": "Dinner",

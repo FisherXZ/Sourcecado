@@ -883,6 +883,23 @@ def test_failover_continues_from_completed_tool_result_without_reexecution(
 def test_failover_does_not_repeat_completed_approval_or_send(tmp_path, monkeypatch):
     retry = importlib.import_module("coworker.provider_retry")
 
+    from coworker.people import PersonStore
+    from coworker.gmail import FakeGmail,body_digest
+    from coworker.consequential_actions import ConsequentialActions
+    store=ConversationStore(tmp_path)
+    sid='approval-failover'
+    store.create_session(sid)
+    people=PersonStore(tmp_path)
+    pid=people.keep_from_apollo(apollo_id='retry-person',first_name='Ada',last_name_obfuscated='Lovelace',title=None,company=None)['person_id']
+    people.apply_enrichment(pid,email='ada@example.test')
+    people.bind_session(sid,pid)
+    gmail=FakeGmail();gmail.account_email='director@example.test'
+    gmail.create_draft(to='ada@example.test',subject='Reviewed',body='Reviewed message')
+    gmail.drafts[-1]['id']='draft-1'
+    send_arguments={'draft_id':'draft-1','reviewed_body_digest':body_digest('Reviewed message')}
+    inbox=Inbox(store)
+    actions=ConsequentialActions(people=people,inbox=inbox,gmail=lambda:gmail,http=lambda:None,apollo_key=lambda:None)
+
     class ActiveProvider:
         provider_id = "openai"
         model_id = "gpt-4o-mini"
@@ -898,7 +915,7 @@ def test_failover_does_not_repeat_completed_approval_or_send(tmp_path, monkeypat
                         ToolCall(
                             id="call_send",
                             name="gmail_send",
-                            arguments={"draft_id": "draft-1"},
+                            arguments=send_arguments,
                         )
                     ]
                 )
@@ -927,9 +944,6 @@ def test_failover_does_not_repeat_completed_approval_or_send(tmp_path, monkeypat
         return True, {"message_id": "sent-1", "status": "sent"}
 
     monkeypatch.setattr("coworker.turn.execute", execute_send)
-    store = ConversationStore(tmp_path)
-    sid = "approval-failover"
-    store.create_session(sid)
     result = asyncio.run(
         run_turn(
             text="send it",
@@ -939,11 +953,11 @@ def test_failover_does_not_repeat_completed_approval_or_send(tmp_path, monkeypat
             failover_providers=(FallbackProvider(),),
             persona=None,
             skills=None,
-            inbox=Inbox(store),
+            inbox=inbox,
             openai_tools=[
                 {"type": "function", "function": {"name": "gmail_send"}}
             ],
-            execute_kwargs={},
+            execute_kwargs={"people":people,"consequential_actions":actions},
             wait_permission=approve,
             retry_policy=retry.RetryPolicy(max_attempts_per_provider=1),
         )
@@ -951,7 +965,7 @@ def test_failover_does_not_repeat_completed_approval_or_send(tmp_path, monkeypat
 
     assert result == {"status": "ok", "text": "send already completed"}
     assert approvals == ["call_send"]
-    assert sends == [("gmail_send", {"draft_id": "draft-1"}, True)]
+    assert sends == [("gmail_send", send_arguments, True)]
 
 
 def test_final_provider_failure_emits_safe_message_without_raw_body(tmp_path):

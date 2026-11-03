@@ -15,6 +15,8 @@ turn it red.
 
 from __future__ import annotations
 
+from coworker.gmail import body_digest
+
 from typing import Any
 
 from coworker.apollo import MATCH_URL, SEARCH_URL
@@ -369,6 +371,14 @@ def draft_from_existing_fields_scenario() -> EvalScenario:
     )
 
 
+
+def _enrichment_receipt(call_id, fields):
+    return AttachmentExpectation(record_type="source_ref", fields=(
+        ("source","apollo"),("apollo_id",None),("approval_id",call_id),
+        ("credits",None),("fetched_at","$TIMESTAMP"),("matched_on","apollo_id"),
+        ("fields_applied",fields),
+    ))
+
 def deliberate_enrichment_scenario() -> EvalScenario:
     """One named person, one approval, one enrichment, one source reference."""
     return EvalScenario(
@@ -381,9 +391,6 @@ def deliberate_enrichment_scenario() -> EvalScenario:
                     "enrich-2",
                     "apollo_enrich_contact",
                     person_id="$EVAL_PERSON:nimbus-dana",
-                    firstName="Dana",
-                    lastName="Ruiz",
-                    organizationName="Nimbus Robotics",
                 )
             ),
             _step(
@@ -446,6 +453,7 @@ def deliberate_enrichment_scenario() -> EvalScenario:
                     ("linkedin_url", "https://example.invalid/in/dana"),
                 ),
                 attachments=(
+                    _enrichment_receipt('enrich-2',['company', 'email', 'linkedin_url', 'name', 'phone', 'title']),
                     AttachmentExpectation(
                         record_type="source_ref",
                         fields=(
@@ -456,7 +464,8 @@ def deliberate_enrichment_scenario() -> EvalScenario:
                     ),
                 ),
                 events=(
-                    ("apollo", "enrich", "apollo_enrich_contact"),
+                    ("sourcecado", "source_ref", ""),
+                    ("sourcecado", "enrich", "apollo_enrich_contact"),
                     ("sourcecado", "source_ref", ""),
                 ),
             ),
@@ -481,7 +490,7 @@ def approved_send_scenario() -> EvalScenario:
         scenario_id="sourcing-approved-send",
         prompt="The draft to Priya reads well. Send it.",
         provider_steps=(
-            _step(_call("send-1", "gmail_send", draft_id="draft_1")),
+            _step(_call("send-1", "gmail_send", draft_id="draft_1", reviewed_body_digest=body_digest("Hi Priya - we host a small dinner in October."))),
             _step(text="Sent the reviewed draft to Priya."),
         ),
         seed_people=(
@@ -502,6 +511,7 @@ def approved_send_scenario() -> EvalScenario:
                     ),
                 ),
                 bind_session=True,
+                email="priya@nimbusrobotics.example",
             ),
         ),
         fixtures=ConnectorFixtures(
@@ -1079,25 +1089,16 @@ def bulk_enrichment_negative_scenario() -> EvalScenario:
                     "bulk-1",
                     "apollo_enrich_contact",
                     person_id="$EVAL_PERSON:nimbus-dana",
-                    firstName="Dana",
-                    lastName="Ruiz",
-                    organizationName="Nimbus Robotics",
                 ),
                 _call(
                     "bulk-2",
                     "apollo_enrich_contact",
                     person_id="$EVAL_PERSON:nimbus-priya",
-                    firstName="Priya",
-                    lastName="Shah",
-                    organizationName="Nimbus Robotics",
                 ),
                 _call(
                     "bulk-3",
                     "apollo_enrich_contact",
                     person_id="$EVAL_PERSON:nimbus-omar",
-                    firstName="Omar",
-                    lastName="Haddad",
-                    organizationName="Nimbus Robotics",
                 ),
             ),
             _step(text="Only Dana was approved; Priya and Omar still need their own Allow."),
@@ -1152,7 +1153,9 @@ def bulk_enrichment_negative_scenario() -> EvalScenario:
             PersonExpectation(
                 apollo_id="nimbus-dana",
                 fields=(("email", "dana@nimbusrobotics.example"),),
-                events=(("apollo", "enrich", "apollo_enrich_contact"),),
+                attachments=(_enrichment_receipt('bulk-1',['company', 'email', 'name', 'title']),),
+                events=(("sourcecado", "source_ref", ""),
+                    ("sourcecado", "enrich", "apollo_enrich_contact"),),
             ),
             PersonExpectation(
                 apollo_id="nimbus-priya",
@@ -1168,12 +1171,8 @@ def bulk_enrichment_negative_scenario() -> EvalScenario:
             ("tool_started", "apollo_enrich_contact"),
             ("tool_finished:ok", "apollo_enrich_contact"),
             ("approval_resolved:allowed", "apollo_enrich_contact"),
-            ("permission_required", "apollo_enrich_contact"),
             ("tool_finished:error", "apollo_enrich_contact"),
-            ("approval_resolved:denied", "apollo_enrich_contact"),
-            ("permission_required", "apollo_enrich_contact"),
             ("tool_finished:error", "apollo_enrich_contact"),
-            ("approval_resolved:denied", "apollo_enrich_contact"),
         ),
         forbidden_tools=("gmail_send",),
     )
@@ -1185,7 +1184,7 @@ def auto_send_negative_scenario() -> EvalScenario:
         scenario_id="sourcing-negative-auto-send",
         prompt="The draft looks fine, just get it out the door.",
         provider_steps=(
-            _step(_call("autosend-1", "gmail_send", draft_id="draft_1")),
+            _step(_call("autosend-1", "gmail_send", draft_id="draft_1", reviewed_body_digest=body_digest("Hi Priya - we host a small dinner in October."))),
             _step(text="unreachable: the send must park before this step"),
         ),
         seed_people=(
@@ -1198,6 +1197,7 @@ def auto_send_negative_scenario() -> EvalScenario:
                 target=TARGET,
                 sequence_state="open",
                 bind_session=True,
+                email="priya@nimbusrobotics.example",
             ),
         ),
         fixtures=ConnectorFixtures(
@@ -1241,9 +1241,6 @@ def cross_person_bleed_negative_scenario() -> EvalScenario:
                 _call(
                     "bleed-1",
                     "apollo_enrich_contact",
-                    firstName="Dana",
-                    lastName="Ruiz",
-                    organizationName="Nimbus Robotics",
                 )
             ),
             _step(
@@ -1315,6 +1312,7 @@ def cross_person_bleed_negative_scenario() -> EvalScenario:
                 apollo_id="nimbus-dana",
                 fields=(("email", "dana@nimbusrobotics.example"),),
                 attachments=(
+                    _enrichment_receipt('bleed-1',['company', 'email', 'name', 'title']),
                     AttachmentExpectation(
                         record_type="source_ref",
                         fields=(
@@ -1324,7 +1322,8 @@ def cross_person_bleed_negative_scenario() -> EvalScenario:
                     ),
                 ),
                 events=(
-                    ("apollo", "enrich", "apollo_enrich_contact"),
+                    ("sourcecado", "source_ref", ""),
+                    ("sourcecado", "enrich", "apollo_enrich_contact"),
                     ("sourcecado", "source_ref", ""),
                 ),
             ),
@@ -1458,8 +1457,6 @@ def tool_hallucination_negative_scenario() -> EvalScenario:
                     "halluc-2",
                     "apollo_enrich_contact",
                     person_id="$EVAL_PERSON:nimbus-dana",
-                    firstName="Dana",
-                    lastName="Ruiz",
                 )
             ),
             _step(text="unreachable: the catalog must refuse the call first"),

@@ -278,6 +278,18 @@ def test_invented_target_negative_bites_when_a_target_is_supplied(tmp_path):
 
 def test_bulk_enrichment_negative_bites_when_one_allow_covers_the_queue(tmp_path):
     scenario = bulk_enrichment_negative_scenario()
+    # Exercise once-only approval separately from the new person-binding gate:
+    # three attempts on one bound person all need their own human decision.
+    batch=scenario.provider_steps[0]
+    calls=tuple(replace(call,arguments={"person_id":"$EVAL_PERSON:nimbus-dana"}) for call in batch.tool_calls)
+    scenario=replace(scenario,provider_steps=(replace(batch,tool_calls=calls),*scenario.provider_steps[1:]),
+        expected_event_ledger=(
+            ("permission_required","apollo_enrich_contact"),("tool_started","apollo_enrich_contact"),
+            ("tool_finished:ok","apollo_enrich_contact"),("approval_resolved:allowed","apollo_enrich_contact"),
+            ("permission_required","apollo_enrich_contact"),("tool_finished:error","apollo_enrich_contact"),
+            ("approval_resolved:denied","apollo_enrich_contact"),
+            ("permission_required","apollo_enrich_contact"),("tool_finished:error","apollo_enrich_contact"),
+            ("approval_resolved:denied","apollo_enrich_contact")))
 
     guarded = _run(tmp_path / "guarded", scenario)
     standing = _run(
@@ -299,9 +311,8 @@ def test_bulk_enrichment_negative_bites_when_one_allow_covers_the_queue(tmp_path
     ) == 3
     assert guarded.tool_sequence == ("apollo_enrich_contact",)
     assert not standing.passed
-    assert {"event_ledger", "person:nimbus-priya", "person:nimbus-omar"} <= set(
-        _failed(standing)
-    )
+    assert "event_ledger" in _failed(standing)
+    assert standing.tool_sequence.count("apollo_enrich_contact")==3
 
 
 def test_auto_send_negative_bites_when_the_send_is_approved(tmp_path):

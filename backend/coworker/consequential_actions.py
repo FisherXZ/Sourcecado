@@ -34,6 +34,10 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def _authority_error(exc: SendAuthorityError) -> str:
+    return 'The live Gmail draft could not be read. Nothing was sent.' if exc.code == 'draft_unavailable' else str(exc)
+
+
 def safe_enrichment_match(people, person_id) -> dict:
     """Select the exact saved provider id, or reject ambiguous local aliases."""
     person = people.get(person_id)
@@ -109,7 +113,7 @@ class ConsequentialActions:
                 draft_id=draft_id, reviewed_body_digest=reviewed_body_digest,
                 expected_thread_id=expected_thread_id, task_id=task_id)
         except SendAuthorityError as exc:
-            raise ActionRefused(exc.code, str(exc)) from None
+            raise ActionRefused(exc.code, _authority_error(exc)) from None
         if not authority.account:
             raise ActionRefused('account_unavailable', 'The sending account could not be verified. Reconnect Gmail and review again.')
         self._reviewable_snapshot(draft_id)
@@ -120,6 +124,10 @@ class ConsequentialActions:
 
     def _reviewable_snapshot(self, draft_id):
         snapshot = draft_snapshot(self.gmail(), draft_id=draft_id)
+        self._validate_reviewable(snapshot)
+        return snapshot
+
+    def _validate_reviewable(self, snapshot):
         if snapshot['cc'] or snapshot['bcc']:
             raise ActionRefused('recipient_mismatch', 'This bounded review does not include Cc or Bcc recipients. Remove them and review again.')
         sender = parseaddr(snapshot['from'])[1]
@@ -127,7 +135,6 @@ class ConsequentialActions:
             raise ActionRefused('account_mismatch', 'The draft sender differs from the reviewed sending account.')
         if snapshot['unreviewed_parts']:
             raise ActionRefused('unsupported_message', 'This editor cannot review attachments or HTML message parts. Nothing was sent.')
-        return snapshot
 
     def enrichment_resource(self, person_id, *, session_id):
         person = self._person(person_id, session_id)
@@ -226,7 +233,8 @@ class ConsequentialActions:
                 return self._send(item, resource, person)
             return self._enrich(item, resource, person)
         except (ActionRefused, SendAuthorityError) as exc:
-            return False, {'code':exc.code,'error':str(exc),'sent':False} if item['name']=='gmail_send' else {'code':exc.code,'error':str(exc)}
+            message = _authority_error(exc) if isinstance(exc, SendAuthorityError) else str(exc)
+            return False, {'code':exc.code,'error':message,'sent':False} if item['name']=='gmail_send' else {'code':exc.code,'error':message}
 
     def _send(self, item, resource, person):
         authority = SendAuthority.from_resource(resource, approval_id=item['id'])
@@ -234,11 +242,15 @@ class ConsequentialActions:
             raise ActionRefused('review_required', 'This send authority is incomplete. Review the draft again.')
         if authority.to.strip().casefold() != str(person.get('email') or '').strip().casefold():
             raise ActionRefused('identity_changed', 'This person’s recipient changed. Review the draft again.')
-        snapshot = self._reviewable_snapshot(authority.draft_id)
-        if snapshot['thread_id'] != resource['thread_id']:
-            raise ActionRefused('thread_mismatch', 'The Gmail conversation changed. Nothing was sent.')
+        def final_check(snapshot):
+            self._validate_reviewable(snapshot)
+            current = self._person(person['person_id'], item.get('session_id'))
+            if current['identity_revision'] != resource['identity_revision'] or str(current.get('email') or '').strip().casefold() != authority.to.strip().casefold():
+                raise ActionRefused('identity_changed', 'This person’s recipient or match identity changed. Review the draft again.')
+            if snapshot['thread_id'] != resource['thread_id']:
+                raise ActionRefused('thread_mismatch', 'The Gmail conversation changed. Nothing was sent.')
         try:
-            result = send_reviewed_draft(self.gmail(), authority)
+            result = send_reviewed_draft(self.gmail(), authority, before_send=final_check)
         except GmailOutcomeUnknown:
             raise
         except SendAuthorityError:

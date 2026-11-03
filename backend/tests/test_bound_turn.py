@@ -4,8 +4,9 @@ import json
 import pytest
 
 from coworker.apollo import MATCH_URL, FakeHttp
-from coworker.gmail import FakeGmail
+from coworker.gmail import FakeGmail, body_digest
 from coworker.inbox import Inbox
+from coworker.consequential_actions import ConsequentialActions
 from coworker.people import PersonStore
 from coworker.provider import FakeProvider, ToolCall
 from coworker.store import ConversationStore
@@ -25,6 +26,7 @@ def _alyssa() -> dict:
 
 def _run(*, tmp_path, sid, text, provider, people, gmail=None, drive=None, wait=None, http=None, apollo_key=None):
     conv = ConversationStore(tmp_path)
+    inbox = Inbox(conv)
 
     async def _wait(_call_id: str) -> str:
         return wait or "allow"
@@ -37,10 +39,11 @@ def _run(*, tmp_path, sid, text, provider, people, gmail=None, drive=None, wait=
             provider=provider,
             persona=None,
             skills=None,
-            inbox=Inbox(conv),
+            inbox=inbox,
             openai_tools=OPENAI_TOOLS,
             execute_kwargs={
                 "people": people,
+                "consequential_actions": ConsequentialActions(people=people,inbox=inbox,gmail=lambda:gmail,http=lambda:http,apollo_key=lambda:apollo_key),
                 "gmail": gmail,
                 "drive": drive,
                 "http": http,
@@ -630,11 +633,7 @@ def _enrich_call():
     return ToolCall(
         id="enrich_1",
         name="apollo_enrich_contact",
-        arguments={
-            "firstName": "Ada",
-            "lastName": "Lovelace",
-            "organizationName": "Analytic",
-        },
+        arguments={},
     )
 
 
@@ -725,22 +724,22 @@ def test_gmail_send_asks_and_execute_sends_draft():
     gmail = FakeGmail()
     gmail.create_draft(to="ada@analytic.example", subject="Dinner", body="Join us")
     ok, result = execute("gmail_send", {"draft_id": "draft_1"}, gmail=gmail)
-    assert ok is True
-    assert result["sent"] is True
-    assert result["draft_id"] == "draft_1"
-    assert gmail.sends == [{"draft_id": "draft_1"}]
+    assert not ok and result["code"] == "approval_binding_required"
+    assert gmail.sends == []
 
 
 def test_allowed_send_files_on_bound_person(tmp_path):
     people = PersonStore(tmp_path)
     _keep(tmp_path, people, "sess-ada", _ada())
     gmail = FakeGmail()
+    gmail.account_email="director@fixture.test"
+    people.apply_enrichment(people.person_for_session("sess-ada"),email="ada@analytic.example")
     gmail.create_draft(to="ada@analytic.example", subject="Dinner", body="Join us")
     fake = FakeProvider(
         steps=[
             {
                 "tool_calls": [
-                    ToolCall(id="send_1", name="gmail_send", arguments={"draft_id": "draft_1"})
+                    ToolCall(id="send_1", name="gmail_send", arguments={"draft_id": "draft_1","reviewed_body_digest":body_digest("Join us")})
                 ]
             },
             {"deltas": ("Sent.",)},
@@ -767,12 +766,14 @@ def test_denied_send_does_not_send(tmp_path):
     people = PersonStore(tmp_path)
     _keep(tmp_path, people, "sess-ada", _ada())
     gmail = FakeGmail()
+    gmail.account_email="director@fixture.test"
+    people.apply_enrichment(people.person_for_session("sess-ada"),email="ada@analytic.example")
     gmail.create_draft(to="ada@analytic.example", subject="Dinner", body="Join us")
     fake = FakeProvider(
         steps=[
             {
                 "tool_calls": [
-                    ToolCall(id="send_1", name="gmail_send", arguments={"draft_id": "draft_1"})
+                    ToolCall(id="send_1", name="gmail_send", arguments={"draft_id": "draft_1","reviewed_body_digest":body_digest("Join us")})
                 ]
             },
             {"deltas": ("Okay.",)},

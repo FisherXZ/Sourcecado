@@ -169,3 +169,31 @@ def test_ambiguous_non_id_match_refuses_before_approval_or_credit_spend(tmp_path
     response=client.post(f'/v1/people/{pid}/enrich-approval',headers=HEADERS,json={'session_id':sid})
     assert response.status_code==409 and response.json()['code']=='ambiguous_match',response.text
     assert http.calls==[] and app.state.inbox.pending()==[]
+
+
+def test_gmail_preflight_failure_never_returns_provider_exception_secrets(tmp_path):
+    from coworker.gmail import GmailError
+    app,client,pid,sid,gmail,http=setup(tmp_path)
+    draft=_draft(client,pid,sid)
+    def broken(*args,**kwargs):
+        raise GmailError('Authorization: Bearer private-fake-access-token')
+    gmail.get_draft=broken
+    response=client.post(f'/v1/people/{pid}/outreach/send-approval',headers=HEADERS,
+        json={'session_id':sid,'draft_id':draft['id'],'reviewed_body_digest':draft['body_digest']})
+    assert response.status_code==409
+    assert 'private-fake-access-token' not in response.text and 'Bearer' not in response.text
+    assert gmail.send_attempts==[]
+
+
+def test_identity_correction_during_live_gmail_review_refuses_before_send(tmp_path):
+    app,client,pid,sid,gmail,http=setup(tmp_path)
+    draft=_draft(client,pid,sid);approval=_park(client,pid,sid,draft)
+    original=gmail.get_draft
+    def correct_while_reading(**kwargs):
+        snapshot=original(**kwargs)
+        app.state.people.apply_enrichment(pid,email='corrected-during-read@example.test')
+        return snapshot
+    gmail.get_draft=correct_while_reading
+    outcome=_decide(client,approval).json()
+    assert not outcome['ok'] and outcome['result']['code']=='identity_changed',outcome
+    assert gmail.send_attempts==[]
