@@ -182,6 +182,7 @@ export function FindSavedPerson({ onClose }: { onClose: () => void }) {
                   aria-selected={index === selected}
                   className={`find-saved-person-row${index === selected ? " is-active" : ""}`}
                   onMouseEnter={() => setSelected(index)}
+                  onFocus={() => setSelected(index)}
                   onClick={() => openPerson(person)}
                 >
                   <span className="find-saved-person-avatar" aria-hidden="true">

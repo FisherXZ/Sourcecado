@@ -135,6 +135,26 @@ describe("Find saved person finder", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it("opens the focused result on Enter after moving focus with Tab", async () => {
+    const onClose = vi.fn();
+    api.searchSavedPeople.mockResolvedValue({
+      results: [match(), match({ person_id: "person-2", first_name: "Noor", last_name: "Ali" })],
+      count: 2,
+      query: "a",
+    });
+    render(<FindSavedPerson onClose={onClose} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "a" } });
+    const noor = await screen.findByRole("option", { name: /Noor Ali/ });
+
+    // Native Tab focuses each result button without using the arrow selector.
+    fireEvent.focus(noor);
+    fireEvent.keyDown(noor, { key: "Enter" });
+
+    expect(window.location.hash).toBe("#/people/person-2");
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(api.setPersonSequence).not.toHaveBeenCalled();
+  });
+
   it("shows the masked-surname note when Apollo hid the surname", async () => {
     api.searchSavedPeople.mockResolvedValue({
       results: [match({ last_name: null, last_name_status: "hidden_by_apollo" })],
