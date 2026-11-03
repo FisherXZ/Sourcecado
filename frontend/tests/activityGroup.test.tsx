@@ -738,6 +738,9 @@ describe("ActivityGroup process layer", () => {
 describe("CRM operation labels", () => {
   it.each([
     ["crm_list_tasks", "Read saved tasks"],
+    ["crm_list_attention", "Read attention"],
+    ["crm_set_attention", "Updated attention flag"],
+    ["crm_resolve_proposal", "Reviewed suggestion"],
     ["crm_create_task", "Created task"],
     ["crm_update_task", "Updated task"],
     ["crm_update_description", "Updated description"],

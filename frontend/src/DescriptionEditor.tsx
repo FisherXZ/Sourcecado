@@ -174,7 +174,7 @@ export function DescriptionEditor({
   }
 
   return (
-    <div className="description-editor">
+    <div className="description-editor" data-unsaved={dirty || busy ? "true" : undefined}>
       {stale ? (
         <p className="description-stale" role="status">
           The saved copy changed since you started this draft. Saving replaces it.
@@ -197,6 +197,15 @@ export function DescriptionEditor({
             : "Assistant-maintained"}
         </span>
       </div>
+      {description.source_refs?.length ? <details className="description-sources" aria-label="Description sources">
+        <summary>Sources ({description.source_refs.length})</summary>
+        {description.source_refs.map((source, index) => {
+          const url = typeof source === "string" ? source : source.url;
+          return url?.startsWith("https://mail.google.com/")
+            ? <a key={index} href={url} target="_blank" rel="noreferrer">Source email {index + 1}</a>
+            : <span key={index}>Saved source {index + 1}</span>;
+        })}
+      </details> : null}
       <div className="description-actions">
         <button
           type="button"

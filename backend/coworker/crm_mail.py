@@ -106,7 +106,8 @@ def refresh_mail(people: PersonStore, reader: TrackedMailReader, *, max_threads:
         seen.add(mid)
         result["scanned"] += 1
         outbound = "SENT" in (message.get("label_ids") or [])
-        verdict = classify_outbound(message, index, account=account) if outbound else classify(message, index)
+        current_index = build_index(people, account=account)
+        verdict = classify_outbound(message, current_index, account=account) if outbound else classify(message, current_index)
         if verdict.evidence is Evidence.ABSENT:
             return
         if verdict.evidence is Evidence.AMBIGUOUS:
@@ -115,8 +116,6 @@ def refresh_mail(people: PersonStore, reader: TrackedMailReader, *, max_threads:
         pid = verdict.person_id
         stored = repository.message(account, mid)
         existing = people._has_external_event(pid, f"gmail:message:{mid}")
-        if not outbound and not stored:
-            result["filed"] += int(_apply(people, message, verdict) == "filed")
         if stored and stored["body_state"] != "missing":
             content = {"body": stored["body"], "body_state": stored["body_state"]}
         elif bodies < max_body_reads:
@@ -124,7 +123,18 @@ def refresh_mail(people: PersonStore, reader: TrackedMailReader, *, max_threads:
             bodies += 1
         else:
             content = {"body": "", "body_state": "missing"}
-        repository.save_message(pid, message, direction="outbound" if outbound else "inbound", account=account, content=content)
+        # Connector I/O can overlap edits to any person's address or thread.
+        # Recheck under the writer lock before exposing either preview or body.
+        with people._lock:
+            current_index = build_index(people, account=account)
+            current = classify_outbound(message, current_index, account=account) if outbound else classify(message, current_index)
+            if current.evidence is not Evidence.PRESENT or current.person_id != pid:
+                if current.evidence is Evidence.AMBIGUOUS:
+                    result["unassigned"] += int(_apply(people, message, current) == "unassigned")
+                return
+            if not outbound and not stored:
+                result["filed"] += int(_apply(people, message, current) == "filed")
+            repository.save_message(pid, message, direction="outbound" if outbound else "inbound", account=account, content=content)
         if outbound and not existing:
             result["outgoing"] += 1
         result["content_partial"] += int(content["body_state"] != "present")

@@ -31,12 +31,11 @@ class DescriptionService:
             return result
 
     def undo(self, pid: str, change_id: str, *, operation_id: str, actor: str = "director",
-             reason: str = "Director undid a description change.") -> dict:
-        if actor != "director":
+             reason: str = "Director undid a description change.", human_requested: bool = False) -> dict:
+        if actor != "director" and not human_requested:
             raise TaskConflict("description undo requires the director", code="human_protected")
         operation_id = _clean_operation_id(operation_id)
-        with self.people._lock, self.people._conn:
-            self.people._conn.execute("BEGIN IMMEDIATE")
+        with self.people.crm_transaction():
             self.people._load_person_row(pid)
             change = self.people._conn.execute("""SELECT * FROM crm_changes WHERE person_id=?
                 AND change_id=? AND entity_type='description'""", (pid, change_id)).fetchone()
@@ -52,7 +51,7 @@ class DescriptionService:
                 raise TaskConflict("description changed since this change", code="description_conflict")
             result = self.people._patch_description_uncommitted(pid, slot,
                 expected_version=change["entity_version"], text=before["text"],
-                actor=actor, rationale_summary=reason, source_refs=before["source_refs"],
+                actor=actor, human_requested=human_requested, rationale_summary=reason, source_refs=before["source_refs"],
                 allowed_source_ids=self.allowed, operation_id=operation_id,
                 restore=before, compensates_change_id=change_id)
             self.people._conn.execute("""UPDATE crm_proposals SET state='dismissed', resolution='undo',

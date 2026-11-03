@@ -20,7 +20,9 @@ export function MailFreshness({ state, analysis }: {
     {state?.status === "partial" ? <p role="status">Gmail collection is unfinished. Refresh again to continue.</p> : null}
     {state?.warning === "body_unavailable" ? <p>Some message bodies are unavailable or incomplete. Their previews are not complete evidence.</p> : null}
     {analysis ? <p className="person-timeline-meta">
-      {analysis.status === "pending" ? "Analysis pending: collected mail has not been analyzed."
+      {analysis.status === "failed" ? "Conversation analysis failed. Saved work is kept; retry when ready."
+        : analysis.status === "retrying" ? "Conversation analysis is waiting to retry. Saved work is kept."
+        : analysis.status === "pending" ? "Analysis pending: collected mail has not been analyzed."
         : analysis.status === "current" ? "Analysis is current." : "Mail has not been analyzed."}
     </p> : null}
   </div>;

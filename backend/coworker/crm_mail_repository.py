@@ -59,10 +59,23 @@ class MailRepository:
     def analysis_state(self, person_id: str) -> dict[str, Any]:
         with self.people._lock:
             row = self.people._conn.execute(
-                "SELECT latest_evidence_revision, analyzed_revision FROM crm_analysis_state WHERE person_id = ?",
+                "SELECT * FROM crm_analysis_state WHERE person_id = ?",
                 (person_id,)).fetchone()
-        result = dict(row) if row else {"latest_evidence_revision": 0, "analyzed_revision": 0}
-        result["status"] = "pending" if result["latest_evidence_revision"] != result["analyzed_revision"] else "current" if result["latest_evidence_revision"] else "not_analyzed"
+        return self.analysis_projection(dict(row) if row else None)
+
+    @staticmethod
+    def analysis_projection(row: dict[str, Any] | None) -> dict[str, Any]:
+        result = dict(row) if row else {"latest_evidence_revision":0,"latest_revision":0,"analyzed_revision":0}
+        latest=result.get('latest_revision',0)
+        dirty=result.get('latest_evidence_revision',0)>result.get('observed_collection_revision',0)
+        pending=dirty or latest!=result.get('analyzed_revision',0)
+        result['status']='pending' if pending else 'current' if latest else 'not_analyzed'
+        if result.get('failure_code') and pending:
+            result['status']='failed' if result.get('attempts',0)>=3 else 'retrying'
+        result['next_attempt_at']=result.get('next_retry_at')
+        result['attempted_revision']=latest if result.get('attempts',0) else 0
+        result['failure']=result.get('failure_code')
+        for key in ('lease_token','usage_json'):result.pop(key,None)
         return result
 
     def incomplete_body_count(self, account: str) -> int:
@@ -152,6 +165,7 @@ class MailRepository:
                     summary, payload, actor, tool) VALUES (?, ?, ?, 'gmail', 'mail', ?, ?, 'assistant', 'gmail_read')""",
                     (_new_event_id(), person_id, f"gmail:message:{mid}",
                      f"{'Received from' if direction == 'inbound' else 'Sent to'} {message.get('from' if direction == 'inbound' else 'to')}: {headline}", json.dumps(payload)))
-            conn.execute("""INSERT INTO crm_analysis_state(person_id, latest_evidence_revision) VALUES (?, 1)
-                ON CONFLICT(person_id) DO UPDATE SET latest_evidence_revision=latest_evidence_revision+1""", (person_id,))
+            conn.execute("""INSERT INTO crm_analysis_state(person_id, latest_evidence_revision, updated_at) VALUES (?, 1, ?)
+                ON CONFLICT(person_id) DO UPDATE SET latest_evidence_revision=latest_evidence_revision+1,
+                updated_at=excluded.updated_at""", (person_id, now))
         return True

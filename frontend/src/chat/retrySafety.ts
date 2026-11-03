@@ -21,6 +21,8 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "apollo_search_people",
   "board_get",
   "board_query",
+  "crm_list_tasks",
+  "crm_list_attention",
 ]);
 
 /**

@@ -4,8 +4,7 @@ Model arguments never establish actor identity or grant source access. A human
 edit is identified conservatively from the current director-channel Directive
 and a matching explicit command. Chat writes require that verified request;
 background inference uses the shared services behind its own evidence gates.
-Attention and proposal services are not present yet, so their tools return a
-named unavailable result instead of a fabricated operating picture.
+Attention, proposal review and local Undo use the same shared service as the app.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from coworker.crm_sources import sources_visible
+from coworker.crm_service import CrmService
 from coworker.crm_tasks import (
     DEFAULT_TIMEZONE, TIMEZONE_SETTING, TASK_STATES, TASK_TRANSITIONS, TaskConflict, TaskNotFound,
     TaskService, validate_timezone,
@@ -50,8 +50,8 @@ _SOURCE_REFS = {"type": "array", "items": {"type": "string"}, "maxItems": 50,
                 "description": "Existing person-file source reference ids. Cannot grant access to private sources."}
 _VERSION = {"type": "integer", "minimum": 1}
 CRM_TOOL_SCHEMAS = [
-    _schema("crm_list_attention", "Read Contacts attention in the same order and freshness as the app. Currently unavailable until #204; never infer an all-clear.", {"limit": {"type": "integer"}}),
-    _schema("crm_list_tasks", "Read saved tasks in the same due order as Contacts. A person chat defaults to that person; the global list includes active sequences only. Report partial/truncated results.", {"state": {"type": "string", "enum": [*TASK_STATES, "all"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}}),
+    _schema("crm_list_attention", "Read current Contacts attention in the same order as the app. A person chat includes its saved person; global results include active sequences only. Report partial results.", {"limit": {"type": "integer", "minimum": 1, "maximum": 500}}),
+    _schema("crm_list_tasks", "Read saved tasks in the same due order as the app Tasks view. A person chat defaults to that person; the global list includes all live saved people, including before outreach. Report partial/truncated results.", {"state": {"type": "string", "enum": [*TASK_STATES, "all"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}}),
     _schema("crm_create_task", "Save one local task. Does not start a sequence, send, enrich or change Calendar. Reuse operation_id on retry.", {
         "title": {"type": "string"}, "details": {"type": "string"},
         "due_date": {"type": ["string", "null"], "description": "Calendar day YYYY-MM-DD in the operator's saved timezone; omit if unspecified. Use now to resolve relative dates."},
@@ -61,23 +61,23 @@ CRM_TOOL_SCHEMAS = [
         "task_id": {"type": "string"}, "expected_version": _VERSION,
         "changes": {"type": "object", "properties": {"title": {"type": "string"}, "details": {"type": "string"}, "due_date": {"type": ["string", "null"]}, "state": {"type": "string", "enum": list(TASK_STATES)}}, "additionalProperties": False},
     }, ("task_id", "expected_version", "changes"), write=True),
-    _schema("crm_update_description", "Save a director-requested description through the app's slot writer. An unspecified description means general; detailed requires the director to say detailed description. Read the slot version with board_get first. Releasing protection is a separate command without text. Description undo awaits #205.", {
+    _schema("crm_update_description", "Save a director-requested description through the app's slot writer. An unspecified description means general; detailed requires the director to say detailed description. Read the slot version with board_get first. Releasing protection is a separate command without text. Use the exact local change id with crm_undo_change to undo it.", {
         "slot": {"type": "string", "enum": ["general", "detailed"]},
         "text": {"type": "string"}, "release": {"type": "boolean"},
         "expected_version": {"type": "integer", "minimum": 0}, "source_refs": _SOURCE_REFS,
     }, ("slot", "expected_version"), write=True),
-    _schema("crm_set_attention", "Set a manual attention flag using the shared attention service. Currently unavailable until #204.", {
-        "expected_version": _VERSION, "flagged": {"type": "boolean"}, "until_date": {"type": ["string", "null"]},
-    }, ("expected_version", "flagged"), write=True),
-    _schema("crm_resolve_proposal", "Accept, edit or dismiss a saved CRM proposal. Currently unavailable until #205.", {
+    _schema("crm_set_attention", "Set or clear manual attention. Use 'Set attention to: REASON', optionally 'until YYYY-MM-DD', or 'Clear attention'. Never infer a date or flag text.", {
+        "expected_version": _VERSION, "flagged": {"type": "boolean"}, "flag_reason": {"type": ["string", "null"], "maxLength": 500}, "until_date": {"type": ["string", "null"]},
+    }, ("expected_version",), write=True),
+    _schema("crm_resolve_proposal", "Review one saved suggestion. The director must name its exact proposal id: 'Accept suggestion proposal_ID' or 'Dismiss suggestion proposal_ID'. Edited acceptance requires 'Accept suggestion proposal_ID with: JSON' containing the exact edited value.", {
         "proposal_id": {"type": "string"}, "expected_version": _VERSION,
         "expected_target_version": {"type": "integer", "minimum": 0},
         "resolution": {"type": "string", "enum": ["accept", "accept_edited", "dismiss"]},
         "edited_value": {"type": "object"},
     }, ("proposal_id", "expected_version", "expected_target_version", "resolution"), write=True),
-    _schema("crm_undo_change", "Undo a local task edit or a server-eligible automatic creation using its change id and current task version. Creation Undo cancels the inferred task and suppresses unchanged inference. Human/chat-created tasks must be cancelled. A later edit conflicts. Other entity undo awaits #205. Never retracts external effects.", {
+    _schema("crm_undo_change", "Undo a local task, description, attention, status or proposal change. Non-task Undo requires its exact change id in the director command; an optional entity word must match. Task Undo requires the current task version. Human-created task creation cannot be undone; cancel that task. Never retracts external effects.", {
         "change_id": {"type": "string"}, "expected_version": _VERSION,
-    }, ("change_id", "expected_version"), write=True),
+    }, ("change_id",), write=True),
 ]
 CRM_TOOL_NAMES = frozenset(schema["function"]["name"] for schema in CRM_TOOL_SCHEMAS)
 CRM_READ_TOOLS = frozenset({"crm_list_attention", "crm_list_tasks"})
@@ -122,7 +122,7 @@ def crm_outcome_references(result: dict[str, Any]) -> dict[str, Any]:
     change = result.get("change")
     if not isinstance(change, dict) or not change.get("change_id"):
         return {}
-    entity = result.get("task") or result.get("description") or {}
+    entity = result.get("task") or result.get("description") or result.get("proposal") or {}
     return {
         "outcome_ref": change["change_id"], "person_id": result.get("person_id"),
         "artifact_refs": [{"id": change["change_id"], "artifact_type": "crm_change", "title": "CRM change"}],
@@ -369,7 +369,7 @@ def _validate(value: Any, schema: dict, path: str = "arguments") -> None:
 
 
 def _human_request(name: str, args: dict, directive: Directive | None, *, timezone: str = DEFAULT_TIMEZONE,
-                   saved_operation: dict | None = None) -> bool:
+                   saved_operation: dict | None = None, undo_kind: str | None = None) -> bool:
     supplied_quote = args.get("request_quote")
     if not isinstance(directive, Directive):
         if supplied_quote:
@@ -387,12 +387,14 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
         "crm_create_task": r"^(?:remind me\b|(?:add|create|save|make)\b.*\b(?:task|reminder)\b)",
         "crm_update_task": r"^(?:mark|complete|finish|reopen|cancel|change|edit|update|clear|move|reschedule)\b.*\b(?:task|reminder)\b",
         "crm_update_description": r"^(?:change|edit|update|set|clear|release)\b.*\bdescription\b",
+        "crm_set_attention": r"^(?:set|flag|clear)\b.*\battention\b",
+        "crm_resolve_proposal": r"^(?:accept|dismiss)\s+(?:suggestion|proposal)\b",
         "crm_undo_change": r"^undo\b",
     }
     if not re.search(patterns.get(name, r"(?!)"), text):
         if not supplied_quote:
             return False
-        raise CRMToolError("unverified_director_request", "Ask the director to state the task or description edit explicitly; this wording cannot establish human authority.")
+        raise CRMToolError("unverified_director_request", "Ask the director to state the local CRM edit explicitly; this wording cannot establish human authority.")
     # Only an explicit colon after a supported replacement command creates a
     # literal-data boundary. Without it, trailing conditions stay commands.
     literal_prefix = None
@@ -402,10 +404,23 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
     elif name == "crm_update_description":
         literal_prefix = re.match(r"^(?:change|edit|update|set)\s+(?:the\s+)?"
                                   r"(?:(?:general|detailed)\s+)?description\s+to:\s+", text)
+    elif name == "crm_set_attention":
+        literal_prefix = re.match(r"^(?:set|flag)\s+attention(?:\s+flag)?(?:\s+for\s+.+?)?"
+                                  r"(?:\s+until\s+\d{4}-\d{2}-\d{2})?\s*(?:to:|:)\s+", text)
+    elif name == "crm_resolve_proposal":
+        literal_prefix = re.match(r"^accept\s+(?:suggestion|proposal)\s+(?:prop|proposal)_[0-9a-f]{32}\s+with:\s+", text)
     command = text[:literal_prefix.end()] if literal_prefix else text
     if re.search(r"\b(?:not|never|unless|if|when|after|before)\b|\bdon['’]t\b", command):
         raise CRMToolError("unverified_director_request", "Negated or conditional wording needs clarification before a CRM write. Ask for one explicit immediate edit.")
     if name == "crm_undo_change":
+        if undo_kind and undo_kind != "task":
+            command = re.fullmatch(
+                r"undo\s+(?:(?:the|that)\s+)?(?:(description|status|attention|proposal|suggestion)"
+                r"\s+(?:(?:change|flag|resolution)\s+)?)?(chg_[0-9a-f]{32})[.!?]?", text)
+            if (not command or command[2] != args["change_id"]
+                    or command[1] and {"suggestion": "proposal"}.get(command[1], command[1]) != undo_kind):
+                raise CRMToolError("unverified_director_request", "Name the exact local change id and its matching entity before Undo. External effects cannot be undone.")
+            return True
         task_command = re.match(r"^undo\s+(?:(?:the|that|last|latest)\s+)?task\b", text)
         explicit_command = re.fullmatch(r"undo\s+(?:(?:the|that)\s+)?(?:(?:task|change)\s+)?(?:task|chg)_[0-9a-f]{32}[.!?]?", text)
         if not task_command and not explicit_command:
@@ -416,6 +431,39 @@ def _human_request(name: str, args: dict, directive: Directive | None, *, timezo
             selected = args["change_id"] if identifier.startswith("chg_") else (saved_operation or {}).get("task_id")
             if selected is not None and identifier != selected:
                 raise CRMToolError("unverified_director_request", "The task/change id must match the director's current undo command.")
+        return True
+    if name == "crm_set_attention":
+        clearing = re.fullmatch(r"clear\s+(?:(?:the|this|that)\s+)?attention(?:\s+flag)?(?:\s+for\s+(.+?))?[.!?]?", text)
+        if clearing:
+            if clearing[1] and _replacement(clearing[1]) not in {_replacement(str(args.get(field) or "")) for field in ("person_id", "person_name")}:
+                raise CRMToolError("unverified_director_request", "The named person must match the selected person in this conversation.")
+            if args.get("flag_reason") is not None or args.get("flagged", False) or args.get("until_date") is not None:
+                raise CRMToolError("unverified_director_request", "Clear attention permits only removing the manual flag, without a date or new reason.")
+            return True
+        command = re.fullmatch(r"(?:set|flag)\s+attention(?:\s+flag)?(?:\s+for\s+(.+?))?"
+                               r"(?:\s+until\s+(\d{4}-\d{2}-\d{2}))?\s*(?:to:|:)\s+(.+)", text)
+        if (not command or not args.get("flag_reason") or args.get("flagged") is False
+                or _replacement(args["flag_reason"]) != _replacement(command[3])
+                or args.get("until_date") != command[2]):
+            raise CRMToolError("unverified_director_request", "Attention text and optional YYYY-MM-DD expiry must exactly match the director's explicit command.")
+        if command[1] and _replacement(command[1]) not in {_replacement(str(args.get(field) or "")) for field in ("person_id", "person_name")}:
+            raise CRMToolError("unverified_director_request", "The named person must match the selected person in this conversation.")
+        return True
+    if name == "crm_resolve_proposal":
+        command = re.fullmatch(r"(accept|dismiss)\s+(?:suggestion|proposal)\s+((?:prop|proposal)_[0-9a-f]{32})(?:\s+with:\s+(.+))?[.!?]?", text)
+        resolution = args["resolution"]
+        if (not command or command[2] != args["proposal_id"]
+                or command[1] != ("dismiss" if resolution == "dismiss" else "accept")):
+            raise CRMToolError("unverified_director_request", "The director must name this exact proposal id and its acceptance or dismissal.")
+        if resolution == "accept_edited":
+            try:
+                edited = json.loads(command[3] or "")
+            except ValueError:
+                raise CRMToolError("unverified_director_request", "Edited acceptance requires the complete edited JSON value after 'with:'.")
+            if _normalized(json.dumps(edited, sort_keys=True)) != _normalized(json.dumps(args.get("edited_value"), sort_keys=True)):
+                raise CRMToolError("unverified_director_request", "The edited value must match the director's complete replacement.")
+        elif command[3] or "edited_value" in args:
+            raise CRMToolError("unverified_director_request", "A simple acceptance or dismissal cannot also edit the suggestion.")
         return True
     if name == "crm_update_task":
         changes = args["changes"]
@@ -524,42 +572,67 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
                      allowed_source_ids: set[str] | None = None,
                      directive: Directive | None = None,
                      mutation_budget: CRMMutationBudget | None = None) -> tuple[bool, dict]:
-    pending = {"crm_list_attention": 204, "crm_set_attention": 204, "crm_resolve_proposal": 205}
-    if name in pending:
-        issue = pending[name]
-        return False, {"status": "unavailable", "partial": True, "code": "crm_capability_unavailable",
-                       "depends_on_issue": issue, "error": f"This CRM capability is not available in this build (pending #{issue}). Saved tasks remain available through crm_list_tasks; do not report that no one needs attention."}
     try:
         args = arguments or {}
         schema = _SCHEMAS[name]
         _validate(args, schema)
         if name not in CRM_READ_TOOLS and (not isinstance(args.get("reason"), str) or not args["reason"].strip() or len(args["reason"]) > 500):
             raise CRMToolError("invalid_arguments", "A reason of 1–500 characters is required.")
-        pid = _person(people, args, session_id, directive, optional=name == "crm_list_tasks")
+        pid = _person(people, args, session_id, directive, optional=name in CRM_READ_TOOLS)
         saved_timezone = store.get_setting(TIMEZONE_SETTING) if store else None
         try:
             timezone = validate_timezone(saved_timezone)
         except ValueError:
             timezone = DEFAULT_TIMEZONE
         tasks = TaskService(people)
+        service = CrmService(people)
+        if name == "crm_list_attention":
+            result = service.contacts(timezone=timezone, include_saved=pid is not None,
+                needs_attention=True, limit=args.get("limit", 200), person_id=pid,
+                allowed_source_ids=allowed_source_ids)
+            partial = bool(result.get("partial") or result.get("truncated"))
+            return True, {**result, "partial": partial, "status": "partial" if partial else "complete"}
         if name == "crm_list_tasks":
             state = args.get("state", "open")
             result = tasks.list(timezone=timezone, person_id=pid,
                 states=TASK_STATES if state == "all" else (state,),
-                active_sequences_only=pid is None, limit=args.get("limit", 200), allowed_source_ids=allowed_source_ids)
+                active_sequences_only=False, limit=args.get("limit", 200), allowed_source_ids=allowed_source_ids)
             visible = [task for task in result["tasks"] if sources_visible(people, task["person_id"], task["source_refs"], allowed_source_ids)]
             partial = result["truncated"] or len(visible) != len(result["tasks"])
             return True, {**result, "tasks": visible, "partial": partial,
                           "status": "partial" if partial else "complete"}
         saved_operation = _saved_task_operation(people, pid, args["operation_id"])
+        undo_kind = None
+        if name in {"crm_undo_change", "crm_resolve_proposal"}:
+            with people._lock:
+                if name == "crm_undo_change":
+                    row = people._conn.execute("SELECT * FROM crm_changes WHERE person_id=? AND change_id=?",
+                        (pid, args["change_id"])).fetchone()
+                else:
+                    row = people._conn.execute("SELECT * FROM crm_proposals WHERE person_id=? AND proposal_id=?",
+                        (pid, args["proposal_id"])).fetchone()
+                if row is None:
+                    raise TaskNotFound("unknown local change or proposal")
+                refs = json.loads(row["source_refs"])
+                if not sources_visible(people, pid, refs, allowed_source_ids):
+                    raise CRMToolError("source_access_denied", "This change uses sources unavailable to this run.")
+                if name == "crm_undo_change":
+                    undo_kind = row["entity_type"]
+                else:
+                    replay = people._conn.execute("SELECT 1 FROM crm_operations WHERE operation_id=?",
+                        (args["operation_id"],)).fetchone()
+                    if not replay and (args["expected_version"] != row["version"]
+                            or args["expected_target_version"] != row["expected_target_version"]):
+                        raise TaskConflict("This suggestion changed. Review it again.", code="crm_conflict")
         request = json.dumps({"tool": name, "person_id": pid,
             "arguments": {key: value for key, value in args.items() if key not in {"person_id", "person_name", "request_quote"}}},
             sort_keys=True, separators=(",", ":"))
         replay_authority = mutation_budget.check(request) if mutation_budget is not None else False
-        human = _human_request(name, args, directive, timezone=timezone, saved_operation=saved_operation)
+        human = _human_request(name, args, directive, timezone=timezone,
+            saved_operation=saved_operation, undo_kind=undo_kind)
         if not human:
             raise CRMToolError("unverified_director_request", "Chat CRM writes require an explicit current director command. Ask for wording such as 'Remind me to send examples', 'Mark that task done', or 'Change the description to: …'. Nothing was saved.")
-        if not replay_authority:
+        if not replay_authority and (name != "crm_undo_change" or undo_kind == "task"):
             _verify_task_target(name, args, people, pid, directive, allowed_source_ids, saved_operation)
         identity = dict(actor="assistant", human_requested=human, session_id=session_id,
                         run_id=run_id, allowed_source_ids=allowed_source_ids,
@@ -577,14 +650,28 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
                 expected_version=args.get("expected_version"), text=args.get("text"),
                 release=args.get("release", False), source_refs=args.get("source_refs"),
                 rationale_summary=args["reason"], **identity)
+        elif name == "crm_set_attention":
+            result = service.set_attention(pid, reason=args.get("flag_reason"),
+                until=args.get("until_date"), expected_version=args["expected_version"],
+                rationale_summary=args["reason"], **identity)
+        elif name == "crm_resolve_proposal":
+            result = service.resolve(pid, args["proposal_id"],
+                decision="dismissed" if args["resolution"] == "dismiss" else "accepted",
+                timezone=timezone, value=args.get("edited_value"),
+                expected_version=args["expected_version"],
+                expected_target_version=args["expected_target_version"],
+                rationale_summary=args["reason"], **identity)
         elif name == "crm_undo_change":
             change_id = str(args.get("change_id") or "")
-            if not change_id.startswith("chg_"):
-                raise CRMToolError("crm_capability_unavailable", "Description and attention undo await #205. Task creation can be cancelled with crm_update_task.", depends_on_issue=205, partial=True)
-            version = args.get("expected_version")
-            if isinstance(version, bool) or not isinstance(version, int) or version < 1:
-                raise CRMToolError("invalid_arguments", "expected_version must be a positive task version")
-            result = tasks.undo(pid, change_id, expected_version=version, reason=args["reason"], **identity)
+            if undo_kind == "task":
+                version = args.get("expected_version")
+                if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+                    raise CRMToolError("invalid_arguments", "expected_version must be a positive task version")
+                result = tasks.undo(pid, change_id, expected_version=version, reason=args["reason"], **identity)
+            else:
+                result = service.undo(pid, change_id, reason=args["reason"],
+                    **({"expected_version": args["expected_version"]} if "expected_version" in args else {}),
+                    **identity)
         else:
             raise CRMToolError("unknown_crm_tool", "Unknown CRM operation")
         if mutation_budget is not None:
@@ -596,7 +683,7 @@ def execute_crm_tool(name: str, arguments: dict, *, people: PersonStore, store: 
         # A protected or stale record can itself contain private sourced text.
         # Do not include it until it has passed the same read filter.
         current = exc.current
-        visible = current and sources_visible(people, current["person_id"], current["source_refs"], allowed_source_ids)
+        visible = current and sources_visible(people, current.get("person_id", pid), current.get("source_refs", []), allowed_source_ids)
         return False, {"status": "conflict", "code": exc.code, "error": str(exc), **({"task": current} if visible else {})}
     except TaskNotFound as exc:
         return False, {"status": "failed", "code": "not_found", "error": str(exc)}

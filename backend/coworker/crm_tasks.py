@@ -86,7 +86,7 @@ CRM_CHANGES_V5_COLUMNS = """
         compensates_change_id TEXT REFERENCES crm_changes(change_id),
         created_at TEXT NOT NULL
 """
-CRM_CHANGES_COLUMNS = CRM_CHANGES_V5_COLUMNS.replace("IN ('task')", "IN ('task', 'description')")
+CRM_CHANGES_COLUMNS = CRM_CHANGES_V5_COLUMNS.replace("IN ('task')", "IN ('task', 'description', 'attention', 'proposal', 'review', 'status', 'artifact')").replace("'cancel', 'undo')", "'cancel', 'undo', 'accept', 'dismiss')")
 CRM_CHANGES_INDEX_STATEMENTS: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS crm_changes_entity
@@ -352,6 +352,7 @@ class TaskService:
         active_sequences_only: bool = False,
         limit: int = LIST_LIMIT_DEFAULT,
         now: datetime | None = None,
+        offset: int = 0,
         allowed_source_ids: set[str] | None = None,
         permitted_only: bool = False,
     ) -> dict[str, Any]:
@@ -366,6 +367,7 @@ class TaskService:
         if not states or unknown:
             raise TaskError("state must be open, completed or cancelled")
         limit = max(1, min(int(limit), LIST_LIMIT_MAX))
+        offset=max(0,int(offset))
         clauses = ["people.deleted_at IS NULL"]
         params: list[Any] = []
         clauses.append(f"person_tasks.state IN ({', '.join('?' for _ in states)})")
@@ -392,9 +394,9 @@ class TaskService:
                          person_tasks.due_date,
                          person_tasks.created_at,
                          person_tasks.task_id
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (*params, limit + 1),
+                (*params, limit + 1, offset),
             ).fetchall()
         today = today_in(timezone, now=now)
         tasks = []
@@ -861,84 +863,79 @@ class TaskService:
         )
         legacy = _fingerprint({"op": "task.undo", "person_id": person_id, "change_id": change_id,
                                "actor": actor}) if not human_requested and expected_version is None else None
-        with self._lock, self._conn:
-            try:
-                if not self._conn.in_transaction:
-                    self._conn.execute("BEGIN IMMEDIATE")
-                self._live_person(person_id)
-                replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
-                if replay is not None:
-                    source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
-                    return self._project_response(replay, allowed_source_ids)
-                self._live_person(person_id)
-                row = self._conn.execute(
-                    """
-                    SELECT entity_id, entity_version, action, before_json
-                    FROM crm_changes
-                    WHERE change_id = ? AND person_id = ? AND entity_type = 'task'
-                    """,
-                    (change_id, person_id),
-                ).fetchone()
-                if row is None:
-                    raise TaskNotFound("unknown change")
-                automatic = row["before_json"] is None and self._automatic_creation(change_id)
-                if row["before_json"] is None and not automatic:
-                    raise TaskError("creating a task cannot be undone; cancel it instead")
-                task_id = str(row["entity_id"])
-                current = self._task_dict(self._load_task(person_id, task_id))
-                source_ids(self._people, person_id, current["source_refs"], allowed_source_ids)
-                if expected_version is not None and current["version"] != expected_version:
-                    raise TaskConflict("this task changed since you opened it", code="task_conflict", current=self._project_task(current, allowed_source_ids))
-                if current["version"] != int(row["entity_version"]):
-                    raise TaskConflict(
-                        "this task changed again after that change",
-                        code="task_conflict",
-                        current=self._project_task(current, allowed_source_ids),
-                    )
-                restored = json.loads(str(row["before_json"])) if not automatic else None
-                changed = {"state": "cancelled", "completed_at": datetime.now(UTC).isoformat()} if automatic else {
-                    field: restored[field]
-                    for field in UNDO_FIELDS
-                    if restored[field] != current[field]
-                }
-                if not changed:
-                    return {"task": current, "change": None, "replayed": False}
-                if actor == "assistant" and not human_requested and "state" in changed:
-                    raise TaskConflict("assistant lifecycle changes require verified task fulfillment or a director request",
-                                       code="fulfillment_required", current=current)
-                if actor == "assistant" and not human_requested and set(changed) & set(current["protected_fields"]):
-                    raise TaskConflict("human-edited task fields require a director request",
-                                       code="human_protected", current=current)
-                protected = set(current["protected_fields"])
-                if actor == "director" or human_requested:
-                    protected |= set(changed) & set(TASK_CHANGE_FIELDS)
-                now = datetime.now(UTC).isoformat()
-                task = self._write(
-                    person_id,
-                    task_id,
-                    changed,
-                    protected=protected,
-                    expected_version=current["version"],
-                    now=now,
+        with self._people.crm_transaction():
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
+            self._live_person(person_id)
+            replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
+            if replay is not None:
+                source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
+                return self._project_response(replay, allowed_source_ids)
+            self._live_person(person_id)
+            row = self._conn.execute(
+                """
+                SELECT entity_id, entity_version, action, before_json
+                FROM crm_changes
+                WHERE change_id = ? AND person_id = ? AND entity_type = 'task'
+                """,
+                (change_id, person_id),
+            ).fetchone()
+            if row is None:
+                raise TaskNotFound("unknown change")
+            automatic = row["before_json"] is None and self._automatic_creation(change_id)
+            if row["before_json"] is None and not automatic:
+                raise TaskError("creating a task cannot be undone; cancel it instead")
+            task_id = str(row["entity_id"])
+            current = self._task_dict(self._load_task(person_id, task_id))
+            source_ids(self._people, person_id, current["source_refs"], allowed_source_ids)
+            if expected_version is not None and current["version"] != expected_version:
+                raise TaskConflict("this task changed since you opened it", code="task_conflict", current=self._project_task(current, allowed_source_ids))
+            if current["version"] != int(row["entity_version"]):
+                raise TaskConflict(
+                    "this task changed again after that change",
+                    code="task_conflict",
+                    current=self._project_task(current, allowed_source_ids),
                 )
-                response = self._record(
-                    operation_id=operation,
-                    fingerprint=fingerprint,
-                    person_id=person_id,
-                    task=task,
-                    action="undo",
-                    before=current,
-                    actor=actor,
-                    reason=_clean_reason(reason, f"Undid: {row['action']}"),
-                    session_id=session_id,
-                    run_id=run_id,
-                    now=now,
-                    compensates=change_id,
-                )
-                self._conn.execute("""UPDATE crm_proposals SET state='dismissed', version=version+1,
-                    updated_at=? WHERE change_id=? AND state='accepted'""", (now, change_id))
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
+            restored = json.loads(str(row["before_json"])) if not automatic else None
+            changed = {"state": "cancelled", "completed_at": datetime.now(UTC).isoformat()} if automatic else {
+                field: restored[field]
+                for field in UNDO_FIELDS
+                if restored[field] != current[field]
+            }
+            if not changed:
+                return {"task": current, "change": None, "replayed": False}
+            if actor == "assistant" and not human_requested and "state" in changed:
+                raise TaskConflict("assistant lifecycle changes require verified task fulfillment or a director request",
+                                   code="fulfillment_required", current=current)
+            if actor == "assistant" and not human_requested and set(changed) & set(current["protected_fields"]):
+                raise TaskConflict("human-edited task fields require a director request",
+                                   code="human_protected", current=current)
+            protected = set(current["protected_fields"])
+            if actor == "director" or human_requested:
+                protected |= set(changed) & set(TASK_CHANGE_FIELDS)
+            now = datetime.now(UTC).isoformat()
+            task = self._write(
+                person_id,
+                task_id,
+                changed,
+                protected=protected,
+                expected_version=current["version"],
+                now=now,
+            )
+            response = self._record(
+                operation_id=operation,
+                fingerprint=fingerprint,
+                person_id=person_id,
+                task=task,
+                action="undo",
+                before=current,
+                actor=actor,
+                reason=_clean_reason(reason, f"Undid: {row['action']}"),
+                session_id=session_id,
+                run_id=run_id,
+                now=now,
+                compensates=change_id,
+            )
+            self._conn.execute("""UPDATE crm_proposals SET state='dismissed', version=version+1,
+                updated_at=? WHERE change_id=? AND state='accepted'""", (now, change_id))
         return self._project_response(response, allowed_source_ids)

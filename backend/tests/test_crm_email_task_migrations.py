@@ -35,7 +35,7 @@ def test_registered_v7_upgrade_preserves_v6_history_and_schedules_task_stage(tmp
     result = migrations.apply_migrations(tmp_path)
     assert result.error is None and result.backup_id
     people = PersonStore(tmp_path)
-    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert people._conn.execute("PRAGMA user_version").fetchone()[0] == 8
     assert [tuple(row) for row in people._conn.execute("SELECT * FROM crm_changes")] == history
     assert people._conn.execute("SELECT count(*) FROM crm_task_evidence").fetchone()[0] == 0
     service = worker(people, TaskModel(), TaskMail())
@@ -66,7 +66,7 @@ def test_missing_v7_shape_is_gated_even_when_store_version_claims_current(tmp_pa
     from coworker.people import CrmMigrationRequired
     pid = v6_database(tmp_path)
     conn = sqlite3.connect(tmp_path / "people.db")
-    conn.execute("PRAGMA user_version=7")
+    conn.execute("PRAGMA user_version=8")
     conn.close()
     model = TaskModel()
     with pytest.raises(CrmMigrationRequired):

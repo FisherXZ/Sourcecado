@@ -157,15 +157,15 @@ describe("reply filing on Contacts and the person file", () => {
     api.searchPersonDriveEvidence.mockResolvedValue({ files: [] });
   });
 
-  it("shows last contact, replied state, and the follow-up flag on Contacts", async () => {
+  it("shows the next-action placeholder and the follow-up flag on Contacts", async () => {
     render(<BoardView />);
 
     const waiting = contactRow(await screen.findByRole("link", { name: /Ada Analytic/ }));
-    expect(waiting).toHaveTextContent("We wrote · 2026-08-20");
+    expect(waiting).toHaveTextContent("No open task");
     expect(waiting).not.toHaveTextContent("Reply to review");
 
     const talking = contactRow(screen.getByRole("link", { name: /Bob Builder/ }));
-    expect(talking).toHaveTextContent("They replied · 2026-08-26");
+    expect(talking).toHaveTextContent("No open task");
     expect(talking).toHaveTextContent("Reply to review");
   });
 
@@ -178,7 +178,7 @@ describe("reply filing on Contacts and the person file", () => {
     expect(row).not.toHaveTextContent("They replied");
   });
 
-  it("says a person with no contact has none rather than showing a blank date", async () => {
+  it("says a person with no task has none rather than showing a blank action", async () => {
     api.getBoard.mockResolvedValue(
       boardWith(
         [{ ...WAITING, last_contact_at: null, last_contact_direction: null }],
@@ -189,7 +189,7 @@ describe("reply filing on Contacts and the person file", () => {
 
     expect(
       contactRow(await screen.findByRole("link", { name: /Ada Analytic/ })),
-    ).toHaveTextContent("No contact yet");
+    ).toHaveTextContent("No open task");
   });
 
   it("checks for replies on demand and reports what the refresh did", async () => {

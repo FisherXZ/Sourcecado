@@ -140,18 +140,6 @@ def test_sourced_tasks_validate_ownership_and_private_access(tmp_path):
     assert ok and visible["tasks"][0]["task_id"] == saved["task"]["task_id"]
 
 
-@pytest.mark.parametrize("name, issue", [
-    ("crm_list_attention", 204), ("crm_set_attention", 204), ("crm_resolve_proposal", 205),
-])
-def test_pending_capabilities_are_actionable_and_never_report_success(tmp_path, name, issue):
-    people = PersonStore(tmp_path)
-    keep(people)
-    ok, result = invoke(people, name, {"reason": "Requested", "operation_id": "op-pending-1"})
-    assert not ok and result["code"] == "crm_capability_unavailable"
-    assert result["depends_on_issue"] == issue
-    assert result["partial"] is True
-
-
 def test_description_chat_request_is_protected_idempotent_and_slot_scoped(tmp_path):
     people = PersonStore(tmp_path)
     pid = keep(people)["person_id"]

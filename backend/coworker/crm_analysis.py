@@ -324,6 +324,9 @@ class AnalysisService:
                 evidence_fingerprint='collecting', collection_fingerprint=?, attempts=0,
                 next_retry_at=NULL, failure_code=NULL, outcome='pending', updated_at=?
                 WHERE person_id=? AND collection_fingerprint != ?""", (identity, self.people._now(), pid, identity))
+            # This snapshot includes the current mail events while holding the
+            # collection writer lock. A later message keeps its newer revision dirty.
+            self.people._conn.execute('UPDATE crm_analysis_state SET observed_collection_revision=latest_evidence_revision WHERE person_id=?',(pid,))
 
     def _observe(self, pid: str, evidence: EvidenceInput) -> dict:
         with self.people._lock, self.people._conn:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import asyncio
 import html
 import json
@@ -11,6 +12,7 @@ import re
 import secrets
 import threading
 import time
+import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -131,6 +133,11 @@ from coworker.people import DESCRIPTION_SLOTS, CrmMigrationRequired, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.crm_analysis import AnalysisService, ConversationReader
+from coworker.crm_maintenance import AnalysisMaintenance, RefreshCoordinator
+from coworker.crm_service import CrmService
+from coworker.crm_mail import TrackedMailReader, refresh_mail
+from coworker.crm_mail_repository import MailRepository
+from coworker.crm_drafts import prepare_task_draft
 from coworker.crm_tasks import source_ids as crm_source_ids
 from coworker.crm_descriptions import DescriptionService
 from coworker.prompt_contract import (
@@ -414,7 +421,16 @@ def create_app(
     if not token:
         raise ValueError("backend token must be non-empty")
 
-    app = FastAPI(title="Club backend", version="0.0.2")
+    @asynccontextmanager
+    async def lifespan(app):
+        maintenance=asyncio.create_task(app.state.crm_refresh.run())
+        try:yield
+        finally:
+            maintenance.cancel()
+            try:await maintenance
+            except asyncio.CancelledError:pass
+
+    app = FastAPI(title="Club backend", version="0.0.2",lifespan=lifespan)
     app.state.token = token
     if provider is _UNSET:
         provider_chain = verified_provider_chain()
@@ -433,6 +449,7 @@ def create_app(
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
     app.state.tasks = TaskService(app.state.people)
+    app.state.crm = CrmService(app.state.people)
     app.state.meeting_evidence = MeetingEvidenceStore(root, people=app.state.people)
     app.state.workspace_runtime = workspace_runtime or WorkspaceRuntime(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
@@ -2028,9 +2045,25 @@ def create_app(
             )
         return HTMLResponse("<p>Gmail connected. You can close this tab and go back to Sourcecado.</p>")
 
-    @app.get("/v1/board")
-    def board_get():
-        return app.state.people.list_board()
+    mail_repository=MailRepository(app.state.people)
+    mail_refresh_lock=threading.Lock()
+    def collect_tracked_mail():
+        with mail_refresh_lock:
+            return refresh_mail(app.state.people,TrackedMailReader(app.state.gmail))
+    app.state.collect_tracked_mail=collect_tracked_mail
+
+    def current_board():
+        with app.state.people._lock:
+            board = app.state.people.list_board()
+            attention = app.state.crm.contacts(timezone=_operator_timezone(), limit=10000, include_saved=True)["contacts"]
+            by_id = {row["person_id"]: {**row, "attention_rank": rank} for rank, row in enumerate(attention)}
+            return {**{lane: [by_id.get(p["person_id"], p) for p in people] for lane, people in board.items()},
+                "mail_sync": mail_repository.public_sync_state()}
+
+
+    @app.get('/v1/board')
+    def board_get(include_mail_state:bool=False):
+        return current_board() if include_mail_state else app.state.people.list_board()
 
     def _operator_timezone() -> str:
         """The director's saved IANA timezone; task dates are days in it."""
@@ -2050,16 +2083,92 @@ def create_app(
             return JSONResponse(body, status_code=409)
         return JSONResponse({"error": str(exc)}, status_code=400)
 
+    app.state.crm_analysis=AnalysisMaintenance(app.state.people,lambda:_crm_analysis())
+    app.state.crm_refresh=RefreshCoordinator(collect_tracked_mail,app.state.crm_analysis,connected=lambda:app.state.gmail is not None)
+
+    @app.post("/v1/crm/refresh", status_code=202)
+    async def crm_refresh(force: bool = True):
+        last = mail_repository.sync_state().get("last_success_at")
+        fresh = False
+        if last:
+            try:
+                fresh = (datetime.now(UTC) - datetime.fromisoformat(last.replace("Z", "+00:00"))).total_seconds() < 60
+            except ValueError:
+                pass
+        if force or not fresh:
+            app.state.crm_analysis.provider = app.state.provider
+            app.state.crm_analysis.timezone = _operator_timezone()
+            app.state.crm_refresh.request()
+        return {"status": "current" if fresh and not force else "pending", "mail_sync": mail_repository.public_sync_state()}
+
+
+    @app.post("/v1/people/{person_id}/crm-analysis/retry", status_code=202)
+    async def crm_analysis_retry(person_id: str):
+        try:
+            app.state.crm_analysis.retry(person_id)
+            app.state.crm_analysis.provider = app.state.provider
+            app.state.crm_refresh.request()
+            return {"status": "pending"}
+        except TaskError as exc:
+            return _task_error(exc)
+
+
+    @app.get("/v1/crm/contacts")
+    def crm_contacts(limit: int = 100, offset: int = 0, query: str = "", state: str | None = None, needs_attention: bool = False):
+        if state is not None and state not in ("open", "in_conversation", "done"):
+            return JSONResponse({"error": "unknown sequence state"}, status_code=400)
+        return app.state.crm.contacts(timezone=_operator_timezone(), limit=max(1,min(limit,200)),
+            offset=max(0,offset), query=query[:500], state=state, needs_attention=needs_attention)
+
+
+    @app.get("/v1/crm/proposals")
+    def crm_proposals(limit: int = 100, offset: int = 0):
+        return app.state.crm.all_proposals(limit=max(1,min(limit,200)), offset=max(0,offset))
+
+
+    @app.patch("/v1/people/{person_id}/attention")
+    async def crm_attention(person_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.crm.set_attention(person_id, reason=payload.get("reason"), until=payload.get("until"),
+                expected_version=payload.get("expected_version"), operation_id=payload.get("operation_id"))
+        except TaskError as exc:
+            return _task_error(exc)
+
+
+    @app.post("/v1/people/{person_id}/crm-proposals/{proposal_id}/resolve")
+    async def crm_resolve(person_id: str, proposal_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.crm.resolve(person_id, proposal_id, decision=payload.get("decision"),
+                value=payload.get("value"), operation_id=payload.get("operation_id"), timezone=_operator_timezone())
+        except TaskError as exc:
+            return _task_error(exc)
+
+
+    @app.post("/v1/people/{person_id}/crm-reviews/{message_id}/dismiss")
+    async def crm_dismiss_review(person_id: str, message_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.crm.dismiss_review(person_id, message_id, operation_id=payload.get("operation_id"))
+        except TaskError as exc:
+            return _task_error(exc)
+
+
     @app.get("/v1/crm/tasks")
     def crm_tasks(
         person_id: str | None = None,
         state: str = "open",
         limit: int = LIST_LIMIT_DEFAULT,
+        offset: int = 0,
     ):
         """One list of task records for Contacts and every person file.
 
-        Without `person_id` it is the global view, limited to people in an
-        active sequence so a task never moves a kept person into Contacts.
+        The global Tasks view includes every live saved person. Saving a task
+        never changes sequence membership in the Contacts people table.
         """
         states = TASK_STATES if state == "all" else (state,)
         try:
@@ -2067,12 +2176,13 @@ def create_app(
                 timezone=_operator_timezone(),
                 person_id=person_id or None,
                 states=states,
-                active_sequences_only=not person_id,
+                active_sequences_only=False,permitted_only=True,
                 limit=limit,
-                permitted_only=True,
+                offset=offset,
             )
         except TaskError as exc:
             return _task_error(exc)
+
 
     @app.post("/v1/people/{person_id}/tasks", status_code=201)
     async def people_task_create(person_id: str, request: Request):
@@ -2118,6 +2228,34 @@ def create_app(
         except TaskError as exc:
             return _task_error(exc)
 
+    @app.post("/v1/people/{person_id}/tasks/{task_id}/prepare")
+    async def crm_prepare_draft(person_id: str, task_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return await prepare_task_draft(people=app.state.people, provider=app.state.provider,
+                person_id=person_id, task_id=task_id, expected_version=payload.get("expected_version"),
+                operation_id=payload.get("operation_id"))
+        except TaskError as exc:
+            return _task_error(exc)
+        except Exception:
+            return JSONResponse({"error": "Draft preparation is unavailable. Saved work is kept."}, status_code=503)
+
+
+    @app.post("/v1/people/{person_id}/crm-proposals/{proposal_id}/prepare")
+    async def crm_prepare_suggestion(person_id: str, proposal_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return await prepare_task_draft(people=app.state.people, provider=app.state.provider,
+                person_id=person_id, task_id=proposal_id, expected_version=0,
+                operation_id=payload.get("operation_id"), proposal=True)
+        except TaskError as exc:
+            return _task_error(exc)
+        except Exception:
+            return JSONResponse({"error": "Draft preparation is unavailable. Saved work is kept."}, status_code=503)
+
+
     @app.get("/v1/people/{person_id}/tasks/{task_id}/changes")
     def people_task_changes(person_id: str, task_id: str):
         """The recorded history of one task, oldest first."""
@@ -2128,39 +2266,19 @@ def create_app(
             return _task_error(exc)
         return {"changes": app.state.tasks.changes(task_id)}
 
-    @app.post("/v1/people/{person_id}/crm-changes/{change_id}/undo")
-    async def people_change_undo(person_id: str, change_id: str, request: Request):
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
-        try:
-            with app.state.people._lock:
-                entity = app.state.people._conn.execute(
-                    "SELECT entity_type FROM crm_changes WHERE person_id=? AND change_id=?",
-                    (person_id, change_id),
-                ).fetchone()
-            if entity and entity[0] == "description":
-                return DescriptionService(app.state.people).undo(person_id, change_id,
-                    operation_id=payload.get("operation_id"), reason=payload.get("reason") or "Director undid a description change.")
-            return app.state.tasks.undo(
-                person_id,
-                change_id,
-                operation_id=payload.get("operation_id"),
-                actor="director",
-                reason=payload.get("reason"),
-            )
-        except TaskError as exc:
-            return _task_error(exc)
+    @app.post('/v1/people/{person_id}/crm-changes/{change_id}/undo')
+    async def people_change_undo(person_id:str,change_id:str,request:Request):
+        payload=await request.json()
+        if not isinstance(payload,dict):return JSONResponse({'error':'expected a JSON object'},status_code=400)
+        try:return app.state.crm.undo(person_id,change_id,operation_id=payload.get('operation_id'),reason=payload.get('reason'),actor='director')
+        except (TaskError,ValueError) as exc:return _task_error(exc)
 
     @app.post("/v1/replies/refresh")
-    def replies_refresh():
-        """Read inbound Gmail since the cursor and file what it can attribute.
+    async def replies_refresh():
+        """Share collection with maintenance; model analysis continues separately."""
+        result = await app.state.crm_refresh.collection_result()
+        return {"refresh": result, "board": current_board()}
 
-        Read and filing only. The reader handed to the refresh exposes four
-        Gmail read calls, so nothing on this path can enrich, draft, or send.
-        """
-        result = refresh_replies(app.state.people, InboundReader(app.state.gmail))
-        return {"refresh": result, "board": app.state.people.list_board()}
 
     @app.post("/v1/apollo/curate")
     async def apollo_curate(request: Request):
@@ -2225,18 +2343,16 @@ def create_app(
         }
         return result
 
-    @app.post("/v1/people/{person_id}/sequence")
-    async def people_sequence(person_id: str, request: Request):
-        payload = await request.json()
-        state = str(payload.get("state") or "")
-        actor = str(payload.get("actor") or "director")
-        if app.state.people.get(person_id) is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
+    @app.post('/v1/people/{person_id}/sequence')
+    async def people_sequence(person_id:str,request:Request):
+        payload=await request.json()
+        if not isinstance(payload,dict):return JSONResponse({'error':'expected a JSON object'},status_code=400)
+        person=app.state.people.get(person_id)
+        if person is None:return JSONResponse({'error':'not found'},status_code=404)
         try:
-            person = app.state.people.set_sequence(person_id, state, actor=actor)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return {"person": person}
+            result=app.state.crm.set_status(person_id,state=payload.get('state'),expected_version=payload.get('expected_version',person['version']),operation_id=payload.get('operation_id') or 'sequence_'+uuid.uuid4().hex)
+            return {**result,'person':app.state.people.get(person_id)}
+        except (TaskError,ValueError) as exc:return _task_error(exc)
 
     @app.get("/v1/people/{person_id}")
     def people_get(person_id: str):
@@ -2256,11 +2372,15 @@ def create_app(
             )
         return {
             "person": person,
+            "crm_proposals": app.state.crm.proposals(person_id),
+            "crm_changes": app.state.crm.recent_changes(person_id),
             "descriptions": app.state.people.descriptions(person_id),
             # The redacted timeline goes in, so nothing the person view hides
             # from the ledger can reappear through the brief.
             "brief": brief_payload(project(person, timeline, session_id=session_id)),
             "timeline": timeline,
+            "mail_sync": mail_repository.public_sync_state(),
+            "mail_analysis": mail_repository.analysis_state(person_id),
             "versions": app.state.people.versions(person_id),
             "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
             "sourcing_chat": (
@@ -2269,6 +2389,7 @@ def create_app(
                 else None
             ),
         }
+
 
     @app.post("/v1/people/{person_id}/handoff")
     async def people_handoff(person_id: str, request: Request):
@@ -2389,94 +2510,26 @@ def create_app(
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
-    @app.patch("/v1/people/{person_id}/descriptions/{slot}")
-    async def people_description(person_id: str, slot: str, request: Request):
-        """Save a person-description slot, or release it to the assistant.
-
-        One route covers both actions (spec §7.2). Concurrency is slot-scoped:
-        the client sends the slot's `expected_version`. A text save makes the
-        slot human-authored (an empty string is an intentional, protected
-        blank); `release: true` hands the slot back to the assistant.
-        """
-        if app.state.people.get(person_id) is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        if slot not in DESCRIPTION_SLOTS:
-            return JSONResponse(
-                {"error": "unknown description slot"}, status_code=404
-            )
-        payload = await request.json()
-        expected_version = payload.get("expected_version")
-        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
-            return JSONResponse(
-                {"error": "expected_version is required"}, status_code=400
-            )
-        release = bool(payload.get("release"))
-        text = payload.get("text")
-        if not release:
-            if text is None:
-                return JSONResponse(
-                    {"error": "text or release is required"}, status_code=400
-                )
-            if not isinstance(text, str):
-                return JSONResponse(
-                    {"error": "text must be a string"}, status_code=400
-                )
-
-        current = app.state.people.descriptions(person_id)[slot]
-        if int(current["version"]) != expected_version:
-            return JSONResponse(
-                {
-                    "error": (
-                        "stale record version: "
-                        f"expected {expected_version}, current {current['version']}"
-                    )
-                },
-                status_code=409,
-            )
-        if release:
-            unchanged = current["authority"] == "assistant"
-        else:
-            unchanged = (
-                current["authority"] == "human" and (current["text"] or "") == text
-            )
-        if unchanged:
-            return {
-                "descriptions": app.state.people.descriptions(person_id),
-                "description": current,
-                "person": app.state.people.get(person_id, expand_sources=True),
-                "versions": app.state.people.versions(person_id),
-                "saved": False,
-                "unchanged": True,
-            }
+    @app.patch('/v1/people/{person_id}/descriptions/{slot}')
+    async def people_description(person_id:str,slot:str,request:Request):
+        if app.state.people.get(person_id) is None:return JSONResponse({'error':'not found'},status_code=404)
+        if slot not in DESCRIPTION_SLOTS:return JSONResponse({'error':'unknown description slot'},status_code=404)
+        payload=await request.json()
+        if not isinstance(payload,dict):return JSONResponse({'error':'expected a JSON object'},status_code=400)
+        expected=payload.get('expected_version');release=payload.get('release',False);text=payload.get('text')
+        if type(expected) is not int or type(release) is not bool:return JSONResponse({'error':'expected_version and release must have the correct types'},status_code=400)
+        if not release and not isinstance(text,str):return JSONResponse({'error':'text or release is required'},status_code=400)
+        current=app.state.people.descriptions(person_id)[slot]
+        if not payload.get('operation_id'):
+            if expected!=current['version']:return JSONResponse({'error':'stale record version'},status_code=409)
+            if (release and current['authority']=='assistant') or (not release and current['authority']=='human' and (current['text'] or '')==text):
+                return {'descriptions':app.state.people.descriptions(person_id),'description':current,'person':app.state.people.get(person_id,expand_sources=True),'versions':app.state.people.versions(person_id),'saved':False,'unchanged':True}
         try:
-            description = app.state.people.patch_description(
-                person_id,
-                slot,
-                expected_version=expected_version,
-                text=None if release else text,
-                release=release,
-                actor="director",
-                rationale_summary=str(
-                    payload.get("rationale_summary")
-                    or (
-                        "Director let the assistant maintain the description."
-                        if release
-                        else "Director edited the description."
-                    )
-                ),
-            )
-        except ValueError as exc:
-            message = str(exc)
-            status = 422 if "exceeds" in message else 409
-            return JSONResponse({"error": message}, status_code=status)
-        return {
-            "descriptions": app.state.people.descriptions(person_id),
-            "description": description,
-            "person": app.state.people.get(person_id, expand_sources=True),
-            "versions": app.state.people.versions(person_id),
-            "saved": True,
-            "unchanged": False,
-        }
+            result=app.state.crm.save_description(person_id,slot,text=text,release=release,expected_version=expected,operation_id=payload.get('operation_id') or 'description_'+uuid.uuid4().hex,actor='director',reason=payload.get('rationale_summary') or 'Director edited the description.')
+            return {**result,'descriptions':app.state.people.descriptions(person_id),'person':app.state.people.get(person_id,expand_sources=True),'versions':app.state.people.versions(person_id),'saved':True,'unchanged':False}
+        except (TaskError,ValueError) as exc:
+            if 'exceeds' in str(exc):return JSONResponse({'error':str(exc)},status_code=422)
+            return _task_error(exc)
 
     def _granola_meetings() -> dict[str, Any]:
         if app.state.mcp is None or not app.state.mcp.has(

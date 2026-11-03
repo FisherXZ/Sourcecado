@@ -878,6 +878,12 @@ def _add_crm_analysis(context: MigrationContext) -> int:
     return copied
 
 
+def _unify_crm(context: MigrationContext) -> int:
+    from coworker.crm_unified_schema import normalize
+    _widen_crm_changes(context, CRM_CHANGES_COLUMNS)
+    return normalize(context.connection)
+
+
 def _add_crm_email_tasks(context: MigrationContext) -> int:
     assert context.connection is not None
     add_task_analysis_schema(context.connection)
@@ -1162,6 +1168,9 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 count=lambda context: 0,
                 apply=_add_crm_email_tasks,
             ),
+            Migration(from_version=7, to_version=8,
+                description="Unify tracked mail, guarded CRM analysis, attention and task schemas without losing branch records.",
+                count=lambda context: 0, apply=_unify_crm),
         ),
         json_columns=(
             ("events", "payload"),
