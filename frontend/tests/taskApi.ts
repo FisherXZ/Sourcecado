@@ -8,6 +8,11 @@ export function taskApiMock() {
     current = null;
   }
   return {
+    getPersonEnrichment: vi.fn(async (personId: string) => ({
+      person: {person_id:personId,name:"Saved person",title:null,company:null,version:1,identity_revision:0},
+      known:{email:null,phone:null,linkedin_url:null},match:null,credits_estimated:null,session_id:null,
+      status:"not_enriched",latest:null,pending:null,can_request:false,problem:"apollo_not_configured",attempts:[],
+    })),
     getCrmProposals: vi.fn(async () => ({ proposals: [], truncated: false })),
     listTasks: vi.fn(async () => ({
       tasks: [],

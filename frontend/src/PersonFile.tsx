@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { DescriptionEditor } from "./DescriptionEditor";
 import { FollowUpPanel } from "./FollowUpPanel";
+import { EnrichmentPanel } from "./EnrichmentPanel";
 import { OutreachPanel } from "./OutreachPanel";
 import { TaskList } from "./Tasks";
 import { MailActivity } from "./crm/MailActivity";
@@ -395,6 +396,8 @@ export function PersonFileView({
           ) : null}
         </div>
       </header>
+
+      <EnrichmentPanel personId={personId} />
 
       <nav className="person-section-nav" aria-label="Person file sections">
         {[["person-mail-heading", "Gmail activity"], ["person-tasks", "Tasks"],

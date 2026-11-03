@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { EnrichmentPanel } from "../EnrichmentPanel";
 import { DescriptionEditor } from "../DescriptionEditor";
 import { clearDescriptionDraft } from "../descriptionDrafts";
 import { TaskList, TASKS_CHANGED } from "../Tasks";
@@ -125,6 +126,7 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
       <p className="person-timeline-meta">{person.last_contact_at
         ? `${person.last_contact_direction === "inbound" ? "They replied" : "We wrote"} · ${person.last_contact_at.slice(0, 10)}`
         : "No contact yet"}</p>
+      <EnrichmentPanel personId={personId} />
       <div className="preview-status">
         <label>Relationship status<select value={person.sequence_state ?? ""} disabled={busy} onChange={async event => {
           const state = event.target.value;

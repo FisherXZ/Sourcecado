@@ -56,6 +56,7 @@ from coworker.apollo import (
 )
 from coworker.apollo_curation import curate_apollo_candidates
 from coworker.crm_reminders import reminder_router
+from coworker.crm_enrichment import enrichment_router
 from coworker.bundle_redaction import registered_secret_values
 from coworker.calendar import calendar_from_secrets
 from coworker.connectors.google_oauth import (
@@ -2133,6 +2134,7 @@ def create_app(
 
     app.include_router(reminder_router(people=app.state.people, tasks=app.state.tasks,
                                       store=app.state.store, timezone=_operator_timezone))
+    app.include_router(enrichment_router(people=app.state.people, store=app.state.store, configured=lambda: bool(app.state.apollo_key)))
 
     def _task_error(exc: TaskError) -> JSONResponse:
         if isinstance(exc, TaskNotFound):

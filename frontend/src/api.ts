@@ -3082,3 +3082,35 @@ export async function settleQuarantinedEffect(
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(payload?.error || `settle ${res.status}`);
 }
+
+// Deliberate enrichment: all status reads are local; only the existing Inbox
+// decision route may execute a reviewed provider lookup.
+export type EnrichmentAttempt = {
+  id: string; status: string; provider: "apollo"; person: string | null;
+  title: string | null; company: string | null; match: Record<string,string> | null;
+  matched_on: string | null; credits_estimated: number | null; credits_actual: number | null;
+  fetched_at: string | null; created_at: string | null; source_ref_id?: string | null;
+  fields_found: string[]; fields_applied: string[];
+  conflicts: Array<{field:string;current:string|null;proposed:string|null}>;
+  stale_identity: boolean;
+};
+export type PersonEnrichment = {
+  person: {person_id:string;name:string;title:string|null;company:string|null;version:number;identity_revision:number};
+  known: {email:string|null;phone:string|null;linkedin_url:string|null};
+  match: Record<string,string> | null; credits_estimated:number|null; session_id:string|null;
+  status:string; latest:EnrichmentAttempt|null; pending:EnrichmentAttempt|null;
+  can_request:boolean; problem:string|null; attempts?:EnrichmentAttempt[];
+};
+export async function getPersonEnrichment(personId:string):Promise<PersonEnrichment> {
+  const response=await get(`/v1/people/${encodeURIComponent(personId)}/enrichment`);
+  if (!response.ok) throw new Error("Couldn’t read this person’s lookup status.");
+  return response.json();
+}
+export async function preparePersonEnrichment(personId:string, current:PersonEnrichment, operationId:string, acknowledgedUnknownId?:string):Promise<PersonEnrichment> {
+  const sessionId=current.session_id ?? (await openPersonSourcingChat(personId,current.person.version)).session.id;
+  await crmRequest(`/v1/people/${encodeURIComponent(personId)}/enrich-approval`, {
+    session_id:sessionId, operation_id:operationId,
+    ...(acknowledgedUnknownId ? {acknowledged_unknown_id:acknowledgedUnknownId} : {}),
+  });
+  return getPersonEnrichment(personId);
+}
