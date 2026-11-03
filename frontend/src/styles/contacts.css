@@ -334,13 +334,13 @@
   border-left: 1px solid var(--border);
 }
 
-.contacts-table th:nth-child(1) { width: 19%; }
-.contacts-table th:nth-child(2) { width: 14%; }
-.contacts-table th:nth-child(3) { width: 13%; }
-.contacts-table th:nth-child(4) { width: 12%; }
-.contacts-table th:nth-child(5) { width: 17%; }
-.contacts-table th:nth-child(6) { width: 12%; }
-.contacts-table th:nth-child(7) { width: 13%; }
+.contacts-table th:nth-child(1) { width: 17%; }
+.contacts-table th:nth-child(2) { width: 12%; }
+.contacts-table th:nth-child(3) { width: 11%; }
+.contacts-table th:nth-child(4) { width: 11%; }
+.contacts-table th:nth-child(5) { width: 22%; }
+.contacts-table th:nth-child(6) { width: 15%; }
+.contacts-table th:nth-child(7) { width: 12%; }
 
 .contacts-table tbody tr {
   height: 38px;
