@@ -332,3 +332,20 @@ def test_board_get_uses_the_operator_timezone(tmp_path, monkeypatch):
     ok, result = execute("board_get", {}, people=people, session_id="chat-crm", store=store)
     assert ok, result
     assert seen == ["Pacific/Auckland"]
+
+
+def test_board_get_hides_tasks_built_from_restricted_sources(tmp_path):
+    people, pid = bound(tmp_path)
+    ref = people.upsert_attachment(pid, record_type="source_ref",
+        fields={"id": "gmail:private", "sensitivity": "restricted", "title": "Private"},
+        idempotency_key="private", actor="director", rationale_summary="Attach source")
+    TaskService(people).create(pid, title="Private task body", timezone="America/Los_Angeles", actor="assistant",
+        operation_id="private-task", source_refs=[ref["id"]], allowed_source_ids={ref["id"]})
+    store = ConversationStore(tmp_path / "conversations")
+    ok, hidden = execute("board_get", {}, people=people, session_id="chat-crm", store=store)
+    assert ok, hidden
+    assert "Private task body" not in json.dumps(hidden)
+    ok, visible = execute("board_get", {}, people=people, session_id="chat-crm", store=store,
+                          allowed_source_ids={ref["id"]})
+    assert ok, visible
+    assert "Private task body" in json.dumps(visible)

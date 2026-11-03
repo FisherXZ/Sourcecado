@@ -220,8 +220,9 @@ def execute_board_tool(
                 timeline = people.timeline(person_id)
                 from coworker.crm_service import CrmService
                 crm = CrmService(people)
-                person["tasks"] = crm.tasks.list(timezone=operator_timezone(store), person_id=person_id)["tasks"]
-                person["crm_proposals"] = crm.proposals(person_id)
+                person["tasks"] = crm.tasks.list(timezone=operator_timezone(store), person_id=person_id,
+                    allowed_source_ids=allowed_source_ids, permitted_only=True)["tasks"]
+                person["crm_proposals"] = crm.proposals(person_id, allowed_source_ids=allowed_source_ids)
             except Exception:
                 return _partial_board_read(
                     "board_read_failed",
