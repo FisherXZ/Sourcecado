@@ -218,7 +218,8 @@ describe("the living brief on the person file", () => {
     const section = await screen.findByRole("region", { name: "Successor handoff" });
     expect(section).toHaveTextContent("Drafted from the claims below.");
     const form = within(section);
-    expect(form.getByLabelText("Who this is")).toHaveValue("Alyssa Lee");
+    // The draft fills in after the section mounts; slower CI machines see the gap.
+    await waitFor(() => expect(form.getByLabelText("Who this is")).toHaveValue("Alyssa Lee"));
     expect(form.getByLabelText("What happened")).toHaveValue("Led university sourcing.");
 
     fireEvent.change(form.getByLabelText("What happened"), {
