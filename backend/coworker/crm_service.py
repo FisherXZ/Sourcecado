@@ -782,6 +782,7 @@ class CrmService:
         if actor != "director" and not audit.pop("human_requested", False):
             raise TaskConflict("status requires the director", code="human_protected")
         audit.pop("allowed_source_ids", None)
+        rationale = audit.pop("rationale_summary", "Director changed relationship status")
         if state not in ("open", "in_conversation", "done"):
             raise TaskError("unknown sequence state")
         op = _clean_operation_id(operation_id)
@@ -809,7 +810,7 @@ class CrmService:
                 operation=op,
                 fingerprint=fp,
                 actor=actor,
-                reason="Director changed relationship status",
+                reason=rationale,
                 **audit,
             )
 

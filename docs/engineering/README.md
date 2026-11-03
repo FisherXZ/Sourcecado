@@ -43,6 +43,12 @@ Python venv; a packaged app uses the frozen backend.
 - [Living brief](living-brief.md)
 - [Meeting evidence](meeting-evidence.md) and [legal artifacts](legal-artifacts.md)
 
+The agent reads a person with `crm_get_person`, `crm_list_tasks`, `crm_list_attention`
+and `board_get`. `crm_refresh_mail` files tracked Gmail (read-only, once a minute). CRM
+writes are `crm_create_task`, `crm_update_task`, `crm_update_description`, `crm_set_attention`,
+`crm_set_status`, `crm_resolve_proposal`, `crm_correct_person` and `crm_undo_change`. Each needs
+an explicit director command and goes through the app's own writer and change history.
+
 ## Operating and packaging
 
 - [Doctor and migrations](doctor.md)

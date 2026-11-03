@@ -7,6 +7,7 @@ from typing import Any
 from coworker.brief import CHAT_HANDOFF_FIELD_CHARS, brief_payload, project
 from coworker.people import ATTACHMENT_TYPES, SEARCH_LIMIT_DEFAULT, PersonStore
 from coworker.crm_sources import sources_visible
+from coworker.crm_tasks import operator_timezone
 
 _ATTACHMENT_SCHEMA = {"type": "string", "enum": sorted(ATTACHMENT_TYPES)}
 
@@ -170,6 +171,7 @@ def execute_board_tool(
     arguments: dict[str, Any],
     *,
     people: PersonStore,
+    store: Any = None,
     actor: str,
     session_id: str | None,
     run_id: str | None,
@@ -218,7 +220,7 @@ def execute_board_tool(
                 timeline = people.timeline(person_id)
                 from coworker.crm_service import CrmService
                 crm = CrmService(people)
-                person["tasks"] = crm.tasks.list(timezone="America/Los_Angeles", person_id=person_id)["tasks"]
+                person["tasks"] = crm.tasks.list(timezone=operator_timezone(store), person_id=person_id)["tasks"]
                 person["crm_proposals"] = crm.proposals(person_id)
             except Exception:
                 return _partial_board_read(
