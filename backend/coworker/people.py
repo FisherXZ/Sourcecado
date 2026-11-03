@@ -32,7 +32,8 @@ _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # history (#209); v7 adds canonical task evidence and analysis stage tracking
 # (#210). The constructor creates fresh tables. Existing databases use
 # the registered migrations with backup and rollback before the new writer runs.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+APPROVAL_IDENTITY_FIELDS = ("first_name", "last_name", "company", "email", "apollo_id")
 
 SEQUENCE_STATES = ("open", "in_conversation", "done")
 BOARD_LANES = ("backlog", *SEQUENCE_STATES)
@@ -132,6 +133,7 @@ class PersonStore:
                 handoff_happened TEXT,
                 handoff_they_want TEXT,
                 version INTEGER NOT NULL DEFAULT 1,
+                identity_revision INTEGER NOT NULL DEFAULT 0 CHECK(identity_revision >= 0),
                 outcome TEXT,
                 deleted_at TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -306,8 +308,31 @@ class PersonStore:
             else "missing"
         )
         person["version"] = int(person.get("version") or 1)
+        person["identity_revision"] = int(person.get("identity_revision") or 0)
         person["restricted"] = False
         return person
+
+    def _bump_identity_revision(self, person_id: str, before: Any) -> int:
+        """After a caller-owned identity UPDATE, bump once from its fresh prior row.
+
+        Call under the people lock, before committing and snapshotting. The
+        current revision prevents a repeated call for the same update bumping
+        twice. Corrections/Undo and provider merges share this narrow helper.
+        Historical stores remain on their registered migration path.
+        """
+        old = dict(before)
+        current = dict(self._load_person_row(person_id))
+        if "identity_revision" not in current:
+            return 0
+        def facts(row: dict) -> tuple:
+            return tuple((_clean(str(row.get(field) or "")) or "").casefold()
+                         if field == "email" else _clean(str(row.get(field) or ""))
+                         for field in APPROVAL_IDENTITY_FIELDS)
+        revision = int(current["identity_revision"])
+        if facts(old) != facts(current) and revision == int(old.get("identity_revision") or 0):
+            self._conn.execute("UPDATE people SET identity_revision=identity_revision+1 WHERE person_id=?", (person_id,))
+            revision += 1
+        return revision
 
     def _attachment_dict(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
@@ -621,6 +646,7 @@ class PersonStore:
                         existing["person_id"],
                     ),
                 )
+                self._bump_identity_revision(existing["person_id"], existing)
                 if restoring:
                     self._receipt(
                         existing["person_id"],
@@ -699,7 +725,7 @@ class PersonStore:
                 last_name = None
         with self._lock:
             exists = self._conn.execute(
-                "SELECT 1 FROM people WHERE person_id = ?",
+                "SELECT * FROM people WHERE person_id = ?",
                 (person_id,),
             ).fetchone()
             if exists is None:
@@ -728,6 +754,7 @@ class PersonStore:
                     person_id,
                 ),
             )
+            self._bump_identity_revision(person_id, exists)
             self._conn.commit()
         return self.get(person_id)
 
@@ -1937,6 +1964,7 @@ class PersonStore:
             if cursor.rowcount != 1:
                 self._conn.rollback()
                 raise ValueError("stale record version")
+            self._bump_identity_revision(person_id, row)
             self._receipt(
                 person_id,
                 kind="patch",
@@ -2386,6 +2414,7 @@ class PersonStore:
             if cursor.rowcount != 1:
                 self._conn.rollback()
                 raise ValueError("stale record version")
+            self._bump_identity_revision(person_id, row)
             # Tasks and their history are independently versioned. Preserve the
             # current source rows they depend on, including current restrictions,
             # rather than replacing their evidence from a person snapshot.

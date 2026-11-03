@@ -890,6 +890,14 @@ def _add_crm_email_tasks(context: MigrationContext) -> int:
     return 0
 
 
+def _add_approval_identity_revision(context: MigrationContext) -> int:
+    assert context.connection is not None
+    conn = context.connection
+    if "identity_revision" not in {row[1] for row in conn.execute("PRAGMA table_info(people)")}:
+        conn.execute("ALTER TABLE people ADD COLUMN identity_revision INTEGER NOT NULL DEFAULT 0 CHECK(identity_revision >= 0)")
+    return conn.execute("SELECT count(*) FROM people").fetchone()[0]
+
+
 # DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
 # constructor still adds it with a column-existence probe; version 1 is that
 # column being present and recorded.
@@ -1171,6 +1179,9 @@ REGISTRY: tuple[StoreSpec, ...] = (
             Migration(from_version=7, to_version=8,
                 description="Unify tracked mail, guarded CRM analysis, attention and task schemas without losing branch records.",
                 count=lambda context: 0, apply=_unify_crm),
+            Migration(from_version=8, to_version=9,
+                description="Add monotonic person identity revisions for action-specific send and enrichment approvals.",
+                count=_count_people_db, apply=_add_approval_identity_revision),
         ),
         json_columns=(
             ("events", "payload"),

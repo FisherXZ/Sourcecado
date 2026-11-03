@@ -26,6 +26,21 @@ produce the same person-bound credit/provenance receipt. Unifying these paths is
   trailing whitespace are normalized. It identifies a body version. It is not
   the body, and it is safe to store and to display.
 
+## Person identity revision
+
+Schema 9 adds a monotonic `identity_revision`, initially zero. Effective changes
+to the saved first/last name, company, email or Apollo id increment it; email
+comparison ignores case and outer whitespace. Repeating the same provider facts
+does not increment it, and unrelated CRM edits leave it alone. Restoring identity
+facts increments the revision instead of restoring an old token, so A→B→A cannot
+revive an earlier approval.
+
+Identity writers call `PersonStore._bump_identity_revision(person_id, before)`
+under the people lock after their SQL update and before commit/snapshot, using
+the fresh prior row. The helper returns the current revision and does not bump
+twice for the same prior revision. Manual correction/protection uses the next
+registered migration; it must share this helper rather than broad person versions.
+
 ## The chain
 
 1. `POST /v1/people/{id}/outreach/draft` creates a Gmail draft. The recipient
