@@ -31,7 +31,7 @@ Python venv; a packaged app uses the frozen backend.
 
 - [Reviewed enrichment and approved sending](approved-send.md)
 - [Reply filing](reply-filing.md)
-- [CRM description analysis](crm-analysis.md)
+- [CRM evidence analysis and email tasks](crm-analysis.md)
 - [Living brief](living-brief.md)
 - [Meeting evidence](meeting-evidence.md) and [legal artifacts](legal-artifacts.md)
 

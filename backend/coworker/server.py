@@ -131,6 +131,7 @@ from coworker.people import DESCRIPTION_SLOTS, CrmMigrationRequired, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.crm_analysis import AnalysisService, ConversationReader
+from coworker.crm_tasks import source_ids as crm_source_ids
 from coworker.crm_descriptions import DescriptionService
 from coworker.prompt_contract import (
     AssembledSystemPrompt,
@@ -2068,6 +2069,7 @@ def create_app(
                 states=states,
                 active_sequences_only=not person_id,
                 limit=limit,
+                permitted_only=True,
             )
         except TaskError as exc:
             return _task_error(exc)
@@ -2120,7 +2122,8 @@ def create_app(
     def people_task_changes(person_id: str, task_id: str):
         """The recorded history of one task, oldest first."""
         try:
-            app.state.tasks.get(person_id, task_id)
+            task = app.state.tasks.get(person_id, task_id)
+            crm_source_ids(app.state.people, person_id, task["source_refs"], None)
         except TaskError as exc:
             return _task_error(exc)
         return {"changes": app.state.tasks.changes(task_id)}
@@ -2337,7 +2340,7 @@ def create_app(
 
     def _crm_analysis() -> AnalysisService:
         return AnalysisService(app.state.people, provider=app.state.provider,
-            failovers=app.state.provider_failovers, reader=ConversationReader(app.state.gmail))
+            failovers=app.state.provider_failovers, reader=ConversationReader(app.state.gmail), timezone=_operator_timezone())
 
     @app.get("/v1/people/{person_id}/descriptions/{slot}/changes")
     def people_description_changes(person_id: str, slot: str):

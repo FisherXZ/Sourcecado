@@ -170,7 +170,12 @@ function fakeServer() {
     if (current.version !== change.entity_version) {
       throw new TaskSaveError("moved on", 409, "task_conflict", view(current));
     }
-    const restored = { ...current, state: change.before.state, title: change.before.title, version: current.version + 1 };
+    const restored = {
+      ...current,
+      state: change.action === "create" ? "cancelled" as const : change.before.state,
+      title: change.before.title,
+      version: current.version + 1,
+    };
     tasks.set(current.task_id, restored);
     const undo = record(current, restored, "undo", changeId);
     return { task: view(restored), change: { change_id: undo.change_id }, replayed: false };
@@ -517,5 +522,66 @@ describe("shared person tasks", () => {
     expect(notice.textContent).toContain("newer edit");
     await screen.findByText("Draft the proposal");
     expect(screen.getByText("Completed")).toBeTruthy();
+  });
+
+  it("shows permitted task sources and the assistant's reason without turning unsafe URLs into links", async () => {
+    const server = fakeServer();
+    await api.createTask("per_maya", { title: "Send proposal", details: "", due_date: "2026-10-16", operationId: "source-fixture" });
+    const saved = server.tasks.get("task_1")!;
+    const sourceLinks = [
+      { id: "src_mail", label: "Friday request", url: "https://mail.google.com/mail/u/0/#all/thread-1" },
+      { id: "src_note", label: "Conversation note", url: null },
+      { id: "src_unsafe", label: "Unsafe source", url: "javascript:alert(1)" },
+    ];
+    server.tasks.set(saved.task_id, { ...saved, origin: "assistant", source_refs: ["src_mail"], source_links: sourceLinks });
+    const change = server.changes.get("chg_1")!;
+    server.changes.set(change.change_id, {
+      ...change,
+      actor: "assistant",
+      reason: "Maya asked for the proposal by Friday.",
+      source_links: sourceLinks,
+      can_undo: true,
+    });
+    render(<TaskList personId="per_maya" />);
+    const link = await screen.findByRole("link", { name: "Source: Friday request" });
+    expect(link.getAttribute("href")).toBe(sourceLinks[0].url);
+    expect(link.getAttribute("rel")).toContain("noreferrer");
+    expect(screen.getByText("Source: Conversation note")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Source: Unsafe source" })).toBeNull();
+    expect(document.body.textContent).not.toContain("src_mail");
+
+    fireEvent.click(screen.getByRole("button", { name: "Changes to Send proposal" }));
+    const history = await screen.findByRole("group", { name: "Changes to Send proposal" });
+    await within(history).findByText("Maya asked for the proposal by Friday.");
+    expect(within(history).getByText("Assistant")).toBeTruthy();
+    expect(within(history).getByRole("link", { name: "Source: Friday request" })).toBeTruthy();
+  });
+
+  it("undoes an eligible automatic creation in every list and hides creation undo without server eligibility", async () => {
+    const server = fakeServer();
+    await api.createTask("per_maya", { title: "Send proposal", details: "", due_date: "2026-10-16", operationId: "automatic-fixture" });
+    const saved = server.tasks.get("task_1")!;
+    server.tasks.set(saved.task_id, { ...saved, origin: "assistant" });
+    const change = server.changes.get("chg_1")!;
+    server.changes.set(change.change_id, { ...change, actor: "assistant", can_undo: true });
+    render(<>
+      <div data-testid="person"><TaskList personId="per_maya" /></div>
+      <div data-testid="global"><TaskList people={[MAYA]} /></div>
+    </>);
+    const person = screen.getByTestId("person");
+    const global = screen.getByTestId("global");
+    fireEvent.click(await within(person).findByRole("button", { name: "Changes to Send proposal" }));
+    const history = await within(person).findByRole("group", { name: "Changes to Send proposal" });
+    fireEvent.click(await within(history).findByRole("button", { name: "Undo created on Send proposal" }));
+    await within(person).findByText("Cancelled");
+    await within(global).findByText("Cancelled");
+    expect(api.undoTaskChange).toHaveBeenCalledWith("per_maya", "chg_1", expect.objectContaining({ operationId: expect.any(String) }));
+
+    // A creation marked ineligible by the server must not offer a stale undo.
+    server.changes.set(change.change_id, { ...change, actor: "assistant", can_undo: false });
+    fireEvent.click(within(global).getByRole("button", { name: "Changes to Send proposal" }));
+    const globalHistory = await within(global).findByRole("group", { name: "Changes to Send proposal" });
+    await within(globalHistory).findByText("Created");
+    expect(within(globalHistory).queryByRole("button", { name: "Undo created on Send proposal" })).toBeNull();
   });
 });
