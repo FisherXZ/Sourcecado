@@ -243,72 +243,6 @@
   gap: 8px;
 }
 
-/* Sequence state: a tinted pill that is a native select underneath, with
-   Undo beside it. Shared with the Contacts preview. */
-.sequence-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.pf-sequence {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  border-radius: 9999px;
-  background: var(--raised);
-  color: var(--text);
-}
-
-.pf-sequence select {
-  min-height: 32px;
-  padding: 0 30px 0 14px;
-  border: 1px solid var(--border);
-  border-radius: 9999px;
-  appearance: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.pf-sequence select:disabled {
-  cursor: wait;
-}
-
-.pf-sequence .sourcecado-card-glyph {
-  position: absolute;
-  right: 10px;
-  pointer-events: none;
-}
-
-.pf-sequence.is-open {
-  background: var(--accent-tint);
-  color: var(--accent-deep);
-}
-
-.pf-sequence.is-open select {
-  border-color: transparent;
-}
-
-/* Same pairs as the Contacts sequence pills. */
-.pf-sequence.is-in_conversation {
-  background: var(--raised);
-  color: var(--pit);
-}
-
-.pf-sequence.is-in_conversation select,
-.pf-sequence.is-done select {
-  border-color: transparent;
-}
-
-.pf-sequence.is-done {
-  background: var(--raised);
-  color: var(--text);
-}
-
 /* --- layout -------------------------------------------------------------- */
 
 .pf-layout {
@@ -441,9 +375,7 @@
   border: 0;
 }
 
-.pf .person-details-conflicts,
-.pf .person-details-history,
-.pf .person-details-review {
+.pf .person-details-history {
   margin-top: 12px;
   font-size: 13px;
 }
@@ -456,16 +388,6 @@
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-}
-
-.pf .person-details-fields {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.pf .person-details-review table {
-  width: 100%;
-  table-layout: fixed;
-  overflow-wrap: anywhere;
 }
 
 /* --- tabs ---------------------------------------------------------------- */
@@ -638,86 +560,6 @@
   overflow-wrap: anywhere;
 }
 
-/* --- outreach ------------------------------------------------------------ */
-
-.pf .person-outreach-recipient {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text);
-  font-size: 14px;
-}
-
-.person-outreach-fields {
-  display: grid;
-  gap: 4px;
-  margin: 8px 0 0;
-}
-
-.person-outreach-fields > div {
-  display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
-  align-items: baseline;
-  gap: 12px;
-}
-
-.person-outreach-fields dt {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.person-outreach-fields dt .sourcecado-card-glyph {
-  align-self: center;
-  color: var(--muted);
-}
-
-.person-outreach-fields dd {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.pf .person-outreach-sent {
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-}
-
-.person-outreach-sent-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  color: var(--accent-deep);
-}
-
-.person-outreach-sent-head time {
-  color: var(--text);
-}
-
-.person-outreach-gmail {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: auto;
-  min-height: 32px;
-  color: var(--accent-deep);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.after-send-hint {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 8px;
-}
-
 /* --- readable floor for older person-page pieces ----------------------- */
 
 .pf :is(.person-mail-source, .description-editor-meta, .person-empty,
@@ -804,7 +646,7 @@
   }
 
   .pf-btn,
-  .pf-sequence select,
+  .pf-sequence,
   .pf .pf-attr-add,
   .pf .person-section button,
   .pf .person-outreach-actions button,
@@ -823,12 +665,4 @@
     padding: 12px;
   }
 
-  .person-outreach-fields > div {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
-
-  .person-outreach-gmail {
-    margin-left: 0;
-  }
 }

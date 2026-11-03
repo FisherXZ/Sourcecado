@@ -1,0 +1,755 @@
+/* CRM interaction states shared by the Person File and the Contacts preview:
+   details edited in place, the correction review, contact lookup outcomes,
+   the sequence pill menu, the attention flag and suggestion cards.
+   Icon + label ghost buttons, tinted pills, 13-14px text on --text.
+   --muted colours icons only. Nothing here goes below 13px. */
+
+/* --- shared buttons ------------------------------------------------------ */
+
+:is(.pf, .person-preview, .person-enrichment) :is(.pd-btn, .enrichment-btn, .sequence-undo) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+:is(.pf, .person-preview, .person-enrichment) :is(.pd-btn, .enrichment-btn, .sequence-undo):hover:not(:disabled) {
+  background: var(--raised);
+}
+
+:is(.pf, .person-preview, .person-enrichment) :is(.pd-btn, .enrichment-btn).is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+:is(.pf, .person-preview, .person-enrichment) :is(.pd-btn, .enrichment-btn).is-primary:hover:not(:disabled) {
+  border-color: var(--accent-deep);
+  background: var(--accent-deep);
+}
+
+:is(.pf, .person-preview) :is(.pd-btn.is-quiet, .sequence-undo) {
+  border-color: transparent;
+  background: transparent;
+}
+
+:is(.pd-btn, .enrichment-btn, .sequence-undo):disabled {
+  cursor: default;
+  opacity: .6;
+}
+
+:is(.pd-btn, .enrichment-btn, .sequence-undo, .pd-value):focus-visible,
+.pd-review :is(input, a):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* One quiet result line after a save, with Undo when it can be undone. */
+.pd-result {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.preview-status .pd-result {
+  margin: 0;
+}
+
+/* --- details: click a value to edit it in place -------------------------- */
+
+:is(.pf, .person-preview) .pd-value {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  max-width: 100%;
+  margin-left: -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: text;
+}
+
+.pd-value > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+:is(.pf, .person-preview) .pd-value:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+/* The pencil and the copy/open actions appear on hover or focus; touch
+   screens keep them visible. */
+.pd-value .action-icon,
+.pd-hover-action {
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.pf-attr:hover .pd-value .action-icon,
+.pd-value:focus-visible .action-icon,
+.pf-attr:hover .pd-hover-action,
+.pf-attr:focus-within .pd-hover-action {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .pd-value .action-icon,
+  .pd-hover-action {
+    opacity: 1;
+  }
+}
+
+.pf-attr.is-editing {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  row-gap: 6px;
+}
+
+.pd-row-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+:is(.pf, .person-preview) .person-details-editor :is(.pf-attr.is-editing, .pd-row) input,
+:is(.pf, .person-preview) .pd-review .pd-reason {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+:is(.pf, .person-preview) .person-details-editor .pf-attr.is-editing > input,
+:is(.pf, .person-preview) .person-details-editor :is(.pf-attr.is-editing, .pd-row) input:focus,
+:is(.pf, .person-preview) .pd-review .pd-reason:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+:is(.pf, .person-preview) .pd-review .pd-reason {
+  height: 30px;
+  font-size: 13px;
+}
+
+.person-details-editor input::placeholder {
+  color: var(--muted);
+}
+
+/* "Edit details": every value as an input, same icons, no labels. */
+.pd-form {
+  display: grid;
+  gap: 6px;
+}
+
+.pd-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+}
+
+.pd-name-row {
+  grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 6px;
+}
+
+.pd-row > :is(.action-icon, .sourcecado-card-glyph) {
+  color: var(--muted);
+}
+
+.pd-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* A saved line glows once, so the change is visible where it happened. */
+.pf-attr.is-saved {
+  border-radius: 6px;
+  animation: pd-saved 1600ms ease-out;
+}
+
+@keyframes pd-saved {
+  from { background: var(--accent-tint); }
+  to { background: transparent; }
+}
+
+/* Correction review, inline under the edited line. */
+.pd-review {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+  margin: 2px 0 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 13px;
+}
+
+.pd-review-changes {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pd-review-changes li,
+.pd-conflict > span,
+.suggestion-comparison {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pd-review-changes :is(.action-icon, .sourcecado-card-glyph) {
+  color: var(--muted);
+}
+
+.pd-before {
+  color: var(--text);
+  text-decoration: line-through;
+  text-decoration-color: var(--muted);
+}
+
+.pd-after,
+.pd-conflict strong {
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
+.pd-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.pd-duplicates {
+  display: grid;
+  gap: 6px;
+}
+
+.pd-duplicates p {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+}
+
+:is(.pf, .person-preview) .pd-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+:is(.pf, .person-preview) .pd-check input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  flex: none;
+}
+
+.pd-error {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--error-bg);
+  color: var(--error);
+  font-size: 13px;
+}
+
+.pd-conflicts {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.pd-conflicts h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pd-conflict {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.pd-conflict > :is(.action-icon, .sourcecado-card-glyph) {
+  color: var(--muted);
+}
+
+.person-details-history summary,
+.enrichment-history summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.person-details-history ol {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.person-details-history li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  font-size: 13px;
+}
+
+/* --- contact lookup ------------------------------------------------------ */
+
+:is(.pf, .person-preview) .enrichment-review label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text);
+}
+
+.enrichment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.person-enrichment > .enrichment-btn {
+  justify-self: start;
+}
+
+/* Why a lookup found nothing, failed or ran out of credit, and what next. */
+.enrichment-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.enrichment-card.is-warn {
+  background: var(--warn-bg);
+}
+
+.enrichment-card.is-error {
+  background: var(--error-bg);
+}
+
+.enrichment-card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.enrichment-card.is-warn .enrichment-card-title {
+  color: var(--warn);
+}
+
+.enrichment-card.is-error .enrichment-card-title {
+  color: var(--error);
+}
+
+.enrichment-card-title .sourcecado-card-glyph {
+  margin-top: 2px;
+}
+
+.enrichment-card .enrichment-actions {
+  margin-top: 2px;
+}
+
+.enrichment-match {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.enrichment-match .sourcecado-card-glyph {
+  color: var(--muted);
+}
+
+/* Fields the last lookup filled, as small tinted chips. */
+.enrichment-filled {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.enrichment-filled li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.enrichment-filled.is-fresh li {
+  animation: enrichment-filled 1600ms ease-out;
+}
+
+@keyframes enrichment-filled {
+  from { box-shadow: 0 0 0 3px var(--accent); }
+  to { box-shadow: 0 0 0 3px transparent; }
+}
+
+.enrichment-history ol {
+  padding-left: 18px;
+}
+
+/* --- sequence pill and its menu ------------------------------------------ */
+
+.sequence-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+:is(.pf, .person-preview) .pf-sequence {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 12px;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, var(--surface));
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+:is(.pf, .person-preview) .pf-sequence.is-open {
+  border-color: transparent;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+/* Same pairs as the Contacts sequence pills. */
+:is(.pf, .person-preview) .pf-sequence.is-in_conversation {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--pit) 16%, var(--surface));
+  color: color-mix(in srgb, var(--pit) 55%, var(--text));
+}
+
+:is(.pf, .person-preview) .pf-sequence.is-done {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 8%, var(--surface));
+  color: var(--text);
+}
+
+.pf-sequence[aria-disabled="true"] {
+  cursor: wait;
+  opacity: .7;
+}
+
+.pf-sequence:focus-visible,
+.sequence-menu:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sequence-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 190px;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 14%, transparent);
+  list-style: none;
+}
+
+.sequence-option {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sequence-option.is-active {
+  background: var(--raised);
+}
+
+.sequence-option[aria-disabled="true"] {
+  cursor: default;
+}
+
+.sequence-option-check {
+  display: inline-grid;
+  width: 16px;
+  flex: none;
+  place-items: center;
+  color: var(--accent-deep);
+}
+
+.sequence-option-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 9999px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 35%, var(--surface));
+}
+
+.sequence-option.is-open .sequence-option-dot {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+.sequence-option.is-in_conversation .sequence-option-dot {
+  background: var(--pit);
+  box-shadow: none;
+}
+
+.sequence-option.is-done .sequence-option-dot {
+  background: var(--muted);
+  box-shadow: none;
+}
+
+/* --- attention flag ------------------------------------------------------ */
+
+/* Reason on its own line, then the date chip and Save/Cancel; it wraps
+   inside the 390px preview instead of pushing past it. */
+.person-preview .preview-flag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.flag-field {
+  display: flex;
+  flex: 1 1 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+}
+
+.person-preview .flag-field input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 14px;
+}
+
+.person-preview .flag-field input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.flag-date {
+  display: inline-flex;
+  min-width: 0;
+  height: 30px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 8px;
+  border-radius: 9999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.person-preview .flag-date input {
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.flag-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* --- suggestions --------------------------------------------------------- */
+
+.person-preview .preview-suggestion {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.suggestion-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.suggestion-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.suggestion-kind .sourcecado-card-glyph {
+  color: var(--muted);
+}
+
+.person-preview .suggestion-source {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.person-preview .suggestion-comparison strong {
+  display: inline;
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+
+.person-preview .suggestion-comparison textarea {
+  flex: 1 1 100%;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 14px;
+}
+
+.suggestion-reason {
+  margin: 0;
+  color: var(--text);
+}
+
+.suggestion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* --- touch sizes and reduced motion -------------------------------------- */
+
+@media (max-width: 1023px) {
+  .person-preview :is(.pd-btn, .enrichment-btn, .sequence-undo, .pd-value),
+  .person-preview .person-details-editor :is(.pf-attr.is-editing, .pd-row) input,
+  .person-preview .flag-field input,
+  .person-preview .flag-date {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  .pf :is(.pd-btn, .enrichment-btn, .sequence-undo, .pd-value),
+  .pf .person-details-editor :is(.pf-attr.is-editing, .pd-row) input,
+  .sequence-option {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pf-attr.is-saved,
+  .enrichment-filled.is-fresh li {
+    animation: none;
+  }
+
+  .pd-value .action-icon,
+  .pd-hover-action {
+    transition: none;
+  }
+}

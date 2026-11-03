@@ -121,6 +121,7 @@ class CrmService:
         compensates=None,
         session_id=None,
         run_id=None,
+        receipt=True,
     ):
         if actor not in ("director", "assistant"):
             raise TaskError("invalid actor")
@@ -171,19 +172,20 @@ class CrmService:
                 change["created_at"],
             ),
         )
-        self.people._receipt(
-            pid,
-            kind="crm_change",
-            summary=change["reason"],
-            payload={
-                "change_id": change["change_id"],
-                "entity_type": kind,
-                "action": action,
-            },
-            actor=actor,
-            session_id=session_id,
-            run_id=run_id,
-        )
+        if receipt:
+            self.people._receipt(
+                pid,
+                kind="crm_change",
+                summary=change["reason"],
+                payload={
+                    "change_id": change["change_id"],
+                    "entity_type": kind,
+                    "action": action,
+                },
+                actor=actor,
+                session_id=session_id,
+                run_id=run_id,
+            )
         return response
 
     def _bump_person(self, pid):
@@ -813,6 +815,52 @@ class CrmService:
                 reason=rationale,
                 **audit,
             )
+
+    def transition(
+        self,
+        pid,
+        *,
+        state,
+        expected_version,
+        actor,
+        rationale_summary="",
+        session_id=None,
+        run_id=None,
+    ):
+        """The Board move: PersonStore's sequence guards, saved as an undoable status change.
+
+        The guards still decide the move. The assistant needs conversation
+        evidence for in_conversation and a recorded outcome for done. This is
+        not set_status, which stays the director-command path. The store's
+        state receipt is the timeline entry, so the change adds no second one.
+        """
+        op = "board_transition_" + uuid.uuid4().hex
+        with self.people.crm_transaction():
+            before = self.people._write_sequence(
+                pid,
+                state,
+                actor=actor,
+                expected_version=expected_version,
+                session_id=session_id,
+                run_id=run_id,
+                rationale_summary=rationale_summary,
+            )
+            recorded = self._record(
+                pid,
+                "status",
+                pid,
+                self._person(pid)["version"],
+                {"state": before},
+                {"state": state},
+                operation=op,
+                fingerprint=_fingerprint({"transition": op}),
+                actor=actor,
+                reason=rationale_summary.strip() or f"Moved to {state.replace('_', ' ')}",
+                session_id=session_id,
+                run_id=run_id,
+                receipt=False,
+            )
+        return {"person": self.people.get(pid), "change": recorded["change"]}
 
     def undo(
         self,

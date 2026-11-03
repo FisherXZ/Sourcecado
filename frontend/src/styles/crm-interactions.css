@@ -1,0 +1,1500 @@
+/* CRM inner states: task rows and their editors, the Undo toast, outreach and
+   follow-up email cards, the after-send reminder and the open description
+   editor. One vocabulary: icon + label buttons, tinted pills, 13-14px text in
+   --text, no field labels. --muted colours icons only.
+
+   Selectors carry a component root (.task-list, .person-section,
+   .description-editor, .pf-next-tasks). That lets them outrank the older
+   .person-preview and .person-section element rules that styles.css declares
+   after its imports. */
+
+/* --- shared controls ---------------------------------------------------- */
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-btn {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 80ms ease-out, border-color 80ms ease-out;
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-btn:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-btn.is-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-btn.is-ghost:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-btn.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-btn.is-primary:hover:not(:disabled) {
+  border-color: var(--accent-deep);
+  background: var(--accent-deep);
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-icon-btn {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 80ms ease-out, border-color 80ms ease-out;
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-icon-btn:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--raised);
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a).crm-icon-btn.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+:is(.task-list, .person-section, .description-editor) :is(button, a):is(.crm-btn, .crm-icon-btn):disabled {
+  cursor: default;
+  opacity: .6;
+}
+
+:is(.task-list, .person-section, .description-editor, .undo-toast) :is(button, a, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.crm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-pill {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--text) 7%, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.crm-pill.is-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+/* An icon and one line of text: recipients, sent lines, empty states. */
+:is(.task-list, .person-section, .description-editor) .crm-line {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.crm-line > :is(.action-icon, .sourcecado-card-glyph) {
+  flex: none;
+  color: var(--muted);
+}
+
+:is(.task-list, .person-section, .description-editor) .crm-line.is-ok,
+.crm-line.is-ok > :is(.action-icon, .sourcecado-card-glyph) {
+  color: var(--accent-deep);
+}
+
+/* Errors and warnings: tinted, with the icon in the same colour. */
+:is(.task-list, .person-section, .description-editor) :is(p, div, span).crm-alert,
+:is(.task-list, .person-section, .description-editor) :is(p, div, span).crm-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+:is(.task-list, .person-section, .description-editor) :is(p, div, span).crm-alert {
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+:is(.task-list, .person-section, .description-editor) :is(p, div, span).crm-note {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+:is(.crm-alert, .crm-note) > :is(.action-icon, .sourcecado-card-glyph) {
+  flex: none;
+}
+
+/* Popovers: the row menu and the due date picker. */
+.task-menu,
+.task-due {
+  position: relative;
+  display: inline-flex;
+}
+
+.crm-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 220px;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--text) 16%, transparent);
+  animation: crm-pop-in 120ms ease-out;
+}
+
+@keyframes crm-pop-in {
+  from { opacity: 0; transform: translateY(-2px); }
+}
+
+.task-list button.crm-menu-item {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.task-list button.crm-menu-item:hover:not(:disabled),
+.task-list button.crm-menu-item:focus-visible {
+  outline: none;
+  background: var(--raised);
+}
+
+.task-list button.crm-menu-item > :is(.action-icon, .sourcecado-card-glyph) {
+  color: var(--muted);
+}
+
+.task-list button.crm-menu-item.is-danger,
+.task-list button.crm-menu-item.is-danger > .action-icon {
+  color: var(--error);
+}
+
+.task-list button.crm-menu-item.is-selected {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.crm-menu-hint {
+  margin-left: auto;
+  padding-left: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- task list ----------------------------------------------------------- */
+
+.task-list {
+  min-width: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.contacts-list .task-list {
+  padding: 4px 14px 14px;
+}
+
+.task-list-header {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-list .task-list-header :is(h2, h3) {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.task-list .task-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-list .task-group-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 0 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-list .task-group-label :is(h3, h4) {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-list .task-group-label.is-overdue :is(h3, h4) {
+  color: var(--warn);
+}
+
+:is(.task-list, .person-section) .task-group-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  text-align: center;
+}
+
+.task-list .task-row {
+  border-bottom: 1px solid var(--border);
+  transition: background-color 80ms ease-out;
+}
+
+.task-list .task-row:hover {
+  background: color-mix(in srgb, var(--raised) 55%, transparent);
+}
+
+.task-row-line {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 8px;
+  min-height: 40px;
+  padding: 6px 2px 6px 0;
+}
+
+.task-row-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding-top: 2px;
+}
+
+.task-row-trail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-list button.task-title {
+  justify-self: start;
+  max-width: 100%;
+  min-height: 24px;
+  margin: 0 0 0 -4px;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: text;
+}
+
+.task-list button.task-title:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+.task-list button.task-title:disabled {
+  opacity: 1;
+}
+
+.task-list span.task-title {
+  padding: 2px 0 1px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.task-row:is(.is-state-completed, .is-state-cancelled) .task-title {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.task-details {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.task-meta,
+.task-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 13px;
+}
+
+:is(.task-meta, .task-sources) a {
+  color: var(--accent-deep);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+:is(.task-meta, .task-sources) a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Round checkbox. The tick previews on hover; done fills it with the accent. */
+:is(.task-list, .pf-next-tasks, .task-new) .task-check {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+:is(.task-list, .pf-next-tasks) .task-check:disabled {
+  cursor: progress;
+  opacity: 1;
+}
+
+.task-check-box {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  place-items: center;
+  border: 1.5px solid color-mix(in srgb, var(--text) 40%, var(--surface));
+  border-radius: 9999px;
+  background: var(--surface);
+  transition: background-color 120ms ease-out, border-color 120ms ease-out;
+}
+
+.task-check-box .action-icon {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.4;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.task-check:hover:not(:disabled) .task-check-box {
+  border-color: var(--accent);
+}
+
+.task-check:hover:not(:disabled) .task-check-box .action-icon {
+  opacity: .55;
+}
+
+.task-check:is(.is-completed, .is-cancelled) .task-check-box .action-icon {
+  opacity: 1;
+}
+
+.task-check.is-completed .task-check-box {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+  animation: crm-check-in 160ms ease-out;
+}
+
+@keyframes crm-check-in {
+  from { transform: scale(.8); }
+}
+
+.task-check.is-cancelled .task-check-box {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.task-check.is-placeholder {
+  cursor: default;
+}
+
+.task-check.is-placeholder .task-check-box {
+  border-style: dashed;
+}
+
+/* Due date chip: neutral, warn when overdue, accent when today. */
+:is(.task-list, .pf-next-tasks, .follow-up) .task-due-chip {
+  display: inline-flex;
+  height: 24px;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 7%, var(--surface));
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+:is(.task-list, .pf-next-tasks, .follow-up) button.task-due-chip {
+  cursor: pointer;
+}
+
+:is(.task-list, .pf-next-tasks, .follow-up) button.task-due-chip:hover:not(:disabled) {
+  border-color: var(--border);
+}
+
+.task-due-chip .action-icon {
+  width: 14px;
+  height: 14px;
+}
+
+:is(.task-list, .pf-next-tasks, .follow-up) .task-due-chip.is-overdue {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+:is(.task-list, .pf-next-tasks, .follow-up) .task-due-chip.is-today {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.task-list .task-due-chip.is-empty {
+  width: 28px;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+}
+
+.task-origin,
+.task-state-pill {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: 9999px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.task-origin {
+  background: color-mix(in srgb, var(--pit) 12%, var(--surface));
+  color: var(--text);
+}
+
+.task-origin .action-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--pit);
+}
+
+.task-state-pill {
+  background: var(--raised);
+  color: var(--text);
+}
+
+/* Secondary row actions wait for hover or focus; touch screens always show them. */
+@media (hover: hover) {
+  .task-row .task-reveal {
+    opacity: 0;
+    transition: opacity 80ms ease-out;
+  }
+
+  .task-row:hover .task-reveal,
+  .task-row:focus-within .task-reveal,
+  .task-row .task-reveal[aria-expanded="true"] {
+    opacity: 1;
+  }
+}
+
+.task-due-picker {
+  min-width: 240px;
+}
+
+.task-due-options {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-due-exact {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 2px 8px;
+}
+
+.task-list .task-due-exact input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-zone {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.task-zone .sourcecado-card-glyph {
+  color: var(--muted);
+}
+
+/* Inline title edit. */
+.task-list .task-title-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+}
+
+.task-list .task-title-form input {
+  flex: 1 1 160px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.task-list .task-title-form input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.task-title-form > :is(.crm-alert, .crm-note) {
+  flex-basis: 100%;
+}
+
+/* New task: an inline row at the top of the list. */
+.task-list .task-new {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 6px;
+  margin: 6px 0;
+  padding: 4px 6px 4px 0;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.task-list .task-new-title {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.task-list .task-new-title:focus-visible {
+  outline: none;
+}
+
+.task-new-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.task-list .task-new-person {
+  grid-row: 2;
+  grid-column: 2 / -1;
+  justify-self: start;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.task-new > :is(.crm-alert, .crm-note) {
+  grid-column: 1 / -1;
+}
+
+/* Edit details: title, description and due date in one quiet card. */
+.task-list .task-editor,
+.task-list .task-history,
+.task-list .task-local-draft {
+  margin: 0 0 10px 36px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.task-list .task-editor {
+  display: grid;
+  gap: 6px;
+}
+
+.task-list .task-editor:focus-within {
+  border-color: var(--accent);
+}
+
+.task-list .task-editor :is(.task-editor-title, .task-editor-details) {
+  min-width: 0;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.task-list .task-editor .task-editor-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.task-list .task-editor .task-editor-details {
+  min-height: 44px;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.task-list .task-editor :is(.task-editor-title, .task-editor-details):focus-visible {
+  outline: none;
+}
+
+.task-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.task-editor-foot .task-due {
+  margin-right: auto;
+}
+
+.task-editor-foot .crm-popover {
+  right: auto;
+  left: 0;
+}
+
+.task-conflict {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.task-conflict p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-conflict .task-conflict-saved {
+  color: var(--text);
+}
+
+/* Change history under the row: icon, what, who, when, Undo. */
+.task-list .task-history {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.task-history-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.task-history-head .sourcecado-card-glyph {
+  color: var(--muted);
+}
+
+.task-history-head .crm-icon-btn {
+  margin-left: auto;
+}
+
+.task-list .task-history-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-list .task-history-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.task-history-row > .action-icon {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.task-history-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.task-history-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.task-history-line time {
+  font-variant-numeric: tabular-nums;
+}
+
+.task-list .task-local-draft {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.task-local-draft .task-draft {
+  flex: 1 1 auto;
+}
+
+.task-list .task-local-draft .task-row-action {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-weight: 500;
+}
+
+/* Empty, loading, Completed toggle and paging. */
+.task-list .task-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 14px 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.task-empty :is(.action-icon, .sourcecado-card-glyph) {
+  color: var(--muted);
+}
+
+.task-list .task-quiet {
+  margin: 10px 0 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.task-list .task-list-error {
+  margin: 8px 0;
+}
+
+.task-finished {
+  margin-top: 8px;
+}
+
+.task-list .task-finished-toggle {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  margin-left: -4px;
+  padding: 0 6px 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.task-list .task-finished-toggle:hover {
+  background: var(--raised);
+}
+
+.task-finished-toggle .sourcecado-card-glyph {
+  color: var(--muted);
+  transform: rotate(-90deg);
+  transition: transform 120ms ease-out;
+}
+
+.task-finished-toggle[aria-expanded="true"] .sourcecado-card-glyph {
+  transform: none;
+}
+
+.task-list .task-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
+/* Overview "Next tasks": the same checkbox and due chip, no other actions. */
+.pf .pf-next-tasks {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 0;
+  list-style: none;
+}
+
+.pf .pf-next-tasks li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 38px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pf .pf-next-tasks li:last-child {
+  border-bottom: 0;
+}
+
+.pf-next-tasks li.is-done .pf-next-task-title {
+  text-decoration: line-through;
+}
+
+/* --- Undo toast ---------------------------------------------------------- */
+
+.undo-toast-region {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 60;
+  max-width: calc(100vw - 32px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.undo-toast {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--canvas);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--text) 24%, transparent);
+  font-size: 13px;
+  pointer-events: auto;
+  animation: crm-toast-in 160ms ease-out;
+}
+
+@keyframes crm-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+}
+
+.undo-toast-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Rooted on the region so the dark toast keeps its buttons inside the preview,
+   whose .person-preview button rule paints every button white. */
+.undo-toast-region .undo-toast button {
+  display: inline-flex;
+  min-height: 30px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--canvas) 28%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--canvas);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.undo-toast-region .undo-toast button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--canvas) 14%, transparent);
+}
+
+.undo-toast-region .undo-toast .undo-toast-close {
+  width: 30px;
+  padding: 0;
+  border-color: transparent;
+}
+
+.undo-toast:focus-within :focus-visible {
+  outline-color: var(--canvas);
+}
+
+/* --- email cards: compose, Gmail draft, approval, sent ------------------- */
+
+.person-section .crm-card {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.person-section .crm-card + .crm-card,
+.person-section .crm-card + .crm-alert {
+  margin-top: 10px;
+}
+
+.crm-card-head,
+.crm-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 8px 12px;
+}
+
+.crm-card-head {
+  border-bottom: 1px solid var(--border);
+}
+
+.crm-card-foot {
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--raised) 45%, var(--surface));
+}
+
+.crm-compose {
+  display: grid;
+  min-width: 0;
+}
+
+.crm-compose-row,
+.person-section .crm-compose-meta li {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.person-section .crm-compose-meta {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.crm-compose-meta .sourcecado-card-glyph {
+  flex: none;
+  color: var(--muted);
+}
+
+.crm-compose-meta select {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.crm-compose-key {
+  min-width: 36px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.person-section :is(.crm-compose-subject, .crm-compose-body) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.person-section .crm-compose-subject {
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.person-section .crm-compose-subject[readonly] {
+  background: color-mix(in srgb, var(--raised) 45%, var(--surface));
+  cursor: default;
+}
+
+.person-section .crm-compose-body {
+  min-height: 150px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.person-section :is(.crm-compose-subject, .crm-compose-body):focus-visible {
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.crm-compose-subject::placeholder,
+.crm-compose-body::placeholder,
+.task-list :is(input, textarea)::placeholder,
+.description-textarea::placeholder,
+.after-send-title::placeholder {
+  color: var(--muted);
+}
+
+.crm-draft {
+  display: grid;
+  min-width: 0;
+}
+
+.crm-mail-meta {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px 0;
+}
+
+.crm-mail-meta > .crm-pill {
+  justify-self: start;
+}
+
+.crm-mail-subject {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.crm-mail-body {
+  max-height: 260px;
+  overflow: auto;
+  margin: 10px 12px 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.crm-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.crm-version .sourcecado-card-glyph {
+  color: var(--muted);
+}
+
+.crm-version code {
+  font-family: ui-monospace, "Geist Mono", monospace;
+  font-size: 13px;
+}
+
+/* Once-only send approval: the one accent-tinted block in the card. */
+.crm-approval {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--accent);
+  background: var(--accent-tint);
+}
+
+.crm-approval p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.crm-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-deep);
+}
+
+.person-section .crm-sent .crm-mail-meta {
+  padding-bottom: 10px;
+}
+
+.person-section .crm-sent .crm-card-head time {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.person-outreach > :not(h2) + :not(h2) {
+  margin-top: 10px;
+}
+
+.person-outreach-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+/* After a send: set or skip one follow-up task. */
+.after-send-reminder {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+}
+
+p.after-send-reminder {
+  margin: 0;
+}
+
+.after-send-reminder fieldset {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.person-section .after-send-reminder input {
+  min-width: 0;
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.person-section .after-send-reminder .after-send-title {
+  flex: 1 1 200px;
+}
+
+.after-send-saved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+/* Follow-up page header and talking points. */
+.follow-up-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.follow-up-header h2 {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.follow-up-header h2:focus {
+  outline: none;
+}
+
+.follow-up-header h2:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.follow-up-header .follow-up-close {
+  margin-left: auto;
+}
+
+.follow-up > .crm-note + .crm-note,
+.follow-up > .crm-note + .crm-card,
+.follow-up > .crm-card + .follow-up-points,
+.follow-up > .crm-card + .crm-alert,
+.follow-up > .follow-up-points + .crm-alert {
+  margin-top: 10px;
+}
+
+.follow-up-points {
+  font-size: 13px;
+}
+
+.follow-up-points summary {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.follow-up-points summary::-webkit-details-marker {
+  display: none;
+}
+
+.follow-up-points summary .sourcecado-card-glyph {
+  color: var(--muted);
+  transform: rotate(-90deg);
+  transition: transform 120ms ease-out;
+}
+
+.follow-up-points[open] summary .sourcecado-card-glyph {
+  transform: none;
+}
+
+.person-section .follow-up-points ul {
+  margin: 4px 0 0;
+  padding-left: 22px;
+  line-height: 1.5;
+}
+
+.follow-up-sources {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* --- open description editor ------------------------------------------- */
+
+.description-editor.is-editing {
+  gap: 6px;
+}
+
+.description-editor .description-textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.description-editor .description-textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-tint);
+}
+
+.description-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.description-editor .description-clear {
+  margin-right: auto;
+}
+
+.description-count,
+.description-hint {
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.description-count.is-over {
+  color: var(--error);
+  font-weight: 600;
+}
+
+/* --- touch sizing -------------------------------------------------------- */
+
+@media (max-width: 1023px) {
+  .person-preview :is(.task-list, .description-editor) :is(button, a):is(.crm-btn, .crm-icon-btn, .task-check, .task-due-chip, .task-title, .crm-menu-item) {
+    min-height: 44px;
+  }
+
+  .person-preview :is(.task-list, .description-editor) :is(button, a):is(.crm-icon-btn, .task-check) {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+@media (max-width: 767px) {
+  :is(.task-list, .person-section, .description-editor, .undo-toast) :is(button, a):is(.crm-btn, .crm-icon-btn, .task-check, .task-due-chip, .task-finished-toggle, .crm-menu-item),
+  .undo-toast-region .undo-toast button,
+  .person-section .after-send-reminder input,
+  .task-list .task-due-exact input {
+    min-height: 44px;
+  }
+
+  :is(.task-list, .person-section, .description-editor) :is(button, a):is(.crm-icon-btn, .task-check),
+  .undo-toast-region .undo-toast .undo-toast-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .task-row-line {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .task-row-trail {
+    grid-column: 2;
+    flex-wrap: wrap;
+  }
+
+  .task-list :is(.task-editor, .task-history, .task-local-draft) {
+    margin-left: 0;
+  }
+
+  .undo-toast-region {
+    bottom: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crm-popover,
+  .undo-toast,
+  .task-check.is-completed .task-check-box {
+    animation: none;
+  }
+
+  .task-check-box,
+  .task-check-box .action-icon,
+  .task-finished-toggle .sourcecado-card-glyph,
+  .follow-up-points summary .sourcecado-card-glyph,
+  .task-row .task-reveal {
+    transition: none;
+  }
+}

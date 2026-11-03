@@ -1420,54 +1420,17 @@ class PersonStore:
         rationale_summary: str = "",
         source_ref: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if state not in SEQUENCE_STATES:
-            raise ValueError(f"invalid sequence state {state}")
-        if actor not in ACTORS:
-            raise ValueError(f"invalid actor {actor}")
         with self._lock:
-            row = self._load_person_row(person_id)
-            if expected_version is not None and int(row["version"]) != expected_version:
-                raise ValueError(
-                    f"stale record version: expected {expected_version}, current {row['version']}"
-                )
-            if state == "in_conversation" and actor == "assistant":
-                if not self._has_conversation_evidence(person_id):
-                    raise ValueError(
-                        "in_conversation requires sent outreach, an inbound reply, or director Allow"
-                    )
-            next_outcome = row["outcome"]
-            if state == "done" and not str(row["outcome"] or "").strip():
-                if actor != "director":
-                    raise ValueError("done requires a recorded outcome")
-                next_outcome = "closed"
-            now = self._now()
-            next_version = int(row["version"] or 1) + 1
-            self._conn.execute(
-                """
-                UPDATE people
-                SET sequence_state = ?, outcome = ?, version = ?, updated_at = ?
-                WHERE person_id = ?
-                """,
-                (state, next_outcome, next_version, now, person_id),
-            )
-            self._receipt(
+            self._write_sequence(
                 person_id,
-                kind="state",
-                summary=f"Moved to {state.replace('_', ' ')}",
-                payload={
-                    "state": state,
-                    "rationale_summary": rationale_summary,
-                    "version": next_version,
-                    # The external record that justified the move, when one
-                    # did. This is what a reader points at to check the move,
-                    # and what stops the same source moving the person twice.
-                    **({"source_ref": source_ref} if source_ref else {}),
-                },
+                state,
                 actor=actor,
+                expected_version=expected_version,
                 session_id=session_id,
                 run_id=run_id,
+                rationale_summary=rationale_summary,
+                source_ref=source_ref,
             )
-            self._snapshot(person_id, next_version, now)
             self._conn.commit()
             row = self._conn.execute(
                 "SELECT * FROM people WHERE person_id = ?",
@@ -1476,6 +1439,73 @@ class PersonStore:
         person = self._person_dict(row)
         assert person is not None
         return person
+
+    def _write_sequence(
+        self,
+        person_id: str,
+        state: str,
+        *,
+        actor: str,
+        expected_version: int | None,
+        session_id: str | None,
+        run_id: str | None,
+        rationale_summary: str,
+        source_ref: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Guard and write one sequence move without committing it.
+
+        The caller holds the lock and commits. Returns the prior state, so
+        CrmService.transition can save the move as an undoable status change
+        in the same transaction.
+        """
+        if state not in SEQUENCE_STATES:
+            raise ValueError(f"invalid sequence state {state}")
+        if actor not in ACTORS:
+            raise ValueError(f"invalid actor {actor}")
+        row = self._load_person_row(person_id)
+        if expected_version is not None and int(row["version"]) != expected_version:
+            raise ValueError(
+                f"stale record version: expected {expected_version}, current {row['version']}"
+            )
+        if state == "in_conversation" and actor == "assistant":
+            if not self._has_conversation_evidence(person_id):
+                raise ValueError(
+                    "in_conversation requires sent outreach, an inbound reply, or director Allow"
+                )
+        next_outcome = row["outcome"]
+        if state == "done" and not str(row["outcome"] or "").strip():
+            if actor != "director":
+                raise ValueError("done requires a recorded outcome")
+            next_outcome = "closed"
+        now = self._now()
+        next_version = int(row["version"] or 1) + 1
+        self._conn.execute(
+            """
+            UPDATE people
+            SET sequence_state = ?, outcome = ?, version = ?, updated_at = ?
+            WHERE person_id = ?
+            """,
+            (state, next_outcome, next_version, now, person_id),
+        )
+        self._receipt(
+            person_id,
+            kind="state",
+            summary=f"Moved to {state.replace('_', ' ')}",
+            payload={
+                "state": state,
+                "rationale_summary": rationale_summary,
+                "version": next_version,
+                # The external record that justified the move, when one
+                # did. This is what a reader points at to check the move,
+                # and what stops the same source moving the person twice.
+                **({"source_ref": source_ref} if source_ref else {}),
+            },
+            actor=actor,
+            session_id=session_id,
+            run_id=run_id,
+        )
+        self._snapshot(person_id, next_version, now)
+        return row["sequence_state"]
 
     def list_board(self) -> dict[str, list[dict[str, Any]]]:
         board: dict[str, list[dict[str, Any]]] = {lane: [] for lane in BOARD_LANES}

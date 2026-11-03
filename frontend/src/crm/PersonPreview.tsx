@@ -8,8 +8,9 @@ import { MailActivity } from "./MailActivity";
 import { SavedTaskDrafts } from "./SavedTaskDrafts";
 import { TaskDraft } from "./TaskDraft";
 import {Icon} from "../icons";
+import { Glyph, type GlyphName } from "../generative/ResultCard";
 import { personInitials } from "../personName";
-import {PersonDetailsEditor,clearPersonCorrectionDraft} from "./PersonDetailsEditor";
+import {PersonDetailsEditor,clearPersonCorrectionDraft,type PersonDetailsHandle} from "./PersonDetailsEditor";
 import { SequencePill } from "./SequencePill";
 
 function reviewValue(value: Record<string, unknown> | null | undefined): string {
@@ -19,6 +20,21 @@ function reviewValue(value: Record<string, unknown> | null | undefined): string 
   const parts = [fields.text, fields.title, fields.state, fields.due_date]
     .filter((part): part is string => typeof part === "string" && part.length > 0);
   return parts.join(" · ") || "No saved value";
+}
+
+const SUGGESTION: Record<string, { label: string; glyph: GlyphName }> = {
+  task_create: { label: "New task", glyph: "review" },
+  task_update: { label: "Task change", glyph: "review" },
+  description: { label: "Description", glyph: "doc" },
+  status: { label: "Status", glyph: "adjust" },
+};
+
+/** "2026-11-10" as "Nov 10", read as a local calendar day. */
+function shortDay(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, (month || 1) - 1, day || 1);
+  return Number.isNaN(date.getTime()) ? value
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 export type PreviewHandle = { navigate: (next: () => void) => void };
@@ -46,6 +62,9 @@ export const PersonPreview = forwardRef<PreviewHandle, {
   const [flagOpen, setFlagOpen] = useState(false);
   const [movingTo, setMovingTo] = useState<string | null>(null);
   const [sequenceUndo, setSequenceUndo] = useState<string | null>(null);
+  // The last flag save or clear, which one Undo reverses through its receipt.
+  const [flagResult, setFlagResult] = useState<{ changeId: string | null; label: string } | null>(null);
+  const details = useRef<PersonDetailsHandle>(null);
   const flagField = useRef<HTMLInputElement>(null);
   const flagFocus = useRef<"field" | "trigger" | null>(null);
   const [pending, setPending] = useState<(() => void) | null>(null);
@@ -82,6 +101,11 @@ export const PersonPreview = forwardRef<PreviewHandle, {
     }, () => { if (active) setFailed(true); });
     return () => { active = false; };
   }, [personId, attempt]);
+  useEffect(() => {
+    if (!flagResult) return;
+    const timer = window.setTimeout(() => setFlagResult(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [flagResult]);
   useEffect(() => {
     const reload = () => setAttempt(n => n + 1);
     window.addEventListener(TASKS_CHANGED, reload);
@@ -143,7 +167,25 @@ export const PersonPreview = forwardRef<PreviewHandle, {
 
   function openFlag() {
     flagFocus.current = "field";
+    setFlagResult(null);
     setFlagOpen(true);
+  }
+
+  /** Saves or clears the flag and keeps its receipt for Undo. */
+  async function saveFlag(reason: string | null, flagUntil: string | null, label: string) {
+    if (!person) return false;
+    const result = await mutate(`${prefix}/attention`, { reason, until: flagUntil, expected_version: person.version }, "PATCH");
+    if (!result) return false;
+    const change = (result.change as { change_id?: unknown } | undefined)?.change_id;
+    setFlagResult({ changeId: typeof change === "string" ? change : null, label });
+    return true;
+  }
+
+  async function undoFlag() {
+    if (!flagResult?.changeId) return;
+    const undone = await mutate(`${prefix}/crm-changes/${encodeURIComponent(flagResult.changeId)}/undo`, {});
+    // A failed Undo means the flag moved again; the reloaded chip shows where.
+    setFlagResult(undone ? { changeId: null, label: "Undone" } : null);
   }
 
   function cancelFlag() {
@@ -189,7 +231,7 @@ export const PersonPreview = forwardRef<PreviewHandle, {
       <p>Your edits are still here. Save them before leaving, or discard them.</p>
       <button type="button" onClick={() => {
         setPending(null);
-        panel.current?.querySelector<HTMLElement>('[data-unsaved="true"] textarea, .preview-flag[data-unsaved="true"] input, .task-form input')?.focus();
+        panel.current?.querySelector<HTMLElement>('[data-unsaved="true"] textarea, .preview-flag[data-unsaved="true"] input, .person-details-editor[data-unsaved="true"] input[name], .task-form input')?.focus();
       }}><Icon name="edit"/>Keep editing and save</button>
       <button type="button" disabled={busy} onClick={() => {
         clearDescriptionDraft(personId, "general"); clearDescriptionDraft(personId, "detailed"); clearPersonCorrectionDraft(personId);
@@ -205,36 +247,53 @@ export const PersonPreview = forwardRef<PreviewHandle, {
           onChange={state => void moveSequence(state)} onUndo={sequenceUndo ? () => void undoSequence() : undefined} />
         {flagOpen || flagDirty ? null : person.attention_reason ? <span className="preview-flag-set">
           <span className="contacts-pill is-warn" title={person.attention_reason}>
-            <Icon name="flag"/>{person.attention_reason}{person.attention_until ? ` · until ${person.attention_until}` : ""}
+            <Icon name="flag"/>{person.attention_reason}{person.attention_until ? ` · until ${shortDay(person.attention_until)}` : ""}
           </span>
           <button type="button" className="preview-icon-button preview-flag-trigger" aria-label="Edit flag" title="Edit flag"
             disabled={busy} onClick={openFlag}><Icon name="edit"/></button>
           <button type="button" className="preview-icon-button" aria-label="Clear flag" title="Clear flag" disabled={busy}
             onClick={async () => {
-              if (await mutate(`${prefix}/attention`, { reason: null, until: null, expected_version: person.version }, "PATCH")) {
-                setFlag(""); setUntil("");
-              }
+              if (await saveFlag(null, null, "Flag cleared")) { setFlag(""); setUntil(""); }
             }}><Icon name="close"/></button>
-        </span> : <button type="button" className="preview-flag-trigger" disabled={busy} onClick={openFlag}><Icon name="flag"/>Flag</button>}
+        </span> : <button type="button" className="pd-btn preview-flag-trigger" disabled={busy} onClick={openFlag}><Icon name="flag"/>Flag</button>}
+        {flagResult && !flagOpen ? <span className="pd-result" role="status">
+          <Icon name="check"/>{flagResult.label}
+          {flagResult.changeId ? <button type="button" className="pd-btn is-quiet" aria-label="Undo flag change" disabled={busy}
+            onClick={() => void undoFlag()}><Icon name="reply"/>Undo</button> : null}
+        </span> : null}
       </div>
-      {flagOpen || flagDirty ? <form className="preview-flag" data-unsaved={flagDirty ? "true" : undefined} onSubmit={async event => {
-        event.preventDefault();
-        if (await mutate(`${prefix}/attention`, { reason: flag || null, until: until || null, expected_version: person.version }, "PATCH")) {
-          flagFocus.current = "trigger"; setFlagOpen(false);
-        }
-      }}>
-        <label>Attention reason<input ref={flagField} value={flag} maxLength={500} disabled={busy} onChange={e => { setFlag(e.target.value); setFlagDirty(true); }} /></label>
-        <label>Flag until (optional)<input type="date" value={until} disabled={busy} onChange={e => { setUntil(e.target.value); setFlagDirty(true); }} /></label>
-        <div className="preview-actions">
-          <button type="submit" disabled={busy || !flagDirty}><Icon name="save"/>Save flag</button>
-          <button type="button" disabled={busy} onClick={cancelFlag}><Icon name="close"/>Cancel</button>
-        </div>
+      {flagOpen || flagDirty ? <form className="preview-flag" data-unsaved={flagDirty ? "true" : undefined}
+        onKeyDown={event => {
+          if (event.key !== "Escape") return;
+          // Escape closes the flag form only, not the preview around it.
+          event.preventDefault(); event.stopPropagation(); cancelFlag();
+        }}
+        onSubmit={async event => {
+          event.preventDefault();
+          if (await saveFlag(flag.trim() || null, until || null, flag.trim() ? "Flag saved" : "Flag cleared")) {
+            flagFocus.current = "trigger"; setFlagOpen(false);
+          }
+        }}>
+        <span className="flag-field">
+          <Icon name="flag"/>
+          <input ref={flagField} aria-label="Attention reason" placeholder="Reason to follow up" value={flag} maxLength={500}
+            disabled={busy} onChange={e => { setFlag(e.target.value); setFlagDirty(true); }} />
+        </span>
+        <span className="flag-date">
+          <Glyph name="clock"/>
+          <input type="date" aria-label="Flag until (optional)" value={until} disabled={busy}
+            onChange={e => { setUntil(e.target.value); setFlagDirty(true); }} />
+        </span>
+        <span className="flag-actions">
+          <button type="submit" className="pd-btn is-primary" aria-label="Save flag" disabled={busy || !flagDirty}><Icon name="check"/>Save</button>
+          <button type="button" className="pd-btn" disabled={busy} onClick={cancelFlag}><Icon name="close"/>Cancel</button>
+        </span>
       </form> : null}
       <p className="person-timeline-meta">{person.last_contact_at
         ? `${person.last_contact_direction === "inbound" ? "They replied" : "We wrote"} · ${person.last_contact_at.slice(0, 10)}`
         : "No contact yet"}</p>
-      <PersonDetailsEditor key={personId} person={person} history={file.crm_changes} onBusyChange={setDetailsBusy} onSaved={next=>setFile(current=>current?.person.person_id===next.person_id?{...current,person:next}:current)}/>
-      <EnrichmentPanel personId={personId} />
+      <PersonDetailsEditor key={personId} ref={details} person={person} history={file.crm_changes} onBusyChange={setDetailsBusy} onSaved={next=>setFile(current=>current?.person.person_id===next.person_id?{...current,person:next}:current)}/>
+      <EnrichmentPanel personId={personId} onEditDetail={field => details.current?.begin(field)} />
       <section className="preview-section"><h3>Short description</h3>
         <DescriptionEditor personId={personId} description={descriptions.general} rows={2}
           onSaved={next => { setFile(current => current ? { ...current, descriptions: next } : current); window.dispatchEvent(new Event("sourcecado:board-changed")); }} />
@@ -245,27 +304,38 @@ export const PersonPreview = forwardRef<PreviewHandle, {
       </details>
       <TaskList personId={personId} headingLevel={3} />
       <SavedTaskDrafts file={file} />
-      <section className="preview-section"><h3>Suggestions to review</h3>
-        {!file.crm_proposals?.length ? <p className="person-empty">No pending suggestions.</p> : file.crm_proposals.map(proposal => <article key={proposal.proposal_id} className="preview-suggestion">
-          <div className="suggestion-comparison">
-            <p>Current</p><p>{reviewValue(proposal.current_value)}</p>
-            <p>Suggested</p><strong>{reviewValue(proposal.value)}</strong>
-          </div>
-          <p>{proposal.reason}</p>
-          {proposal.source_refs.map((source, index) => source.url?.startsWith("https://mail.google.com/") ? <a key={index} href={source.url} target="_blank" rel="noreferrer">Source email</a> : null)}
-          {editingProposal === proposal.proposal_id ? <label>Suggested value<textarea aria-label="Edit suggested text" value={proposalText} onChange={e => setProposalText(e.target.value)} /></label> : null}
-          <div className="preview-actions">
-            <button type="button" disabled={busy} onClick={() => {
-              const value = editingProposal === proposal.proposal_id ? { ...proposal.value, [proposal.kind === "description" ? "text" : "title"]: proposalText } : undefined;
-              void mutate(`${prefix}/crm-proposals/${proposal.proposal_id}/resolve`, { decision: "accepted", ...(value ? { value } : {}) });
-            }}><Icon name="check"/>Accept</button>
-            {proposal.kind === "description" || proposal.kind === "task_create" ? <button type="button" onClick={() => { setEditingProposal(proposal.proposal_id); setProposalText(String(proposal.value.text ?? proposal.value.title ?? "")); }}><Icon name="edit"/>Edit suggestion</button> : null}
-            <button type="button" disabled={busy} onClick={() => void mutate(`${prefix}/crm-proposals/${proposal.proposal_id}/resolve`, { decision: "dismissed" })}><Icon name="deny"/>Dismiss</button>
-          </div>
-          <TaskDraft proposalId={proposal.proposal_id} task={{ person_id: personId, task_id: proposal.proposal_id,
-            title: String(proposal.value.title ?? "Suggested follow-up"), version: 0 }} />
-        </article>)}
-      </section>
+      {file.crm_proposals?.length ? <section className="preview-section"><h3>Suggestions</h3>
+        {file.crm_proposals.map(proposal => {
+          const kind = SUGGESTION[proposal.kind] ?? { label: "Suggestion", glyph: "assistant" as GlyphName };
+          const editing = editingProposal === proposal.proposal_id;
+          const editable = proposal.kind === "description" || proposal.kind === "task_create";
+          const source = proposal.source_refs.find(ref => ref.url?.startsWith("https://mail.google.com/"));
+          return <article key={proposal.proposal_id} className="preview-suggestion">
+            <div className="suggestion-head">
+              <span className="suggestion-kind"><Glyph name={kind.glyph}/>{kind.label}</span>
+              {source ? <a className="suggestion-source" href={source.url} target="_blank" rel="noreferrer"><Glyph name="mail"/>Source email</a> : null}
+            </div>
+            <div className="suggestion-comparison">
+              {proposal.current_value ? <><span className="pd-before">{reviewValue(proposal.current_value)}</span><Icon name="next"/></> : null}
+              {editing ? <textarea aria-label="Edit suggested text" value={proposalText} rows={3} onChange={e => setProposalText(e.target.value)}
+                onKeyDown={e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEditingProposal(null); } }} />
+                : <strong>{reviewValue(proposal.value)}</strong>}
+            </div>
+            <p className="suggestion-reason">{proposal.reason}</p>
+            <div className="suggestion-actions">
+              <button type="button" className="pd-btn is-primary" disabled={busy} onClick={() => {
+                const value = editing ? { ...proposal.value, [proposal.kind === "description" ? "text" : "title"]: proposalText } : undefined;
+                void mutate(`${prefix}/crm-proposals/${proposal.proposal_id}/resolve`, { decision: "accepted", ...(value ? { value } : {}) });
+              }}><Icon name="check"/>Accept</button>
+              {editing ? <button type="button" className="pd-btn" onClick={() => setEditingProposal(null)}><Icon name="close"/>Cancel</button>
+                : editable ? <button type="button" className="pd-btn" aria-label="Edit suggestion" onClick={() => { setEditingProposal(proposal.proposal_id); setProposalText(String(proposal.value.text ?? proposal.value.title ?? "")); }}><Icon name="edit"/>Edit</button> : null}
+              {editing ? null : <button type="button" className="pd-btn" disabled={busy} onClick={() => void mutate(`${prefix}/crm-proposals/${proposal.proposal_id}/resolve`, { decision: "dismissed" })}><Icon name="deny"/>Dismiss</button>}
+            </div>
+            <TaskDraft proposalId={proposal.proposal_id} task={{ person_id: personId, task_id: proposal.proposal_id,
+              title: String(proposal.value.title ?? "Suggested follow-up"), version: 0 }} />
+          </article>;
+        })}
+      </section> : null}
       <MailActivity events={file.timeline} gaps={person.knowledge_gaps ?? []} sync={file.mail_sync} analysis={file.mail_analysis} followUp={person.follow_up} />
       {file.mail_analysis?.status === "failed" ? <button type="button" disabled={busy} onClick={() => void mutate(`${prefix}/crm-analysis/retry`, {})}><Icon name="refresh"/>Retry analysis</button> : null}
       {person.unanswered_message_ids && Array.isArray(person.unanswered_message_ids) ? person.unanswered_message_ids.map((id) => <button type="button" key={String(id)} disabled={busy}
