@@ -383,7 +383,13 @@ export function PersonFileView({
             history={file.crm_changes}
             onSaved={person => setFile(current => current?.person.person_id === person.person_id ? { ...current, person } : current)}
           />
-          <EnrichmentPanel personId={personId} />
+          <EnrichmentPanel
+            personId={personId}
+            onEditDetail={(field) => details.current?.begin(field)}
+            // The first lookup review opens this person's sourcing chat; read
+            // the file again so the header and Outreach see that chat.
+            onSessionOpened={reloadQuietly}
+          />
         </div>
 
         <div className="pf-main">
