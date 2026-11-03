@@ -2,24 +2,40 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const styles = readFileSync("src/styles.css", "utf8");
+const contacts = readFileSync("src/styles/contacts.css", "utf8");
 
 describe("Contacts and person-file styles", () => {
   it("uses a dense bounded Contacts table with safe horizontal overflow", () => {
-    expect(styles).toMatch(
+    expect(contacts).toMatch(
       /\.contacts-list\s*\{[^}]*border:\s*1px solid var\(--border\);[^}]*background:\s*var\(--surface\);/,
     );
-    expect(styles).toMatch(
+    expect(contacts).toMatch(
       /\.contacts-table-scroll\s*\{[^}]*overflow-x:\s*auto;/,
     );
-    expect(styles).toMatch(
-      /\.contacts-table\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*820px;[^}]*border-collapse:\s*collapse;/,
+    expect(contacts).toMatch(
+      /\.contacts-table\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*960px;[^}]*border-collapse:\s*collapse;/,
     );
-    expect(styles).toMatch(
+    expect(contacts).toMatch(
       /\.contacts-table tbody tr\s*\{[^}]*height:\s*38px;[^}]*border-bottom:\s*1px solid var\(--border\);/,
     );
-    expect(styles).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.contacts-filters button,\s*\.contacts-search input\s*\{[^}]*min-height:\s*44px;/,
+    // Light vertical gridlines between columns, as in a records table.
+    expect(contacts).toMatch(
+      /\.contacts-table th \+ th,\s*\.contacts-table td \+ td\s*\{[^}]*border-left:\s*1px solid var\(--border\);/,
     );
+    expect(contacts).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.contacts-filters button,\s*\.contacts-chip,\s*\.contacts-search\s*\{[^}]*height:\s*44px;/,
+    );
+    expect(contacts).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.contacts-icon-button\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px;/,
+    );
+  });
+
+  it("keeps Contacts on tokens with no text below 13px", () => {
+    expect(contacts).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    for (const size of contacts.matchAll(/font-size:\s*(\d+)px/g)) {
+      expect(Number(size[1])).toBeGreaterThanOrEqual(13);
+    }
+    expect(styles).toMatch(/@import "\.\/styles\/contacts\.css";\s*@import "\.\/styles\/responsive\.css";/);
   });
 
   it("keeps person-file header controls touch sized on narrow screens", () => {
@@ -32,18 +48,15 @@ describe("Contacts and person-file styles", () => {
     expect(personFile).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });
 
-  it("keeps the follow-up flag on warm tokens and the reply check touch sized", () => {
+  it("keeps attention and Gmail warnings on warm tokens", () => {
     // DESIGN.md reserves colour on a dense row for real attention, and the
     // warm "needs attention" pair is already defined in both themes. A
     // hardcoded colour here would break dark mode silently.
-    expect(styles).toMatch(
-      /\.board-row-flag\s*\{[^}]*background:\s*var\(--warn-bg\);[^}]*color:\s*var\(--warn\);/,
+    expect(contacts).toMatch(
+      /\.contacts-pill\.is-warn\s*\{[^}]*background:\s*var\(--warn-bg\);[^}]*color:\s*var\(--warn\);/,
     );
-    expect(styles).toMatch(
-      /\.board-page-actions button\s*\{[^}]*min-height:\s*44px;/,
-    );
-    expect(styles).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.board-page-actions button\s*\{[^}]*min-height:\s*44px;[^}]*min-width:\s*44px;/,
+    expect(contacts).toMatch(
+      /\.contacts-mail-chip\.is-warn\s*\{[^}]*background:\s*var\(--warn-bg\);[^}]*color:\s*var\(--warn\);/,
     );
   });
 

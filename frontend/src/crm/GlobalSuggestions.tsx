@@ -15,7 +15,7 @@ export function GlobalSuggestions({ query, status, onOpen }: { query: string; st
     window.addEventListener("sourcecado:board-changed", reload);
     return () => window.removeEventListener("sourcecado:board-changed", reload);
   }, []);
-  const proposals = result?.proposals.filter(p => (status === "all" || p.person?.sequence_state === status)
+  const proposals = result?.proposals.filter(p => (status === "all" || (p.person && (p.person.sequence_state ?? "not_started") === status))
     && [p.person?.first_name, p.person?.last_name, p.person?.company, p.value.title, p.value.text].filter(Boolean).join(" ").toLowerCase().includes(query.trim().toLowerCase())) ?? [];
   return <section className="preview-section" aria-label="Global suggestions to review">
     <h2>Suggestions to review</h2>

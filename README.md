@@ -6,8 +6,8 @@ Sourcecado is a local desktop assistant for Codeology sourcing directors. It
 helps one operator find people, prepare tailored outreach, keep conversations
 moving, and leave a useful person file for the next officer.
 
-Chat is home. Contacts shows active sequences in Open, In conversation, and
-Done. Apollo enrichment spends credits and Gmail sending reaches real people;
+Chat is home. Contacts lists every saved person with their sequence: Open,
+In conversation, Done, or Not started. Apollo enrichment spends credits and Gmail sending reaches real people;
 both require explicit approval.
 
 ## Start here

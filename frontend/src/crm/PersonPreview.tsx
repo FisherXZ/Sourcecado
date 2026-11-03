@@ -8,6 +8,7 @@ import { MailActivity } from "./MailActivity";
 import { SavedTaskDrafts } from "./SavedTaskDrafts";
 import { TaskDraft } from "./TaskDraft";
 import {Icon} from "../icons";
+import { personInitials } from "../personName";
 import {PersonDetailsEditor,clearPersonCorrectionDraft} from "./PersonDetailsEditor";
 
 function reviewValue(value: Record<string, unknown> | null | undefined): string {
@@ -21,8 +22,17 @@ function reviewValue(value: Record<string, unknown> | null | undefined): string 
 
 export type PreviewHandle = { navigate: (next: () => void) => void };
 
+/** Where the previewed person sits in the table's current filtered order. */
+type PreviewPosition = { index: number; total: number; onPrevious: () => void; onNext: () => void };
+
 /** Non-modal inspector: table position and filters stay mounted. */
-export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClose: () => void }>(function PersonPreview({ personId, onClose }, ref) {
+export const PersonPreview = forwardRef<PreviewHandle, {
+  personId: string;
+  onClose: () => void;
+  position?: PreviewPosition;
+  /** After moving with the pager, keep focus on the same pager button. */
+  initialFocus?: "previous" | "next";
+}>(function PersonPreview({ personId, onClose, position, initialFocus }, ref) {
   const [file, setFile] = useState<PersonFile | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -35,11 +45,16 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
   const [pending, setPending] = useState<(() => void) | null>(null);
   const panel = useRef<HTMLElement>(null);
   const back = useRef<HTMLButtonElement>(null);
+  const previousButton = useRef<HTMLButtonElement>(null);
+  const nextButton = useRef<HTMLButtonElement>(null);
   const operation = useRef<{ key: string; id: string } | null>(null);
   const [editingProposal, setEditingProposal] = useState<string | null>(null);
   const [proposalText, setProposalText] = useState("");
 
-  useEffect(() => { back.current?.focus(); }, []);
+  useEffect(() => {
+    const step = initialFocus === "previous" ? previousButton.current : initialFocus === "next" ? nextButton.current : null;
+    (step && !step.disabled ? step : back.current)?.focus();
+  }, []);
   useEffect(() => {
     if (pending) panel.current?.querySelector<HTMLElement>('[role="alertdialog"] button')?.focus();
   }, [pending]);
@@ -104,11 +119,22 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
       navigate(() => { window.location.hash = link.getAttribute("href")!; });
     }}
     onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); navigate(onClose); } }}>
-    <header className="preview-header">
-      <button type="button" ref={back} disabled={detailsBusy} onClick={() => navigate(onClose)}><Icon name="reply"/>Back to Contacts</button>
-      <a href={`#/people/${encodeURIComponent(personId)}`} onClick={event => {
+    <header className="preview-titlebar">
+      {person ? <>
+        <span className="contacts-avatar" aria-hidden="true">{personInitials(person)}</span>
+        <h2>{[person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person"}</h2>
+      </> : <span className="preview-titlebar-fill" />}
+      {position ? <div className="preview-pager" role="group" aria-label="Move between people">
+        <button type="button" ref={previousButton} aria-label="Previous person" title="Previous person"
+          disabled={detailsBusy || position.index === 0} onClick={position.onPrevious}><Icon name="previous"/></button>
+        <span>{position.index + 1} of {position.total}</span>
+        <button type="button" ref={nextButton} aria-label="Next person" title="Next person"
+          disabled={detailsBusy || position.index >= position.total - 1} onClick={position.onNext}><Icon name="next"/></button>
+      </div> : null}
+      <a className="preview-icon-link" aria-label="Open person file" title="Open person file" href={`#/people/${encodeURIComponent(personId)}`} onClick={event => {
         event.preventDefault(); navigate(() => { window.location.hash = `#/people/${encodeURIComponent(personId)}`; });
-      }}>Open person file</a>
+      }}><Icon name="open"/></a>
+      <button type="button" ref={back} aria-label="Close preview" title="Close preview" disabled={detailsBusy} onClick={() => navigate(onClose)}><Icon name="close"/></button>
     </header>
     {pending ? <div className="preview-unsaved" role="alertdialog" aria-label="Unsaved edits">
       <p>Your edits are still here. Save them before leaving, or discard them.</p>
@@ -125,7 +151,6 @@ export const PersonPreview = forwardRef<PreviewHandle, { personId: string; onClo
     {failed ? <div role="alert"><p>Couldn’t refresh this person. Previously loaded work is kept.</p>
       <button type="button" onClick={() => setAttempt(n => n + 1)}>Retry</button></div> : null}
     {file && person ? <>
-      <h2>{[person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person"}</h2>
       <p className="preview-subtitle">{[person.title, person.company].filter(Boolean).join(" · ")}</p>
       <p className="person-timeline-meta">{person.last_contact_at
         ? `${person.last_contact_direction === "inbound" ? "They replied" : "We wrote"} · ${person.last_contact_at.slice(0, 10)}`

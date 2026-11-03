@@ -26,3 +26,13 @@ export function sanitizeApolloNameMasks(value: unknown): unknown {
   }
   return value;
 }
+
+/** Up to two initials for an avatar; "?" when no name is saved. */
+export function personInitials(person: { first_name?: string | null; last_name?: string | null }): string {
+  const letters = [person.first_name, person.last_name]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .map((value) => Array.from(value)[0])
+    .join("")
+    .slice(0, 2);
+  return letters.toLocaleUpperCase() || "?";
+}

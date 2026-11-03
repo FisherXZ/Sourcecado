@@ -216,8 +216,10 @@ describe("shared person tasks", () => {
     expect(within(tasks).getByRole("button", { name: "Add task" }).hasAttribute("disabled")).toBe(false);
     await addTask(tasks, { title: "Research before outreach", person: "per_maya" });
     await within(tasks).findByText("Research before outreach");
-    fireEvent.click(screen.getByRole("button", { name: "Contacts" }));
-    expect(screen.queryByRole("row", { name: /Maya/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "People" }));
+    // Saving a task leaves sequence membership unchanged: Maya is listed as Not started.
+    const row = await screen.findByRole("row", { name: /Maya/ });
+    expect(row).toHaveTextContent("Not started");
   });
 
   it("shows the same saved tasks in Contacts and in the person's list, and edits in either", async () => {
