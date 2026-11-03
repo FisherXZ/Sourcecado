@@ -1,209 +1,445 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { getSkills, type SkillInfo } from "../api";
+import {
+  createSkill,
+  deleteSkill,
+  getSkills,
+  updateSkill,
+  type SkillDraft,
+  type SkillInfo,
+} from "../api";
+import { Icon } from "../icons";
 
 type SkillsState =
   | { status: "loading" }
   | { status: "loaded"; skills: SkillInfo[] }
   | { status: "failed" };
 
-function humanizeSkillName(name: string): string {
+type Editing = { draft: SkillDraft; isNew: boolean } | null;
+
+const EMPTY_DRAFT: SkillDraft = { name: "", purpose: "", useWhen: "", instructions: "" };
+
+export function humanizeSkillName(name: string): string {
   const words = name.trim().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
   return words ? `${words[0].toUpperCase()}${words.slice(1)}` : "Untitled skill";
 }
 
-function sourceLabel(source: SkillInfo["source"]): string {
-  return source === "builtin" ? "Built into Sourcecado" : "Workspace";
+/** Typed names become the slash command: lowercase words joined by hyphens. */
+function slugify(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").slice(0, 48);
 }
 
-function rowSourceLabel(source: SkillInfo["source"]): string {
-  return source === "builtin" ? "Built in" : "Workspace";
+function draftOf(skill: SkillInfo): SkillDraft {
+  return {
+    name: skill.name,
+    purpose: skill.purpose,
+    useWhen: skill.useWhen,
+    instructions: skill.instructions,
+  };
 }
 
-function SkillsLoading() {
+function SourcePill({ skill }: { skill: SkillInfo }) {
+  if (skill.source === "builtin") return <span className="sm-pill">Built in</span>;
+  if (skill.builtinDefault) return <span className="sm-pill">Edited</span>;
+  return null;
+}
+
+function SkillView({
+  skill,
+  onEdit,
+  onDelete,
+}: {
+  skill: SkillInfo;
+  onEdit: () => void;
+  onDelete: () => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const resets = skill.builtinDefault;
+  const removable = skill.source === "workspace";
+  const verb = resets ? "Reset" : "Delete";
+
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onDelete();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : `Couldn’t ${verb.toLowerCase()}.`);
+      setBusy(false);
+    }
+  }
+
   return (
-    <section className="skills-layout skills-loading" role="status" aria-label="Loading skills">
-      <span className="sr-only">Loading skills…</span>
-      <div className="skill-catalog-skeleton" aria-hidden="true">
-        <div className="skill-search-skeleton skill-skeleton" />
-        {[0, 1, 2].map((item) => (
-          <div className="skill-row-skeleton skill-skeleton" key={item} />
-        ))}
-      </div>
-      <div className="skill-detail-skeleton skill-skeleton" aria-hidden="true" />
-    </section>
-  );
-}
-
-function SkillDetail({ skill }: { skill: SkillInfo }) {
-  const title = humanizeSkillName(skill.name);
-  const headingId = `skill-detail-${skill.name.replace(/[^a-z0-9_-]/gi, "-")}`;
-  return (
-    <article className="skill-detail" role="region" aria-labelledby={headingId}>
-      <header className="skill-detail-header">
-        <div>
-          <h2 id={headingId}>{title}</h2>
-          <div className="skill-meta" aria-label="Skill status and source">
-            <span className="skill-ready">Ready</span>
-            <span>{sourceLabel(skill.source)}</span>
-          </div>
+    <article className="sk-detail" aria-labelledby="sk-detail-title">
+      <header className="sk-detail-header">
+        <div className="sk-detail-heading">
+          <h2 id="sk-detail-title">{humanizeSkillName(skill.name)}</h2>
+          <code className="sk-command">/{skill.name}</code>
+          <SourcePill skill={skill} />
         </div>
-        <div className="skill-management" aria-label="Skill management">
-          <button type="button" disabled aria-label={`Edit ${title}`}>Edit</button>
-          <button
-            className="skill-enabled-switch"
-            type="button"
-            role="switch"
-            aria-checked="true"
-            aria-label={`Disable ${title}`}
-            disabled
-          >
-            <span aria-hidden="true" />
-          </button>
-        </div>
-      </header>
-
-      <section className="skill-detail-section">
-        <h3>Use when</h3>
-        <p>{skill.useWhen || "No activation guidance provided."}</p>
-      </section>
-      <section className="skill-detail-section">
-        <h3>What it does</h3>
-        <p>{skill.purpose || "No purpose provided."}</p>
-      </section>
-      <section className="skill-detail-section">
-        <h3>Instructions</h3>
-        <div className="skill-instructions">
-          {skill.instructions ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
-              {skill.instructions}
-            </ReactMarkdown>
+        <div className="sk-detail-actions">
+          {confirming ? (
+            <>
+              <span className="sk-confirm-text">{verb} /{skill.name}?</span>
+              <button
+                type="button"
+                className="sm-btn sm-btn-danger"
+                disabled={busy}
+                onClick={() => void remove()}
+              >
+                <Icon name={resets ? "refresh" : "trash"} />
+                {verb}
+              </button>
+              <button
+                type="button"
+                className="sm-btn"
+                disabled={busy}
+                onClick={() => setConfirming(false)}
+              >
+                <Icon name="close" />
+                Cancel
+              </button>
+            </>
           ) : (
-            <p>No instructions provided.</p>
+            <>
+              <button type="button" className="sm-btn" onClick={onEdit}>
+                <Icon name="edit" />
+                Edit
+              </button>
+              {removable ? (
+                <button
+                  type="button"
+                  className="sm-btn sm-btn-quiet"
+                  onClick={() => setConfirming(true)}
+                  title={resets ? "Go back to the built-in version" : undefined}
+                >
+                  <Icon name={resets ? "refresh" : "trash"} />
+                  {verb}
+                </button>
+              ) : null}
+            </>
           )}
         </div>
-      </section>
+      </header>
+      {error ? <p className="sm-error" role="alert">{error}</p> : null}
+      {skill.purpose ? <p className="sk-purpose">{skill.purpose}</p> : null}
+      {skill.useWhen ? (
+        <p className="sk-use-when" title="Use when">
+          <Icon name="chat" />
+          <span>{skill.useWhen}</span>
+        </p>
+      ) : null}
+      <div className="sk-instructions">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+          {skill.instructions}
+        </ReactMarkdown>
+      </div>
     </article>
   );
 }
 
-function SkillsCatalog({ skills }: { skills: SkillInfo[] }) {
-  const [query, setQuery] = useState("");
-  const [selectedName, setSelectedName] = useState(skills[0]?.name ?? "");
-  const visibleSkills = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    if (!normalized) return skills;
-    return skills.filter((skill) => (
-      `${skill.name} ${humanizeSkillName(skill.name)} ${skill.purpose} ${skill.useWhen} ${sourceLabel(skill.source)}`
-        .toLocaleLowerCase()
-        .includes(normalized)
-    ));
-  }, [query, skills]);
-  const selected = visibleSkills.find((skill) => skill.name === selectedName) ?? visibleSkills[0];
+function SkillEditor({
+  editing,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  editing: NonNullable<Editing>;
+  onChange: (draft: SkillDraft) => void;
+  onSave: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const { draft, isNew } = editing;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const first = useRef<HTMLInputElement>(null);
+  const ready = Boolean(draft.name && draft.purpose.trim() && draft.instructions.trim());
+
+  useEffect(() => {
+    first.current?.focus();
+  }, [isNew]);
+
+  function set(field: keyof SkillDraft, value: string) {
+    setError(null);
+    onChange({ ...draft, [field]: value });
+  }
+
+  async function save() {
+    if (!ready || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave();
+    } catch (cause) {
+      // A refused save keeps every field as typed.
+      setError(cause instanceof Error ? cause.message : "Couldn’t save. Try again.");
+      setBusy(false);
+    }
+  }
 
   return (
-    <section className="skills-layout">
-      <div className="skill-catalog">
-        <div className="skill-search">
-          <span aria-hidden="true">⌕</span>
+    <form
+      className="sk-detail sk-editor"
+      aria-label={isNew ? "New skill" : `Edit /${draft.name}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        void save();
+      }}
+    >
+      <div className="sk-editor-name">
+        <span aria-hidden="true">/</span>
+        {isNew ? (
           <input
-            type="search"
-            aria-label="Search skills"
-            placeholder="Search skills"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            ref={first}
+            aria-label="Skill name"
+            placeholder="skill-name"
+            value={draft.name}
+            maxLength={48}
+            onChange={(event) => set("name", slugify(event.target.value))}
           />
-        </div>
-        <p className="skill-section-label">Available · {visibleSkills.length}</p>
-        {visibleSkills.length === 0 ? (
-          <div className="skill-no-results" role="status">
-            <strong>No skills match “{query.trim()}”</strong>
-            <button type="button" onClick={() => setQuery("")}>Clear skill search</button>
-          </div>
         ) : (
-          <ul className="skill-list" aria-label="Available skills">
-            {visibleSkills.map((skill) => {
-              const title = humanizeSkillName(skill.name);
-              const isSelected = selected?.name === skill.name;
-              return (
-                <li key={skill.name}>
-                  <button
-                    className="skill-row"
-                    type="button"
-                    aria-pressed={isSelected}
-                    onClick={() => setSelectedName(skill.name)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") setSelectedName(skill.name);
-                    }}
-                  >
-                    <span className="skill-icon" aria-hidden="true">⚡</span>
-                    <span className="skill-row-copy">
-                      <strong>{title}</strong>
-                      <span className="skill-row-subline">
-                        <span className="skill-row-purpose">{skill.purpose}</span>
-                        <span className="skill-row-context">
-                          <span className="skill-row-ready">Ready</span>
-                          <span className="skill-row-separator" aria-hidden="true">·</span>
-                          <span>{rowSourceLabel(skill.source)}</span>
-                        </span>
-                      </span>
-                    </span>
-                    <span className="skill-chevron" aria-hidden="true">›</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <code>{draft.name}</code>
         )}
       </div>
-      {selected ? <SkillDetail skill={selected} /> : <div className="skill-detail-placeholder" aria-hidden="true" />}
-    </section>
+      <input
+        ref={isNew ? undefined : first}
+        className="sk-editor-purpose"
+        aria-label="Description"
+        placeholder="What it does"
+        value={draft.purpose}
+        onChange={(event) => set("purpose", event.target.value)}
+      />
+      <label className="sk-editor-use-when" title="Use when">
+        <Icon name="chat" />
+        <input
+          aria-label="Use when"
+          placeholder="When to use it"
+          value={draft.useWhen}
+          onChange={(event) => set("useWhen", event.target.value)}
+        />
+      </label>
+      <textarea
+        className="sk-editor-instructions"
+        aria-label="Instructions"
+        placeholder="Steps the assistant follows. Markdown works."
+        rows={14}
+        value={draft.instructions}
+        onChange={(event) => set("instructions", event.target.value)}
+      />
+      {error ? <p className="sm-error" role="alert">{error}</p> : null}
+      <div className="sk-editor-actions">
+        <button type="submit" className="sm-btn sm-btn-primary" disabled={!ready || busy}>
+          <Icon name="save" />
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button type="button" className="sm-btn" disabled={busy} onClick={onCancel}>
+          <Icon name="close" />
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function SkillsLoading() {
+  return (
+    <div className="sk-layout" role="status" aria-label="Loading skills">
+      <span className="sm-visually-hidden">Loading skills…</span>
+      <div className="sk-list-pane" aria-hidden="true">
+        {[0, 1, 2].map((item) => (
+          <div className="sm-skeleton sk-row-skeleton" key={item} />
+        ))}
+      </div>
+      <div className="sk-detail" aria-hidden="true">
+        <div className="sm-skeleton sk-detail-skeleton" />
+      </div>
+    </div>
   );
 }
 
 export function SkillsPage() {
   const [state, setState] = useState<SkillsState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
+  const [query, setQuery] = useState("");
+  const [selectedName, setSelectedName] = useState("");
+  const [editing, setEditing] = useState<Editing>(null);
 
   useEffect(() => {
     let active = true;
     setState({ status: "loading" });
-    getSkills().then((body) => {
-      if (active) setState({ status: "loaded", skills: body.skills });
-    }).catch(() => {
-      if (active) setState({ status: "failed" });
-    });
+    getSkills().then(
+      (body) => {
+        if (active) setState({ status: "loaded", skills: body.skills });
+      },
+      () => {
+        if (active) setState({ status: "failed" });
+      },
+    );
     return () => {
       active = false;
     };
   }, [attempt]);
 
+  const skills = state.status === "loaded" ? state.skills : [];
+  const visible = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return skills;
+    return skills.filter((skill) =>
+      `${skill.name} ${skill.purpose} ${skill.useWhen}`.toLocaleLowerCase().includes(needle),
+    );
+  }, [query, skills]);
+  const selected = visible.find((skill) => skill.name === selectedName) ?? visible[0];
+
+  async function reloadAndSelect(name: string) {
+    const body = await getSkills();
+    setState({ status: "loaded", skills: body.skills });
+    setSelectedName(name);
+  }
+
+  async function save() {
+    if (!editing) return;
+    const saved = editing.isNew
+      ? await createSkill(editing.draft)
+      : await updateSkill(editing.draft);
+    const known = skills.some((row) => row.name === saved.name);
+    setState({
+      status: "loaded",
+      skills: known
+        ? skills.map((row) => (row.name === saved.name ? saved : row))
+        : [...skills, saved],
+    });
+    setSelectedName(saved.name);
+    setEditing(null);
+    setQuery("");
+  }
+
+  async function remove(skill: SkillInfo) {
+    await deleteSkill(skill.name);
+    await reloadAndSelect(skill.builtinDefault ? skill.name : "");
+  }
+
+  let body;
+  if (state.status === "loading") {
+    body = <SkillsLoading />;
+  } else if (state.status === "failed") {
+    body = (
+      <div className="sm-empty" role="alert">
+        <p>Skills didn’t load.</p>
+        <button type="button" className="sm-btn" onClick={() => setAttempt((value) => value + 1)}>
+          <Icon name="refresh" />
+          Retry
+        </button>
+      </div>
+    );
+  } else if (skills.length === 0 && !editing) {
+    body = (
+      <div className="sm-empty" role="status">
+        <Icon name="skill" />
+        <p>No skills yet</p>
+        <button
+          type="button"
+          className="sm-btn sm-btn-primary"
+          onClick={() => setEditing({ draft: EMPTY_DRAFT, isNew: true })}
+        >
+          <Icon name="add" />
+          New skill
+        </button>
+      </div>
+    );
+  } else {
+    const listPane = skills.length === 0 ? null : (
+      <div className="sk-list-pane">
+        <label className="sm-search">
+          <Icon name="search" />
+          <input
+            type="search"
+            aria-label="Search skills"
+            placeholder="Search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        {visible.length === 0 ? (
+          <p className="sk-no-match" role="status">
+            No match
+            <button type="button" className="sm-btn sm-btn-quiet" onClick={() => setQuery("")}>
+              <Icon name="close" />
+              Clear
+            </button>
+          </p>
+        ) : (
+          <ul className="sk-list" aria-label="Skills">
+            {visible.map((skill) => (
+              <li key={skill.name}>
+                <button
+                  type="button"
+                  className="sk-row"
+                  aria-current={!editing?.isNew && selected?.name === skill.name ? "true" : undefined}
+                  onClick={() => {
+                    setEditing(null);
+                    setSelectedName(skill.name);
+                  }}
+                >
+                  <Icon name="skill" />
+                  <span className="sk-row-text">
+                    <strong>{humanizeSkillName(skill.name)}</strong>
+                    <span>{skill.purpose}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+    body = (
+      <div className={`sk-layout${skills.length === 0 ? " is-single" : ""}`}>
+        {listPane}
+        {editing ? (
+          <SkillEditor
+            key={editing.isNew ? "new" : editing.draft.name}
+            editing={editing}
+            onChange={(draft) => setEditing({ ...editing, draft })}
+            onSave={save}
+            onCancel={() => setEditing(null)}
+          />
+        ) : selected ? (
+          <SkillView
+            key={`${selected.name}:${selected.source}`}
+            skill={selected}
+            onEdit={() => setEditing({ draft: draftOf(selected), isNew: false })}
+            onDelete={() => remove(selected)}
+          />
+        ) : (
+          <div className="sk-detail" aria-hidden="true" />
+        )}
+      </div>
+    );
+  }
+
   return (
-    <main className="route-page skills-page">
-      <header className="skills-page-header">
-        <h1>Skills</h1>
-        <p>Instructions that extend how Sourcecado handles sourcing work.</p>
-      </header>
-      {state.status === "loading" ? (
-        <SkillsLoading />
-      ) : state.status === "failed" ? (
-        <section className="route-error" role="alert">
-          <h2>The skills catalog couldn’t be loaded</h2>
-          <p>Check that Sourcecado is available, then try again.</p>
-          <button type="button" onClick={() => setAttempt((value) => value + 1)}>
-            Retry loading skills
+    <main className="route-page sm-page">
+      <header className="sm-titlebar">
+        <div className="sm-heading">
+          <h1>Skills</h1>
+          {state.status === "loaded" ? <span className="sm-count">{skills.length}</span> : null}
+        </div>
+        {skills.length > 0 ? (
+          <button
+            type="button"
+            className="sm-btn sm-btn-primary"
+            onClick={() => setEditing({ draft: EMPTY_DRAFT, isNew: true })}
+          >
+            <Icon name="add" />
+            New skill
           </button>
-        </section>
-      ) : state.skills.length === 0 ? (
-        <section className="route-empty" role="status">
-          <h2>No skills available</h2>
-          <p>Installed skills will appear here when they’re ready to use.</p>
-        </section>
-      ) : (
-        <SkillsCatalog skills={state.skills} />
-      )}
+        ) : null}
+      </header>
+      {body}
     </main>
   );
 }

@@ -35,14 +35,16 @@ describe("Contacts and person-file styles", () => {
     for (const size of contacts.matchAll(/font-size:\s*(\d+)px/g)) {
       expect(Number(size[1])).toBeGreaterThanOrEqual(13);
     }
-    expect(styles).toMatch(/@import "\.\/styles\/contacts\.css";\s*@import "\.\/styles\/responsive\.css";/);
+    expect(styles).toMatch(
+      /@import "\.\/styles\/contacts\.css";\s*@import "\.\/styles\/crm-details\.css";\s*@import "\.\/styles\/responsive\.css";/,
+    );
   });
 
   it("keeps person-file header controls touch sized on narrow screens", () => {
     // The sequence pill, Open chat and Edit details live in person-file.css.
     const personFile = readFileSync("src/styles/person-file.css", "utf8");
     expect(personFile).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.pf-btn,\s*\.pf-sequence select,[^{]*\{[^}]*min-height:\s*44px;/,
+      /@media \(max-width: 767px\)[\s\S]*?\.pf-btn,\s*\.pf-sequence,[^{]*\{[^}]*min-height:\s*44px;/,
     );
     expect(personFile).toMatch(/\.pf-panel\.is-inactive\s*\{[^}]*display:\s*none;/);
     expect(personFile).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
@@ -59,9 +61,22 @@ describe("Contacts and person-file styles", () => {
     // The header wraps instead of truncating the name.
     expect(contacts).toMatch(/\.person-preview \.preview-titlebar\s*\{[^}]*flex-wrap:\s*wrap;/);
     expect(contacts).not.toMatch(/\.preview-titlebar h2\s*\{[^}]*text-overflow:\s*ellipsis;/);
-    // One column, so the date input cannot push past the card at 390px.
-    expect(styles).toMatch(/\.preview-flag\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/);
-    expect(styles).toMatch(/\.preview-flag input\s*\{[^}]*min-width:\s*0;/);
+    // The flag form wraps, so the date chip cannot push past the card at 390px.
+    const details = readFileSync("src/styles/crm-details.css", "utf8");
+    expect(details).toMatch(/\.person-preview \.preview-flag\s*\{[^}]*flex-wrap:\s*wrap;/);
+    expect(details).toMatch(/\.person-preview \.flag-field input\s*\{[^}]*min-width:\s*0;/);
+  });
+
+  it("keeps CRM interaction states on tokens with no text below 13px", () => {
+    const details = readFileSync("src/styles/crm-details.css", "utf8");
+    expect(details).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    for (const size of details.matchAll(/font-size:\s*(\d+)px/g)) {
+      expect(Number(size[1])).toBeGreaterThanOrEqual(13);
+    }
+    // Touch sizing for the new ghost buttons and inline inputs.
+    expect(details).toMatch(
+      /@media \(max-width: 767px\)\s*\{\s*\.pf :is\(\.pd-btn, \.enrichment-btn, \.sequence-undo, \.pd-value\),[^{]*\{[^}]*min-height:\s*44px;/,
+    );
   });
 
   it("keeps attention and Gmail warnings on warm tokens", () => {

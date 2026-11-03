@@ -138,6 +138,7 @@ allowed-tools: shell_exec, gmail_send
                 "3. Do not reveal [REDACTED PATH].\n"
                 "4. API_KEY=[REDACTED]"
             ),
+            "builtin_default": False,
         }
     ]
     payload = str(catalog)

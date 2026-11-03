@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 
 import { Glyph } from "../generative/ResultCard";
-import { TASKS_CHANGED } from "../Tasks";
-import { listTasks, type PersonTask } from "../api";
+import { UndoToast, useUndoToast } from "../crm/UndoToast";
+import { DueChip, stateToast, TaskCheck, TASKS_CHANGED, useOperationId } from "../Tasks";
+import { listTasks, TaskSaveError, updateTask, type PersonTask } from "../api";
 
 /** This person's open tasks, soonest first. Null until the first read lands. */
 export function useOpenTasks(personId: string): PersonTask[] | null {
@@ -46,16 +47,7 @@ export function useOpenTasks(personId: string): PersonTask[] | null {
   return tasks;
 }
 
-function dueLabel(task: PersonTask): string | null {
-  if (!task.due_date) return null;
-  const date = new Date(`${task.due_date}T12:00:00`);
-  const text = Number.isNaN(date.getTime())
-    ? task.due_date
-    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return task.due_status === "overdue" ? `Overdue · ${text}` : text;
-}
-
-/** The next three open tasks, with a jump to the full list. */
+/** The next three open tasks: tick one to complete it, with Undo. */
 export function NextTasks({
   tasks,
   onShowAll,
@@ -63,6 +55,35 @@ export function NextTasks({
   tasks: PersonTask[] | null;
   onShowAll: () => void;
 }) {
+  const [pending, setPending] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const { toast, show, dismiss } = useUndoToast();
+  const operation = useOperationId();
+
+  // The tick stays until the reload drops the completed task.
+  useEffect(() => setPending(null), [tasks]);
+
+  async function complete(task: PersonTask) {
+    if (pending) return;
+    setPending(task.task_id);
+    setProblem(null);
+    try {
+      const result = await updateTask(task.person_id, task.task_id, {
+        changes: { state: "completed" },
+        expectedVersion: task.version,
+        operationId: operation.forPayload({ task: task.task_id, state: "completed", version: task.version }),
+      });
+      operation.settle();
+      show(stateToast(task, "completed", result?.change));
+    } catch (failure) {
+      setPending(null);
+      if (failure instanceof TaskSaveError && failure.code === "task_conflict") operation.settle();
+      setProblem("Couldn’t complete the task. It changed or the save failed; try again.");
+    } finally {
+      window.dispatchEvent(new Event(TASKS_CHANGED));
+    }
+  }
+
   return (
     <section className="person-section" aria-labelledby="person-next-tasks-heading">
       <div className="person-section-heading-row">
@@ -76,24 +97,27 @@ export function NextTasks({
         <p className="person-empty">No open tasks.</p>
       ) : (
         <ul className="pf-next-tasks">
-          {tasks.slice(0, 3).map((task) => {
-            const due = dueLabel(task);
-            return (
-              <li key={task.task_id}>
-                <Glyph name="review" />
-                <span className="pf-next-task-title">{task.title}</span>
-                {due ? (
-                  <span
-                    className={`pf-badge${task.due_status === "overdue" ? " is-warn" : ""}`}
-                  >
-                    {due}
-                  </span>
-                ) : null}
-              </li>
-            );
-          })}
+          {tasks.slice(0, 3).map((task) => (
+            <li key={task.task_id} className={pending === task.task_id ? "is-done" : undefined}>
+              <TaskCheck
+                task={task}
+                pending={pending === task.task_id ? "completed" : null}
+                disabled={pending !== null}
+                onToggle={() => void complete(task)}
+              />
+              <span className="pf-next-task-title">{task.title}</span>
+              <DueChip date={task.due_date} status={task.due_status} />
+            </li>
+          ))}
         </ul>
       )}
+      {problem ? (
+        <p className="crm-alert" role="alert">
+          <Glyph name="info" />
+          {problem}
+        </p>
+      ) : null}
+      <UndoToast toast={toast} onDismiss={dismiss} />
     </section>
   );
 }

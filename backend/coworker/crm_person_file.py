@@ -8,6 +8,7 @@ source titles and links are external text; ``person_file_evidence`` fences them.
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 from coworker.crm_enrichment import EnrichmentView
@@ -16,9 +17,14 @@ from coworker.crm_sources import sources_visible
 from coworker.crm_tasks import TaskNotFound
 from coworker.evidence_envelope import EvidenceParts, external, opaque
 from coworker.monid import saved_research
-from coworker.people import PersonStore
+from coworker.people import ATTACHMENT_TYPES, PersonStore
 
-LIMITS = {"tasks": 20, "changes": 10, "mail_threads": 10, "monid_research": 5, "monid_sources": 5}
+LIMITS = {"tasks": 20, "changes": 10, "mail_threads": 10, "monid_research": 5, "monid_sources": 5,
+          "versions": 10}
+# Sourcecado receipts whose payload "version" is the person version they saved.
+# Description receipts count slot versions, so they are not here.
+_VERSION_RECEIPTS = frozenset({"keep", "state", "patch", "outcome", "revert", "reply_gap_updated",
+                               "reply_gap_resolved", *ATTACHMENT_TYPES})
 _IDENTITY = ("person_id", "first_name", "last_name", "title", "company", "email", "phone", "linkedin_url", "version")
 
 
@@ -67,6 +73,46 @@ def _research(person: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+def _versions(people: PersonStore, pid: str, person: dict[str, Any],
+              allowed_source_ids: set[str] | None) -> tuple[dict[str, Any], bool]:
+    """Newest person versions with who saved each one and why. Never the snapshot.
+
+    A version shows the receipt or person-level CRM change that names it.
+    One with neither shows no actor or summary. A version saved from a source
+    this run cannot see shows only its number and time.
+    """
+    history = people.versions(pid)[::-1]
+    newest = history[:LIMITS["versions"]]
+    wanted = {entry["version"] for entry in newest}
+    visible = {item["id"] for item in person["attachments"]}
+    claims: dict[int, list[tuple[bool, str, str]]] = {}
+    for event in people.timeline(pid):
+        payload = event["payload"] if isinstance(event["payload"], dict) else {}
+        version = payload.get("version")
+        if (event["source"] == "sourcecado" and event["kind"] in _VERSION_RECEIPTS
+                and type(version) is int and version in wanted):
+            shown = event["kind"] not in ATTACHMENT_TYPES or payload.get("id") in visible
+            claims.setdefault(version, []).append((shown, event["actor"], event["summary"]))
+    with people._lock:  # Status, attention and detail changes save the person version.
+        changes = people._conn.execute(
+            "SELECT entity_version, actor, reason, source_refs FROM crm_changes "
+            "WHERE person_id=? AND entity_id=? ORDER BY rowid", (pid, pid)).fetchall()
+    for change in changes:
+        if change["entity_version"] in wanted:
+            shown = sources_visible(people, pid, json.loads(change["source_refs"]), allowed_source_ids)
+            claims.setdefault(change["entity_version"], []).append((shown, change["actor"], change["reason"]))
+    items, hidden = [], False
+    for entry in newest:
+        found = claims.get(entry["version"], [])
+        if not all(shown for shown, _, _ in found):
+            hidden = True
+            items.append({**entry, "restricted": True})
+        else:
+            actor, summary = found[0][1:] if found else (None, None)
+            items.append({**entry, "actor": actor, "summary": _clip(summary, 200)})
+    return _bounded(items, LIMITS["versions"], len(history) > LIMITS["versions"]), hidden
+
+
 def person_file(people: PersonStore, pid: str, *, store: Any, timezone: str,
                 allowed_source_ids: set[str] | None, apollo_configured: bool) -> dict[str, Any]:
     person = people.get(pid, expand_sources=True, allowed_source_ids=allowed_source_ids)
@@ -98,9 +144,10 @@ def person_file(people: PersonStore, pid: str, *, store: Any, timezone: str,
                 "last_message_at": thread.get("last_at"), "last_direction": thread.get("last_direction"),
                 "message_count": thread["message_count"]}
                for thread in people.mail_threads(pid)]
+    versions, hidden_version = _versions(people, pid, person, allowed_source_ids)
     enrichment = _enrichment(people, store, pid, apollo_configured)
     unavailable = [] if enrichment is not None else ["enrichment"]
-    partial = hidden or bool(unavailable)
+    partial = hidden or hidden_version or bool(unavailable)
     return {
         "status": "partial" if partial else "complete",
         "partial": partial,
@@ -112,6 +159,7 @@ def person_file(people: PersonStore, pid: str, *, store: Any, timezone: str,
         "descriptions": descriptions,
         "tasks": _bounded(tasks, LIMITS["tasks"], listing["truncated"]),
         "changes": _bounded(changes, LIMITS["changes"]),
+        "versions": versions,
         "mail_threads": _bounded(threads, LIMITS["mail_threads"]),
         "enrichment": enrichment,
         "monid_research": _bounded(_research(person), LIMITS["monid_research"]),

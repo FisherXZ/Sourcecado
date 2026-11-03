@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   readOutreachDraft: vi.fn(),
   requestSendApproval: vi.fn(),
   decideApproval: vi.fn(),
+  openPersonSourcingChat: vi.fn(),
 }));
 
 vi.mock("../src/api", () => api);
@@ -75,20 +76,57 @@ describe("Outreach panel", () => {
     });
   });
 
-  it("refuses to draft without a bound sourcing chat", () => {
-    panel({ sessionId: null });
+  it("opens the person's sourcing chat from Draft email when there is none", async () => {
+    api.openPersonSourcingChat.mockResolvedValue({
+      created: true,
+      session: { id: "sess_new", title: null, n_msgs: 0 },
+      active_person: { person_id: "per_1", version: 3, label: "Ada" },
+    });
+    const onChatOpened = vi.fn();
+    panel({ sessionId: null, personVersion: 3, onChatOpened });
 
-    expect(
-      screen.getByText(/Open this person’s sourcing chat first/),
-    ).toBeTruthy();
+    // Draft email shows even before a chat exists; nothing opens until it is clicked.
+    expect(screen.queryByText(/sourcing chat first/)).toBeNull();
+    expect(api.openPersonSourcingChat).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Draft email" }));
+
+    expect(await screen.findByLabelText("Subject")).toBeInTheDocument();
+    expect(api.openPersonSourcingChat).toHaveBeenCalledWith("per_1", 3);
+    expect(onChatOpened).toHaveBeenCalledTimes(1);
+
+    // The draft is made in the chat that was just opened.
+    fireEvent.change(screen.getByLabelText("Subject"), { target: { value: "Thursday?" } });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Hi Ada" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Gmail draft" }));
+    await screen.findByText("Not sent");
+    expect(api.createOutreachDraft).toHaveBeenCalledWith("per_1", {
+      sessionId: "sess_new",
+      subject: "Thursday?",
+      body: "Hi Ada",
+    });
+  });
+
+  it("refuses a chat bound to someone else and drafts nothing", async () => {
+    api.openPersonSourcingChat.mockResolvedValue({
+      created: false,
+      session: { id: "sess_other", title: null, n_msgs: 2 },
+      active_person: { person_id: "per_2", version: 1, label: "Someone else" },
+    });
+    const onChatOpened = vi.fn();
+    panel({ sessionId: null, personVersion: 3, onChatOpened });
+    fireEvent.click(screen.getByRole("button", { name: "Draft email" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("different person");
     expect(screen.queryByLabelText("Subject")).toBeNull();
+    expect(onChatOpened).not.toHaveBeenCalled();
     expect(api.createOutreachDraft).not.toHaveBeenCalled();
   });
 
   it("refuses to draft to a person with no email", () => {
     panel({ recipient: null });
 
-    expect(screen.getByText(/no email address yet/)).toBeTruthy();
+    expect(screen.getByText("No email address yet")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Draft email" })).toBeNull();
     expect(screen.queryByLabelText("Subject")).toBeNull();
     expect(api.createOutreachDraft).not.toHaveBeenCalled();
   });

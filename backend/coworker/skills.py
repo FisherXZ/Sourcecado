@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,6 +22,12 @@ _PRIVATE_PATH = re.compile(
     r"|(?<![:/A-Za-z0-9_.])/(?!/)[^\s`<>\"'\[\](){}]+",
     re.IGNORECASE,
 )
+# A skill name is its slash command in chat and its folder on disk.
+SKILL_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+
+
+class SkillError(ValueError):
+    """A skill the director asked to save or delete cannot be."""
 
 
 @dataclass
@@ -34,13 +42,22 @@ class Skill:
 
 
 class SkillLoader:
+    """Skills from each directory in order; a later directory wins a name.
+
+    The last directory is the workspace, where the director's skills are
+    saved. Saving a built-in skill writes a workspace copy that replaces it,
+    and deleting that copy brings the built-in back.
+    """
+
     def __init__(self, dirs: list[str | Path]) -> None:
         self._dirs = [Path(d) for d in dirs]
         self._skills: dict[str, Skill] = {}
+        self._builtin_names: set[str] = set()
         self.rescan()
 
     def rescan(self) -> None:
         self._skills = {}
+        self._builtin_names = set()
         for directory in self._dirs:
             if not directory.is_dir():
                 continue
@@ -54,6 +71,8 @@ class SkillLoader:
                     )
                     skill = parse_skill(md, source=source)
                     self._skills[skill.name] = skill
+                    if source == "builtin":
+                        self._builtin_names.add(skill.name)
 
     def get(self, name: str) -> Skill | None:
         skill = self._skills.get(name)
@@ -71,12 +90,81 @@ class SkillLoader:
                 "source": skill.source if skill.source in {"builtin", "workspace"} else "workspace",
                 "status": "ready",
                 "instructions": _safe_public_text(skill.instructions),
+                "builtin_default": skill.name in self._builtin_names,
             }
             for skill in self._skills.values()
         ]
 
     def names(self) -> list[str]:
         return list(self._skills)
+
+    def save(
+        self,
+        name: str,
+        *,
+        purpose: str,
+        use_when: str,
+        instructions: str,
+        create: bool,
+    ) -> Skill:
+        """Write a skill's SKILL.md in the workspace and return the saved skill."""
+        name = name.strip()
+        if not SKILL_NAME.fullmatch(name):
+            raise SkillError(
+                "Use lowercase letters, numbers and hyphens, up to 48 characters."
+            )
+        purpose, use_when = _one_line(purpose), _one_line(use_when)
+        instructions = instructions.strip()
+        if not purpose:
+            raise SkillError("Add a description.")
+        if not instructions:
+            raise SkillError("Add instructions.")
+        if "[REDACTED" in f"{purpose} {use_when} {instructions}":
+            # The catalog hides paths and secrets. Saving the marker would
+            # silently replace what SKILL.md really says.
+            raise SkillError("Replace the [REDACTED] parts before saving.")
+        self.rescan()
+        existing = self._skills.get(name)
+        if create and existing is not None:
+            raise FileExistsError(f"A skill named {name} already exists.")
+        if not create and existing is None:
+            raise KeyError(name)
+        folder = (
+            Path(existing.path)
+            if existing is not None and existing.source == "workspace"
+            else self._dirs[-1] / name
+        )
+        lines = ["---", f"name: {name}", f"description: {purpose}"]
+        if use_when:
+            lines.append(f"use-when: {use_when}")
+        text = "\n".join([*lines, "---", "", instructions, ""])
+        folder.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".SKILL.", suffix=".md")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, folder / "SKILL.md")
+        self.rescan()
+        return self._skills[name]
+
+    def delete(self, name: str) -> None:
+        """Remove a workspace skill. A built-in skill of that name comes back."""
+        self.rescan()
+        skill = self._skills.get(name)
+        if skill is None:
+            raise KeyError(name)
+        if skill.source != "workspace":
+            raise SkillError("A built-in skill cannot be deleted.")
+        folder = Path(skill.path)
+        (folder / "SKILL.md").unlink(missing_ok=True)
+        try:
+            folder.rmdir()
+        except OSError:
+            pass  # Other files the director keeps in the folder stay.
+        self.rescan()
+
+
+def _one_line(value: str) -> str:
+    return " ".join(str(value).split())
 
 
 def _safe_public_text(value: str) -> str:
@@ -129,6 +217,7 @@ def catalog_text(loader: SkillLoader) -> str:
         return ""
     lines = [f"- {row['name']}: {row['purpose']}" for row in rows]
     return (
-        "Available skills — call load_skill with the name to load full instructions:\n"
+        "Available skills — call load_skill with the name to load full instructions. "
+        "A message that starts with /name asks for that skill:\n"
         + "\n".join(lines)
     )

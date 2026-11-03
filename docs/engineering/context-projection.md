@@ -87,8 +87,11 @@ content. `store.memory_update()` sends a rewritten row back for review, because
 rewritten text is text nobody has classified.
 
 A row becomes a global preference only through `store.memory_classify()`, which
-is reached only by `POST /v1/memory/{id}/classification` — a director action in
-the UI. It refuses any row carrying a `person_id` or `session_id`: a fact about
+is reached only by director actions on the Memory page: Keep
+(`POST /v1/memory/{id}/classification`), and writing or rewriting a memory there
+(`POST /v1/memory`, `PATCH /v1/memory/{id}`). The director's own text needs no
+second review. Those two routes refuse text longer than 140 characters, the
+longest line the 64-token item cap shows whole. It refuses any row carrying a `person_id` or `session_id`: a fact about
 one person belongs on that Person File through the existing Board contract.
 
 The `remember` tool passes no scope, so every model-driven write is ambiguous
@@ -106,9 +109,11 @@ deliberately in front of the operator.
   waiting rows.
 - The global rail carries a **Memory** destination with a badge showing the
   waiting count, refreshed on navigation and on window focus.
-- `#/memory` lists each waiting row with two actions: keep it as a global
-  preference, or delete it. The page says where a fact about one person belongs
-  instead.
+- `#/memory` lists every row (`GET /v1/memory`), waiting rows first with a
+  Review pill and Keep. Each row shows its `#id`, the id the prompt line and
+  the memory tools use. The director can add, edit and delete rows there.
+- The `remember` and `memory_update` tool results say the row is not in use
+  yet, so the model tells the director to keep it.
 
 ## Known bound to watch
 

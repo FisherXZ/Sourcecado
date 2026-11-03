@@ -209,7 +209,8 @@ describe("Preview change review", () => {
 
   it("uses a durable operation receipt when changing status", async () => {
     render(<PersonPreview personId="per_maya" onClose={() => {}} />);
-    fireEvent.change(await screen.findByLabelText("Relationship status"), {target: {value: "in_conversation"}});
+    fireEvent.click(await screen.findByRole("button", {name: "Relationship status: Open"}));
+    fireEvent.click(screen.getByRole("option", {name: "In conversation"}));
     await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith(
       "/v1/people/per_maya/sequence", expect.objectContaining({state: "in_conversation", expected_version: 2, operation_id: expect.any(String)}), "POST"));
   });
@@ -230,15 +231,15 @@ describe("Preview controls", () => {
     // The first read is the saved state; the refresh after the save sees the move.
     api.getPerson.mockResolvedValueOnce(file()).mockResolvedValue({ ...file(), person: moved });
     render(<PersonPreview personId="per_maya" onClose={() => {}} />);
-    const pill = await screen.findByRole("combobox", { name: "Relationship status" });
-    expect(pill).toHaveValue("open");
-    expect(pill.closest("label")).toHaveClass("pf-sequence", "is-open");
+    const pill = await screen.findByRole("button", { name: "Relationship status: Open" });
+    expect(pill).toHaveClass("pf-sequence", "is-open");
 
-    fireEvent.change(pill, { target: { value: "in_conversation" } });
+    fireEvent.click(pill);
+    fireEvent.click(screen.getByRole("option", { name: "In conversation" }));
 
     await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith("/v1/people/per_maya/sequence",
       expect.objectContaining({ state: "in_conversation", expected_version: 2, operation_id: expect.any(String) }), "POST"));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Relationship status" })).toHaveValue("in_conversation"));
+    expect(await screen.findByRole("button", { name: "Relationship status: In conversation" })).toHaveClass("is-in_conversation");
     fireEvent.click(await screen.findByRole("button", { name: "Undo sequence change" }));
     await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith("/v1/people/per_maya/crm-changes/chg_status/undo",
       expect.objectContaining({ operation_id: expect.any(String) }), "POST"));
@@ -269,7 +270,7 @@ describe("Preview controls", () => {
   it("shows a saved flag as a chip with Edit flag and Clear flag", async () => {
     api.getPerson.mockResolvedValue({ ...file(), person: { ...maya, attention_reason: "Call after meeting", attention_until: "2026-11-10" } });
     render(<PersonPreview personId="per_maya" onClose={() => {}} />);
-    expect(await screen.findByText(/Call after meeting · until 2026-11-10/)).toBeInTheDocument();
+    expect(await screen.findByText(/Call after meeting · until Nov 10/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Flag" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Clear flag" }));
@@ -280,11 +281,73 @@ describe("Preview controls", () => {
     expect(screen.getByLabelText("Attention reason")).toHaveFocus();
   });
 
+  it("edits the flag inline: Escape cancels, Save shows the result with Undo", async () => {
+    const onClose = vi.fn();
+    api.crmRequest.mockImplementation(async (path: string) =>
+      path.endsWith("/attention") ? { change: { change_id: "chg_flag" } } : {});
+    render(<PersonPreview personId="per_maya" onClose={onClose} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Flag" }));
+    const reason = screen.getByLabelText("Attention reason");
+    expect(reason).toHaveAttribute("placeholder", "Reason to follow up");
+    fireEvent.change(reason, { target: { value: "Ask about the offsite" } });
+    fireEvent.keyDown(reason, { key: "Escape" });
+    expect(screen.queryByLabelText("Attention reason")).toBeNull();
+    expect(screen.getByRole("button", { name: "Flag" })).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(api.crmRequest).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Flag" }));
+    fireEvent.change(screen.getByLabelText("Attention reason"), { target: { value: "Ask about the offsite" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save flag" }));
+    const result = await screen.findByText("Flag saved");
+    fireEvent.click(within(result).getByRole("button", { name: "Undo flag change" }));
+    await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith("/v1/people/per_maya/crm-changes/chg_flag/undo",
+      expect.objectContaining({ operation_id: expect.any(String) }), "POST"));
+    expect(await screen.findByText("Undone")).toBeInTheDocument();
+  });
+
+  it("moves through the status menu with the keyboard", async () => {
+    const onClose = vi.fn();
+    render(<PersonPreview personId="per_maya" onClose={onClose} />);
+    const pill = await screen.findByRole("button", { name: "Relationship status: Open" });
+    expect(pill).toHaveAttribute("aria-haspopup", "listbox");
+    pill.focus();
+    fireEvent.keyDown(pill, { key: "ArrowDown" });
+    const list = screen.getByRole("listbox", { name: "Relationship status" });
+    expect(pill).toHaveAttribute("aria-expanded", "true");
+    expect(list).toHaveFocus();
+    const options = within(list).getAllByRole("option");
+    expect(options.map(option => option.textContent)).toEqual(["Not started", "Open", "In conversation", "Done"]);
+    expect(within(list).getByRole("option", { name: "Open" })).toHaveAttribute("aria-selected", "true");
+    expect(within(list).getByRole("option", { name: "Open" }).querySelector("svg")).not.toBeNull();
+    expect(list).toHaveAttribute("aria-activedescendant", options[1].id);
+
+    // Escape closes the menu only; the preview stays open.
+    fireEvent.keyDown(list, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(pill).toHaveFocus();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(pill, { key: "ArrowDown" });
+    const reopened = screen.getByRole("listbox", { name: "Relationship status" });
+    fireEvent.keyDown(reopened, { key: "ArrowDown" });
+    fireEvent.keyDown(reopened, { key: "ArrowDown" });
+    fireEvent.keyDown(reopened, { key: "ArrowDown" }); // wraps past Not started to Open
+    fireEvent.keyDown(reopened, { key: "ArrowDown" });
+    expect(reopened).toHaveAttribute("aria-activedescendant", within(reopened).getByRole("option", { name: "In conversation" }).id);
+    fireEvent.keyDown(reopened, { key: "Enter" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await waitFor(() => expect(api.crmRequest).toHaveBeenCalledWith("/v1/people/per_maya/sequence",
+      expect.objectContaining({ state: "in_conversation", expected_version: 2 }), "POST"));
+    expect(api.crmRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("shows contact details once, as icon and value lines", async () => {
     api.getPerson.mockResolvedValue({ ...file(), person: { ...maya, email: "maya@lumen.test" } });
     render(<PersonPreview personId="per_maya" onClose={() => {}} />);
     const details = await screen.findByRole("region", { name: "Person details" });
-    expect(within(details).getByRole("link", { name: "maya@lumen.test" })).toHaveAttribute("href", "mailto:maya@lumen.test");
+    expect(within(details).getByRole("button", { name: "Edit email: maya@lumen.test" })).toBeInTheDocument();
+    expect(within(details).getByRole("button", { name: "Copy email" })).toBeInTheDocument();
     expect(screen.getAllByText("maya@lumen.test")).toHaveLength(1);
     expect(screen.getAllByText("Lumen")).toHaveLength(1);
     expect(within(details).queryByText("Email")).toBeNull();
@@ -300,7 +363,7 @@ describe("Preview controls", () => {
     const preview = screen.getByRole("region", { name: "Person preview" });
     const buttons = within(preview).getAllByRole("button", { hidden: true });
     expect(buttons.map(button => button.textContent || button.getAttribute("aria-label"))).toEqual(
-      expect.arrayContaining(["Flag", "Accept", "Edit suggestion", "Dismiss", "Undo", "Add description"]));
+      expect.arrayContaining(["Flag", "Accept", "Edit", "Dismiss", "Undo", "Add description"]));
     for (const button of buttons) {
       expect(button.querySelector("svg"), button.textContent || button.getAttribute("aria-label") || "").not.toBeNull();
     }
