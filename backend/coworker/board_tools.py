@@ -103,7 +103,8 @@ BOARD_MUTATE_SCHEMA: dict[str, Any] = {
     "function": {
         "name": "board_mutate",
         "description": (
-            "Version-checked person-file write: patch, transition, capture_outcome, or revert."
+            "Version-checked person-file write: patch, transition, capture_outcome, or revert. "
+            "A transition returns its status change id; crm_undo_change can undo it."
         ),
         "parameters": {
             "type": "object",
@@ -326,12 +327,15 @@ def execute_board_tool(
                 **identity,
             )
         elif action == "transition":
-            person = people.set_sequence(
+            # Same sequence guards, recorded as a status change Undo can reverse.
+            from coworker.crm_service import CrmService
+            moved = CrmService(people).transition(
                 person_id,
-                str(args.get("to_state") or ""),
+                state=str(args.get("to_state") or ""),
                 expected_version=expected_version,
                 **identity,
             )
+            return True, {**moved, "board_changed": True}
         elif action == "capture_outcome":
             person = people.capture_outcome(
                 person_id,

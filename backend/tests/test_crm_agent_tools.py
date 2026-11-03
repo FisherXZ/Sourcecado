@@ -117,6 +117,77 @@ def test_agent_status_change_is_undone_by_crm_undo_change(tmp_path):
     assert people.get(pid)["sequence_state"] == "open"
 
 
+# --- board_mutate transition ------------------------------------------------
+
+
+def board_transition(people, pid, state, reason="Maya replied to the outreach"):
+    return execute("board_mutate", {"action": "transition", "person_id": pid, "to_state": state,
+        "expected_version": people.get(pid)["version"], "rationale_summary": reason},
+        people=people, session_id="chat-crm", run_id="run-crm")
+
+
+def file_sent_mail(people, pid):
+    people.append_event(pid, source="gmail", kind="send", summary="Sent draft d1",
+                        payload={"sent": True, "draft_id": "d1"}, tool="gmail_send")
+
+
+def test_board_transition_records_a_status_change_that_crm_undo_change_reverses(tmp_path):
+    people, pid = bound(tmp_path)
+    file_sent_mail(people, pid)
+    events_before = len(people.timeline(pid))
+    ok, moved = board_transition(people, pid, "in_conversation")
+    assert ok, moved
+    assert moved["person"]["sequence_state"] == "in_conversation"
+    change_id = moved["change"]["change_id"]
+    row = people._conn.execute("SELECT * FROM crm_changes WHERE change_id=?", (change_id,)).fetchone()
+    assert (row["entity_type"], row["entity_id"], row["actor"], row["session_id"], row["run_id"]) == (
+        "status", pid, "assistant", "chat-crm", "run-crm")
+    assert (json.loads(row["before_json"]), json.loads(row["after_json"])) == (
+        {"state": "open"}, {"state": "in_conversation"})
+    assert row["entity_version"] == people.get(pid)["version"]
+    assert row["reason"] == "Maya replied to the outreach"
+    # The store's state receipt stays the only timeline entry for the move.
+    assert [event["kind"] for event in people.timeline(pid)[events_before:]] == ["state"]
+    ok, file = invoke(people, "crm_get_person", {})
+    assert ok and file["changes"]["items"][0]["change_id"] == change_id
+    assert file["changes"]["items"][0]["can_undo"] is True
+    undo = {"change_id": change_id, "operation_id": "chat-undo-board", "reason": "Director undid the move"}
+    # Undo stays a director action: the assistant cannot reverse the move alone.
+    ok, refused = invoke(people, "crm_undo_change", undo)
+    assert not ok and refused["code"] == "unverified_director_request", refused
+    assert people.get(pid)["sequence_state"] == "in_conversation"
+    ok, undone = invoke(people, "crm_undo_change", undo, f"Undo status {change_id}",
+                        crm_mutation_budget=CRMMutationBudget())
+    assert ok, undone
+    assert undone["sequence"] == {"state": "open"}
+    assert people.get(pid)["sequence_state"] == "open"
+
+
+@pytest.mark.parametrize("state,error", [
+    ("in_conversation", "in_conversation requires sent outreach"),
+    ("done", "done requires a recorded outcome"),
+])
+def test_board_transition_keeps_the_assistant_sequence_guards(tmp_path, state, error):
+    people, pid = bound(tmp_path)
+    before = people.get(pid)
+    changes = people._conn.execute("SELECT COUNT(*) FROM crm_changes").fetchone()[0]
+    ok, refused = board_transition(people, pid, state, "No evidence on file")
+    assert not ok and error in refused["error"], refused
+    assert people.get(pid) == before
+    assert people._conn.execute("SELECT COUNT(*) FROM crm_changes").fetchone()[0] == changes
+
+
+def test_board_transition_to_done_after_an_outcome_is_undoable(tmp_path):
+    people, pid = bound(tmp_path, state="in_conversation")
+    people.capture_outcome(pid, outcome="accepted", expected_version=people.get(pid)["version"],
+                           actor="assistant", rationale_summary="Maya accepted")
+    ok, moved = board_transition(people, pid, "done", "Work on Maya is complete")
+    assert ok, moved
+    assert (moved["person"]["sequence_state"], moved["person"]["outcome"]) == ("done", "accepted")
+    assert CrmService(people).recent_changes(pid)[0]["change_id"] == moved["change"]["change_id"]
+    assert CrmService(people).recent_changes(pid)[0]["can_undo"] is True
+
+
 # --- crm_get_person ---------------------------------------------------------
 
 
