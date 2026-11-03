@@ -163,19 +163,59 @@ def test_three_persisted_failures_require_explicit_retry_and_never_store_secrets
     assert asyncio.run(service.analyze(pid, retry=True))["status"] == "analyzed"
 
 
-def test_real_app_endpoint_uses_current_provider_and_leaves_agent_runs_empty(tmp_path):
+@pytest.mark.parametrize("background", [False, True])
+def test_real_app_endpoint_uses_current_provider_and_leaves_agent_runs_empty(tmp_path, monkeypatch, background):
+    import threading
+
+    class CurrentModel(DescriptionModel):
+        def __init__(self):
+            super().__init__()
+            self.entered = threading.Event()
+            self.release = asyncio.Event()
+
+        async def astream(self, **kwargs):
+            if background:
+                self.entered.set()
+                await asyncio.wait_for(self.release.wait(), timeout=10)
+            async for chunk in super().astream(**kwargs):
+                yield chunk
+
     app = create_app(token="crm-analysis", state=tmp_path, provider=DescriptionModel(), gmail=ReadOnlyMail())
     pid = tracked_person(app.state.people)
-    current = DescriptionModel()
+    current = CurrentModel()
     current.model_id = "changed-in-settings"
     app.state.provider = current
-    with TestClient(app) as client:
-        response = client.post(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "crm-analysis"}, json={})
-        assert response.status_code == 200, response.text
-        assert response.json()["status"] == "analyzed"
-        status = client.get(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "crm-analysis"}).json()
+    if background:
+        app.state.crm_analysis.factory()._prepare(pid)
+        monkeypatch.setattr(app.state.crm_refresh, "collect", lambda: {"status": "ok"})
+        with TestClient(app) as client:
+            assert current.entered.wait(timeout=5), "background analysis never reached the current provider"
+            async def finish():
+                current.release.set()
+                await asyncio.wait_for(asyncio.shield(app.state.crm_refresh._current), timeout=5)
+            try:
+                response = client.post(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "crm-analysis"}, json={})
+                assert response.status_code == 200, response.text
+                assert response.json()["status"] == "running"
+            finally:
+                client.portal.call(finish)
+            status = client.get(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "crm-analysis"}).json()
+    else:
+        # Exercise the explicit API owner separately from the lifecycle worker.
+        client = TestClient(app)
+        try:
+            response = client.post(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "crm-analysis"}, json={})
+            assert response.status_code == 200, response.text
+            assert response.json()["status"] == "analyzed"
+            status = client.get(f"/v1/people/{pid}/analysis", headers={TOKEN_HEADER: "crm-analysis"}).json()
+        finally:
+            client.close()
     assert status["model"] == "changed-in-settings"
+    assert status["outcome"] == "analyzed"
+    assert status["analyzed_revision"] == status["latest_revision"] > 0
+    assert status["lease_until"] is None
     assert len(current.calls) == 1
+    assert app.state.agent_runs.list_runs() == []
 
 
 def test_private_mail_is_never_read_or_prompted_and_wrong_person_never_attributed(tmp_path):
