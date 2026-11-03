@@ -1,0 +1,834 @@
+/* Person File: an Attio-style record page. Header with identity and actions,
+   a Details sidebar of icon + value lines, and tabs over the record's work.
+   Selectors start with .pf so they outrank the older person-page rules that
+   styles.css declares after its imports. Nothing here goes below 13px, and
+   body copy stays on --text; --muted is for icons only. */
+
+.pf {
+  font-size: 14px;
+  color: var(--text);
+}
+
+.pf-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --- shared controls ---------------------------------------------------- */
+
+/* Shared components that also render in Contacts now carry an icon in every
+   button; keep icon and label on one line wherever they mount. */
+.task-list-header button,
+.task-row-action,
+.task-form-actions button,
+.task-list-error button,
+.task-list-status button,
+.task-prepared button,
+.description-actions button,
+.person-mail-filters button,
+.person-mail-activity .person-section-heading-row button,
+.person-mail-activity a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pf .action-icon,
+.pf .sourcecado-card-glyph {
+  flex: none;
+}
+
+.pf-btn,
+.pf .pf-tabs [role="tab"],
+.pf .pf-attr-add,
+.pf .person-section button,
+.pf .person-outreach-actions button,
+.pf .person-outreach-compose button,
+.pf .person-outreach-start button,
+.pf .description-actions button,
+.pf .route-error button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pf-btn,
+.pf .person-section-heading-row button,
+.pf .person-meeting-actions button,
+.pf .person-drive-search button,
+.pf .person-drive-actions button,
+.pf .person-outreach-actions button,
+.pf .person-outreach-compose button,
+.pf .person-outreach-start button,
+.pf .person-outreach-prepared,
+.pf .description-actions button,
+.pf .person-handoff button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pf-btn:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+.pf-btn-primary,
+.pf .person-handoff button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+
+.pf-btn-primary:hover:not(:disabled) {
+  border-color: var(--accent-deep);
+  background: var(--accent-deep);
+}
+
+.pf button.pf-btn-quiet {
+  border-color: transparent;
+  background: transparent;
+}
+
+.pf-btn:disabled,
+.pf button:disabled {
+  cursor: default;
+  opacity: .6;
+}
+
+.pf .pf-icon-btn {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.pf .pf-icon-btn:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--raised);
+}
+
+.pf a:focus-visible,
+.pf button:focus-visible,
+.pf select:focus-visible,
+.pf summary:focus-visible,
+.pf [role="tabpanel"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pf-badge {
+  display: inline-flex;
+  min-height: 22px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: var(--raised);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pf-badge.is-ok {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.pf-badge.is-warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.pf-alert {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--error-bg);
+  color: var(--error);
+  font-size: 13px;
+}
+
+/* --- header -------------------------------------------------------------- */
+
+.pf-header {
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pf-back {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pf-back:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.pf-identity {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 14px;
+}
+
+.pf-avatar {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.pf-title {
+  min-width: 0;
+}
+
+.pf-title h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -.015em;
+  line-height: 1.2;
+}
+
+.pf-subtitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.pf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Sequence state: a tinted pill that is a native select underneath, with
+   Undo beside it. Shared with the Contacts preview. */
+.sequence-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pf-sequence {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  background: var(--raised);
+  color: var(--text);
+}
+
+.pf-sequence select {
+  min-height: 32px;
+  padding: 0 30px 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pf-sequence select:disabled {
+  cursor: wait;
+}
+
+.pf-sequence .sourcecado-card-glyph {
+  position: absolute;
+  right: 10px;
+  pointer-events: none;
+}
+
+.pf-sequence.is-open {
+  background: var(--accent-tint);
+  color: var(--accent-deep);
+}
+
+.pf-sequence.is-open select {
+  border-color: transparent;
+}
+
+/* Same pairs as the Contacts sequence pills. */
+.pf-sequence.is-in_conversation {
+  background: var(--raised);
+  color: var(--pit);
+}
+
+.pf-sequence.is-in_conversation select,
+.pf-sequence.is-done select {
+  border-color: transparent;
+}
+
+.pf-sequence.is-done {
+  background: var(--raised);
+  color: var(--text);
+}
+
+/* --- layout -------------------------------------------------------------- */
+
+.pf-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.pf-main,
+.pf-sidebar {
+  min-width: 0;
+}
+
+@media (min-width: 1100px) {
+  .pf-layout {
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-areas: "main side";
+    align-items: start;
+    gap: 28px;
+  }
+
+  .pf-sidebar {
+    grid-area: side;
+  }
+
+  .pf-main {
+    grid-area: main;
+  }
+}
+
+/* --- details sidebar ---------------------------------------------------- */
+
+.pf-sidebar {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.pf-side-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pf-side-edit {
+  margin-left: auto;
+}
+
+.pf .pf-side-heading h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pf-attrs {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-attr {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 34px;
+}
+
+.pf-attr > .action-icon,
+.pf-attr > .sourcecado-card-glyph,
+.pf-attr-add .action-icon,
+.pf-attr-add .sourcecado-card-glyph {
+  color: var(--muted);
+}
+
+.pf-attr > a,
+.pf-attr > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.pf-attr > a {
+  text-decoration: none;
+}
+
+.pf-attr > a:hover {
+  color: var(--accent-deep);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.pf-attr.is-missing {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pf .pf-attr-add {
+  justify-self: start;
+  min-height: 34px;
+  margin-left: -6px;
+  padding: 0 8px 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-deep);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.pf .pf-attr-add .sourcecado-card-glyph,
+.pf .pf-attr-add .action-icon {
+  margin-right: 4px;
+}
+
+.pf .pf-attr-add:hover {
+  background: var(--raised);
+}
+
+.pf .person-details-editor {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.pf .person-details-conflicts,
+.pf .person-details-history,
+.pf .person-details-review {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.pf .person-details-history summary,
+.pf .enrichment-history summary {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pf .person-details-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pf .person-details-review table {
+  width: 100%;
+  table-layout: fixed;
+  overflow-wrap: anywhere;
+}
+
+/* --- tabs ---------------------------------------------------------------- */
+
+.pf-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.pf .pf-tabs [role="tab"] {
+  position: relative;
+  flex: none;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pf .pf-tabs [role="tab"]:hover {
+  background: var(--raised);
+}
+
+.pf .pf-tabs [role="tab"][aria-selected="true"] {
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.pf .pf-tabs [role="tab"] .sourcecado-card-glyph {
+  color: var(--muted);
+}
+
+.pf .pf-tabs [role="tab"][aria-selected="true"] .sourcecado-card-glyph {
+  color: var(--accent-deep);
+}
+
+.pf-tab-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: var(--raised);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.pf-panel {
+  display: grid;
+  gap: 24px;
+  padding-top: 20px;
+}
+
+.pf-panel > * {
+  min-width: 0;
+}
+
+.pf-panel.is-inactive {
+  display: none;
+}
+
+/* Sections inside a tab are flat, divided by hairlines, not boxed. */
+.pf .pf-panel .person-section,
+.pf .pf-panel .monid-card {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.pf .pf-panel > :not(:first-child) {
+  margin-top: 0;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.pf .pf-panel h2,
+.pf .monid-card h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.pf .pf-panel h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pf .person-section > h2 + *,
+.pf .person-section-heading-row + * {
+  margin-top: 10px;
+}
+
+.pf .person-section-heading-row {
+  min-height: 34px;
+}
+
+/* --- overview ------------------------------------------------------------ */
+
+.pf-glance {
+  display: grid;
+  gap: 8px;
+}
+
+.pf-attention-flag,
+.pf-why {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.pf-attention-flag {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.pf-why .sourcecado-card-glyph,
+.pf-attention-flag .sourcecado-card-glyph {
+  margin-top: 2px;
+}
+
+.pf-next-tasks,
+.pf-gaps {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf-next-tasks li,
+.pf-gaps li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 36px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pf-gaps li {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.pf-next-tasks li:last-child,
+.pf-gaps li:last-child {
+  border-bottom: 0;
+}
+
+.pf-next-tasks .sourcecado-card-glyph,
+.pf-gaps .sourcecado-card-glyph {
+  color: var(--muted);
+}
+
+.pf-next-task-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* --- outreach ------------------------------------------------------------ */
+
+.pf .person-outreach-recipient {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.person-outreach-fields {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+}
+
+.person-outreach-fields > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+}
+
+.person-outreach-fields dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.person-outreach-fields dt .sourcecado-card-glyph {
+  align-self: center;
+  color: var(--muted);
+}
+
+.person-outreach-fields dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pf .person-outreach-sent {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.person-outreach-sent-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--accent-deep);
+}
+
+.person-outreach-sent-head time {
+  color: var(--text);
+}
+
+.person-outreach-gmail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-height: 32px;
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.after-send-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+/* --- readable floor for older person-page pieces ----------------------- */
+
+.pf :is(.person-mail-source, .description-editor-meta, .person-empty,
+  .person-timeline-meta, .person-attention, .person-partial, .person-claim-state,
+  .person-claim-flag, .person-claim-refs, .person-handoff label,
+  .task-group-label h3, .task-group-label h4, .task-group-count, .task-details,
+  .task-meta, .task-due, .task-row-notice, .task-field label, .task-list-error p,
+  .task-conflict, .task-list-timezone, .person-outreach-compose label,
+  .person-outreach-version, .person-outreach-status, .person-outreach-account,
+  .person-followup-line, .person-mail-filters button) {
+  font-size: 13px;
+}
+
+.pf :is(.person-mail-source, .description-editor-meta, .person-empty,
+  .person-timeline-meta, .person-claim-refs, .person-handoff label,
+  .task-field label, .task-list-timezone, .person-outreach-compose label,
+  .person-outreach-version, .person-outreach-account, .person-followup-line,
+  .person-summary-card p, .person-section > p, .person-description-slot h3) {
+  color: var(--text);
+}
+
+.pf :is(.person-claim-state, .person-claim-flag) {
+  font-family: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.pf .person-outreach-status {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.pf .person-summary-grid {
+  margin-top: 0;
+}
+
+.pf .person-summary-card {
+  padding: 12px 14px;
+}
+
+.pf .person-summary-card h2 {
+  font-size: 14px;
+}
+
+.pf .pf-versions {
+  display: grid;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pf .pf-versions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pf .person-drive-search input {
+  min-height: 34px;
+  border-radius: 6px;
+}
+
+.pf .person-timeline-entry .pf-badge {
+  margin-top: 6px;
+}
+
+.pf .monid-card .monid-heading {
+  justify-content: flex-start;
+}
+
+/* --- narrow -------------------------------------------------------------- */
+
+@media (max-width: 767px) {
+  .pf-identity {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  .pf-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .pf-btn,
+  .pf-sequence select,
+  .pf .pf-attr-add,
+  .pf .person-section button,
+  .pf .person-outreach-actions button,
+  .pf .person-outreach-compose button,
+  .pf .person-outreach-start button,
+  .pf .description-actions button {
+    min-height: 44px;
+  }
+
+  .pf .pf-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .pf-sidebar {
+    padding: 12px;
+  }
+
+  .person-outreach-fields > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .person-outreach-gmail {
+    margin-left: 0;
+  }
+}

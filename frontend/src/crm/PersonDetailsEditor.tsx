@@ -1,5 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { Icon } from "../icons";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import { Icon, type IconName } from "../icons";
+import { Glyph, type GlyphName } from "../generative/ResultCard";
 import {
   getPerson,
   newOperationId,
@@ -67,18 +75,88 @@ function read(pid: string): Draft | null {
   }
 }
 
+/** Person File attributes, in sidebar order. A value speaks for itself. */
+const ATTRIBUTES: Array<{
+  field: PersonDetailField;
+  noun: string;
+  icon: { glyph: GlyphName } | { icon: IconName };
+}> = [
+  { field: "email", noun: "email", icon: { glyph: "mail" } },
+  { field: "phone", noun: "phone", icon: { glyph: "phone" } },
+  { field: "linkedin_url", noun: "LinkedIn", icon: { glyph: "link" } },
+  { field: "company", noun: "company", icon: { icon: "company" } },
+  { field: "title", noun: "role", icon: { icon: "role" } },
+];
+
+function safeLink(field: PersonDetailField, value: string): string | null {
+  if (field === "email") return `mailto:${value}`;
+  if (field === "phone") return `tel:${value.replace(/[^\d+]/g, "")}`;
+  if (field === "linkedin_url")
+    return /^https:\/\/[^\s]+$/.test(value) ? value : null;
+  return null;
+}
+
+function shownValue(field: PersonDetailField, value: string): string {
+  return field === "linkedin_url"
+    ? value.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")
+    : value;
+}
+
+function CopyValue({ value, noun }: { value: string; noun: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  const label = copied ? `Copied ${noun}` : `Copy ${noun}`;
+  return (
+    <button
+      type="button"
+      className="pf-icon-btn"
+      aria-label={label}
+      title={label}
+      onClick={() =>
+        void navigator.clipboard
+          ?.writeText(value)
+          .then(() => setCopied(true))
+          .catch(() => {
+            /* The value stays selectable as a link. */
+          })
+      }
+    >
+      <Icon name={copied ? "approve" : "copy"} />
+    </button>
+  );
+}
+
+export type PersonDetailsHandle = {
+  /** Open the editor, optionally focused on one field. Keeps an open draft. */
+  begin: (field?: PersonDetailField) => void;
+};
+
 /** One correction form serves the compact preview and durable Person File. */
-export function PersonDetailsEditor({
-  person,
-  onSaved,
-  history = [],
-  onBusyChange,
-}: {
-  person: PersonFile["person"];
-  onSaved: (person: PersonFile["person"]) => void;
-  history?: CrmChange[];
-  onBusyChange?: (busy: boolean) => void;
-}) {
+export const PersonDetailsEditor = forwardRef<
+  PersonDetailsHandle,
+  {
+    person: PersonFile["person"];
+    onSaved: (person: PersonFile["person"]) => void;
+    history?: CrmChange[];
+    onBusyChange?: (busy: boolean) => void;
+    /** The edit button when it lives outside (the Person File header); focus
+     *  returns there after an edit. Without it, the heading has its own. */
+    editTrigger?: RefObject<HTMLButtonElement | null>;
+  }
+>(function PersonDetailsEditor(
+  {
+    person,
+    onSaved,
+    history = [],
+    onBusyChange,
+    editTrigger,
+  },
+  ref,
+) {
   const pid = person.person_id;
   const [draft, setDraft] = useState<Draft | null>(() => read(pid));
   const [review, setReview] = useState<PersonCorrectionReview | null>(null);
@@ -92,6 +170,8 @@ export function PersonDetailsEditor({
   const wasEditing = useRef(Boolean(draft));
   const editor = useRef<HTMLElement>(null);
   const operation = useRef<{ fingerprint: string; id: string } | null>(null);
+  const focusField = useRef<PersonDetailField | null>(null);
+  const focusTrigger = () => (editTrigger?.current ?? editButton.current)?.focus();
   const controls = person.identity_field_controls as
     Record<string, { protected?: boolean }> | undefined;
   const conflicts = Array.isArray(person.identity_conflicts)
@@ -104,6 +184,9 @@ export function PersonDetailsEditor({
       }>)
     : [];
   const dirty = Boolean(draft && (draft.changed.length || draft.reason));
+  const protectedFields = Object.values(controls ?? {}).some(
+    (c) => c.protected,
+  );
   useEffect(() => {
     if (draft) {
       try {
@@ -115,15 +198,30 @@ export function PersonDetailsEditor({
   }, [draft, pid]);
   useEffect(() => {
     if (draft && !review)
-      editor.current?.querySelector<HTMLInputElement>("input")?.focus();
+      editor.current
+        ?.querySelector<HTMLInputElement>(
+          focusField.current ? `input[name="${focusField.current}"]` : "input",
+        )
+        ?.focus();
+    focusField.current = null;
   }, [Boolean(draft), Boolean(review)]);
   useEffect(() => {
     onBusyChange?.(busy);
   }, [busy, onBusyChange]);
   useEffect(() => {
-    if (!draft && wasEditing.current) editButton.current?.focus();
+    if (!draft && wasEditing.current) focusTrigger();
     wasEditing.current = Boolean(draft);
   }, [Boolean(draft)]);
+  useImperativeHandle(ref, () => ({
+    begin(field) {
+      if (draft) {
+        editor.current?.querySelector<HTMLInputElement>("input")?.focus();
+        return;
+      }
+      focusField.current = field ?? null;
+      begin();
+    },
+  }));
   function begin() {
     setUndoTarget(null);
     setDraft({
@@ -146,7 +244,7 @@ export function PersonDetailsEditor({
     setSourceRefs([]);
     setUndoTarget(null);
     operation.current = null;
-    editButton.current?.focus();
+    focusTrigger();
   }
   function changes(d: Draft) {
     return Object.fromEntries(
@@ -230,7 +328,7 @@ export function PersonDetailsEditor({
       setSourceRefs([]);
       onSaved(result.person);
       window.dispatchEvent(new Event("sourcecado:board-changed"));
-      editButton.current?.focus();
+      focusTrigger();
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Couldn’t save. Your edits are kept.",
@@ -290,36 +388,81 @@ export function PersonDetailsEditor({
       data-unsaved={dirty ? "true" : undefined}
       data-correction-busy={busy ? "true" : undefined}
     >
-      <div className="person-details-heading">
-        <h3>Details</h3>
-        {!draft ? (
-          <button type="button" ref={editButton} onClick={begin}>
+      <div className="pf-side-heading">
+        <h2>Details</h2>
+        {protectedFields ? (
+          <span
+            className="pf-badge"
+            title="Human corrections are protected from provider updates."
+          >
+            Human-edited
+          </span>
+        ) : null}
+        {/* Without an outside trigger (the Contacts preview), edit from here. */}
+        {!editTrigger && !draft ? (
+          <button
+            type="button"
+            ref={editButton}
+            className="pf-icon-btn pf-side-edit"
+            aria-label="Edit details"
+            title="Edit details"
+            onClick={begin}
+          >
             <Icon name="edit" />
-            Edit details
           </button>
         ) : null}
       </div>
       {!draft ? (
         <>
-          <dl className="person-details-contact">
-            {["email", "phone", "linkedin_url"].map((field) => {
-              const value = person[field];
-              return typeof value === "string" && value ? (
-                <div key={field}>
-                  <dt>{FIELDS.find((f) => f.field === field)?.label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ) : null;
+          <ul className="pf-attrs">
+            {ATTRIBUTES.map(({ field, noun, icon }) => {
+              const raw = person[field];
+              const value = typeof raw === "string" ? raw.trim() : "";
+              const mark =
+                "glyph" in icon ? (
+                  <Glyph name={icon.glyph} />
+                ) : (
+                  <Icon name={icon.icon} />
+                );
+              if (!value)
+                return (
+                  <li key={field} className="pf-attr is-missing">
+                    <button
+                      type="button"
+                      className="pf-attr-add"
+                      onClick={() => {
+                        focusField.current = field;
+                        begin();
+                      }}
+                    >
+                      {mark}
+                      Add {noun}
+                    </button>
+                  </li>
+                );
+              const href = safeLink(field, value);
+              return (
+                <li key={field} className="pf-attr">
+                  {mark}
+                  {href ? (
+                    <a
+                      href={href}
+                      {...(field === "linkedin_url"
+                        ? { target: "_blank", rel: "noreferrer" }
+                        : {})}
+                    >
+                      {shownValue(field, value)}
+                    </a>
+                  ) : (
+                    <span>{value}</span>
+                  )}
+                  {field === "email" ? (
+                    <CopyValue value={value} noun="email" />
+                  ) : null}
+                </li>
+              );
             })}
-          </dl>
-          {!person.email && !person.phone && !person.linkedin_url ? (
-            <p className="person-empty">No contact details saved.</p>
-          ) : null}
-          {Object.values(controls ?? {}).some((c) => c.protected) ? (
-            <p className="person-details-protection">
-              Human corrections are protected from provider updates.
-            </p>
-          ) : null}
+          </ul>
           {conflicts.length ? (
             <div className="person-details-conflicts">
               <h4>Provider differences to review</h4>
@@ -572,4 +715,4 @@ export function PersonDetailsEditor({
       )}
     </section>
   );
-}
+});

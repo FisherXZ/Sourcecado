@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { DescriptionEditor } from "./DescriptionEditor";
-import {PersonDetailsEditor} from "./crm/PersonDetailsEditor";
+import { PersonDetailsEditor, type PersonDetailsHandle } from "./crm/PersonDetailsEditor";
 import { FollowUpPanel } from "./FollowUpPanel";
 import { EnrichmentPanel } from "./EnrichmentPanel";
 import { OutreachPanel } from "./OutreachPanel";
@@ -9,101 +9,94 @@ import { MonidResearch } from "./MonidResearch";
 import { TaskList } from "./Tasks";
 import { MailActivity } from "./crm/MailActivity";
 import { SavedTaskDrafts, savedTaskDrafts } from "./crm/SavedTaskDrafts";
+import { SequencePill } from "./crm/SequencePill";
+import { Glyph, type GlyphName } from "./generative/ResultCard";
+import { Icon } from "./icons";
+import {
+  Artifacts,
+  BriefSummary,
+  LearnedAndConflicts,
+  SourceReferences,
+  Timeline,
+  VersionHistory,
+} from "./person/PersonBrief";
+import { DriveEvidence, MeetingEvidence } from "./person/PersonEvidence";
+import { NextTasks, useOpenTasks } from "./person/NextTasks";
+import { SuccessorHandoff } from "./person/SuccessorHandoff";
 
 import {
-  attachPersonMeeting,
-  attachPersonDriveEvidence,
   defaultPersonDescriptions,
   getPerson,
-  refreshReplies,
+  newOperationId,
   openPersonSourcingChat,
-  refreshPersonMeetings,
-  rejectPersonMeeting,
-  revertPerson,
-  savePersonHandoff,
-  searchPersonDriveEvidence,
+  refreshReplies,
   setPersonSequence,
-  type BriefClaim,
-  type BriefSourceRef,
-  type DriveEvidenceCandidate,
+  undoTaskChange,
   type PersonFile,
 } from "./api";
 
-const STATES = [
-  { id: "open", label: "Open" },
-  { id: "in_conversation", label: "In conversation" },
-  { id: "done", label: "Done" },
-] as const;
+const TABS = [
+  { id: "overview", label: "Overview", icon: "user" },
+  { id: "emails", label: "Emails", icon: "mail" },
+  { id: "tasks", label: "Tasks", icon: "review" },
+  { id: "notes", label: "Notes", icon: "doc" },
+  { id: "research", label: "Research", icon: "inspect" },
+  { id: "history", label: "History", icon: "clock" },
+] as const satisfies ReadonlyArray<{ id: string; label: string; icon: GlyphName }>;
 
-const CLAIM_STATE_LABEL: Record<string, string> = {
-  current: "Current",
-  stale: "Stale",
-  conflicting: "Conflicting",
-  missing: "Missing",
-};
+type TabId = (typeof TABS)[number]["id"];
 
-const EVIDENCE_LABEL: Record<string, string> = {
-  present: "Read",
-  partial: "Partly read",
-  unsupported: "Body unavailable",
-  missing: "Not reachable",
-  ambiguous: "Unattributed",
-  expired: "Aged out",
-  absent: "Not present",
-};
-
-const HANDOFF_FIELDS = [
-  { key: "who", label: "Who this is" },
-  { key: "wanted", label: "What we wanted" },
-  { key: "happened", label: "What happened" },
-  { key: "theyWant", label: "What they want" },
-] as const;
-
-const STALE_HANDOFF_LABELS: Record<string, string> = {
-  who: "Who this is",
-  wanted: "What we wanted",
-  happened: "What happened",
-  they_want: "What they want",
-};
-
-type HandoffDraft = Record<(typeof HANDOFF_FIELDS)[number]["key"], string>;
-
-/** One brief claim: what it says, how far it holds, and what backs it. */
-function Claim({ claim }: { claim: BriefClaim }) {
+function displayName(file: PersonFile): string {
+  const { first_name, last_name } = file.person;
   return (
-    <li className="person-claim">
-      <p className="person-claim-line">
-        <span className={`person-claim-state is-${claim.state}`}>
-          {CLAIM_STATE_LABEL[claim.state] ?? claim.state}
-        </span>
-        <span>{claim.text}</span>
-        {claim.truncated ? <span className="person-claim-flag">Truncated</span> : null}
-      </p>
-      <p className="person-claim-refs">
-        {claim.source_refs.length > 0
-          ? claim.source_refs.join(" · ")
-          : "No source reference"}
-      </p>
-    </li>
+    [first_name, last_name].filter(Boolean).join(" ") ||
+    (file.brief.who ?? "").split(",")[0]?.trim() ||
+    "Person"
   );
 }
 
-function ClaimList({ claims, empty }: { claims: BriefClaim[]; empty: string }) {
-  if (claims.length === 0) return <p className="person-empty">{empty}</p>;
+function subtitle(file: PersonFile): string {
+  const line = [file.person.title, file.person.company].filter(Boolean).join(" · ");
+  if (line) return line;
+  // Older people carry role and company only inside the brief's "who" line.
+  const who = file.brief.who ?? "";
+  const comma = who.indexOf(",");
+  return comma > 0 ? who.slice(comma + 1).trim() : "";
+}
+
+function initials(name: string): string {
   return (
-    <ul className="person-claims">
-      {claims.map((claim) => (
-        <Claim key={claim.id} claim={claim} />
-      ))}
-    </ul>
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((word) => word[0]?.toUpperCase() ?? "")
+      .join("") || "?"
   );
 }
 
-function sourceNote(source: BriefSourceRef): string {
-  const parts = [EVIDENCE_LABEL[source.evidence] ?? source.evidence];
-  parts.push(source.fresh ? "fresh" : "stale");
-  if (source.truncated) parts.push("truncated");
-  return parts.join(" · ");
+function emailCount(file: PersonFile): number {
+  return file.timeline.filter(
+    (event) =>
+      (event.kind === "send" && event.payload.sent) ||
+      event.payload.direction === "inbound" ||
+      event.payload.direction === "outbound",
+  ).length;
+}
+
+function TabPanel({ id, active, children }: { id: TabId; active: boolean; children: ReactNode }) {
+  // Every panel stays mounted so unsaved edits survive a tab switch.
+  return (
+    <div
+      role="tabpanel"
+      id={`pf-panel-${id}`}
+      aria-labelledby={`pf-tab-${id}`}
+      tabIndex={0}
+      className={`pf-panel${active ? "" : " is-inactive"}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function PersonFileView({
@@ -117,23 +110,16 @@ export function PersonFileView({
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [moving, setMoving] = useState<string | null>(null);
-  const [moveFailed, setMoveFailed] = useState(false);
+  const [moveFailed, setMoveFailed] = useState<string | null>(null);
+  const [undoChange, setUndoChange] = useState<string | null>(null);
   const [openingChat, setOpeningChat] = useState(false);
   const [chatFailed, setChatFailed] = useState(false);
-  const [meetingBusy, setMeetingBusy] = useState<string | null>(null);
-  const [meetingStatus, setMeetingStatus] = useState<string | null>(null);
-  const [driveQuery, setDriveQuery] = useState("");
-  const [driveResults, setDriveResults] = useState<DriveEvidenceCandidate[] | null>(null);
-  const [driveSearching, setDriveSearching] = useState(false);
-  const [driveBusy, setDriveBusy] = useState<string | null>(null);
-  const [driveStatus, setDriveStatus] = useState<string | null>(null);
-  const [handoff, setHandoff] = useState<HandoffDraft | null>(null);
-  const [handoffBusy, setHandoffBusy] = useState(false);
-  const [handoffStatus, setHandoffStatus] = useState<string | null>(null);
-  const handoffDirty = useRef(false);
-  const handoffPerson = useRef(personId);
   const [mailBusy, setMailBusy] = useState(false);
   const [mailStatus, setMailStatus] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabId>(followUpTaskId ? "tasks" : "overview");
+  const details = useRef<PersonDetailsHandle>(null);
+  const editButton = useRef<HTMLButtonElement>(null);
+  const openTasks = useOpenTasks(personId);
 
   useEffect(() => {
     let active = true;
@@ -154,30 +140,26 @@ export function PersonFileView({
     };
   }, [attempt, personId]);
 
-  // The form starts from what the brief already says: a saved handoff when
-  // the director wrote one, otherwise the draft generated from the claims.
   useEffect(() => {
-    if (!file) return;
-    if (handoffPerson.current !== file.person.person_id) {
-      handoffPerson.current = file.person.person_id;
-      handoffDirty.current = false;
-      setMailStatus(null);
-    }
-    if (handoffDirty.current) return;
-    const stored = file.brief.handoff;
-    setHandoff({
-      who: stored.who,
-      wanted: stored.wanted,
-      happened: stored.happened,
-      theyWant: stored.they_want,
-    });
-  }, [file]);
+    setMailStatus(null);
+    setUndoChange(null);
+    setMoveFailed(null);
+    setTab(followUpTaskId ? "tasks" : "overview");
+  }, [personId]);
+
+  useEffect(() => {
+    if (followUpTaskId) setTab("tasks");
+  }, [followUpTaskId]);
 
   useEffect(() => {
     const refresh = () => setAttempt((value) => value + 1);
     window.addEventListener("sourcecado:board-changed", refresh);
     return () => window.removeEventListener("sourcecado:board-changed", refresh);
   }, []);
+
+  async function reload() {
+    setFile(await getPerson(personId));
+  }
 
   async function refreshMail() {
     if (mailBusy) return;
@@ -199,9 +181,13 @@ export function PersonFileView({
   async function move(state: string) {
     if (moving) return;
     setMoving(state);
-    setMoveFailed(false);
+    setMoveFailed(null);
     try {
-      await setPersonSequence(personId, state);
+      // The server also returns the recorded change, which Undo reverses.
+      const result = (await setPersonSequence(personId, state)) as {
+        change?: { change_id?: string };
+      };
+      setUndoChange(result.change?.change_id ?? null);
       setFile(await getPerson(personId));
       // Tell any open view listening for this signal (Contacts, and this page
       // itself) to refetch, so its status and filter counts reflect the change
@@ -210,7 +196,24 @@ export function PersonFileView({
       // board-changed event ChatPage already dispatches for the same purpose.
       window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
     } catch {
-      setMoveFailed(true);
+      setMoveFailed("Couldn’t update the sequence state. Try again.");
+    } finally {
+      setMoving(null);
+    }
+  }
+
+  async function undoMove() {
+    if (moving || !undoChange) return;
+    setMoving("undo");
+    setMoveFailed(null);
+    try {
+      await undoTaskChange(personId, undoChange, { operationId: newOperationId() });
+      setUndoChange(null);
+      setFile(await getPerson(personId));
+      window.dispatchEvent(new CustomEvent("sourcecado:board-changed"));
+    } catch {
+      setUndoChange(null);
+      setMoveFailed("Couldn’t undo. The sequence state changed again.");
     } finally {
       setMoving(null);
     }
@@ -238,116 +241,29 @@ export function PersonFileView({
     }
   }
 
-  async function refreshMeetings() {
-    if (meetingBusy) return;
-    setMeetingBusy("refresh");
-    setMeetingStatus(null);
-    try {
-      const result = await refreshPersonMeetings(personId);
-      const calendar = result.sources.calendar?.status;
-      const granola = result.sources.granola?.status;
-      if (calendar === "ok" && granola === "ok") {
-        setMeetingStatus("Calendar and Granola refreshed.");
-      } else if (calendar === "failed" && granola === "ok") {
-        setMeetingStatus("Granola refreshed; Calendar is unavailable.");
-      } else if (calendar === "ok" && granola === "failed") {
-        setMeetingStatus("Calendar refreshed; Granola is unavailable.");
-      } else {
-        setMeetingStatus("Meeting evidence is unavailable from both sources.");
-      }
-      setFile(await getPerson(personId));
-    } catch {
-      setMeetingStatus("Couldn’t refresh meeting evidence. Try again.");
-    } finally {
-      setMeetingBusy(null);
-    }
-  }
-
-  async function reviewMeeting(evidenceId: string, action: "attach" | "reject") {
-    if (meetingBusy) return;
-    setMeetingBusy(`${action}:${evidenceId}`);
-    setMeetingStatus(null);
-    try {
-      if (action === "attach") {
-        await attachPersonMeeting(personId, evidenceId);
-      } else {
-        await rejectPersonMeeting(personId, evidenceId);
-      }
-      setFile(await getPerson(personId));
-    } catch {
-      setMeetingStatus(`Couldn’t ${action} this meeting. Refresh and try again.`);
-    } finally {
-      setMeetingBusy(null);
-    }
-  }
-
-  async function searchDrive(event: FormEvent) {
+  function onTabKey(event: KeyboardEvent<HTMLDivElement>) {
+    const index = TABS.findIndex((item) => item.id === tab);
+    const last = TABS.length - 1;
+    const next =
+      event.key === "ArrowRight" ? (index === last ? 0 : index + 1)
+        : event.key === "ArrowLeft" ? (index === 0 ? last : index - 1)
+          : event.key === "Home" ? 0
+            : event.key === "End" ? last
+              : -1;
+    if (next < 0) return;
     event.preventDefault();
-    if (driveSearching || !driveQuery.trim()) return;
-    setDriveSearching(true);
-    setDriveStatus(null);
-    try {
-      const result = await searchPersonDriveEvidence(personId, driveQuery.trim());
-      setDriveResults(result.files);
-    } catch {
-      setDriveResults(null);
-      setDriveStatus("Couldn’t search Drive. Try again.");
-    } finally {
-      setDriveSearching(false);
-    }
-  }
-
-  async function attachDrive(candidate: DriveEvidenceCandidate) {
-    if (driveBusy) return;
-    setDriveBusy(candidate.id);
-    setDriveStatus(null);
-    try {
-      await attachPersonDriveEvidence(personId, {
-        kind: "search_result",
-        fileId: candidate.id,
-      });
-      setFile(await getPerson(personId));
-      setDriveStatus(`Attached “${candidate.name ?? "Drive file"}” to this person.`);
-    } catch {
-      setDriveStatus("Couldn’t attach this Drive result. Try again.");
-    } finally {
-      setDriveBusy(null);
-    }
-  }
-
-  async function saveHandoff(event: FormEvent) {
-    event.preventDefault();
-    if (!file || !handoff || handoffBusy) return;
-    setHandoffBusy(true);
-    setHandoffStatus(null);
-    try {
-      const result = await savePersonHandoff(personId, {
-        ...handoff,
-        expectedVersion: file.brief.person_version,
-      });
-      handoffDirty.current = false;
-      setFile(await getPerson(personId));
-      setHandoffStatus(
-        result.saved
-          ? "Saved as a new person-file version."
-          : "No handoff changes to save.",
-      );
-    } catch {
-      setHandoffStatus(
-        "Couldn\u2019t save the handoff. Refresh the person file and try again.",
-      );
-    } finally {
-      setHandoffBusy(false);
-    }
+    setTab(TABS[next].id);
+    document.getElementById(`pf-tab-${TABS[next].id}`)?.focus();
   }
 
   if (failed && !file) {
     return (
-      <main className="route-page person-page">
+      <main className="route-page person-page pf">
         <h1>Person</h1>
         <section className="route-error" role="alert">
           <p>Couldn’t load this person file.</p>
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            <Icon name="refresh" />
             Retry
           </button>
           <a href="#/board">Back to Contacts</a>
@@ -358,482 +274,240 @@ export function PersonFileView({
 
   if (!file) {
     return (
-      <main className="route-page person-page" aria-busy="true">
+      <main className="route-page person-page pf" aria-busy="true">
         <h1>Person</h1>
         <p role="status">Loading person file…</p>
       </main>
     );
   }
 
-  const driveSources = (file.person.sources ?? []).filter(
-    (source) => source.fields?.provider === "Google Drive",
-  );
+  const name = displayName(file);
+  const role = subtitle(file);
+  // While a change is saving, the pill already shows where it is going.
+  const sequence = moving && moving !== "undo" ? moving : (file.person.sequence_state ?? "");
+  const descriptions = file.descriptions ?? defaultPersonDescriptions();
+  const reloadQuietly = () => {
+    void getPerson(personId).then(setFile);
+  };
+  const attention = [
+    ...new Set(
+      [
+        file.person.attention_reason,
+        ...(file.person.attention_reasons ?? []).map((reason) => reason.label),
+      ].filter((text): text is string => typeof text === "string" && text.trim() !== ""),
+    ),
+  ];
+  const counts: Partial<Record<TabId, number>> = {
+    emails: emailCount(file),
+    ...(openTasks ? { tasks: openTasks.length } : {}),
+  };
 
   return (
-    <main className="route-page person-page">
-      <header className="person-page-header">
-        <a className="person-back-link" href="#/board">← Contacts</a>
-        <p className="eyebrow">Person file</p>
-        <h1>{file.brief.who || "Person"}</h1>
-        {file.person.last_name_status === "hidden_by_apollo" ? (
-          <p>Surname hidden by Apollo. Enrich to verify the full name.</p>
-        ) : null}
-        {file.brief.why ? <p>{file.brief.why}</p> : null}
-        <div className="person-chat-action">
-          <button
-            type="button"
-            disabled={openingChat}
-            onClick={() => void openSourcingChat()}
-          >
-            {openingChat
-              ? "Opening sourcing chat…"
-              : file.sourcing_chat
-                ? "Open sourcing chat"
-                : "Create sourcing chat"}
-          </button>
-          {chatFailed ? (
-            <p role="alert">
-              Couldn’t open this person’s sourcing chat. Refresh the person file and try again.
-            </p>
-          ) : null}
+    <main className="route-page person-page pf">
+      <header className="pf-header">
+        <a className="pf-back" href="#/board" aria-label="Back to Contacts">
+          <Icon name="back" />
+          Contacts
+        </a>
+        <div className="pf-identity">
+          <span className="pf-avatar" aria-hidden="true">
+            {initials(name)}
+          </span>
+          <div className="pf-title">
+            <h1>{name}</h1>
+            {role || file.person.last_name_status === "hidden_by_apollo" ? (
+              <p className="pf-subtitle">
+                {role ? <span>{role}</span> : null}
+                {file.person.last_name_status === "hidden_by_apollo" ? (
+                  <span className="pf-badge is-warn" title="Enrich to verify the full name.">
+                    Surname hidden by Apollo
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
+          </div>
+          <div className="pf-actions">
+            <SequencePill
+              label="Sequence state"
+              value={sequence}
+              disabled={moving !== null}
+              onChange={(state) => void move(state)}
+              onUndo={undoChange ? () => void undoMove() : undefined}
+            />
+            <button
+              type="button"
+              className="pf-btn pf-btn-primary"
+              disabled={openingChat}
+              onClick={() => void openSourcingChat()}
+            >
+              <Icon name="chat" />
+              {openingChat ? "Opening chat…" : file.sourcing_chat ? "Open chat" : "Start chat"}
+            </button>
+            <button
+              ref={editButton}
+              type="button"
+              className="pf-btn"
+              onClick={() => details.current?.begin()}
+            >
+              <Icon name="edit" />
+              Edit details
+            </button>
+          </div>
         </div>
+        {chatFailed ? (
+          <p className="pf-alert" role="alert">
+            Couldn’t open this person’s sourcing chat. Refresh the person file and try again.
+          </p>
+        ) : null}
+        {moveFailed ? (
+          <p className="pf-alert" role="alert">
+            {moveFailed}
+          </p>
+        ) : null}
       </header>
-
-      <EnrichmentPanel personId={personId} />
-
-      <nav className="person-section-nav" aria-label="Person file sections">
-        {[["person-mail-heading", "Gmail activity"], ["person-tasks", "Tasks"],
-          ["person-description-heading", "Description"], ["person-handoff-heading", "Handoff"]].map(([id, label]) =>
-          <button key={id} type="button" onClick={() => {
-            const section = document.getElementById(id);
-            section?.scrollIntoView({ block: "start" });
-            section?.focus({ preventScroll: true });
-          }}>{label}</button>)}
-      </nav>
 
       {failed ? <p className="task-error" role="alert">Couldn’t refresh this person file. Previously loaded work is kept.</p> : null}
       {file.brief.partial ? (
         <p className="person-partial" role="status">
-          Partial brief. {file.brief.partial_sources.join(", ")} could not be
-          refreshed, so everything below is what we already had.
+          Partial brief. {file.brief.partial_sources.join(", ")} could not be refreshed.
         </p>
       ) : null}
 
-      <PersonDetailsEditor key={personId} person={file.person} history={file.crm_changes} onSaved={person=>setFile(current=>current?.person.person_id===person.person_id?{...current,person}:current)}/>
-      <section className="person-sequence" aria-labelledby="person-sequence-heading">
-        <h2 id="person-sequence-heading">Sequence state</h2>
-        <div className="person-sequence-actions">
-          {STATES.map((state) => {
-            const active = file.person.sequence_state === state.id;
-            return (
-              <button
-                key={state.id}
-                type="button"
-                className={`person-sequence-action ${active ? "is-active" : ""}`}
-                aria-pressed={active}
-                disabled={moving !== null}
-                onClick={() => void move(state.id)}
-              >
-                {moving === state.id ? "Updating…" : state.label}
-              </button>
-            );
-          })}
+      <div className="pf-layout">
+        <div className="pf-sidebar">
+          <PersonDetailsEditor
+            key={personId}
+            ref={details}
+            editTrigger={editButton}
+            person={file.person}
+            history={file.crm_changes}
+            onSaved={person => setFile(current => current?.person.person_id === person.person_id ? { ...current, person } : current)}
+          />
+          <EnrichmentPanel personId={personId} />
         </div>
-        {moveFailed ? (
-          <p className="person-sequence-error" role="alert">
-            Couldn’t update the sequence state. Try again.
-          </p>
-        ) : null}
-      </section>
 
-      <section className="person-section" aria-labelledby="person-description-heading">
-        <h2 id="person-description-heading" tabIndex={-1}>Description</h2>
-        <p>
-          Readable context about this person. Editing either field protects it
-          as your own until you let the assistant maintain it again.
-        </p>
-        {(() => {
-          const descriptions = file.descriptions ?? defaultPersonDescriptions();
-          const reload = () => {
-            void getPerson(personId).then(setFile);
-          };
-          return (
-            <div className="person-descriptions">
-              <div className="person-description-slot">
-                <h3>Short description</h3>
-                <DescriptionEditor
-                  personId={personId}
-                  description={descriptions.general}
-                  onSaved={reload}
-                  rows={2}
-                />
+        <div className="pf-main">
+          <div className="pf-tabs" role="tablist" aria-label="Person file sections" onKeyDown={onTabKey}>
+            {TABS.map((item) => {
+              const selected = item.id === tab;
+              const count = counts[item.id];
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  id={`pf-tab-${item.id}`}
+                  aria-selected={selected}
+                  aria-controls={`pf-panel-${item.id}`}
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => setTab(item.id)}
+                >
+                  <Glyph name={item.icon} />
+                  {item.label}
+                  {count ? <span className="pf-tab-count">{count}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <TabPanel id="overview" active={tab === "overview"}>
+            {file.brief.why || attention.length > 0 ? (
+              <div className="pf-glance">
+                {attention.length > 0 ? (
+                  <p className="pf-attention-flag">
+                    <Glyph name="info" />
+                    {attention.join(" · ")}
+                  </p>
+                ) : null}
+                {file.brief.why ? (
+                  <p className="pf-why">
+                    <Glyph name="keep" />
+                    {file.brief.why}
+                  </p>
+                ) : null}
               </div>
-              <div className="person-description-slot">
-                <h3>Detailed description</h3>
-                <DescriptionEditor
-                  personId={personId}
-                  description={descriptions.detailed}
-                  onSaved={reload}
-                  rows={6}
-                />
-              </div>
-            </div>
-          );
-        })()}
-      </section>
-
-      <div className="person-section person-tasks" id="person-tasks" tabIndex={-1}>
-        <TaskList personId={personId} heading="Tasks" />
-      </div>
-
-      {followUpTaskId ? (
-        <FollowUpPanel
-          key={followUpTaskId}
-          personId={personId}
-          taskId={followUpTaskId}
-          personVersion={
-            typeof file.person.version === "number" ? file.person.version : null
-          }
-          sessionId={file.sourcing_chat?.session_id ?? null}
-          onClose={() => {
-            window.location.hash = `#/people/${encodeURIComponent(personId)}`;
-            // Put focus back on the task's Prepare draft link.
-            requestAnimationFrame(() =>
-              document.getElementById(`task-prepare-${followUpTaskId}`)?.focus(),
-            );
-          }}
-        />
-      ) : null}
-
-      <div className="person-summary-grid">
-        <section className="person-summary-card" aria-labelledby="person-outcome-heading">
-          <h2 id="person-outcome-heading">Outcome</h2>
-          <p>{file.brief.outcome?.text ?? "None recorded"}</p>
-        </section>
-        <section className="person-summary-card" aria-labelledby="person-contact-heading">
-          <h2 id="person-contact-heading">Last contact</h2>
-          <p>
-            {file.brief.last_contact.direction
-              ? `${file.brief.last_contact.direction} · ${file.brief.last_contact.at ?? "date not recorded"}`
-              : "No outreach sent and no reply received"}
-          </p>
-          {file.brief.last_contact.follow_up.needed ? (
-            <p className="person-attention">{file.brief.last_contact.follow_up.reason === "reply_unanswered"
-              ? "Reply to review." : "Message attribution needs review."}</p>
-          ) : null}
-        </section>
-        <section className="person-summary-card" aria-labelledby="person-wants-heading">
-          <h2 id="person-wants-heading">What they want</h2>
-          <p>{file.brief.wants.text || "Not recorded"}</p>
-        </section>
-        <section className="person-summary-card" aria-labelledby="person-sources-heading">
-          <h2 id="person-sources-heading">Sources</h2>
-          <p>{file.brief.sources.join(", ") || "None recorded"}</p>
-          {file.brief.restricted_source_count > 0 ? (
-            <p className="person-attention">
-              {file.brief.restricted_source_count} restricted source withheld from
-              this brief.
-            </p>
-          ) : null}
-        </section>
-      </div>
-
-      <section className="person-section" aria-labelledby="person-handoff-heading">
-        <h2 id="person-handoff-heading" tabIndex={-1}>Successor handoff</h2>
-        <p>
-          {file.brief.handoff.generated
-            ? "Drafted from the claims below. Review each field, then save it as a version."
-            : file.brief.handoff.freshness_unknown
-              ? "Saved handoff. Its saved version was not recorded; review every field."
-              : `Saved at version ${file.brief.handoff.version}.`}
-        </p>
-        {file.brief.handoff.stale ? (
-          <p className="person-attention">
-            Review outdated fields:{" "}
-            {file.brief.handoff.stale_fields
-              .map((key) => STALE_HANDOFF_LABELS[key])
-              .filter((label): label is string => Boolean(label))
-              .map((label, index, labels) =>
-                index === labels.length - 1 && labels.length > 1
-                  ? `and ${label}`
-                  : label,
-              )
-              .join(file.brief.handoff.stale_fields.length > 2 ? ", " : " ")}.
-          </p>
-        ) : null}
-        <form className="person-handoff" onSubmit={(event) => void saveHandoff(event)}>
-          {HANDOFF_FIELDS.map((field) => (
-            <p key={field.key}>
-              <label htmlFor={`person-handoff-${field.key}`}>{field.label}</label>
-              <textarea
-                id={`person-handoff-${field.key}`}
+            ) : null}
+            <section className="person-section" aria-labelledby="person-description-heading">
+              <h2 id="person-description-heading" tabIndex={-1}>Description</h2>
+              <DescriptionEditor
+                personId={personId}
+                description={descriptions.general}
+                onSaved={reloadQuietly}
                 rows={2}
-                value={handoff?.[field.key] ?? ""}
-                onChange={(event) => {
-                  handoffDirty.current = true;
-                  setHandoff((current) =>
-                    current === null
-                      ? current
-                      : { ...current, [field.key]: event.target.value },
+              />
+            </section>
+            <NextTasks tasks={openTasks} onShowAll={() => setTab("tasks")} />
+            <OutreachPanel
+              personId={personId}
+              sessionId={file.sourcing_chat?.session_id ?? null}
+              recipient={typeof file.person.email === "string" ? file.person.email : null}
+              prepared={savedTaskDrafts(file)[0]}
+            />
+            <SavedTaskDrafts file={file} />
+          </TabPanel>
+
+          <TabPanel id="emails" active={tab === "emails"}>
+            <MailActivity events={file.timeline} gaps={file.person.knowledge_gaps ?? []}
+              sync={file.mail_sync} analysis={file.mail_analysis}
+              followUp={file.person.follow_up} onRefresh={() => void refreshMail()}
+              refreshing={mailBusy} refreshStatus={mailStatus} />
+          </TabPanel>
+
+          <TabPanel id="tasks" active={tab === "tasks"}>
+            {followUpTaskId ? (
+              <FollowUpPanel
+                key={followUpTaskId}
+                personId={personId}
+                taskId={followUpTaskId}
+                personVersion={typeof file.person.version === "number" ? file.person.version : null}
+                sessionId={file.sourcing_chat?.session_id ?? null}
+                onClose={() => {
+                  window.location.hash = `#/people/${encodeURIComponent(personId)}`;
+                  // Put focus back on the task's Prepare draft link.
+                  requestAnimationFrame(() =>
+                    document.getElementById(`task-prepare-${followUpTaskId}`)?.focus(),
                   );
                 }}
               />
-            </p>
-          ))}
-          <button type="submit" disabled={handoffBusy}>
-            {handoffBusy ? "Saving\u2026" : "Save handoff version"}
-          </button>
-        </form>
-        {handoffStatus ? <p role="status">{handoffStatus}</p> : null}
-      </section>
+            ) : null}
+            <div className="person-tasks" id="person-tasks" tabIndex={-1}>
+              <TaskList personId={personId} heading="Tasks" />
+            </div>
+          </TabPanel>
 
-      <section className="person-section" aria-labelledby="person-learned-heading">
-        <h2 id="person-learned-heading">Learned</h2>
-        <ClaimList claims={file.brief.evidence} empty="Nothing filed yet." />
-        {file.brief.omitted > 0 ? (
-          <p className="person-empty">
-            {file.brief.omitted} older record(s) are not in this brief. The full
-            timeline is below.
-          </p>
-        ) : null}
-      </section>
+          <TabPanel id="notes" active={tab === "notes"}>
+            <section className="person-section" aria-labelledby="person-detailed-description-heading">
+              <h2 id="person-detailed-description-heading">Detailed description</h2>
+              <DescriptionEditor
+                personId={personId}
+                description={descriptions.detailed}
+                onSaved={reloadQuietly}
+                rows={6}
+              />
+            </section>
+            <SuccessorHandoff personId={personId} file={file} onSaved={setFile} />
+          </TabPanel>
 
-      {file.brief.conflicts.length > 0 ? (
-        <section className="person-section" aria-labelledby="person-conflicts-heading">
-          <h2 id="person-conflicts-heading">Conflicts</h2>
-          <ClaimList claims={file.brief.conflicts} empty="None." />
-        </section>
-      ) : null}
+          <TabPanel id="research" active={tab === "research"}>
+            <MonidResearch personId={personId} sessionId={file.sourcing_chat?.session_id ?? null} />
+            <MeetingEvidence personId={personId} evidence={file.meeting_evidence} onChanged={reload} />
+            <DriveEvidence personId={personId} sources={file.person.sources ?? []} onChanged={reload} />
+            <SourceReferences brief={file.brief} />
+            <Artifacts brief={file.brief} />
+          </TabPanel>
 
-      <section className="person-section" aria-labelledby="person-gaps-heading">
-        <h2 id="person-gaps-heading">Knowledge gaps</h2>
-        <ClaimList claims={file.brief.gaps} empty="Nothing is open." />
-      </section>
-
-      <section className="person-section" aria-labelledby="person-artifacts-heading">
-        <h2 id="person-artifacts-heading">Artifacts</h2>
-        <ClaimList claims={file.brief.artifacts} empty="Nothing filed yet." />
-      </section>
-
-      <OutreachPanel
-        personId={personId}
-        sessionId={file.sourcing_chat?.session_id ?? null}
-        recipient={
-          typeof file.person.email === "string" ? file.person.email : null
-        }
-        prepared={savedTaskDrafts(file)[0]}
-      />
-      <SavedTaskDrafts file={file} />
-      <MonidResearch personId={personId} sessionId={file.sourcing_chat?.session_id ?? null} />
-
-      <MailActivity events={file.timeline} gaps={file.person.knowledge_gaps ?? []}
-        sync={file.mail_sync} analysis={file.mail_analysis}
-        followUp={file.person.follow_up} onRefresh={() => void refreshMail()}
-        refreshing={mailBusy} refreshStatus={mailStatus} />
-
-      <section className="person-section" aria-labelledby="person-meetings-heading">
-        <div className="person-section-heading-row">
-          <h2 id="person-meetings-heading">Meeting evidence</h2>
-          <button
-            type="button"
-            disabled={meetingBusy !== null}
-            onClick={() => void refreshMeetings()}
-          >
-            {meetingBusy === "refresh" ? "Refreshing…" : "Refresh meeting evidence"}
-          </button>
+          <TabPanel id="history" active={tab === "history"}>
+            <BriefSummary brief={file.brief} />
+            <LearnedAndConflicts brief={file.brief} />
+            <Timeline events={file.timeline} />
+            <VersionHistory
+              personId={personId}
+              file={file}
+              onReverted={() => setAttempt((value) => value + 1)}
+            />
+          </TabPanel>
         </div>
-        {meetingStatus ? <p role="status">{meetingStatus}</p> : null}
-        {(file.meeting_evidence?.attached ?? []).length === 0 ? (
-          <p className="person-empty">No attached meetings yet.</p>
-        ) : (
-          <div className="person-timeline">
-            {(file.meeting_evidence?.attached ?? []).map((meeting) => (
-              <article key={meeting.evidence_id} className="person-timeline-entry">
-                <p className="person-timeline-meta">
-                  {meeting.source_ref.provider} · attached evidence
-                </p>
-                <p>{meeting.title}</p>
-                {meeting.starts_at ? <p>{meeting.starts_at}</p> : null}
-                <p>{meeting.notes ? "Notes attached (untrusted evidence)." : "Meeting notes missing."}</p>
-              </article>
-            ))}
-          </div>
-        )}
-        {(file.meeting_evidence?.proposed ?? []).length > 0 ? (
-          <div className="person-meeting-proposals">
-            <h3>Needs review</h3>
-            {(file.meeting_evidence?.proposed ?? []).map((meeting) => (
-              <article key={meeting.evidence_id} className="person-timeline-entry">
-                <p className="person-timeline-meta">{meeting.source_ref.provider}</p>
-                <p>{meeting.title}</p>
-                <p>
-                  {meeting.match_reason === "name_only"
-                    ? "Name-only match — review required"
-                    : "Multiple or conflicting matches — review required"}
-                </p>
-                <div className="person-meeting-actions">
-                  <button
-                    type="button"
-                    disabled={meetingBusy !== null}
-                    aria-label={`Attach ${meeting.title}`}
-                    onClick={() => void reviewMeeting(meeting.evidence_id, "attach")}
-                  >
-                    Attach
-                  </button>
-                  <button
-                    type="button"
-                    disabled={meetingBusy !== null}
-                    aria-label={`Reject ${meeting.title}`}
-                    onClick={() => void reviewMeeting(meeting.evidence_id, "reject")}
-                  >
-                    Reject
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : null}
-      </section>
-
-      <section className="person-section" aria-labelledby="person-drive-evidence-heading">
-        <h2 id="person-drive-evidence-heading">Drive evidence</h2>
-        {driveSources.length === 0 ? (
-          <p className="person-empty">No Drive evidence attached yet.</p>
-        ) : (
-          <div className="person-timeline">
-            {driveSources.map((source) => (
-              <article key={source.id} className="person-timeline-entry">
-                <p className="person-timeline-meta">
-                  Google Drive · {String(source.fields?.extraction_status ?? "metadata_only")}
-                </p>
-                <p>{String(source.fields?.title ?? "Drive file")}</p>
-                {source.fields?.out_of_scope ? (
-                  <p role="status">Outside the browsed folder — review before relying on it.</p>
-                ) : null}
-                {source.fields?.sensitivity === "sensitive" ? (
-                  <p role="status">Flagged sensitive — review before sharing.</p>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        )}
-
-        <form className="person-drive-search" onSubmit={(event) => void searchDrive(event)}>
-          <label htmlFor="person-drive-query">Search Drive</label>
-          <input
-            id="person-drive-query"
-            type="text"
-            value={driveQuery}
-            onChange={(event) => setDriveQuery(event.target.value)}
-            placeholder="File name or contents"
-          />
-          <button type="submit" disabled={driveSearching || !driveQuery.trim()}>
-            {driveSearching ? "Searching…" : "Search Drive"}
-          </button>
-        </form>
-        {driveStatus ? <p role="status">{driveStatus}</p> : null}
-        {driveResults !== null && driveResults.length === 0 ? (
-          <p className="person-empty">No Drive results for that search.</p>
-        ) : null}
-        {driveResults !== null && driveResults.length > 0 ? (
-          <div className="person-timeline">
-            {driveResults.map((candidate) => (
-              <article key={candidate.id} className="person-timeline-entry">
-                <p className="person-timeline-meta">{candidate.mimeType ?? "Drive file"}</p>
-                <p>{candidate.name ?? "Untitled Drive file"}</p>
-                <div className="person-drive-actions">
-                  <button
-                    type="button"
-                    disabled={driveBusy !== null}
-                    aria-label={`Attach ${candidate.name ?? "Drive file"}`}
-                    onClick={() => void attachDrive(candidate)}
-                  >
-                    {driveBusy === candidate.id ? "Attaching…" : "Attach to person"}
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : null}
-      </section>
-
-      <section className="person-section" aria-labelledby="person-source-refs-heading">
-        <h2 id="person-source-refs-heading">Source references</h2>
-        {file.brief.source_refs.length === 0 ? (
-          <p className="person-empty">No sources recorded.</p>
-        ) : (
-          <ul className="person-claims">
-            {file.brief.source_refs.map((source) => (
-              <li key={source.id} className="person-claim">
-                <p className="person-claim-line">
-                  <span
-                    className={`person-claim-state is-${source.fresh ? "current" : "stale"}`}
-                  >
-                    {source.provider}
-                  </span>
-                  <span>{source.title ?? source.locator ?? source.id}</span>
-                </p>
-                <p className="person-claim-refs">
-                  {source.id} · {sourceNote(source)} · seen {source.observed_at}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {file.versions && file.versions.length > 0 ? (
-        <section className="person-section" aria-labelledby="person-history-heading">
-          <h2 id="person-history-heading">Version history</h2>
-          <p>
-            {typeof file.person.version === "number"
-              ? `Current version ${file.person.version}`
-              : "Prior versions"}
-          </p>
-          <ol>
-            {file.versions.map((entry) => {
-              const current = file.person.version;
-              const canRevert =
-                typeof current === "number" && entry.version < current;
-              return (
-                <li key={entry.version}>
-                  <span>Version {entry.version}</span>
-                  {canRevert ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void revertPerson(personId, {
-                          toVersion: entry.version,
-                          expectedVersion: current,
-                          rationaleSummary: `Restore version ${entry.version} from person history.`,
-                        }).then(() => setAttempt((value) => value + 1))
-                      }
-                    >
-                      Revert to version {entry.version}
-                    </button>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ol>
-        </section>
-      ) : null}
-
-      <section className="person-section" aria-labelledby="person-timeline-heading">
-        <h2 id="person-timeline-heading">Timeline</h2>
-        {file.timeline.length === 0 ? (
-          <p className="person-empty">No sourcing activity yet.</p>
-        ) : (
-          <div className="person-timeline">
-            {file.timeline.map((event) => (
-              <article key={event.event_id} className="person-timeline-entry">
-                <p className="person-timeline-meta">{event.source} · {event.kind}</p>
-                <p>{event.summary}</p>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
+      </div>
     </main>
   );
 }

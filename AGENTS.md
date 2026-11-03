@@ -4,7 +4,7 @@
 
 Sourcecado is a local-first desktop assistant for a Codeology sourcing director. The current spring proves the complete job for one operator on one machine: name a target, find people, prepare tailored outreach, deliberately enrich when needed, approve and send, keep conversations moving, and leave a person file another officer can pick up.
 
-Chat is home. Contacts is the assistant's operating picture for active sequences. The person file is the durable domain object.
+Chat is home. Contacts is the assistant's operating picture for saved people and their sequences. The person file is the durable domain object.
 
 The active runtime is `backend/` (Python) and `frontend/` (React and Tauri). The previous hosted Next.js/Postgres application is preserved in `archive/hosted-web/` and must not be treated as the current implementation.
 
@@ -13,7 +13,7 @@ The active runtime is `backend/` (Python) and `frontend/` (React and Tauri). The
 - Build the local Sourcecado desktop product: Python/FastAPI backend plus React/Vite/Tauri UI.
 - Optimize for one sourcing director now while keeping person files intelligible to a later officer.
 - A sequence is a person being worked through Open, In conversation, and Done. A company is context, not a deal.
-- A kept person remains durable before outreach. The Contacts people table shows active sequences in Open, In conversation, and Done; its Tasks view includes all live saved people. Saving a task leaves sequence membership unchanged.
+- A kept person remains durable before outreach. The Contacts people table shows every live saved person: Open, In conversation, Done, or Not started (kept without a sequence). Its Tasks view includes the same people. Saving a task leaves sequence membership unchanged.
 - Apollo search may return candidates without an email. Enrichment is manual and credit-aware.
 - Sending is allowed only after explicit review and approval in Sourcecado. Never add auto-send.
 - Keep Gmail, Drive, Calendar, Granola, Apollo, and web work attached to the relevant person and run ledger.

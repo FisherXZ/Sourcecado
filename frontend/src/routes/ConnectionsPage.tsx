@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   checkConnectors,
@@ -8,7 +8,12 @@ import {
   type Connector,
 } from "../api";
 import { connectorStatus } from "../connectorStatus";
-import { MonidConnection } from "../MonidConnection";
+import {
+  MonidConnection,
+  monidRowStatus,
+  useMonidStatus,
+  type MonidState,
+} from "../MonidConnection";
 
 type PageState =
   | { status: "loading" }
@@ -56,16 +61,40 @@ function ConnectorRow({ connector }: { connector: Connector }) {
   );
 }
 
+/** Monid is not a backend connector, so its row is built here with the same parts. */
+function MonidRow({ monid }: { monid: MonidState }) {
+  const status = monidRowStatus(monid);
+  return (
+    <li>
+      <a
+        className="connection-row"
+        href="#/connections/monid"
+        aria-label={`Monid sources, ${status.label}`}
+      >
+        <span className="connection-mark" aria-hidden="true">MO</span>
+        <span className="connection-row-copy">
+          <strong>Monid sources</strong>
+          <span>{monid.status?.workspace || "Paid research sources"}</span>
+        </span>
+        <span className={`connection-status tone-${status.tone}`}>{status.label}</span>
+      </a>
+    </li>
+  );
+}
+
 function ConnectorGroup({
   id,
   title,
   connectors,
+  extra,
 }: {
   id: string;
   title: string;
   connectors: Connector[];
+  extra?: ReactNode;
 }) {
-  if (!connectors.length) return null;
+  const count = connectors.length + (extra ? 1 : 0);
+  if (!count) return null;
   const headingId = `${id}-connections-heading`;
   return (
     <section
@@ -75,12 +104,13 @@ function ConnectorGroup({
     >
       <div className="connection-group-heading">
         <h2 id={headingId}>{title}</h2>
-        <span>{connectors.length}</span>
+        <span>{count}</span>
       </div>
       <ul>
         {connectors.map((connector) => (
           <ConnectorRow key={connector.id} connector={connector} />
         ))}
+        {extra}
       </ul>
     </section>
   );
@@ -115,7 +145,7 @@ function LoadingCatalog() {
   );
 }
 
-function ConnectionsCatalog({ connectors }: { connectors: Connector[] }) {
+function ConnectionsCatalog({ connectors, monid }: { connectors: Connector[]; monid: MonidState }) {
   const [query, setQuery] = useState("");
   const matching = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -129,6 +159,15 @@ function ConnectionsCatalog({ connectors }: { connectors: Connector[] }) {
   }, [connectors, query]);
   const connected = matching.filter((connector) => connector.catalogGroup === "connected");
   const available = matching.filter((connector) => connector.catalogGroup === "available");
+  const needle = query.trim().toLocaleLowerCase();
+  const monidShown =
+    !needle ||
+    ["Monid sources", "Paid research sources", monid.status?.workspace ?? ""]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(needle);
+  const monidRow = monidShown ? <MonidRow monid={monid} /> : null;
+  const monidConnected = monidRowStatus(monid).connected;
 
   return (
     <div className="connections-catalog">
@@ -142,7 +181,7 @@ function ConnectionsCatalog({ connectors }: { connectors: Connector[] }) {
           onChange={(event) => setQuery(event.target.value)}
         />
       </div>
-      {matching.length === 0 ? (
+      {matching.length === 0 && !monidShown ? (
         <section className="route-empty connection-empty">
           <h2>No connectors match</h2>
           <p>Try another product or account name.</p>
@@ -152,8 +191,18 @@ function ConnectionsCatalog({ connectors }: { connectors: Connector[] }) {
         </section>
       ) : (
         <div className="connection-groups">
-          <ConnectorGroup id="connected" title="Connected" connectors={connected} />
-          <ConnectorGroup id="available" title="Available" connectors={available} />
+          <ConnectorGroup
+            id="connected"
+            title="Connected"
+            connectors={connected}
+            extra={monidConnected ? monidRow : null}
+          />
+          <ConnectorGroup
+            id="available"
+            title="Available"
+            connectors={available}
+            extra={monidConnected ? null : monidRow}
+          />
         </div>
       )}
     </div>
@@ -363,6 +412,7 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
   const [interaction, setInteraction] = useState<ConnectorInteraction | null>(null);
   const [confirmGoogleDisconnect, setConfirmGoogleDisconnect] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const monid = useMonidStatus();
 
   const loadSequence = useRef(0);
 
@@ -472,8 +522,6 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
           <p>Manage the sources Sourcecado can use for research and review-ready work.</p>
         </div>
       </header>
-      {connectorId === "monid" || (!connectorId && state.status === "loaded") ? <MonidConnection /> : null}
-
       {state.status === "loading" && <LoadingCatalog />}
       {state.status === "failed" && (
         <section className="route-error" role="alert">
@@ -486,7 +534,8 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
       )}
       {state.status === "loaded" && (
         <div className="connections-layout">
-          <ConnectionsCatalog connectors={state.connectors} />
+          <ConnectionsCatalog connectors={state.connectors} monid={monid} />
+          {connectorId === "monid" ? <MonidConnection {...monid} /> : null}
           {connectorId && selectedConnector && (
             <ConnectorDetail
               connector={selectedConnector}

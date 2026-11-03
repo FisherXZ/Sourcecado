@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OutreachPanel } from "../src/OutreachPanel";
@@ -52,6 +52,7 @@ function panel(overrides: Record<string, unknown> = {}) {
 
 async function composeAndDraft() {
   panel();
+  fireEvent.click(screen.getByRole("button", { name: "Draft email" }));
   fireEvent.change(screen.getByLabelText("Subject"), {
     target: { value: "Thursday?" },
   });
@@ -97,6 +98,37 @@ describe("Outreach panel", () => {
 
     expect(screen.getByText("ada@analytic.example")).toBeTruthy();
     expect(screen.queryByLabelText("To")).toBeNull();
+  });
+
+  it("starts with one Draft email button that reveals the form with Subject focused", () => {
+    panel();
+
+    expect(screen.queryByLabelText("Subject")).toBeNull();
+    expect(screen.queryByLabelText("Message")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create Gmail draft" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Draft email" }));
+
+    expect(screen.getByLabelText("Subject")).toHaveFocus();
+    expect(screen.getByLabelText("Message")).toBeInTheDocument();
+    expect(screen.getByText("ada@analytic.example")).toBeTruthy();
+    expect(api.createOutreachDraft).not.toHaveBeenCalled();
+  });
+
+  it("collapses on Cancel only while both fields are empty", () => {
+    panel();
+    fireEvent.click(screen.getByRole("button", { name: "Draft email" }));
+
+    fireEvent.change(screen.getByLabelText("Subject"), { target: { value: "Thursday?" } });
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.getByLabelText("Subject")).toHaveValue("Thursday?");
+
+    fireEvent.change(screen.getByLabelText("Subject"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByLabelText("Subject")).toBeNull();
+    expect(screen.getByRole("button", { name: "Draft email" })).toHaveFocus();
+    expect(api.createOutreachDraft).not.toHaveBeenCalled();
   });
 
   it("creates a draft and shows it as not sent", async () => {
@@ -162,11 +194,18 @@ describe("Outreach panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Allow once and send" }));
 
-    await screen.findByText("Sent");
+    const card = (await screen.findByText("Sent")).closest(".person-outreach-sent") as HTMLElement;
     expect(api.decideApproval).toHaveBeenCalledWith("send_1", "allow");
     expect(api.decideApproval).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("msg_1")).toBeTruthy();
-    expect(screen.getByText("thread_1")).toBeTruthy();
+    // Recipient and the reviewed subject sit in one aligned grid.
+    expect(within(card).getByText("ada@analytic.example")).toBeInTheDocument();
+    expect(within(card).getByText("Thursday?")).toBeInTheDocument();
+    // Raw Gmail ids stay off screen; the Open in Gmail link carries them.
+    expect(screen.queryByText("msg_1")).toBeNull();
+    const gmail = screen.getByRole("link", { name: "Open in Gmail" });
+    expect(gmail).toHaveAttribute("href", "https://mail.google.com/mail/u/0/#all/thread_1");
+    expect(gmail).toHaveAttribute("title", expect.stringContaining("msg_1"));
+    expect(gmail).toHaveAttribute("title", expect.stringContaining("thread_1"));
   });
 
   it("reports a refused send without claiming anything went out", async () => {

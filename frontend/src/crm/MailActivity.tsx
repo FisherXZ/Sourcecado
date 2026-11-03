@@ -1,8 +1,11 @@
 import { useState } from "react";
 import type { FollowUp, MailAnalysisState, MailSyncState, PersonFile, PersonKnowledgeGap } from "../api";
 import { MailFreshness } from "./MailFreshness";
+import { Icon, type IconName } from "../icons";
 
-const FILTERS = [{ id: "all", label: "All" }, { id: "inbound", label: "Incoming" }, { id: "outbound", label: "Outgoing" }] as const;
+const FILTERS: ReadonlyArray<{ id: "all" | "inbound" | "outbound"; label: string; icon: IconName }> = [
+  { id: "all", label: "All", icon: "draft" }, { id: "inbound", label: "Incoming", icon: "reply" },
+  { id: "outbound", label: "Outgoing", icon: "send" }];
 
 function gmailUrl(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -48,7 +51,7 @@ export function MailActivity({ events, gaps, sync, analysis, followUp, onRefresh
     <div className="person-section-heading-row">
       <h2 id="person-mail-heading" tabIndex={-1}>Gmail activity</h2>
       {onRefresh ? <button type="button" disabled={refreshing} onClick={onRefresh}>
-        {refreshing ? "Checking Gmail…" : "Refresh Gmail"}
+        <Icon name="refresh" />{refreshing ? "Checking Gmail…" : "Refresh Gmail"}
       </button> : null}
     </div>
     {refreshStatus ? <p role="status">{refreshStatus}</p> : null}
@@ -60,7 +63,7 @@ export function MailActivity({ events, gaps, sync, analysis, followUp, onRefresh
     </p>
     <div className="person-mail-filters" role="group" aria-label="Activity direction">
       {FILTERS.map(option => <button key={option.id} type="button"
-        aria-pressed={filter === option.id} onClick={() => setFilter(option.id)}>{option.label}</button>)}
+        aria-pressed={filter === option.id} onClick={() => setFilter(option.id)}><Icon name={option.icon} />{option.label}</button>)}
     </div>
     {visible.length === 0 ? <p className="person-empty">
       {filter === "all" ? "No messages collected yet." : `No ${filter === "inbound" ? "incoming" : "outgoing"} messages collected.`}
@@ -76,7 +79,7 @@ export function MailActivity({ events, gaps, sync, analysis, followUp, onRefresh
         {message.bodyState === "missing" || message.bodyState === "partial" ? <p className="person-timeline-meta">Body unavailable or incomplete.</p> : null}
         <p className="person-timeline-meta">
           {message.url ? <a href={message.url} target="_blank" rel="noreferrer"
-            aria-label={`Open Gmail thread: ${message.subject}`}>Open in Gmail ↗</a> : "Gmail link unavailable"}
+            aria-label={`Open Gmail thread: ${message.subject}`}><Icon name="external" />Open in Gmail</a> : "Gmail link unavailable"}
         </p>
         <details className="person-mail-source"><summary>Source details</summary>
           <p>Thread: {message.thread}{message.message ? ` · Message: ${message.message}` : ""}</p>

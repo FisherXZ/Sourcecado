@@ -16,6 +16,7 @@ const TASK = { task_id: "task_saved", title: "Check the proposal", due_date: "20
 
 async function draftAndReview() {
   render(<OutreachPanel personId="person_1" sessionId="session_1" recipient="ada@example.test" />);
+  fireEvent.click(screen.getByRole("button", { name: "Draft email" }));
   fireEvent.change(screen.getByLabelText("Subject"), { target: { value: "Hello" } });
   fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Hi Ada" } });
   fireEvent.click(screen.getByRole("button", { name: "Create Gmail draft" }));

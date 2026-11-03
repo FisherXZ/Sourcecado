@@ -41,9 +41,11 @@ export function MonidResearch({personId,sessionId}:{personId:string;sessionId:st
   }
   const sources = result?.output?.results ?? (result?.output?.title ? [result.output] : []);
   return <section className="person-section monid-card" aria-labelledby="monid-research-heading">
-    <h2 id="monid-research-heading">Monid research</h2>
-    <p>Research stays attached to this person as untrusted source material. It does not correct identity or send outreach.</p>
-    <a href="#/connections/monid">Configure Monid sources</a>
+    <div className="monid-heading">
+      <h2 id="monid-research-heading">Monid research</h2>
+      <span className="pf-badge is-warn" title="Research is source material only. It never corrects identity or sends outreach.">Untrusted</span>
+      <a className="monid-settings" href="#/connections/monid"><Icon name="edit"/>Configure Monid sources</a>
+    </div>
     <form onSubmit={event=>{event.preventDefault();void run(async()=>{const found=await monidRequest(`monid/catalog?q=${encodeURIComponent(catalogQuery)}&limit=5`);setItems(found.items);});}}>
       <label className="task-field">Search Monid catalog<input value={catalogQuery} maxLength={200} disabled={busy} onChange={event=>setCatalogQuery(event.currentTarget.value)}/></label>
       <button type="submit" disabled={busy}><Icon name="draft"/>Find Monid sources</button>
@@ -51,10 +53,10 @@ export function MonidResearch({personId,sessionId}:{personId:string;sessionId:st
     {items?.length===0?<p role="status">No catalog sources match.</p>:null}
     {items?.map((item,index)=><div className="monid-endpoint" key={`${item.provider}:${item.endpoint}:${index}`}>
       <strong>{item.displayName||`${item.provider} ${item.endpoint}`}</strong><span>{item.provider} · {item.endpoint}</span>
-      {item.supported?<button type="button" disabled={busy||Boolean(quote)} onClick={()=>{setSelected(item);setResult(null);setSavedAt(null);}}><Icon name="reply"/>Use {item.provider} {item.endpoint}</button>:<span>Catalog only — not executable in this version</span>}
+      {item.supported?<button type="button" disabled={busy||Boolean(quote)} onClick={()=>{setSelected(item);setResult(null);setSavedAt(null);}}><Icon name="reply"/>Use {item.provider} {item.endpoint}</button>:<span className="pf-badge">Catalog only</span>}
     </div>)}
     {selected&&!result?<>
-      {!sessionId?<p>Open this person’s sourcing chat before reviewing a lookup.</p>:<form onSubmit={event=>{event.preventDefault();void run(async()=>{
+      {!sessionId?<p>Open this person’s sourcing chat to review a lookup.</p>:<form onSubmit={event=>{event.preventDefault();void run(async()=>{
         const prepared=await monidRequest(`people/${encodeURIComponent(personId)}/monid/quote`,"POST",{session_id:sessionId,provider:selected.provider,endpoint:selected.endpoint,
           input:{body:{query,numResults:count}},max_cost_usd:maximum});setQuote(prepared.quote);
       });}}>
@@ -70,7 +72,7 @@ export function MonidResearch({personId,sessionId}:{personId:string;sessionId:st
       <h3 ref={reviewHeading} tabIndex={-1}>Review one Monid lookup</h3>
       <dl><dt>Provider</dt><dd>{quote.provider}</dd><dt>Endpoint</dt><dd>{quote.endpoint}</dd><dt>Quoted cost</dt><dd>USD {quote.quoted_cost_usd}</dd><dt>Maximum</dt><dd>USD {quote.max_cost_usd}</dd></dl>
       <pre aria-label="Exact request data">{JSON.stringify(quote.input,null,2)}</pre>
-      <p>The current fixed quote is checked again before dispatch. Monid does not offer an atomic per-run charge ceiling.</p>
+      <p className="monid-note">The quote is checked again before dispatch. Monid has no hard per-run charge ceiling.</p>
       <div className="monid-actions">{!approval?<button type="button" disabled={busy} onClick={()=>void run(async()=>{
         const parked=await monidRequest("monid/approvals","POST",{quote_id:quote.quote_id,session_id:sessionId});setApproval(parked.item.id);
       })}><Icon name="approve"/>Request lookup approval</button>:<button type="button" disabled={busy} onClick={()=>void run(async()=>{
@@ -80,14 +82,14 @@ export function MonidResearch({personId,sessionId}:{personId:string;sessionId:st
       <button type="button" disabled={busy} onClick={()=>void run(discard)}><Icon name="close"/>{approval?"Deny lookup":"Discard quote"}</button></div>
     </div>:null}
     {result?<div className="monid-result" role="region" aria-label="Monid research result">
-      <h3 ref={resultHeading} tabIndex={-1}>Monid research result</h3>
+      <div className="monid-heading"><h3 ref={resultHeading} tabIndex={-1}>Monid research result</h3>
+        <span className="pf-badge is-warn" title="Verify before using.">Untrusted source</span></div>
       {savedAt!==null?<p>Saved research{savedAt?` · ${new Date(savedAt).toLocaleString()}`:""}</p>:null}
       <p>Status: {{completed:"Completed",running:"Running",failed:"Failed",outcome_unknown:"Outcome unknown — review required"}[String(result.status||result.code)]||"Unknown"}</p><p>Actual cost: {result.actual_cost_usd==null?"Unknown":`USD ${result.actual_cost_usd}`}</p>
-      <p>Untrusted research source — verify before using.</p>
       {result.code==="outcome_unknown"?<a href="#/quarantine">Review uncertain action</a>:null}
       {Array.isArray(sources)?sources.filter((source:unknown)=>source!==null&&typeof source==="object"&&!Array.isArray(source)).slice(0,10).map((source:any,index:number)=><article className="monid-endpoint" key={index}>
         <strong>{typeof source.title==="string"?source.title:"Research source"}</strong>
-        {typeof source.url==="string"&&/^https:\/\/[^\s]+$/.test(source.url)?<a href={source.url} target="_blank" rel="noreferrer">Open source</a>:null}
+        {typeof source.url==="string"&&/^https:\/\/[^\s]+$/.test(source.url)?<a href={source.url} target="_blank" rel="noreferrer"><Icon name="external"/>Open source</a>:null}
         {typeof source.text==="string"?<p>{source.text.slice(0,500)}</p>:null}
       </article>):null}
       <details><summary>Inspect source data</summary><pre>{JSON.stringify(result.output??{},null,2)}</pre></details>

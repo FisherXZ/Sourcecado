@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { DescriptionEditor, describeDescription } from "./DescriptionEditor";
 import { FindSavedPerson } from "./FindSavedPerson";
 import { Glyph } from "./generative/ResultCard";
+import { Icon } from "./icons";
+import { personInitials } from "./personName";
 import {
   defaultPersonDescriptions,
   getBoard,
@@ -14,7 +16,7 @@ import {
   type ReplyRefreshResult,
 } from "./api";
 import { TaskList, TASKS_CHANGED } from "./Tasks";
-import { MailFreshness } from "./crm/MailFreshness";
+import { MailStatusChip } from "./crm/MailFreshness";
 import { PersonPreview, type PreviewHandle } from "./crm/PersonPreview";
 import { GlobalSuggestions } from "./crm/GlobalSuggestions";
 
@@ -27,37 +29,38 @@ const FOLLOW_UP_LABEL: Record<string, string> = {
   reply_needs_review: "Reply needs review",
 };
 
-function FollowUpChip({ person }: { person: BoardPerson }) {
-  const reason = person.follow_up?.needed ? person.follow_up.reason : null;
-  if (!reason) return null;
-  return (
-    <span className="board-row-flag">{FOLLOW_UP_LABEL[reason] ?? "Needs follow-up"}</span>
-  );
-}
+type SequenceFilter = "all" | "open" | "in_conversation" | "done" | "not_started";
+type Sequence = Exclude<SequenceFilter, "all">;
 
-function initials(person: BoardPerson): string {
-  const letters = [person.first_name, person.last_name]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .map((value) => Array.from(value)[0])
-    .join("")
-    .slice(0, 2);
-  return letters.toLocaleUpperCase() || "?";
-}
-
-const SEQUENCE_LABEL: Record<string, string> = {
-  open: "Open",
-  in_conversation: "In conversation",
-  done: "Done",
-};
-
-type SequenceFilter = "all" | "open" | "in_conversation" | "done";
-
-const SEQUENCE_FILTERS: { value: SequenceFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "open", label: "Open" },
-  { value: "in_conversation", label: "In conversation" },
-  { value: "done", label: "Done" },
+const SEQUENCE_FILTERS: { value: SequenceFilter; label: string; icon: ReactNode }[] = [
+  { value: "all", label: "All", icon: <Glyph name="user" /> },
+  { value: "open", label: "Open", icon: <Icon name="send" /> },
+  { value: "in_conversation", label: "In conversation", icon: <Glyph name="chat" /> },
+  { value: "done", label: "Done", icon: <Icon name="check" /> },
+  { value: "not_started", label: "Not started", icon: <Glyph name="empty" /> },
 ];
+
+const SEQUENCE_LABEL = Object.fromEntries(
+  SEQUENCE_FILTERS.map((filter) => [filter.value, filter.label]),
+) as Record<SequenceFilter, string>;
+
+/** A saved person outside Open, In conversation and Done has not started outreach. */
+function sequenceOf(person: Pick<BoardPerson, "sequence_state">): Sequence {
+  const state = person.sequence_state;
+  return state === "open" || state === "in_conversation" || state === "done" ? state : "not_started";
+}
+
+/** Canonical task dates are YYYY-MM-DD days; show them as a short local day. */
+function formatDue(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(year === new Date().getFullYear() ? {} : { year: "numeric" }),
+  });
+}
 
 function ContactDescriptionCell({ person }: { person: BoardPerson }) {
   const [editing, setEditing] = useState(false);
@@ -74,6 +77,7 @@ function ContactDescriptionCell({ person }: { person: BoardPerson }) {
           personId={person.person_id}
           description={general}
           rows={2}
+          startEditing
           onSaved={() =>
             window.dispatchEvent(new Event("sourcecado:board-changed"))
           }
@@ -85,23 +89,76 @@ function ContactDescriptionCell({ person }: { person: BoardPerson }) {
   return (
     <button
       type="button"
-      className={`contacts-description${muted ? " is-muted" : ""}`}
-      aria-label="Edit short description"
+      className="contacts-description"
+      aria-label={muted ? "Edit short description" : `Edit short description: ${text}`}
+      title={muted ? "Add a short description" : text}
       onClick={(event) => {
         event.stopPropagation();
         setEditing(true);
       }}
     >
-      {text}
+      <span>{muted ? null : text}</span>
+      <Icon name="edit" />
     </button>
   );
 }
 
-function ContactRow({ person, onOpen }: { person: BoardPerson; onOpen: (id: string) => void }) {
+function NextTask({ task }: { task?: PersonTask | null }) {
+  if (!task) return null;
+  const overdue = task.due_status === "overdue";
+  return (
+    <span className="contacts-task" title={task.due_date ? `${task.title} · due ${task.due_date}` : task.title}>
+      <span className="contacts-task-title">{task.title}</span>
+      {task.due_date ? (
+        <span className={`contacts-due${overdue ? " is-overdue" : task.due_status === "today" ? " is-today" : ""}`}>
+          <time dateTime={task.due_date}>{formatDue(task.due_date)}</time>
+          {overdue ? <span className="sr-only">, overdue</span> : null}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function AttentionCell({ person }: { person: BoardPerson }) {
+  const reasons = person.attention_reasons;
+  if (reasons === undefined) {
+    // Older payloads without saved attention fall back to the follow-up flag.
+    const reason = person.follow_up?.needed ? person.follow_up.reason : null;
+    return reason ? (
+      <span className="contacts-pill is-warn">{FOLLOW_UP_LABEL[reason] ?? "Needs follow-up"}</span>
+    ) : null;
+  }
+  if (reasons.length === 0) return null;
+  const [first, ...rest] = reasons;
+  if (rest.length === 0) {
+    return <span className="contacts-pill is-warn" title={first.label}>{first.label}</span>;
+  }
+  return (
+    <details className="contacts-attention">
+      <summary title={reasons.map((reason) => reason.label).join(" · ")}>
+        <span className="contacts-pill is-warn">{first.label}</span>
+        <span className="contacts-more">+{rest.length}</span>
+      </summary>
+      {rest.map((reason) => (
+        <p key={reason.code}>{reason.label}{reason.count ? ` (${reason.count})` : ""}</p>
+      ))}
+    </details>
+  );
+}
+
+function ContactRow({
+  person,
+  selected,
+  onOpen,
+}: {
+  person: BoardPerson;
+  selected: boolean;
+  onOpen: (id: string) => void;
+}) {
   const name = personName(person);
-  const sequence = SEQUENCE_LABEL[person.sequence_state ?? ""] ?? "Unknown";
+  const sequence = sequenceOf(person);
   const href = `#/people/${encodeURIComponent(person.person_id)}`;
-  const openPersonFile = () => {
+  const openPreview = () => {
     onOpen(person.person_id);
   };
   return (
@@ -109,83 +166,89 @@ function ContactRow({ person, onOpen }: { person: BoardPerson; onOpen: (id: stri
       className="contacts-row"
       tabIndex={0}
       aria-label={`Preview person ${name}`}
+      aria-current={selected ? "true" : undefined}
       onClick={(event) => {
         if ((event.target as HTMLElement).closest("a, button, textarea, input, select, summary")) return;
-        openPersonFile();
+        openPreview();
       }}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         if ((event.target as HTMLElement).closest("a, button, textarea, input, select, summary")) return;
         event.preventDefault();
-        openPersonFile();
+        openPreview();
       }}
     >
       <td>
-        <div className="contacts-identity">
-          <button type="button" id={`preview-${person.person_id}`} className="contacts-avatar" aria-label={`Preview ${name}`} onClick={openPersonFile}>
-            {initials(person)}
+        <div className="contacts-person">
+          <button type="button" id={`preview-${person.person_id}`} className="contacts-avatar" aria-label={`Preview ${name}`} onClick={openPreview}>
+            {personInitials(person)}
           </button>
-          <span className="contacts-cell-copy">
-            <a href={href} onClick={event => { event.preventDefault(); openPersonFile(); }}>
-              <strong>{name}</strong>
-            </a>
-            {person.last_name_status === "hidden_by_apollo" ? (
-              <span>Surname hidden by Apollo</span>
-            ) : null}
-          </span>
+          <a href={href} onClick={event => { event.preventDefault(); openPreview(); }}>{name}</a>
+          {person.last_name_status === "hidden_by_apollo" ? (
+            <span className="contacts-hidden-surname" title="Surname hidden by Apollo">
+              <Glyph name="restricted" />
+              <span className="sr-only">Surname hidden by Apollo</span>
+            </span>
+          ) : null}
         </div>
       </td>
+      <td title={person.title ?? undefined}>{person.title}</td>
+      <td title={person.company ?? undefined}>{person.company}</td>
       <td>
-        <span className="contacts-primary">{person.title || "No title recorded"}</span>
-        <span className="contacts-secondary">{person.company || "No company recorded"}</span>
+        <span className={`contacts-pill contacts-sequence-${sequence}`}>{SEQUENCE_LABEL[sequence]}</span>
+      </td>
+      <td>
+        <NextTask task={person.next_action} />
+      </td>
+      <td>
+        <AttentionCell person={person} />
       </td>
       <td>
         <ContactDescriptionCell person={person} />
-      </td>
-      <td>
-        <span className={`contacts-sequence contacts-sequence-${person.sequence_state}`}>
-          {sequence}
-        </span>
-      </td>
-      <td>
-        <span className="contacts-next-action" title={person.next_action?.title ?? undefined}>
-          {person.next_action ? <>{person.next_action.title}<span className="contacts-secondary">{person.next_action.due_date ?? "No date"}</span></> : "No open task"}
-        </span>
-      </td>
-      <td>
-        {person.attention_reasons?.length ? (
-          <details className="contacts-attention-reasons"><summary><span className="board-row-flag">{person.attention_reasons[0].label}</span>
-            {person.attention_reasons.length > 1 ? ` +${person.attention_reasons.length - 1}` : null}</summary>
-            {person.attention_reasons.slice(1).map(reason => <p key={reason.code}>{reason.label}{reason.count ? ` (${reason.count})` : ""}</p>)}</details>
-        ) : person.attention_reasons === undefined && person.follow_up?.needed ? (
-          <FollowUpChip person={person} />
-        ) : (
-          <span className="contacts-attention-empty" aria-label="No attention needed">
-            —
-          </span>
-        )}
       </td>
     </tr>
   );
 }
 
-function ContactsTable({ people, onOpen }: { people: BoardPerson[]; onOpen: (id: string) => void }) {
+const COLUMNS: { label: string; icon: ReactNode }[] = [
+  { label: "Person", icon: <Glyph name="user" /> },
+  { label: "Role", icon: <Glyph name="card" /> },
+  { label: "Company", icon: <Icon name="company" /> },
+  { label: "Sequence", icon: <Glyph name="partial" /> },
+  { label: "Next task", icon: <Glyph name="clock" /> },
+  { label: "Attention", icon: <Glyph name="info" /> },
+  { label: "Summary", icon: <Glyph name="doc" /> },
+];
+
+function ContactsTable({
+  people,
+  selected,
+  onOpen,
+}: {
+  people: BoardPerson[];
+  selected: string | null;
+  onOpen: (id: string) => void;
+}) {
   return (
     <div className="contacts-table-scroll">
-      <table className="contacts-table" aria-label="Active sourcing contacts">
+      <table className="contacts-table" aria-label="Contacts">
         <thead>
           <tr>
-            <th scope="col">Contact</th>
-            <th scope="col">Role &amp; company</th>
-            <th scope="col">Description</th>
-            <th scope="col">Sequence</th>
-            <th scope="col">Next action</th>
-            <th scope="col">Attention</th>
+            {COLUMNS.map((column) => (
+              <th key={column.label} scope="col">
+                <span className="contacts-th">{column.icon}{column.label}</span>
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {people.map((person) => (
-            <ContactRow key={person.person_id} person={person} onOpen={onOpen} />
+            <ContactRow
+              key={person.person_id}
+              person={person}
+              selected={person.person_id === selected}
+              onOpen={onOpen}
+            />
           ))}
         </tbody>
       </table>
@@ -195,19 +258,15 @@ function ContactsTable({ people, onOpen }: { people: BoardPerson[]; onOpen: (id:
 
 function ContactsFilters({
   active,
-  board,
+  people,
   onChange,
 }: {
   active: SequenceFilter;
-  board: Board;
+  people: BoardPerson[];
   onChange: (filter: SequenceFilter) => void;
 }) {
-  const counts: Record<SequenceFilter, number> = {
-    all: board.open.length + board.in_conversation.length + board.done.length,
-    open: board.open.length,
-    in_conversation: board.in_conversation.length,
-    done: board.done.length,
-  };
+  const count = (filter: SequenceFilter) =>
+    filter === "all" ? people.length : people.filter((person) => sequenceOf(person) === filter).length;
   return (
     <div
       className="contacts-filters"
@@ -221,8 +280,9 @@ function ContactsFilters({
           aria-pressed={active === filter.value}
           onClick={() => onChange(filter.value)}
         >
+          {filter.icon}
           <span>{filter.label}</span>
-          <span className="contacts-filter-count">{counts[filter.value]}</span>
+          <span className="contacts-filter-count">{count(filter.value)}</span>
         </button>
       ))}
     </div>
@@ -292,8 +352,8 @@ function ViewSwitch({
     <div className="contacts-view-switch" role="group" aria-label="Contacts view">
       {(
         [
-          { value: "contacts", label: "Contacts" },
-          { value: "tasks", label: "Tasks" },
+          { value: "contacts", label: "People", icon: <Glyph name="user" /> },
+          { value: "tasks", label: "Tasks", icon: <Glyph name="review" /> },
         ] as const
       ).map((view) => (
         <button
@@ -302,6 +362,7 @@ function ViewSwitch({
           aria-pressed={active === view.value}
           onClick={() => onChange(view.value)}
         >
+          {view.icon}
           {view.label}
         </button>
       ))}
@@ -311,7 +372,7 @@ function ViewSwitch({
 
 /** The status filter and search apply to tasks through the person they belong to. */
 function matchesTask(task: PersonTask, filter: SequenceFilter, query: string): boolean {
-  if (filter !== "all" && task.person?.sequence_state !== filter) return false;
+  if (filter !== "all" && (!task.person || sequenceOf(task.person) !== filter)) return false;
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return true;
   return [
@@ -359,6 +420,8 @@ function replyStatus(result: ReplyRefreshResult): string {
   return parts.join(" ");
 }
 
+type PreviewStep = "previous" | "next";
+
 export function BoardView() {
   const [board, setBoard] = useState<Board | null>(null);
   const [failed, setFailed] = useState(false);
@@ -372,6 +435,7 @@ export function BoardView() {
   const [needsAttention, setNeedsAttention] = useState(initialView.needsAttention);
   const [sort, setSort] = useState<ContactsSort>(initialView.sort);
   const [selected, setSelected] = useState<string | null>(null);
+  const [previewStep, setPreviewStep] = useState<PreviewStep | undefined>();
   const preview = useRef<PreviewHandle>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
 
@@ -391,9 +455,10 @@ export function BoardView() {
     setSort(DEFAULT_CONTACTS_VIEW.sort);
   }
 
-  function openPreview(id: string) {
+  function openPreview(id: string, step?: PreviewStep) {
     const next = () => {
       returnFocus.current = document.getElementById(`preview-${id}`);
+      setPreviewStep(step);
       setSelected(id);
     };
     if (selected) preview.current?.navigate(next);
@@ -465,120 +530,183 @@ export function BoardView() {
     }
   }
 
-  const contacts = board
-    ? [...board.open, ...board.in_conversation, ...board.done]
+  // Every saved person, including people kept before outreach starts.
+  const people = board
+    ? [...(board.backlog ?? []), ...board.open, ...board.in_conversation, ...board.done]
     : [];
-  const visibleContacts =
-    (sequenceFilter === "all"
-      ? contacts
-      : contacts.filter((person) => person.sequence_state === sequenceFilter)
-    ).filter((person) => matchesContact(person, contactQuery))
+  const visibleContacts = people
+    .filter((person) => sequenceFilter === "all" || sequenceOf(person) === sequenceFilter)
+    .filter((person) => matchesContact(person, contactQuery))
     .filter(person => !needsAttention || (person.attention_reasons !== undefined
       ? person.attention_reasons.length > 0 : Boolean(person.follow_up?.needed)))
     .sort((a, b) => compareContacts(a, b, sort));
-  const empty =
-    board !== null &&
-    contacts.length === 0;
+  const empty = board !== null && people.length === 0;
+  const selectedIndex = view === "contacts" && selected
+    ? visibleContacts.findIndex((person) => person.person_id === selected)
+    : -1;
+  const position = selectedIndex >= 0 ? {
+    index: selectedIndex,
+    total: visibleContacts.length,
+    onPrevious: () => openPreview(visibleContacts[selectedIndex - 1].person_id, "previous"),
+    onNext: () => openPreview(visibleContacts[selectedIndex + 1].person_id, "next"),
+  } : undefined;
 
   return (
     <main className={`route-page board-page${selected ? " has-preview" : ""}`}>
       <div className="contacts-workspace">
-      <header className="board-page-header">
-        <p className="eyebrow">Active sequences</p>
-        <h1>Contacts</h1>
-        <p>Keep active people moving from open outreach through completed follow-up.</p>
-        <ViewSwitch active={view} onChange={setView} />
-        <div className="board-page-actions">
-          <button type="button" onClick={resetView}><Glyph name="retry" />Reset view</button>
+      <header className="contacts-titlebar">
+        <div className="contacts-heading">
+          <h1>Contacts</h1>
+          {board ? (
+            <span className="contacts-count">
+              {people.length}
+              <span className="sr-only">{people.length === 1 ? " person" : " people"}</span>
+            </span>
+          ) : null}
+          <ViewSwitch active={view} onChange={setView} />
+        </div>
+        <div className="contacts-actions">
+          {replyStatusText ? <p className="contacts-mail-result" role="status">{replyStatusText}</p> : null}
+          {board ? <MailStatusChip state={board.mail_sync} /> : null}
           <button
             type="button"
-            className="board-finder-trigger"
+            className={`contacts-icon-button${checking ? " is-spinning" : ""}`}
+            aria-label="Refresh Gmail"
+            title={checking ? "Checking Gmail…" : "Refresh Gmail"}
+            aria-busy={checking}
+            disabled={checking}
+            onClick={() => void checkReplies()}
+          >
+            <Icon name="refresh" />
+          </button>
+          <button
+            type="button"
+            className="contacts-icon-button"
+            aria-label="Find saved person"
+            aria-keyshortcuts="/"
+            title="Find saved person (/)"
             onClick={() => setFinderOpen(true)}
           >
-            <Glyph name="inspect" />
-            Find saved person
+            <Icon name="search" />
           </button>
-
-          <button type="button" disabled={checking} onClick={() => void checkReplies()}>
-            {checking ? "Checking Gmail…" : "Refresh Gmail"}
-          </button>
-          {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
         </div>
-        {board ? <MailFreshness state={board.mail_sync} /> : null}
       </header>
       {finderOpen ? <FindSavedPerson onClose={() => setFinderOpen(false)} /> : null}
-      {board === null && !failed ? <p role="status">Loading contacts…</p> : null}
+      {board === null && !failed ? <p className="contacts-loading" role="status">Loading contacts…</p> : null}
       {failed ? (
         <section className="route-error" role="alert">
           <p>Couldn’t load contacts.</p>
           <button type="button" onClick={() => setAttempt((value) => value + 1)}>
+            <Glyph name="retry" />
             Retry
           </button>
         </section>
       ) : null}
       {empty && view === "contacts" ? (
-        <section className="route-empty" role="status">
-          <h2>No active contacts</h2>
-          <p>Start a sequence from a Person File to add someone here.</p>
+        <section className="contacts-empty" role="status">
+          <Glyph name="user" />
+          <h2>No saved people yet</h2>
+          <a className="contacts-chip" href="#/chat">
+            <Icon name="search" />
+            Find people
+          </a>
         </section>
       ) : null}
       {board && (!empty || view === "tasks") ? (
-        <section
-          className="contacts-list"
-          aria-label={view === "tasks" ? "Tasks for contacts" : "Sequence contacts"}
-        >
-          <div className="contacts-controls">
+        <>
+          <div className="contacts-toolbar">
             <ContactsFilters
               active={sequenceFilter}
-              board={board}
+              people={people}
               onChange={setSequenceFilter}
             />
-            <button type="button" aria-pressed={needsAttention} onClick={() => setNeedsAttention(value => !value)}><Glyph name="info" />Needs attention</button>
-            {view === "contacts" ? <label className="contacts-search task-field" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Glyph name="adjust" />
-              <select aria-label="Sort contacts" value={sort} onChange={event => setSort(event.currentTarget.value as ContactsSort)}>
-                <option value="attention">Attention</option>
-                <option value="name">Name</option>
-                <option value="due">Next task due</option>
-              </select>
-            </label> : null}
-            <label className="contacts-search">
-              <span className="contacts-visually-hidden">
-                {view === "tasks" ? "Search tasks" : "Search active contacts"}
-              </span>
-              <input
-                type="search"
-                aria-label={view === "tasks" ? "Search tasks" : "Search active contacts"}
-                placeholder={view === "tasks" ? "Search tasks" : "Search active contacts"}
-                value={contactQuery}
-                onChange={(event) => setContactQuery(event.currentTarget.value)}
-              />
-            </label>
+            <div className="contacts-toolbar-end">
+              <button
+                type="button"
+                className="contacts-chip"
+                aria-pressed={needsAttention}
+                onClick={() => setNeedsAttention(value => !value)}
+              >
+                <Glyph name="info" />
+                Needs attention
+              </button>
+              {view === "contacts" ? (
+                <label className="contacts-chip contacts-sort" title="Sort">
+                  <Icon name="sort" />
+                  <select aria-label="Sort contacts" value={sort} onChange={event => setSort(event.currentTarget.value as ContactsSort)}>
+                    <option value="attention">Attention</option>
+                    <option value="name">Name</option>
+                    <option value="due">Next task due</option>
+                  </select>
+                </label>
+              ) : null}
+              <label className="contacts-search">
+                <Icon name="search" />
+                <input
+                  type="search"
+                  aria-label={view === "tasks" ? "Search tasks" : "Search contacts"}
+                  placeholder="Search"
+                  value={contactQuery}
+                  onChange={(event) => setContactQuery(event.currentTarget.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="contacts-icon-button"
+                aria-label="Reset view"
+                title="Reset view"
+                onClick={resetView}
+              >
+                <Glyph name="retry" />
+              </button>
+            </div>
           </div>
-          {view === "tasks" ? (
-            <>
-            <TaskList
-              people={[...(board.backlog ?? []), ...contacts]}
-              heading="Open tasks"
-              matches={(task) => matchesTask(task, sequenceFilter, contactQuery)
-                && (!needsAttention || [...(board.backlog ?? []), ...contacts].some(p => p.person_id === task.person_id && Boolean(p.attention_reasons?.length))
-                  || task.due_status === "overdue" || task.due_status === "today")}
-            />
-            <GlobalSuggestions query={contactQuery} status={sequenceFilter} onOpen={openPreview} />
-            </>
-          ) : <><ContactsTable people={visibleContacts} onOpen={openPreview} />{visibleContacts.length === 0 ? (
-            <p className="contacts-filter-empty" role="status">
-              {contactQuery.trim()
-                ? `No contacts match “${contactQuery.trim()}”.`
-                : needsAttention ? "No known work needs attention. Check Gmail freshness above."
-                : `No contacts in ${SEQUENCE_LABEL[sequenceFilter] ?? "this status"}.`}
-            </p>
-          ) : null}</>}
-        </section>
+          <section
+            className="contacts-list"
+            aria-label={view === "tasks" ? "Tasks for contacts" : "Contacts table"}
+          >
+            {view === "tasks" ? (
+              <>
+                <TaskList
+                  people={people}
+                  heading="Open tasks"
+                  matches={(task) => matchesTask(task, sequenceFilter, contactQuery)
+                    && (!needsAttention || people.some(p => p.person_id === task.person_id && Boolean(p.attention_reasons?.length))
+                      || task.due_status === "overdue" || task.due_status === "today")}
+                />
+                <GlobalSuggestions query={contactQuery} status={sequenceFilter} onOpen={openPreview} />
+              </>
+            ) : (
+              <>
+                <ContactsTable people={visibleContacts} selected={selected} onOpen={openPreview} />
+                {visibleContacts.length === 0 ? (
+                  <p className="contacts-filter-empty" role="status">
+                    {contactQuery.trim()
+                      ? `No contacts match “${contactQuery.trim()}”.`
+                      : needsAttention ? "Nobody needs attention."
+                      : `No contacts in ${SEQUENCE_LABEL[sequenceFilter]}.`}
+                  </p>
+                ) : (
+                  <p className="contacts-footer">
+                    {visibleContacts.length} {visibleContacts.length === 1 ? "person" : "people"}
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+        </>
       ) : null}
-      {empty && view === "contacts" ? <ContactsTable people={[]} onOpen={openPreview} /> : null}
       </div>
-      {selected ? <PersonPreview key={selected} ref={preview} personId={selected} onClose={closePreview} /> : null}
+      {selected ? (
+        <PersonPreview
+          key={selected}
+          ref={preview}
+          personId={selected}
+          onClose={closePreview}
+          position={position}
+          initialFocus={previewStep}
+        />
+      ) : null}
     </main>
   );
 }

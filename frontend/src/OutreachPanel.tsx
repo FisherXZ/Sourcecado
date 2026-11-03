@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PreparedText } from "./crm/SavedTaskDrafts";
 import { AfterSendReminder } from "./AfterSendReminder";
+import { Glyph } from "./generative/ResultCard";
+import { Icon } from "./icons";
 
 import {
   createOutreachDraft,
@@ -35,8 +37,28 @@ export function OutreachPanel({
   const [draft, setDraft] = useState<OutreachDraft | null>(null);
   const [approval, setApproval] = useState<PendingSendApproval | null>(null);
   const [sent, setSent] = useState<Record<string, unknown> | null>(null);
+  const [sentAt, setSentAt] = useState<Date | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [composing, setComposing] = useState(false);
+  const subjectField = useRef<HTMLInputElement>(null);
+  const draftButton = useRef<HTMLButtonElement>(null);
+  const focusNext = useRef<"subject" | "start" | null>(null);
+  const blank = subject.trim() === "" && body.trim() === "";
+  // Typed text keeps the form open, so it is never hidden unsaved.
+  const formOpen = composing || !blank;
+
+  useEffect(() => {
+    const target = focusNext.current === "subject" ? subjectField.current
+      : focusNext.current === "start" ? draftButton.current : null;
+    focusNext.current = null;
+    target?.focus();
+  }, [formOpen]);
+
+  function openCompose() {
+    focusNext.current = "subject";
+    setComposing(true);
+  }
 
   const reviewedHere =
     approval !== null &&
@@ -60,10 +82,7 @@ export function OutreachPanel({
     return (
       <section className="person-section" aria-labelledby="person-outreach-heading">
         <h2 id="person-outreach-heading">Outreach</h2>
-        <p className="person-empty">
-          Open this person’s sourcing chat first. Outreach starts from the chat
-          that is bound to them, so the recipient is never guessed.
-        </p>
+        <p className="person-empty">Open this person’s sourcing chat first.</p>
       </section>
     );
   }
@@ -72,10 +91,7 @@ export function OutreachPanel({
     return (
       <section className="person-section" aria-labelledby="person-outreach-heading">
         <h2 id="person-outreach-heading">Outreach</h2>
-        <p className="person-empty">
-          This person file has no email address yet. Enrich or add one before
-          drafting.
-        </p>
+        <p className="person-empty">This person has no email address yet.</p>
       </section>
     );
   }
@@ -85,33 +101,18 @@ export function OutreachPanel({
       <h2 id="person-outreach-heading">Outreach</h2>
 
       {sent ? (
-        <div className="person-outreach-sent" role="status">
-          <strong>Sent</strong>
-          <dl>
-            <div>
-              <dt>To</dt>
-              <dd>{recipient}</dd>
-            </div>
-            <div>
-              <dt>Gmail message</dt>
-              <dd>
-                <code>{String(sent.message_id ?? "unknown")}</code>
-              </dd>
-            </div>
-            <div>
-              <dt>Gmail thread</dt>
-              <dd>
-                <code>{String(sent.thread_id ?? "unknown")}</code>
-              </dd>
-            </div>
-          </dl>
-          <AfterSendReminder key={String(sent.message_id)} personId={personId} sent={sent} />
-        </div>
+        <SentCard
+          sent={sent}
+          at={sentAt}
+          recipient={recipient}
+          personId={personId}
+        />
       ) : null}
 
       {!draft && !sent ? (
         <>
-        {prepared && !prepared.thread_id && !prepared.thread_review_required ? <button type="button" onClick={() => { setSubject(prepared.subject); setBody(prepared.body); }}>Use prepared follow-up text</button> : null}
+        {prepared && !prepared.thread_id && !prepared.thread_review_required ? <button type="button" className="person-outreach-prepared" onClick={() => { setSubject(prepared.subject); setBody(prepared.body); openCompose(); }}><Icon name="draft" />Use prepared follow-up text</button> : null}
+        {formOpen ? (
         <form
           className="person-outreach-compose"
           onSubmit={(event) => {
@@ -128,10 +129,12 @@ export function OutreachPanel({
           }}
         >
           <p className="person-outreach-recipient">
-            To <strong>{recipient}</strong> — taken from this person file.
+            <Glyph name="mail" />
+            <span>To</span> <strong>{recipient}</strong>
           </p>
           <label htmlFor="outreach-subject">Subject</label>
           <input
+            ref={subjectField}
             id="outreach-subject"
             value={subject}
             onChange={(event) => setSubject(event.target.value)}
@@ -145,10 +148,37 @@ export function OutreachPanel({
             onChange={(event) => setBody(event.target.value)}
             required
           />
-          <button type="submit" disabled={busy !== null}>
-            {busy === "draft" ? "Creating draft…" : "Create Gmail draft"}
-          </button>
+          <div className="person-outreach-actions">
+            <button type="submit" disabled={busy !== null}>
+              <Icon name="draft" />
+              {busy === "draft" ? "Creating draft…" : "Create Gmail draft"}
+            </button>
+            <button
+              type="button"
+              disabled={busy !== null || !blank}
+              title={blank ? undefined : "Clear the subject and message to close"}
+              onClick={() => {
+                focusNext.current = "start";
+                setComposing(false);
+              }}
+            >
+              <Icon name="close" />
+              Cancel
+            </button>
+          </div>
         </form>
+        ) : (
+          <div className="person-outreach-start">
+            <button ref={draftButton} type="button" onClick={openCompose}>
+              <Icon name="draft" />
+              Draft email
+            </button>
+            <p className="person-outreach-recipient">
+              <Glyph name="mail" />
+              <span>To</span> <strong>{recipient}</strong>
+            </p>
+          </div>
+        )}
         </>
       ) : null}
 
@@ -158,13 +188,13 @@ export function OutreachPanel({
             Gmail · {draft.account ?? "Account could not be determined"}
           </p>
           <strong className="person-outreach-status">Not sent</strong>
-          <dl>
+          <dl className="person-outreach-fields">
             <div>
-              <dt>To</dt>
+              <dt><Glyph name="mail" />To</dt>
               <dd>{draft.to}</dd>
             </div>
             <div>
-              <dt>Subject</dt>
+              <dt><Glyph name="doc" />Subject</dt>
               <dd>{draft.subject}</dd>
             </div>
           </dl>
@@ -182,6 +212,7 @@ export function OutreachPanel({
                 })
               }
             >
+              <Icon name="refresh" />
               {busy === "reread" ? "Re-reading…" : "Re-read draft from Gmail"}
             </button>
             {!approval ? (
@@ -200,6 +231,7 @@ export function OutreachPanel({
                   })
                 }
               >
+                <Icon name="approve" />
                 {busy === "approval" ? "Requesting…" : "Request approval to send"}
               </button>
             ) : null}
@@ -228,7 +260,14 @@ export function OutreachPanel({
                       const outcome = await decideApproval(approval.id, "allow");
                       setApproval(null);
                       if (outcome.ok) {
-                        setSent(outcome.result);
+                        // The reviewed subject and recipient fill in when the
+                        // send result leaves them out.
+                        setSent({
+                          subject: approval.resource.subject,
+                          to: approval.resource.to,
+                          ...outcome.result,
+                        });
+                        setSentAt(new Date());
                         setDraft(null);
                       } else {
                         setProblem(
@@ -238,6 +277,7 @@ export function OutreachPanel({
                     })
                   }
                 >
+                  <Icon name="send" />
                   {busy === "allow" ? "Sending…" : "Allow once and send"}
                 </button>
                 <button
@@ -250,6 +290,7 @@ export function OutreachPanel({
                     })
                   }
                 >
+                  <Icon name="deny" />
                   {busy === "deny" ? "Denying…" : "Deny"}
                 </button>
               </div>
@@ -264,5 +305,68 @@ export function OutreachPanel({
         </p>
       ) : null}
     </section>
+  );
+}
+
+function gmailLink(id: string): string {
+  return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(id)}`;
+}
+
+/** What went out, to whom, and where to open it. Gmail ids stay off screen. */
+function SentCard({
+  sent,
+  at,
+  recipient,
+  personId,
+}: {
+  sent: Record<string, unknown>;
+  at: Date | null;
+  recipient: string;
+  personId: string;
+}) {
+  const text = (value: unknown) =>
+    typeof value === "string" && value.trim() ? value : null;
+  const message = text(sent.message_id);
+  const thread = text(sent.thread_id);
+  const subject = text(sent.subject);
+  const target = thread ?? message;
+  return (
+    <div className="person-outreach-sent" role="status">
+      <p className="person-outreach-sent-head">
+        <Icon name="send" />
+        <strong>Sent</strong>
+        {at ? (
+          <time dateTime={at.toISOString()}>
+            {" · "}
+            {at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+          </time>
+        ) : null}
+        {target ? (
+          <a
+            className="person-outreach-gmail"
+            href={gmailLink(target)}
+            target="_blank"
+            rel="noreferrer"
+            title={`Gmail message ${message ?? "unknown"} · thread ${thread ?? "unknown"}`}
+          >
+            <Icon name="external" />
+            Open in Gmail
+          </a>
+        ) : null}
+      </p>
+      <dl className="person-outreach-fields">
+        <div>
+          <dt><Glyph name="mail" />To</dt>
+          <dd>{text(sent.to) ?? recipient}</dd>
+        </div>
+        {subject ? (
+          <div>
+            <dt><Glyph name="doc" />Subject</dt>
+            <dd>{subject}</dd>
+          </div>
+        ) : null}
+      </dl>
+      <AfterSendReminder key={String(sent.message_id)} personId={personId} sent={sent} />
+    </div>
   );
 }

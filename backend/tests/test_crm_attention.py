@@ -135,3 +135,36 @@ def test_description_api_replays_before_checking_the_old_version(tmp_path):
         headers=args["headers"], json={"operation_id": "undo-description-through-http"})
     assert undo.status_code == 200
     assert app.state.people.descriptions(pid)["general"]["text"] is None
+
+
+def test_contacts_board_ranks_people_saved_before_outreach_with_active_sequences(tmp_path):
+    """Contacts reads /v1/board?include_mail_state=true. A person kept before
+    outreach stays in the backlog lane with the same attention fields and one
+    shared attention order as active sequences. Other callers keep their shape."""
+    from fastapi.testclient import TestClient
+    from coworker.provider import FakeProvider
+    from coworker.server import TOKEN_HEADER, create_app
+    app = create_app(token="test-board", state=tmp_path, provider=FakeProvider())
+    people = app.state.people
+    active = people.keep_from_apollo(apollo_id="maya", first_name="Maya", last_name_obfuscated="Patel", title="Director", company="Lumen")["person_id"]
+    people.set_sequence(active, "open", actor="director")
+    kept = people.keep_from_apollo(apollo_id="noor", first_name="Noor", last_name_obfuscated="Chen", title="Engineer", company="Arc")["person_id"]
+    TaskService(people).create(kept, title="Research before outreach", timezone="UTC", operation_id="board-kept-task", actor="director")
+    client, headers = TestClient(app), {TOKEN_HEADER: "test-board"}
+    flagged = client.patch(f"/v1/people/{kept}/attention", headers=headers, json={"reason": "Ask about spring", "expected_version": people.get(kept)["version"], "operation_id": "board-kept-flag"})
+    assert flagged.status_code == 200
+
+    board = client.get("/v1/board?include_mail_state=true", headers=headers).json()
+    (row,) = board["backlog"]
+    (open_row,) = board["open"]
+    assert (row["person_id"], row["sequence_state"], row["board_lane"]) == (kept, None, "backlog")
+    assert row["attention_reasons"][0] == {"code": "manual", "label": "Ask about spring"}
+    assert row["next_action"]["title"] == "Research before outreach"
+    assert row["attention_rank"] < open_row["attention_rank"]
+    assert people.get(kept)["sequence_state"] is None
+
+    plain = client.get("/v1/board", headers=headers).json()
+    assert [p["person_id"] for p in plain["backlog"]] == [kept]
+    assert "attention_rank" not in plain["backlog"][0]
+    contacts = client.get("/v1/crm/contacts", headers=headers).json()["contacts"]
+    assert [p["person_id"] for p in contacts] == [active]

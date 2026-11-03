@@ -200,22 +200,27 @@ describe("Contacts and person-file routes", () => {
 
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
 
-    expect(await screen.findByRole("heading", { name: "No active contacts" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No saved people yet" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Find people" })).toHaveAttribute("href", "#/chat");
     expect(api.getBoard).toHaveBeenCalledTimes(2);
   });
 
-  it("renders active sequences in a Contacts table", async () => {
-    render(<BoardView />);
+  it("renders saved people in a Contacts records table", async () => {
+    const { container } = render(<BoardView />);
 
     expect(
       await screen.findByRole("heading", { level: 1, name: "Contacts" }),
     ).toBeInTheDocument();
-    const table = screen.getByRole("table", { name: "Active sourcing contacts" });
-    expect(within(table).getByRole("columnheader", { name: "Contact" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "Role & company" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "Sequence" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "Next action" })).toBeInTheDocument();
-    expect(within(table).getByRole("columnheader", { name: "Attention" })).toBeInTheDocument();
+    const table = screen.getByRole("table", { name: "Contacts" });
+    expect(within(table).getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
+      "Person", "Role", "Company", "Sequence", "Next task", "Attention", "Summary",
+    ]);
+    // No eyebrow or narrating sentence above the table, and no placeholder copy in cells.
+    expect(container.querySelector(".eyebrow")).toBeNull();
+    expect(container).not.toHaveTextContent("Keep active people moving");
+    expect(container).not.toHaveTextContent("Not summarized yet");
+    expect(container).not.toHaveTextContent("No open task");
+    expect(screen.getByText("1 person")).toBeInTheDocument();
     expect(within(table).getByRole("link", { name: /Alyssa Lee/ })).toHaveAttribute(
       "href",
       "#/people/person%20one",
@@ -233,7 +238,7 @@ describe("Contacts and person-file routes", () => {
     fireEvent.click(within(row).getByText("Codeology"));
     expect(await screen.findByRole("region", { name: "Person preview" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/board");
-    fireEvent.click(screen.getByRole("button", { name: "Back to Contacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
 
     window.location.hash = "#/board";
     row.focus();
@@ -242,12 +247,12 @@ describe("Contacts and person-file routes", () => {
     expect(window.location.hash).toBe("#/board");
   });
 
-  it("filters Contacts by the three sequence states", async () => {
+  it("filters Contacts by sequence state, including people not started", async () => {
     api.getBoard.mockResolvedValue({
       backlog: [
         {
           person_id: "person-backlog",
-          first_name: "Hidden",
+          first_name: "Kept",
           last_name: "Backlog",
           sequence_state: null,
         },
@@ -289,7 +294,7 @@ describe("Contacts and person-file routes", () => {
     const filters = await screen.findByRole("group", {
       name: "Filter contacts by sequence status",
     });
-    expect(within(filters).getByRole("button", { name: "All 3" })).toHaveAttribute(
+    expect(within(filters).getByRole("button", { name: "All 4" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -298,16 +303,23 @@ describe("Contacts and person-file routes", () => {
       within(filters).getByRole("button", { name: "In conversation 1" }),
     ).toBeInTheDocument();
     expect(within(filters).getByRole("button", { name: "Done 1" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Hidden Backlog/ })).not.toBeInTheDocument();
+    expect(within(filters).getByRole("button", { name: "Not started 1" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Kept Backlog/ })).toBeInTheDocument();
 
     fireEvent.click(within(filters).getByRole("button", { name: "In conversation 1" }));
 
     expect(screen.getByRole("link", { name: /Connie Conversation/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Olive Open/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Dana Done/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Kept Backlog/ })).not.toBeInTheDocument();
+
+    fireEvent.click(within(filters).getByRole("button", { name: "Not started 1" }));
+
+    expect(screen.getByRole("link", { name: /Kept Backlog/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Connie Conversation/ })).not.toBeInTheDocument();
   });
 
-  it("searches active Contacts by identity, role, and company", async () => {
+  it("searches Contacts by identity, role, and company", async () => {
     api.getBoard.mockResolvedValue({
       backlog: [],
       open: [
@@ -334,7 +346,7 @@ describe("Contacts and person-file routes", () => {
 
     render(<BoardView />);
 
-    const search = await screen.findByRole("searchbox", { name: "Search active contacts" });
+    const search = await screen.findByRole("searchbox", { name: "Search contacts" });
     fireEvent.change(search, { target: { value: "northstar" } });
 
     expect(screen.getByRole("link", { name: /Maya Chen/ })).toBeInTheDocument();
@@ -387,11 +399,15 @@ describe("Contacts and person-file routes", () => {
     board.unmount();
 
     const person = render(<PersonFileView personId="person one" />);
-    expect(await screen.findByText(/Enrich to verify the full name/i)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Hudson" })).toBeInTheDocument();
+    expect(screen.getByText("Surname hidden by Apollo")).toHaveAttribute(
+      "title",
+      "Enrich to verify the full name.",
+    );
     expect(person.container).not.toHaveTextContent("***");
   });
 
-  it("keeps unsequenced backlog people off Contacts", async () => {
+  it("shows people saved before outreach as Not started", async () => {
     api.getBoard.mockResolvedValue({
       backlog: [
         {
@@ -411,18 +427,20 @@ describe("Contacts and person-file routes", () => {
 
     render(<BoardView />);
 
-    expect(await screen.findByRole("heading", { name: "No active contacts" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /Hudson Liao/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("table", { name: "Active sourcing contacts" })).toBeInTheDocument();
-    expect(screen.getAllByRole("row")).toHaveLength(1);
+    const row = await screen.findByRole("row", { name: "Preview person Hudson Liao" });
+    expect(row).toHaveTextContent("Not started");
+    expect(row).toHaveTextContent("The Hog");
+    expect(screen.queryByRole("heading", { name: "No saved people yet" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(2);
   });
 
-  it("updates a person sequence through labeled pressed-state controls", async () => {
+  it("updates a person sequence through the labeled sequence select", async () => {
     const { container } = render(<PersonFileView personId="person one" />);
 
     expect(await screen.findByRole("heading", { level: 1, name: "Alyssa Lee" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open" })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: "In conversation" }));
+    const sequence = screen.getByRole("combobox", { name: "Sequence state" });
+    expect(sequence).toHaveValue("open");
+    fireEvent.change(sequence, { target: { value: "in_conversation" } });
 
     await waitFor(() =>
       expect(api.setPersonSequence).toHaveBeenCalledWith(
@@ -496,14 +514,16 @@ describe("Contacts and person-file routes", () => {
     await screen.findByRole("heading", { level: 1, name: "Alyssa Lee" });
 
     // Change the status in the Person File.
-    fireEvent.click(screen.getByRole("button", { name: "In conversation" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Sequence state" }), {
+      target: { value: "in_conversation" },
+    });
     await waitFor(() =>
       expect(api.setPersonSequence).toHaveBeenCalledWith("person one", "in_conversation"),
     );
 
     // Navigate back to Contacts through the real back link — no event is
     // dispatched here by the test; the remount alone must refresh the view.
-    fireEvent.click(screen.getByRole("link", { name: "← Contacts" }));
+    fireEvent.click(screen.getByRole("link", { name: "Back to Contacts" }));
 
     const updatedFilters = await screen.findByRole("group", {
       name: "Filter contacts by sequence status",
@@ -534,7 +554,7 @@ describe("Contacts and person-file routes", () => {
     window.location.hash = "#/people/person%20one";
     render(<PersonFileView personId="person one" />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Create sourcing chat" }),
+      await screen.findByRole("button", { name: "Start chat" }),
     );
 
     await waitFor(() =>
@@ -555,10 +575,10 @@ describe("Contacts and person-file routes", () => {
     render(<PersonFileView personId="person one" />);
 
     expect(
-      await screen.findByRole("button", { name: "Open sourcing chat" }),
+      await screen.findByRole("button", { name: "Open chat" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Create sourcing chat" }),
+      screen.queryByRole("button", { name: "Start chat" }),
     ).not.toBeInTheDocument();
   });
 
@@ -567,7 +587,7 @@ describe("Contacts and person-file routes", () => {
     api.openPersonSourcingChat.mockRejectedValueOnce(new Error("stale version"));
     render(<PersonFileView personId="person one" />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "Create sourcing chat" }),
+      await screen.findByRole("button", { name: "Start chat" }),
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -584,7 +604,7 @@ describe("Contacts and person-file routes", () => {
       "Couldn’t load this person file",
     );
     expect(
-      screen.queryByRole("button", { name: /sourcing chat/i }),
+      screen.queryByRole("button", { name: /chat/i }),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Back to Contacts" })).toHaveAttribute(
       "href",

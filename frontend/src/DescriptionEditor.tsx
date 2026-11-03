@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   DescriptionSaveError,
@@ -13,11 +13,16 @@ import {
   subscribeDescriptionDraft,
   writeDescriptionDraft,
 } from "./descriptionDrafts";
+import { Icon } from "./icons";
 
 const LIMITS: Record<DescriptionSlot, number> = { general: 500, detailed: 8000 };
 const SLOT_LABEL: Record<DescriptionSlot, string> = {
   general: "Short description",
   detailed: "Detailed description",
+};
+const SLOT_NOUN: Record<DescriptionSlot, string> = {
+  general: "description",
+  detailed: "detailed description",
 };
 
 function savedText(description: PersonDescription): string {
@@ -42,9 +47,12 @@ export function describeDescription(
 
 /**
  * The one editor for a description slot, mounted anywhere (person file or
- * Contacts). Save / Cancel / Clear plus the "let the assistant maintain this"
- * release. Its draft is shared across every mount of the same person+slot and
- * survives relaunch; a failed save keeps the unsaved text in place.
+ * Contacts). At rest it shows the saved text with its owner, or one "Add"
+ * button when there is none; the textarea and Save / Cancel / Clear appear
+ * only while editing. A human-owned slot offers the "let the assistant
+ * maintain this" release. Its draft is shared across every mount of the same
+ * person+slot and survives relaunch, so a stored draft opens the editor; a
+ * failed save keeps the unsaved text in place.
  */
 export function DescriptionEditor({
   personId,
@@ -52,6 +60,7 @@ export function DescriptionEditor({
   onSaved,
   onClose,
   rows = 3,
+  startEditing = false,
 }: {
   personId: string;
   description: PersonDescription;
@@ -60,6 +69,8 @@ export function DescriptionEditor({
    *  (the Contacts cell) can collapse the editor. */
   onClose?: () => void;
   rows?: number;
+  /** The host already chose to edit (the Contacts cell), so skip the rest view. */
+  startEditing?: boolean;
 }) {
   const slot = description.slot;
   const limit = LIMITS[slot];
@@ -68,8 +79,12 @@ export function DescriptionEditor({
   const [draft, setDraft] = useState<string | null>(
     () => readDescriptionDraft(personId, slot)?.text ?? null,
   );
+  const [editing, setEditing] = useState(startEditing);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const field = useRef<HTMLTextAreaElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  const focusNext = useRef<"field" | "toggle" | null>(null);
   const [stale, setStale] = useState<boolean>(() => {
     const stored = readDescriptionDraft(personId, slot);
     return stored !== null && stored.baseVersion !== description.version;
@@ -90,6 +105,27 @@ export function DescriptionEditor({
   const value = draft ?? base;
   const dirty = draft !== null && draft !== base;
   const overLimit = value.length > limit;
+  // A stored draft is unsaved work, so it always shows in the editor.
+  const open = editing || draft !== null;
+
+  useEffect(() => {
+    const target = focusNext.current === "field" ? field.current
+      : focusNext.current === "toggle" ? toggle.current : null;
+    focusNext.current = null;
+    target?.focus();
+  }, [open]);
+
+  function begin() {
+    focusNext.current = "field";
+    setStatus(null);
+    setEditing(true);
+  }
+
+  function close() {
+    focusNext.current = "toggle";
+    setEditing(false);
+    onClose?.();
+  }
 
   function edit(next: string) {
     setDraft(next);
@@ -104,7 +140,7 @@ export function DescriptionEditor({
     setDraft(null);
     setStatus(null);
     clearDescriptionDraft(personId, slot);
-    onClose?.();
+    close();
   }
 
   function clear() {
@@ -134,7 +170,7 @@ export function DescriptionEditor({
         setDraft(null);
         setStale(false);
         onSaved(result.descriptions);
-        onClose?.();
+        close();
       } else {
         writeDescriptionDraft(personId, slot, {
           text: pending.text,
@@ -173,6 +209,78 @@ export function DescriptionEditor({
     }
   }
 
+  const noun = SLOT_NOUN[slot];
+  const owner = description.authority === "human" ? (
+    <span className="description-authority is-human" title="Protected from assistant updates">
+      Human-edited
+    </span>
+  ) : (
+    <span className="description-authority" title="Maintained by the assistant">
+      Assistant
+    </span>
+  );
+  const sources = description.source_refs?.length ? (
+    <details className="description-sources" aria-label="Description sources">
+      <summary>Sources ({description.source_refs.length})</summary>
+      {description.source_refs.map((source, index) => {
+        const url = typeof source === "string" ? source : source.url;
+        return url?.startsWith("https://mail.google.com/")
+          ? <a key={index} href={url} target="_blank" rel="noreferrer">Source email {index + 1}</a>
+          : <span key={index}>Saved source {index + 1}</span>;
+      })}
+    </details>
+  ) : null;
+  const statusLine = status ? (
+    <p className="description-status" role="status">
+      {status}
+    </p>
+  ) : null;
+
+  if (!open) {
+    const empty = base.trim() === "";
+    return (
+      <div className="description-editor" data-unsaved={busy ? "true" : undefined}>
+        {empty ? null : <p className="description-text">{base}</p>}
+        <div className="description-rest">
+          {empty ? (
+            <button ref={toggle} type="button" className="description-add" onClick={begin}>
+              <Icon name="add" />
+              Add {noun}
+            </button>
+          ) : null}
+          {/* An empty assistant slot shows only the Add button. */}
+          {empty && description.authority !== "human" ? null : owner}
+          {description.authority === "human" ? (
+            <button
+              type="button"
+              className="description-icon-button"
+              aria-label="Let the assistant maintain this"
+              title="Let the assistant maintain this"
+              onClick={() => void release()}
+              disabled={busy}
+            >
+              <Icon name="assistant" />
+            </button>
+          ) : null}
+          {empty ? null : (
+            <button
+              ref={toggle}
+              type="button"
+              className="description-icon-button description-edit"
+              aria-label={`Edit ${noun}`}
+              title={`Edit ${noun}`}
+              onClick={begin}
+            >
+              <Icon name="edit" />
+            </button>
+          )}
+        </div>
+        {sources}
+        {statusLine}
+      </div>
+    );
+  }
+
   return (
     <div className="description-editor" data-unsaved={dirty || busy ? "true" : undefined}>
       {stale ? (
@@ -181,6 +289,7 @@ export function DescriptionEditor({
         </p>
       ) : null}
       <textarea
+        ref={field}
         className="description-textarea"
         aria-label={SLOT_LABEL[slot]}
         rows={rows}
@@ -191,51 +300,26 @@ export function DescriptionEditor({
         <span className={`description-count${overLimit ? " is-over" : ""}`}>
           {value.length} / {limit}
         </span>
-        <span className="description-authority">
-          {description.authority === "human"
-            ? "Human-written · protected"
-            : "Assistant-maintained"}
-        </span>
       </div>
-      {description.source_refs?.length ? <details className="description-sources" aria-label="Description sources">
-        <summary>Sources ({description.source_refs.length})</summary>
-        {description.source_refs.map((source, index) => {
-          const url = typeof source === "string" ? source : source.url;
-          return url?.startsWith("https://mail.google.com/")
-            ? <a key={index} href={url} target="_blank" rel="noreferrer">Source email {index + 1}</a>
-            : <span key={index}>Saved source {index + 1}</span>;
-        })}
-      </details> : null}
       <div className="description-actions">
         <button
           type="button"
           onClick={() => void save()}
           disabled={busy || overLimit || !dirty}
         >
+          <Icon name="save" />
           {busy ? "Saving…" : "Save"}
         </button>
-        <button type="button" onClick={cancel} disabled={busy || !dirty}>
+        <button type="button" onClick={cancel} disabled={busy}>
+          <Icon name="close" />
           Cancel
         </button>
         <button type="button" onClick={clear} disabled={busy || value.length === 0}>
+          <Icon name="deny" />
           Clear
         </button>
-        {description.authority === "human" ? (
-          <button
-            type="button"
-            className="description-release"
-            onClick={() => void release()}
-            disabled={busy}
-          >
-            Let the assistant maintain this
-          </button>
-        ) : null}
       </div>
-      {status ? (
-        <p className="description-status" role="status">
-          {status}
-        </p>
-      ) : null}
+      {statusLine}
     </div>
   );
 }

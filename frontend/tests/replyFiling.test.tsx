@@ -85,6 +85,13 @@ function contactRow(link: HTMLElement): HTMLTableRowElement {
   return row;
 }
 
+function cell(row: HTMLTableRowElement, column: string): HTMLTableCellElement {
+  const headers = Array.from(row.closest("table")?.querySelectorAll("th") ?? []).map(
+    (header) => header.textContent,
+  );
+  return row.cells[headers.indexOf(column)];
+}
+
 function personFile(overrides: Record<string, unknown> = {}) {
   return {
     person: {
@@ -157,16 +164,16 @@ describe("reply filing on Contacts and the person file", () => {
     api.searchPersonDriveEvidence.mockResolvedValue({ files: [] });
   });
 
-  it("shows the next-action placeholder and the follow-up flag on Contacts", async () => {
+  it("leaves an empty next task blank and shows the follow-up flag on Contacts", async () => {
     render(<BoardView />);
 
     const waiting = contactRow(await screen.findByRole("link", { name: /Ada Analytic/ }));
-    expect(waiting).toHaveTextContent("No open task");
+    expect(cell(waiting, "Next task").textContent).toBe("");
     expect(waiting).not.toHaveTextContent("Reply to review");
 
     const talking = contactRow(screen.getByRole("link", { name: /Bob Builder/ }));
-    expect(talking).toHaveTextContent("No open task");
-    expect(talking).toHaveTextContent("Reply to review");
+    expect(cell(talking, "Next task").textContent).toBe("");
+    expect(cell(talking, "Attention")).toHaveTextContent("Reply to review");
   });
 
   it("flags an unassigned reply as needing review rather than as a reply", async () => {
@@ -178,7 +185,7 @@ describe("reply filing on Contacts and the person file", () => {
     expect(row).not.toHaveTextContent("They replied");
   });
 
-  it("says a person with no task has none rather than showing a blank action", async () => {
+  it("shows no placeholder copy when a person has no open task", async () => {
     api.getBoard.mockResolvedValue(
       boardWith(
         [{ ...WAITING, last_contact_at: null, last_contact_direction: null }],
@@ -187,9 +194,9 @@ describe("reply filing on Contacts and the person file", () => {
     );
     render(<BoardView />);
 
-    expect(
-      contactRow(await screen.findByRole("link", { name: /Ada Analytic/ })),
-    ).toHaveTextContent("No open task");
+    const row = contactRow(await screen.findByRole("link", { name: /Ada Analytic/ }));
+    expect(cell(row, "Next task").textContent).toBe("");
+    expect(row).not.toHaveTextContent("No open task");
   });
 
   it("checks for replies on demand and reports what the refresh did", async () => {

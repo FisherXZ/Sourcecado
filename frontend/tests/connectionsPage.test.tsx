@@ -134,6 +134,7 @@ describe("ConnectionsPage", () => {
     expect(within(available).getAllByRole("link").map((link) => link.textContent)).toEqual([
       expect.stringContaining("Gmail"),
       expect.stringContaining("Granola"),
+      expect.stringContaining("Monid sources"),
     ]);
   });
 
