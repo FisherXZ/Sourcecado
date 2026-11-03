@@ -5,6 +5,7 @@
 @import "./styles/route.css";
 @import "./styles/afterSendReminder.css";
 @import "./styles/enrichment.css";
+@import "./styles/monid.css";
 @import "./styles/responsive.css";
 
 .person-section-nav {

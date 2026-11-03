@@ -1,5 +1,9 @@
 # Engineering guides
 
+The optional additional-source connector is described in
+[Monid sources](monid-sources.md), including its quote, once-only approval and
+unverified live-connection limits.
+
 Setup and contribution instructions live in [CONTRIBUTING.md](../../CONTRIBUTING.md).
 These guides explain how the running application works and the constraints to
 preserve when changing it.

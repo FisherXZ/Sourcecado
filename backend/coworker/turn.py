@@ -1603,6 +1603,14 @@ async def run_turn(
                             if actions is None:
                                 raise ActionRefused("approval_binding_required", "Open this person's reviewed action flow before sending or enriching.")
                             resource = actions.tool_resource(call.name, call.arguments, session_id=sid)
+                        elif call.name == "monid_research":
+                            monid = execute_kwargs.get("monid_actions")
+                            if monid is None:
+                                raise ActionRefused("monid_unavailable", "Configure Monid in Connections first.")
+                            try:
+                                resource = monid.approval_resource(call.arguments,sid)
+                            except ValueError as exc:
+                                raise ActionRefused("monid_quote_required", str(exc)) from None
                         else:
                             resource = approval_resource(call.name, call.arguments,
                                 execute_kwargs.get("gmail"), execute_kwargs.get("workspace_runtime"))

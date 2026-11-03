@@ -141,6 +141,10 @@ def _turn(
             provider.arguments = {"draft_id":draft["id"],"reviewed_body_digest":body_digest(BODY),**provider.arguments}
         execution["consequential_actions"] = ConsequentialActions(people=person_store,inbox=inbox,
             gmail=lambda:gmail,http=lambda:None,apollo_key=lambda:"fixture",agent_runs=repository)
+    if isinstance(provider,OneToolProvider) and provider.tool_name == "monid_research":
+        from monid_fixture import prepared_monid
+        execution["monid_actions"], provider.arguments = prepared_monid(tmp_path, people=person_store,
+            store=conv, inbox=inbox, sid=sid, agent_runs=repository)
 
     async def _wait(_call_id: str) -> str:
         return wait or "allow"

@@ -312,6 +312,19 @@ export function approvalView(part: ToolCallMessagePartProps): ApprovalView {
     warning: null as string | null,
   };
 
+  if (toolName === "monid_research") {
+    const value = resourceRecord(part);
+    const valid = value?.kind === "monid_research";
+    return {...base,title:"Run one Monid lookup",icon:"search",spendsCredits:true,
+      caveat:valid?"Current quote rechecked before dispatch. Vendor charge ceiling is not atomic.":"Prepare and review an exact lookup quote first.",
+      rows:[row("person","Person","user",valid?(str(value.person_label)||str(value.person_id)):null),
+        row("provider","Provider","building",valid?str(value.provider):null),
+        row("endpoint","Endpoint","search",valid?str(value.endpoint):null),
+        row("input","Request data","list",valid?JSON.stringify(value.input,null,2):null,"Unavailable","code"),
+        row("quote","Quoted cost","coins",valid&&typeof value.quoted_cost_usd==="string"?`USD ${value.quoted_cost_usd}`:null),
+        row("maximum","Maximum cost","coins",valid&&typeof value.max_cost_usd==="string"?`USD ${value.max_cost_usd}`:null)]};
+  }
+
   if (toolName === "gmail_send") {
     const facts = sendFactsOf(part, args);
     return {
@@ -474,7 +487,7 @@ export function approvalView(part: ToolCallMessagePartProps): ApprovalView {
  * permission that exists, and it must not become reachable for these tools by a
  * change to the allow rule below.
  */
-const NEVER_STANDING = new Set(["gmail_send", "apollo_enrich_contact"]);
+const NEVER_STANDING = new Set(["gmail_send", "apollo_enrich_contact", "monid_research"]);
 
 export function canOfferAlways(
   toolName: string,

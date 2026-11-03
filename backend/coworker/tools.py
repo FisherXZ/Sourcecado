@@ -35,6 +35,7 @@ from coworker.gmail import (
 )
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
 from coworker.crm_tools import CRM_TOOL_NAMES, CRM_TOOL_SCHEMAS, execute_crm_tool
+from coworker.monid_tools import MONID_NAMES, MONID_TOOL_SCHEMAS, execute_monid
 from coworker.consequential_policy import ACTION_TOOLS, supported_mcp_read
 from coworker.drive_ingestion import DRIVE_INDEX_QUERY_SCHEMA, DriveIngestionStore
 from coworker.people import PersonStore
@@ -441,6 +442,7 @@ OPENAI_TOOLS = [
     WEB_SEARCH_SCHEMA,
     *BOARD_TOOL_SCHEMAS,
     *CRM_TOOL_SCHEMAS,
+    *MONID_TOOL_SCHEMAS,
     *WORKSPACE_TOOL_SCHEMAS,
 ]
 
@@ -623,8 +625,12 @@ def execute(
     consequential_actions: Any = None,
     approval_id: str | None = None,
     approval_claimant: str | None = None,
+    monid_actions: Any = None,
 ) -> tuple[bool, dict[str, Any]]:
     args = arguments or {}
+    if name in MONID_NAMES:
+        return execute_monid(name,args,actions=monid_actions,session_id=session_id,run_id=run_id,
+                             approval_id=approval_id,approval_claimant=approval_claimant)
     if name in ACTION_TOOLS:
         if consequential_actions is None:
             return False, {"code":"approval_binding_required","error":"Use the person-file reviewed action flow; this tool has no claimed authority."}
