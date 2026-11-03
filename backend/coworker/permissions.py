@@ -33,6 +33,10 @@ AUTO = frozenset(
         "board_upsert",
         "board_mutate",
         *CRM_TOOL_NAMES,
+        "monid_catalog",
+        "monid_inspect",
+        "monid_read_result",
+        "monid_prepare_research",
     }
 )
 ASK = frozenset(
@@ -40,6 +44,7 @@ ASK = frozenset(
         "gmail_draft",
         "gmail_send",
         "apollo_enrich_contact",
+        "monid_research",
         "calendar_create",
         "calendar_update",
         "board_delete",
@@ -63,6 +68,9 @@ RETRY_SAFE = frozenset(
         "board_get",
         "board_query",
         *CRM_READ_TOOLS,
+        "monid_catalog",
+        "monid_inspect",
+        "monid_read_result",
         "board_search",
     }
 )

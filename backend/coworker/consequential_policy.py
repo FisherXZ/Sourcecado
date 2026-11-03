@@ -3,7 +3,7 @@ ACTION_TOOLS = frozenset({'gmail_send', 'apollo_enrich_contact'})
 
 
 def requires_once(name: str) -> bool:
-    return name in ACTION_TOOLS
+    return name in ACTION_TOOLS or name == "monid_research"
 
 
 def supported_mcp_read(name: str) -> bool:

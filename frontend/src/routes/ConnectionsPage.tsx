@@ -8,6 +8,7 @@ import {
   type Connector,
 } from "../api";
 import { connectorStatus } from "../connectorStatus";
+import { MonidConnection } from "../MonidConnection";
 
 type PageState =
   | { status: "loading" }
@@ -211,6 +212,7 @@ function ConnectorDetail({
         </div>
         <span className={`connection-status tone-${status.tone}`}>{status.label}</span>
       </header>
+
       <p className="connection-description">{connector.description}</p>
 
       <dl className="connection-facts">
@@ -470,6 +472,7 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
           <p>Manage the sources Sourcecado can use for research and review-ready work.</p>
         </div>
       </header>
+      {connectorId === "monid" || (!connectorId && state.status === "loaded") ? <MonidConnection /> : null}
 
       {state.status === "loading" && <LoadingCatalog />}
       {state.status === "failed" && (
@@ -495,7 +498,7 @@ export function ConnectionsPage({ connectorId }: { connectorId?: string }) {
               onConfirmGoogleDisconnect={() => void performDisconnect(selectedConnector)}
             />
           )}
-          {connectorId && !selectedConnector && (
+          {connectorId && connectorId !== "monid" && !selectedConnector && (
             <section className="connection-detail connection-not-found">
               <a className="connection-back" href="#/connections">
                 <span aria-hidden="true">←</span> Back to Connections

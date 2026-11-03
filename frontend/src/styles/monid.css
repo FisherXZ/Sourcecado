@@ -1,0 +1,17 @@
+.monid-card { margin: 20px 0; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; }
+.monid-card h2 { font-size: 18px; margin-top: 0; }
+.monid-card a { color: var(--accent-deep); text-underline-offset: 3px; }
+.monid-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.monid-card form, .monid-card fieldset { display: grid; gap: 12px; margin: 12px 0; padding: 0; border: 0; min-width: 0; }
+.monid-card .task-field { font-size: 13px; }
+.monid-card input { min-width: 0; width: 100%; box-sizing: border-box; }
+.monid-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.monid-card button { min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--raised); color: var(--text); font: inherit; cursor: pointer; }
+.monid-card button:disabled { opacity: .55; cursor: default; }
+.monid-card .action-icon { margin-right: 4px; vertical-align: middle; }
+.monid-card pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--canvas); padding: 12px; border-radius: 6px; font-size: 13px; }
+.monid-card dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; }
+.monid-card dd { margin: 0; overflow-wrap: anywhere; }
+.monid-endpoint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.monid-card [role="alert"] { color: var(--error); }
+@media (max-width: 600px) { .monid-card { padding: 12px; } .monid-card input, .monid-card button { min-height: 44px; } }

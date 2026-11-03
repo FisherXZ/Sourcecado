@@ -5,6 +5,7 @@ import {PersonDetailsEditor} from "./crm/PersonDetailsEditor";
 import { FollowUpPanel } from "./FollowUpPanel";
 import { EnrichmentPanel } from "./EnrichmentPanel";
 import { OutreachPanel } from "./OutreachPanel";
+import { MonidResearch } from "./MonidResearch";
 import { TaskList } from "./Tasks";
 import { MailActivity } from "./crm/MailActivity";
 import { SavedTaskDrafts, savedTaskDrafts } from "./crm/SavedTaskDrafts";
@@ -623,6 +624,7 @@ export function PersonFileView({
         prepared={savedTaskDrafts(file)[0]}
       />
       <SavedTaskDrafts file={file} />
+      <MonidResearch personId={personId} sessionId={file.sourcing_chat?.session_id ?? null} />
 
       <MailActivity events={file.timeline} gaps={file.person.knowledge_gaps ?? []}
         sync={file.mail_sync} analysis={file.mail_analysis}

@@ -38,6 +38,7 @@ const TOOL_LABELS: Record<string, string> = {
   gmail_send: "Send email",
   gmail_draft: "Create draft",
   apollo_enrich_contact: "Enrich contact",
+  monid_research: "Run one Monid lookup",
   calendar_create: "Create calendar event",
   calendar_update: "Update calendar event",
 };

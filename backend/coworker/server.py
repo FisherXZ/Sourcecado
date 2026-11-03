@@ -54,6 +54,8 @@ from coworker.apollo import (
     enrichment_resource,
 )
 from coworker.apollo_curation import curate_apollo_candidates
+from coworker.monid import MonidResearchActions
+from coworker.monid_routes import monid_router
 from coworker.crm_reminders import reminder_router
 from coworker.crm_enrichment import enrichment_router
 from coworker.bundle_redaction import registered_secret_values
@@ -126,7 +128,7 @@ from coworker.gmail import (
 from coworker.follow_up import prepare_follow_up
 from coworker.inbox import Inbox
 from coworker.consequential_actions import ConsequentialActions, ActionRefused
-from coworker.consequential_policy import ACTION_TOOLS
+from coworker.consequential_policy import ACTION_TOOLS, requires_once
 from coworker.mcp import LiveMcp, write_default_mcp_json
 from coworker.connector_probe import (
     ConnectorProbes,
@@ -477,6 +479,10 @@ def create_app(
         else:
             store.set_open_session(store.create_session()["session_id"])
     app.state.inbox = Inbox(app.state.store)
+    app.state.monid = MonidResearchActions(people=app.state.people, store=app.state.store,
+        inbox=app.state.inbox, secrets_store=app.state.secrets, http=http,
+        agent_runs=lambda: getattr(app.state,"agent_runs",None))
+    app.include_router(monid_router(app.state.monid))
     app.state.scheduler = Scheduler(app.state.store, app.state.inbox)
     if persona_id:
         pid = persona_id
@@ -594,6 +600,7 @@ def create_app(
                     "store": app.state.store,
                     "gmail": app.state.gmail,
                     "consequential_actions": app.state.consequential_actions,
+                    "monid_actions": app.state.monid,
                     "drive": app.state.drive,
                     "drive_ingestions": app.state.drive_ingestions,
                     "calendar": app.state.calendar,
@@ -812,9 +819,15 @@ def create_app(
         run_context = _approval_run_context(item)
 
         async def _invoke() -> tuple[bool, dict[str, Any]]:
+            if item.get("name") == "monid_research":
+                return await asyncio.to_thread(app.state.monid.execute, _claimed_arguments(item),
+                    approval_id=approval_id, approval_claimant=claimant,
+                    run_id=run_context.run_id if run_context else None,
+                    session_id=str(item.get("session_id") or ""))
             if item["name"] in ACTION_TOOLS:
                 return await asyncio.to_thread(app.state.consequential_actions.execute_claimed,
                     item["id"], claimant)
+
             return await asyncio.to_thread(
                 execute,
                 item["name"],
@@ -822,6 +835,7 @@ def create_app(
                 store=app.state.store,
                 gmail=app.state.gmail,
                 consequential_actions=app.state.consequential_actions,
+                monid_actions=app.state.monid,
                 drive=app.state.drive,
                 calendar=app.state.calendar,
                 http=app.state.http,
@@ -1122,6 +1136,7 @@ def create_app(
                     store=store,
                     gmail=app.state.gmail,
                 consequential_actions=app.state.consequential_actions,
+                monid_actions=app.state.monid,
                     drive=app.state.drive,
                     drive_ingestions=app.state.drive_ingestions,
                     calendar=app.state.calendar,
@@ -1466,7 +1481,7 @@ def create_app(
         item = app.state.inbox.get(item_id)
         if item is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        if item.get("name") in ACTION_TOOLS and scope != "once":
+        if requires_once(str(item.get("name") or "")) and scope != "once":
             return JSONResponse({"code":"once_only","error":"Sending and paid enrichment require one action-specific approval."}, status_code=400)
         claimant = f"http:{secrets.token_hex(16)}"
         if item.get("kind") == "recovery_approval":
@@ -3691,6 +3706,7 @@ def create_app(
                     store=store,
                     gmail=app.state.gmail,
                 consequential_actions=app.state.consequential_actions,
+                monid_actions=app.state.monid,
                     drive=app.state.drive,
                     drive_ingestions=app.state.drive_ingestions,
                     calendar=app.state.calendar,
@@ -3839,6 +3855,7 @@ def create_app(
                         "store": store,
                         "gmail": app.state.gmail,
                     "consequential_actions": app.state.consequential_actions,
+                    "monid_actions": app.state.monid,
                         "drive": app.state.drive,
                         "drive_ingestions": app.state.drive_ingestions,
                         "calendar": app.state.calendar,
