@@ -4,6 +4,8 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import { Icon, type IconName } from "../icons";
@@ -36,11 +38,27 @@ const FIELDS: Array<{
   { field: "phone", label: "Phone", max: 80, type: "tel" },
   { field: "linkedin_url", label: "LinkedIn URL", max: 500, type: "url" },
 ];
+const meta = (field: PersonDetailField) =>
+  FIELDS.find((item) => item.field === field)!;
+
+/** Role and phone save on Enter. Name, company, email and LinkedIn decide who
+ *  this person is, so a change to them always opens the correction review. */
+const REVIEWED = new Set<PersonDetailField>([
+  "first_name",
+  "last_name",
+  "company",
+  "email",
+  "linkedin_url",
+]);
+
+/** One field edited in place, or every field ("Edit details"). */
+type Scope = PersonDetailField | "all";
 type Draft = {
   version: number;
   values: Record<PersonDetailField, string>;
   changed: PersonDetailField[];
   reason: string;
+  scope: Scope;
 };
 function values(
   person: PersonFile["person"],
@@ -68,7 +86,13 @@ function read(pid: string): Draft | null {
       raw.values &&
       Array.isArray(raw.changed) &&
       typeof raw.reason === "string"
-      ? raw
+      ? {
+          ...raw,
+          scope:
+            raw.scope === "all" || FIELDS.some((f) => f.field === raw.scope)
+              ? raw.scope
+              : "all",
+        }
       : null;
   } catch {
     return null;
@@ -88,12 +112,11 @@ const ATTRIBUTES: Array<{
   { field: "title", noun: "role", icon: { icon: "role" } },
 ];
 
-function safeLink(field: PersonDetailField, value: string): string | null {
-  if (field === "email") return `mailto:${value}`;
-  if (field === "phone") return `tel:${value.replace(/[^\d+]/g, "")}`;
-  if (field === "linkedin_url")
-    return /^https:\/\/[^\s]+$/.test(value) ? value : null;
-  return null;
+function Mark({ field }: { field: PersonDetailField }) {
+  const icon = ATTRIBUTES.find((item) => item.field === field)?.icon ?? {
+    glyph: "user" as const,
+  };
+  return "glyph" in icon ? <Glyph name={icon.glyph} /> : <Icon name={icon.icon} />;
 }
 
 function shownValue(field: PersonDetailField, value: string): string {
@@ -113,7 +136,7 @@ function CopyValue({ value, noun }: { value: string; noun: string }) {
   return (
     <button
       type="button"
-      className="pf-icon-btn"
+      className="pf-icon-btn pd-hover-action"
       aria-label={label}
       title={label}
       onClick={() =>
@@ -121,21 +144,21 @@ function CopyValue({ value, noun }: { value: string; noun: string }) {
           ?.writeText(value)
           .then(() => setCopied(true))
           .catch(() => {
-            /* The value stays selectable as a link. */
+            /* The value stays selectable. */
           })
       }
     >
-      <Icon name={copied ? "approve" : "copy"} />
+      <Icon name={copied ? "check" : "copy"} />
     </button>
   );
 }
 
 export type PersonDetailsHandle = {
-  /** Open the editor, optionally focused on one field. Keeps an open draft. */
+  /** Edit one field in place, or every field. Keeps an open unsaved edit. */
   begin: (field?: PersonDetailField) => void;
 };
 
-/** One correction form serves the compact preview and durable Person File. */
+/** One correction editor serves the compact preview and durable Person File. */
 export const PersonDetailsEditor = forwardRef<
   PersonDetailsHandle,
   {
@@ -148,13 +171,7 @@ export const PersonDetailsEditor = forwardRef<
     editTrigger?: RefObject<HTMLButtonElement | null>;
   }
 >(function PersonDetailsEditor(
-  {
-    person,
-    onSaved,
-    history = [],
-    onBusyChange,
-    editTrigger,
-  },
+  { person, onSaved, history = [], onBusyChange, editTrigger },
   ref,
 ) {
   const pid = person.person_id;
@@ -166,14 +183,23 @@ export const PersonDetailsEditor = forwardRef<
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
   const [sourceRefs, setSourceRefs] = useState<string[]>([]);
+  const [saved, setSaved] = useState<{
+    fields: PersonDetailField[];
+    changeId: string | null;
+    undone?: boolean;
+  } | null>(null);
   const editButton = useRef<HTMLButtonElement>(null);
   const wasEditing = useRef(Boolean(draft));
   const editor = useRef<HTMLElement>(null);
   const operation = useRef<{ fingerprint: string; id: string } | null>(null);
   const focusField = useRef<PersonDetailField | null>(null);
-  const focusTrigger = () => (editTrigger?.current ?? editButton.current)?.focus();
+  const returnTo = useRef<Scope>(draft?.scope ?? "all");
+  // Set while a change is being proposed, so the blur that follows Enter (or
+  // the review taking focus) does not propose it a second time.
+  const proposing = useRef(false);
   const controls = person.identity_field_controls as
-    Record<string, { protected?: boolean }> | undefined;
+    | Record<string, { protected?: boolean }>
+    | undefined;
   const conflicts = Array.isArray(person.identity_conflicts)
     ? (person.identity_conflicts as Array<{
         conflict_id: string;
@@ -187,6 +213,16 @@ export const PersonDetailsEditor = forwardRef<
   const protectedFields = Object.values(controls ?? {}).some(
     (c) => c.protected,
   );
+  const savedValue = (field: PersonDetailField) =>
+    typeof person[field] === "string" ? (person[field] as string).trim() : "";
+  function changes(d: Draft) {
+    return Object.fromEntries(
+      d.changed
+        .filter((field) => d.values[field].trim() !== savedValue(field))
+        .map((field) => [field, d.values[field].trim() || null]),
+    ) as Partial<Record<PersonDetailField, string | null>>;
+  }
+
   useEffect(() => {
     if (draft) {
       try {
@@ -200,35 +236,78 @@ export const PersonDetailsEditor = forwardRef<
     if (draft && !review)
       editor.current
         ?.querySelector<HTMLInputElement>(
-          focusField.current ? `input[name="${focusField.current}"]` : "input",
+          focusField.current
+            ? `input[name="${focusField.current}"]`
+            : "input[name]",
         )
         ?.focus();
     focusField.current = null;
-  }, [Boolean(draft), Boolean(review)]);
+  }, [draft?.scope, Boolean(draft), Boolean(review)]);
+  useEffect(() => {
+    if (!review) return;
+    const card = editor.current?.querySelector(".pd-review");
+    (
+      card?.querySelector<HTMLElement>('input[type="checkbox"]') ??
+      card?.querySelector<HTMLElement>("input.pd-reason") ??
+      card?.querySelector<HTMLElement>(".pd-btn.is-primary")
+    )?.focus();
+  }, [review]);
   useEffect(() => {
     onBusyChange?.(busy);
   }, [busy, onBusyChange]);
   useEffect(() => {
-    if (!draft && wasEditing.current) focusTrigger();
-    wasEditing.current = Boolean(draft);
+    if (draft) {
+      wasEditing.current = true;
+      return;
+    }
+    if (!wasEditing.current) return;
+    wasEditing.current = false;
+    // Return focus only when it was lost with the closed editor; never pull
+    // it back from wherever the director has moved on to.
+    const active = document.activeElement;
+    if (!active || active === document.body) focusTrigger(returnTo.current);
   }, [Boolean(draft)]);
-  useImperativeHandle(ref, () => ({
-    begin(field) {
-      if (draft) {
-        editor.current?.querySelector<HTMLInputElement>("input")?.focus();
-        return;
-      }
-      focusField.current = field ?? null;
-      begin();
-    },
-  }));
-  function begin() {
+  useEffect(() => {
+    if (!saved) return;
+    const timer = window.setTimeout(() => setSaved(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [saved]);
+  useImperativeHandle(ref, () => ({ begin: (field) => open(field ?? "all") }));
+
+  function focusTrigger(scope: Scope) {
+    const target =
+      scope === "all" || !ATTRIBUTES.some((a) => a.field === scope)
+        ? (editTrigger?.current ?? editButton.current)
+        : editor.current?.querySelector<HTMLElement>(
+            `[data-edit-field="${scope}"]`,
+          );
+    target?.focus();
+  }
+  function open(requested: Scope) {
+    if (busy) return;
+    if (draft && (Object.keys(changes(draft)).length || review)) {
+      // An unsaved edit stays where it is; bring the director back to it.
+      editor.current
+        ?.querySelector<HTMLElement>(
+          review ? ".pd-review input, .pd-review button" : "input[name]",
+        )
+        ?.focus();
+      return;
+    }
+    const scope: Scope = ATTRIBUTES.some((a) => a.field === requested)
+      ? requested
+      : "all";
+    focusField.current = requested === "all" ? null : requested;
+    returnTo.current = scope;
+    proposing.current = false;
+    setSaved(null);
     setUndoTarget(null);
     setDraft({
       version: person.version ?? 0,
       values: values(person),
       changed: [],
       reason: "",
+      scope,
     });
     setReview(null);
     setError(null);
@@ -236,6 +315,7 @@ export const PersonDetailsEditor = forwardRef<
   }
   function cancel() {
     clearPersonCorrectionDraft(pid);
+    proposing.current = false;
     setDraft(null);
     setReview(null);
     setConfirmed(false);
@@ -244,25 +324,38 @@ export const PersonDetailsEditor = forwardRef<
     setSourceRefs([]);
     setUndoTarget(null);
     operation.current = null;
-    focusTrigger();
   }
-  function changes(d: Draft) {
-    return Object.fromEntries(
-      d.changed.map((field) => [field, d.values[field].trim() || null]),
-    );
+  function closeReview() {
+    proposing.current = false;
+    focusField.current = draft && draft.scope !== "all" ? draft.scope : null;
+    setReview(null);
+    setConfirmed(false);
+    setError(null);
   }
-  async function prepare() {
-    if (!draft || busy) return;
+  /** Enter, blur or Save: review identity changes, save the rest. */
+  function propose(d: Draft | null = draft) {
+    if (!d || busy || review || proposing.current) return;
+    const changed = Object.keys(changes(d)) as PersonDetailField[];
+    if (!changed.length) {
+      if (d.scope !== "all") cancel();
+      return;
+    }
+    proposing.current = true;
+    if (changed.some((field) => REVIEWED.has(field))) void prepare(d);
+    else void save(d, null);
+  }
+  async function prepare(d: Draft) {
     setBusy(true);
     setError(null);
     try {
       const result = await reviewPersonCorrection(pid, {
-        changes: changes(draft),
-        expected_version: draft.version,
+        changes: changes(d),
+        expected_version: d.version,
       });
       setReview(result);
       setConfirmed(false);
     } catch (e) {
+      proposing.current = false;
       setError(
         e instanceof Error
           ? e.message
@@ -280,6 +373,7 @@ export const PersonDetailsEditor = forwardRef<
     try {
       const latest = await getPerson(pid);
       setDraft({ ...draft, version: latest.person.version ?? 0 });
+      proposing.current = false;
       setReview(null);
       setError(null);
       setStale(false);
@@ -290,18 +384,20 @@ export const PersonDetailsEditor = forwardRef<
       setBusy(false);
     }
   }
-  async function save() {
-    if (!draft || !review || busy || (review.duplicates.length && !confirmed))
-      return;
+  async function save(
+    d: Draft | null = draft,
+    r: PersonCorrectionReview | null = review,
+  ) {
+    if (!d || busy || (r?.duplicates.length && !confirmed)) return;
     const input: Omit<PersonCorrectionInput, "operation_id"> = {
-      changes: changes(draft),
-      expected_version: draft.version,
-      reason: draft.reason.trim(),
+      changes: undoTarget ? {} : changes(d),
+      expected_version: d.version,
+      reason: d.reason.trim(),
       source_refs: sourceRefs,
-      ...(review.duplicates.length
+      ...(r?.duplicates.length
         ? {
-            collision_token: review.collision_token,
-            confirmed_duplicate_ids: review.duplicates.map((p) => p.person_id),
+            collision_token: r.collision_token,
+            confirmed_duplicate_ids: r.duplicates.map((p) => p.person_id),
           }
         : {}),
     };
@@ -321,19 +417,34 @@ export const PersonDetailsEditor = forwardRef<
             ...input,
             operation_id: operation.current.id,
           });
+      const fields = undoTarget
+        ? (r?.changes.map((change) => change.field) ?? [])
+        : (Object.keys(input.changes) as PersonDetailField[]);
       clearPersonCorrectionDraft(pid);
+      proposing.current = false;
       setDraft(null);
       setReview(null);
+      setUndoTarget(null);
       operation.current = null;
       setSourceRefs([]);
+      setSaved({
+        fields,
+        changeId:
+          !undoTarget && "change" in result
+            ? ((result as { change?: CrmChange }).change?.change_id ?? null)
+            : null,
+        undone: Boolean(undoTarget),
+      });
       onSaved(result.person);
       window.dispatchEvent(new Event("sourcecado:board-changed"));
-      focusTrigger();
     } catch (e) {
+      proposing.current = false;
       setError(
         e instanceof Error ? e.message : "Couldn’t save. Your edits are kept.",
       );
       if (e instanceof PersonCorrectionError && e.review) {
+        // A possible duplicate turns a direct save into a review.
+        proposing.current = true;
         setReview(e.review);
         setConfirmed(false);
         operation.current = null;
@@ -355,6 +466,11 @@ export const PersonDetailsEditor = forwardRef<
         operation_id: operation.current.id,
       });
       operation.current = null;
+      setSaved((current) => ({
+        fields: current?.changeId === changeId ? current.fields : [],
+        changeId: null,
+        undone: true,
+      }));
       onSaved(result.person);
       window.dispatchEvent(new Event("sourcecado:board-changed"));
     } catch (e) {
@@ -365,12 +481,16 @@ export const PersonDetailsEditor = forwardRef<
         const next = values(person);
         for (const change of e.review.changes)
           next[change.field] = change.after ?? "";
+        const only = e.review.changes.length === 1 ? e.review.changes[0].field : null;
+        setSaved(null);
         setDraft({
           version: person.version ?? 0,
           values: next,
           changed: e.review.changes.map((change) => change.field),
           reason: "Undo correction",
+          scope: only && ATTRIBUTES.some((a) => a.field === only) ? only : "all",
         });
+        proposing.current = true;
         setReview(e.review);
         setConfirmed(false);
         setUndoTarget(changeId);
@@ -380,11 +500,207 @@ export const PersonDetailsEditor = forwardRef<
       setBusy(false);
     }
   }
+  function reviewConflict(conflict: (typeof conflicts)[number]) {
+    const d: Draft = {
+      version: person.version ?? 0,
+      values: { ...values(person), [conflict.field]: conflict.provider_value ?? "" },
+      changed: [conflict.field],
+      reason: "Reviewed provider suggestion",
+      scope: ATTRIBUTES.some((a) => a.field === conflict.field)
+        ? conflict.field
+        : "all",
+    };
+    returnTo.current = d.scope;
+    setSaved(null);
+    setDraft(d);
+    setSourceRefs(conflict.source_ref_id ? [conflict.source_ref_id] : []);
+    setError(null);
+    proposing.current = true;
+    void prepare(d);
+  }
+
+  function edit(field: PersonDetailField, value: string) {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      values: { ...draft.values, [field]: value },
+      changed: draft.changed.includes(field)
+        ? draft.changed
+        : [...draft.changed, field],
+    });
+    setError(null);
+    operation.current = null;
+  }
+  function input(field: PersonDetailField, single: boolean) {
+    if (!draft) return null;
+    const { label, max, type } = meta(field);
+    return (
+      <input
+        name={field}
+        type={type ?? "text"}
+        aria-label={label}
+        placeholder={label}
+        autoComplete="off"
+        maxLength={max}
+        value={draft.values[field]}
+        readOnly={busy || Boolean(review)}
+        onChange={(e) => edit(field, e.target.value)}
+        onKeyDown={
+          single
+            ? (e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  propose();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancel();
+                }
+              }
+            : undefined
+        }
+        onBlur={
+          single
+            ? (e) => {
+                if (
+                  e.currentTarget
+                    .closest("li")
+                    ?.contains(e.relatedTarget as Node | null)
+                )
+                  return;
+                propose();
+              }
+            : undefined
+        }
+      />
+    );
+  }
+
+  const reviewCard: ReactNode =
+    review && draft ? (
+      <div
+        className="pd-review"
+        role="group"
+        aria-label={undoTarget ? "Review Undo" : "Review person correction"}
+        onKeyDown={(e: KeyboardEvent) => {
+          if (e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (undoTarget) cancel();
+          else closeReview();
+        }}
+      >
+        <ul className="pd-review-changes" aria-label="Person detail changes">
+          {review.changes.map((change) => (
+            <li key={change.field}>
+              <Mark field={change.field} />
+              <span className="pf-visually-hidden">{change.label}: </span>
+              <span className="pd-before">{change.before ?? "Blank"}</span>
+              <Icon name="next" />
+              <strong className="pd-after">{change.after ?? "Blank"}</strong>
+            </li>
+          ))}
+        </ul>
+        {review.identity_changed ? (
+          <p className="pd-warn">
+            <Glyph name="info" />
+            Earlier send and lookup approvals will need a new review.
+          </p>
+        ) : null}
+        {review.duplicates.length ? (
+          <div className="pd-duplicates">
+            {review.duplicates.map((duplicate) => (
+              <p key={duplicate.person_id}>
+                <Glyph name="user" />
+                <span>
+                  Possible duplicate:{" "}
+                  <a href={duplicate.href}>
+                    {duplicate.name}
+                    {duplicate.company ? ` · ${duplicate.company}` : ""}
+                  </a>{" "}
+                  (same{" "}
+                  {duplicate.matched_fields
+                    .map((f) => meta(f).label.toLowerCase())
+                    .join(", ")}
+                  )
+                </span>
+              </p>
+            ))}
+            <label className="pd-check">
+              <input
+                type="checkbox"
+                checked={confirmed}
+                disabled={busy}
+                onChange={(e) => setConfirmed(e.target.checked)}
+              />
+              I checked the existing file. Keep this correction here.
+            </label>
+          </div>
+        ) : null}
+        {!undoTarget ? (
+          <input
+            className="pd-reason"
+            aria-label="Reason"
+            placeholder="Why (optional)"
+            maxLength={500}
+            value={draft.reason}
+            readOnly={busy}
+            onChange={(e) => {
+              setDraft({ ...draft, reason: e.target.value });
+              operation.current = null;
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              void save();
+            }}
+          />
+        ) : null}
+        <div className="pd-actions">
+          <button
+            type="button"
+            className="pd-btn is-primary"
+            aria-label={undoTarget ? "Confirm Undo" : "Save correction"}
+            disabled={
+              busy || Boolean(review.duplicates.length && !confirmed) || stale
+            }
+            onClick={() => void save()}
+          >
+            <Icon name="check" />
+            {busy ? "Saving…" : undoTarget ? "Confirm Undo" : "Save"}
+          </button>
+          {!undoTarget ? (
+            <button
+              type="button"
+              className="pd-btn"
+              aria-label="Back to editing"
+              disabled={busy}
+              onClick={closeReview}
+            >
+              <Icon name="edit" />
+              Edit
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="pd-btn"
+            disabled={busy}
+            onClick={cancel}
+          >
+            <Icon name="close" />
+            Cancel
+          </button>
+        </div>
+      </div>
+    ) : null;
+
+  const savedNames = saved?.fields.map((f) => meta(f).label) ?? [];
   return (
     <section
       ref={editor}
       className="person-details-editor"
       aria-label="Person details"
+      aria-busy={busy || undefined}
       data-unsaved={dirty ? "true" : undefined}
       data-correction-busy={busy ? "true" : undefined}
     >
@@ -399,320 +715,265 @@ export const PersonDetailsEditor = forwardRef<
           </span>
         ) : null}
         {/* Without an outside trigger (the Contacts preview), edit from here. */}
-        {!editTrigger && !draft ? (
+        {!editTrigger && draft?.scope !== "all" ? (
           <button
             type="button"
             ref={editButton}
             className="pf-icon-btn pf-side-edit"
             aria-label="Edit details"
             title="Edit details"
-            onClick={begin}
+            disabled={busy}
+            onClick={() => open("all")}
           >
             <Icon name="edit" />
           </button>
         ) : null}
       </div>
-      {!draft ? (
-        <>
-          <ul className="pf-attrs">
-            {ATTRIBUTES.map(({ field, noun, icon }) => {
-              const raw = person[field];
-              const value = typeof raw === "string" ? raw.trim() : "";
-              const mark =
-                "glyph" in icon ? (
-                  <Glyph name={icon.glyph} />
-                ) : (
-                  <Icon name={icon.icon} />
-                );
-              if (!value)
-                return (
-                  <li key={field} className="pf-attr is-missing">
-                    <button
-                      type="button"
-                      className="pf-attr-add"
-                      onClick={() => {
-                        focusField.current = field;
-                        begin();
-                      }}
-                    >
-                      {mark}
-                      Add {noun}
-                    </button>
-                  </li>
-                );
-              const href = safeLink(field, value);
+      {draft?.scope === "all" ? (
+        <form
+          className="pd-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            propose();
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "Escape" || review) return;
+            e.preventDefault();
+            e.stopPropagation();
+            cancel();
+          }}
+        >
+          <div className="pd-row pd-name-row">
+            <Glyph name="user" />
+            {input("first_name", false)}
+            {input("last_name", false)}
+          </div>
+          {ATTRIBUTES.map(({ field }) => (
+            <div key={field} className="pd-row">
+              <Mark field={field} />
+              {input(field, false)}
+            </div>
+          ))}
+          {reviewCard ?? (
+            <div className="pd-actions">
+              <button
+                type="submit"
+                className="pd-btn is-primary"
+                disabled={busy || !Object.keys(changes(draft)).length}
+              >
+                <Icon name="check" />
+                {busy
+                  ? "Saving…"
+                  : Object.keys(changes(draft)).some((f) =>
+                        REVIEWED.has(f as PersonDetailField),
+                      )
+                    ? "Review changes"
+                    : "Save"}
+              </button>
+              <button
+                type="button"
+                className="pd-btn"
+                disabled={busy}
+                onClick={cancel}
+              >
+                <Icon name="close" />
+                Cancel
+              </button>
+            </div>
+          )}
+        </form>
+      ) : (
+        <ul className="pf-attrs">
+          {ATTRIBUTES.map(({ field, noun }) => {
+            if (draft?.scope === field)
               return (
-                <li key={field} className="pf-attr">
-                  {mark}
-                  {href ? (
-                    <a
-                      href={href}
-                      {...(field === "linkedin_url"
-                        ? { target: "_blank", rel: "noreferrer" }
-                        : {})}
-                    >
-                      {shownValue(field, value)}
-                    </a>
-                  ) : (
-                    <span>{value}</span>
+                <li key={field} className="pf-attr is-editing">
+                  <Mark field={field} />
+                  {input(field, true)}
+                  {review ? null : (
+                    <span className="pd-row-actions">
+                      <button
+                        type="button"
+                        className="pf-icon-btn"
+                        aria-label={`Save ${noun}`}
+                        title="Save (Enter)"
+                        disabled={busy}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => propose()}
+                      >
+                        <Icon name="check" />
+                      </button>
+                      <button
+                        type="button"
+                        className="pf-icon-btn"
+                        aria-label="Cancel"
+                        title="Cancel (Esc)"
+                        disabled={busy}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={cancel}
+                      >
+                        <Icon name="close" />
+                      </button>
+                    </span>
                   )}
-                  {field === "email" ? (
-                    <CopyValue value={value} noun="email" />
-                  ) : null}
+                  {reviewCard}
                 </li>
               );
-            })}
-          </ul>
-          {conflicts.length ? (
-            <div className="person-details-conflicts">
-              <h4>Provider differences to review</h4>
-              {conflicts.map((conflict) => (
-                <article key={conflict.conflict_id}>
-                  <p>
-                    <strong>
-                      {FIELDS.find((f) => f.field === conflict.field)?.label}
-                    </strong>{" "}
-                    · Saved: {conflict.saved_value ?? "Blank"}
-                  </p>
-                  <p>Provider: {conflict.provider_value ?? "Blank"}</p>
+            const value = savedValue(field);
+            const fresh = saved?.fields.includes(field) ? " is-saved" : "";
+            if (!value)
+              return (
+                <li key={field} className={`pf-attr is-missing${fresh}`}>
                   <button
                     type="button"
-                    onClick={() => {
-                      setDraft({
-                        version: person.version ?? 0,
-                        values: {
-                          ...values(person),
-                          [conflict.field]: conflict.provider_value ?? "",
-                        },
-                        changed: [conflict.field],
-                        reason: "Reviewed provider suggestion",
-                      });
-                      setSourceRefs(
-                        conflict.source_ref_id ? [conflict.source_ref_id] : [],
-                      );
-                      setError(null);
-                    }}
+                    className="pf-attr-add"
+                    data-edit-field={field}
+                    disabled={busy}
+                    onClick={() => open(field)}
                   >
-                    <Icon name="edit" />
-                    Review{" "}
-                    {FIELDS.find(
-                      (f) => f.field === conflict.field,
-                    )?.label.toLowerCase()}{" "}
-                    suggestion
+                    <Mark field={field} />
+                    Add {noun}
                   </button>
-                </article>
-              ))}
-            </div>
-          ) : null}
-          {history.some((change) => change.entity_type === "person_details") ? (
-            <details className="person-details-history">
-              <summary>Correction history</summary>
-              <ol>
-                {history
-                  .filter((change) => change.entity_type === "person_details")
-                  .map((change) => (
-                    <li key={change.change_id}>
-                      <p>
-                        {change.reason} ·{" "}
-                        {change.actor === "assistant" ? "Assistant" : "You"}
-                      </p>
-                      {change.can_undo && change.action !== "undo" ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          aria-label={`Undo correction: ${change.reason}`}
-                          onClick={() => void undo(change.change_id)}
-                        >
-                          <Icon name="refresh" />
-                          Undo correction
-                        </button>
-                      ) : null}
-                    </li>
-                  ))}
-              </ol>
-            </details>
-          ) : null}
-          {error ? (
-            <p role="alert" className="task-error">
-              {error}
-            </p>
-          ) : null}
-        </>
-      ) : (
-        <>
-          {review ? (
-            <div className="person-details-review">
-              <h4>Review person correction</h4>
-              <table aria-label="Person detail changes">
-                <thead>
-                  <tr>
-                    <th scope="col">Detail</th>
-                    <th scope="col">Saved</th>
-                    <th scope="col">Correction</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {review.changes.map((change) => (
-                    <tr key={change.field}>
-                      <th scope="row">{change.label}</th>
-                      <td>{change.before ?? "Blank"}</td>
-                      <td>{change.after ?? "Blank"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {review.identity_changed ? (
-                <p>
-                  Earlier send and enrichment approvals will need a new review.
-                </p>
-              ) : null}
-              {review.duplicates.length ? (
-                <div className="person-details-duplicates">
-                  <h4>Possible duplicate</h4>
-                  {review.duplicates.map((duplicate) => (
-                    <article key={duplicate.person_id}>
-                      <a href={duplicate.href}>
-                        {duplicate.name}
-                        {duplicate.company ? ` · ${duplicate.company}` : ""}
-                      </a>
-                      <p>
-                        Matching{" "}
-                        {duplicate.matched_fields
-                          .map((f) =>
-                            FIELDS.find(
-                              (field) => field.field === f,
-                            )?.label.toLowerCase(),
-                          )
-                          .join(", ")}
-                      </p>
-                    </article>
-                  ))}
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={confirmed}
-                      disabled={busy}
-                      onChange={(e) => setConfirmed(e.target.checked)}
-                    />
-                    I reviewed the existing files. Keep this correction on this
-                    person.
-                  </label>
-                </div>
-              ) : null}
-              <p className="person-details-reason">
-                <strong>Reason:</strong> {draft.reason}
-              </p>
-              <div className="person-details-actions">
+                </li>
+              );
+            const shown = shownValue(field, value);
+            return (
+              <li key={field} className={`pf-attr${fresh}`}>
+                <Mark field={field} />
                 <button
                   type="button"
-                  disabled={
-                    busy ||
-                    Boolean(review.duplicates.length && !confirmed) ||
-                    stale
-                  }
-                  onClick={() => void save()}
-                >
-                  <Icon name="save" />
-                  {busy
-                    ? "Saving…"
-                    : undoTarget
-                      ? "Confirm Undo"
-                      : "Save correction"}
-                </button>
-                <button
-                  type="button"
+                  className="pd-value"
+                  data-edit-field={field}
+                  aria-label={`Edit ${noun}: ${shown}`}
+                  title={`Edit ${noun}`}
                   disabled={busy}
-                  onClick={() => {
-                    setReview(null);
-                    setError(null);
-                  }}
+                  onClick={() => open(field)}
                 >
+                  <span>{shown}</span>
                   <Icon name="edit" />
-                  Back to editing
                 </button>
-                <button type="button" disabled={busy} onClick={cancel}>
-                  <Icon name="close" />
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void prepare();
-              }}
+                {field === "email" ? (
+                  <CopyValue value={value} noun="email" />
+                ) : field === "linkedin_url" &&
+                  /^https:\/\/[^\s]+$/.test(value) ? (
+                  <a
+                    className="pf-icon-btn pd-hover-action"
+                    href={value}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Open LinkedIn profile"
+                    title="Open LinkedIn profile"
+                  >
+                    <Icon name="external" />
+                  </a>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {saved ? (
+        <p className="pd-result" role="status">
+          <Icon name="check" />
+          {saved.undone
+            ? "Restored"
+            : savedNames.length === 1
+              ? `${savedNames[0]} saved`
+              : "Details saved"}
+          {saved.changeId ? (
+            <button
+              type="button"
+              className="pd-btn is-quiet"
+              aria-label="Undo correction"
+              disabled={busy}
+              onClick={() => void undo(saved.changeId!)}
             >
-              <div className="person-details-fields">
-                {FIELDS.map(({ field, label, max, type }) => (
-                  <label key={field}>
-                    {label}
-                    <input
-                      name={field}
-                      type={type ?? "text"}
-                      autoComplete="off"
-                      maxLength={max}
-                      value={draft.values[field]}
-                      disabled={busy}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setDraft({
-                          ...draft,
-                          values: { ...draft.values, [field]: value },
-                          changed: draft.changed.includes(field)
-                            ? draft.changed
-                            : [...draft.changed, field],
-                        });
-                        setError(null);
-                        operation.current = null;
-                      }}
-                    />
-                  </label>
-                ))}
-              </div>
-              <label className="person-details-source">
-                Reason or source
-                <textarea
-                  value={draft.reason}
-                  maxLength={500}
-                  required
-                  disabled={busy}
-                  onChange={(e) => {
-                    setDraft({ ...draft, reason: e.target.value });
-                    operation.current = null;
-                  }}
-                />
-              </label>
-              <div className="person-details-actions">
-                <button
-                  type="submit"
-                  disabled={
-                    busy || !draft.changed.length || !draft.reason.trim()
-                  }
-                >
-                  <Icon name="approve" />
-                  {busy ? "Reviewing…" : "Review changes"}
-                </button>
-                <button type="button" disabled={busy} onClick={cancel}>
-                  <Icon name="close" />
-                  Cancel
-                </button>
-              </div>
-            </form>
-          )}
-          {error ? (
-            <p className="task-error" role="alert">
-              {error} Your edits are kept.
-            </p>
-          ) : null}
-          {stale ? (
-            <button type="button" disabled={busy} onClick={() => void reload()}>
-              <Icon name="refresh" />
-              Review latest details
+              <Icon name="reply" />
+              Undo
             </button>
           ) : null}
-        </>
-      )}
+        </p>
+      ) : null}
+      {!draft && conflicts.length ? (
+        <div className="pd-conflicts">
+          <h3>Provider differences</h3>
+          {conflicts.map((conflict) => (
+            <div key={conflict.conflict_id} className="pd-conflict">
+              <Mark field={conflict.field} />
+              <span>
+                <span className="pf-visually-hidden">
+                  {meta(conflict.field).label}:{" "}
+                </span>
+                <span className="pd-before">
+                  {conflict.saved_value ?? "Blank"}
+                </span>
+                <Icon name="next" />
+                <strong>{conflict.provider_value ?? "Blank"}</strong>
+              </span>
+              <button
+                type="button"
+                className="pd-btn"
+                aria-label={`Review ${meta(conflict.field).label.toLowerCase()} suggestion`}
+                disabled={busy}
+                onClick={() => reviewConflict(conflict)}
+              >
+                <Icon name="edit" />
+                Review
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {!draft &&
+      history.some((change) => change.entity_type === "person_details") ? (
+        <details className="person-details-history">
+          <summary>
+            <Glyph name="clock" />
+            Correction history
+          </summary>
+          <ol>
+            {history
+              .filter((change) => change.entity_type === "person_details")
+              .map((change) => (
+                <li key={change.change_id}>
+                  <span>
+                    {change.reason} ·{" "}
+                    {change.actor === "assistant" ? "Assistant" : "You"}
+                  </span>
+                  {change.can_undo && change.action !== "undo" ? (
+                    <button
+                      type="button"
+                      className="pd-btn is-quiet"
+                      disabled={busy}
+                      aria-label={`Undo correction: ${change.reason}`}
+                      onClick={() => void undo(change.change_id)}
+                    >
+                      <Icon name="reply" />
+                      Undo
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+          </ol>
+        </details>
+      ) : null}
+      {error ? (
+        <p role="alert" className="pd-error">
+          {error}
+          {draft ? " Your edits are kept." : ""}
+        </p>
+      ) : null}
+      {draft && stale ? (
+        <button
+          type="button"
+          className="pd-btn"
+          disabled={busy}
+          onClick={() => void reload()}
+        >
+          <Icon name="refresh" />
+          Review latest details
+        </button>
+      ) : null}
     </section>
   );
 });

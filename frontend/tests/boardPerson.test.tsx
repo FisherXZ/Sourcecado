@@ -434,13 +434,12 @@ describe("Contacts and person-file routes", () => {
     expect(screen.getAllByRole("row")).toHaveLength(2);
   });
 
-  it("updates a person sequence through the labeled sequence select", async () => {
+  it("updates a person sequence through the labeled sequence menu", async () => {
     const { container } = render(<PersonFileView personId="person one" />);
 
     expect(await screen.findByRole("heading", { level: 1, name: "Alyssa Lee" })).toBeInTheDocument();
-    const sequence = screen.getByRole("combobox", { name: "Sequence state" });
-    expect(sequence).toHaveValue("open");
-    fireEvent.change(sequence, { target: { value: "in_conversation" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sequence state: Open" }));
+    fireEvent.click(screen.getByRole("option", { name: "In conversation" }));
 
     await waitFor(() =>
       expect(api.setPersonSequence).toHaveBeenCalledWith(
@@ -514,9 +513,8 @@ describe("Contacts and person-file routes", () => {
     await screen.findByRole("heading", { level: 1, name: "Alyssa Lee" });
 
     // Change the status in the Person File.
-    fireEvent.change(screen.getByRole("combobox", { name: "Sequence state" }), {
-      target: { value: "in_conversation" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Sequence state: Open" }));
+    fireEvent.click(screen.getByRole("option", { name: "In conversation" }));
     await waitFor(() =>
       expect(api.setPersonSequence).toHaveBeenCalledWith("person one", "in_conversation"),
     );

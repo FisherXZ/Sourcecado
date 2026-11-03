@@ -776,25 +776,6 @@
   margin-bottom: 8px;
 }
 
-.person-preview .pf-sequence {
-  display: inline-flex;
-  gap: 0;
-}
-
-.person-preview .pf-sequence.is-none {
-  color: var(--text);
-}
-
-.person-preview .pf-sequence select {
-  min-height: 32px;
-  padding: 0 30px 0 14px;
-  border-radius: 9999px;
-  background: transparent;
-  color: inherit;
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .preview-flag-set {
   display: inline-flex;
   min-width: 0;
@@ -863,7 +844,7 @@
     min-height: 44px;
   }
 
-  .person-preview .pf-sequence select,
+  .person-preview .pf-sequence,
   .person-preview .pf-attr-add {
     min-height: 44px;
   }
