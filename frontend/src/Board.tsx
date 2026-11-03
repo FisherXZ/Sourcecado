@@ -11,6 +11,7 @@ import {
   type ReplyRefreshResult,
 } from "./api";
 import { TaskList } from "./Tasks";
+import { MailFreshness } from "./crm/MailFreshness";
 
 function personName(person: BoardPerson): string {
   return [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
@@ -30,7 +31,7 @@ function contactLine(person: BoardPerson): string {
 }
 
 const FOLLOW_UP_LABEL: Record<string, string> = {
-  reply_unanswered: "Needs follow-up",
+  reply_unanswered: "Reply to review",
   reply_needs_review: "Reply needs review",
 };
 
@@ -290,10 +291,12 @@ function matchesContact(person: BoardPerson, query: string): boolean {
 
 /** What the refresh did, said plainly. Counts come from the server. */
 function replyStatus(result: ReplyRefreshResult): string {
-  if (result.status !== "ok") {
+  if (result.status === "failed") {
     return "Couldn’t reach Gmail. The last checked point is unchanged.";
   }
   const parts: string[] = [];
+  if (result.status === "partial") parts.push("Collection is unfinished. Refresh again to continue.");
+  if (result.outgoing) parts.push(`Collected ${result.outgoing} outgoing ${result.outgoing === 1 ? "message" : "messages"}.`);
   if (result.filed > 0) {
     parts.push(`Filed ${result.filed} ${result.filed === 1 ? "reply" : "replies"}.`);
   }
@@ -303,7 +306,7 @@ function replyStatus(result: ReplyRefreshResult): string {
     );
   }
   if (parts.length === 0) {
-    return `Checked ${result.scanned} ${result.scanned === 1 ? "message" : "messages"}. No new replies.`;
+    return `Checked ${result.scanned} ${result.scanned === 1 ? "message" : "messages"}. No new mail.`;
   }
   return parts.join(" ");
 }
@@ -349,7 +352,7 @@ export function BoardView() {
       setReplyStatusText(replyStatus(result.refresh));
       setBoard(result.board);
     } catch {
-      setReplyStatusText("Couldn’t check for replies. Try again.");
+      setReplyStatusText("Couldn’t check Gmail. Try again.");
     } finally {
       setChecking(false);
     }
@@ -376,10 +379,11 @@ export function BoardView() {
         <ViewSwitch active={view} onChange={setView} />
         <div className="board-page-actions">
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
-            {checking ? "Checking for replies…" : "Check for replies"}
+            {checking ? "Checking Gmail…" : "Refresh Gmail"}
           </button>
           {replyStatusText ? <p role="status">{replyStatusText}</p> : null}
         </div>
+        {board ? <MailFreshness state={board.mail_sync} /> : null}
       </header>
       {board === null && !failed ? <p role="status">Loading contacts…</p> : null}
       {failed ? (

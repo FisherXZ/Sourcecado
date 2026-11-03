@@ -541,6 +541,8 @@ def _claims(
                 refs=(ref,),
             )
         elif record.get("type") == "knowledge_gap":
+            if fields.get("kind") == "unassigned_reply" and fields.get("resolved"):
+                continue
             question = (
                 _clean(fields.get("question"))
                 or _clean(fields.get("reason"))

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -189,6 +190,7 @@ class FakeGmail:
         self.history_calls: list[tuple[str, str | None]] = []
         self.reads: list[str] = []
         self.thread_reads: list[str] = []
+        self.body_reads: list[str] = []
 
     def account(self) -> str | None:
         return self.account_email
@@ -204,6 +206,7 @@ class FakeGmail:
         snippet: str = "",
         cc: str | None = None,
         label_ids: tuple[str, ...] = ("INBOX",),
+        body: str | None = None,
     ) -> dict[str, Any]:
         """Put one message in the mailbox and advance the history id."""
         self.history_id += 1
@@ -219,10 +222,13 @@ class FakeGmail:
             "threadId": thread_id,
             "labelIds": list(label_ids),
             "snippet": snippet,
-            "internalDate": str(1_756_000_000_000 + self.history_id),
+            "internalDate": str(int(datetime.now(UTC).timestamp() * 1000) + self.history_id),
             "historyId": str(self.history_id),
             "payload": {"headers": headers},
         }
+        if body is not None:
+            record["payload"].update({"mimeType": "text/plain", "body": {
+                "data": base64.urlsafe_b64encode(body.encode()).decode()}})
         self.inbox.append(record)
         return record
 
@@ -340,6 +346,12 @@ class FakeGmail:
         return {"messages": []}
 
     def read(self, *, message_id: str) -> dict[str, Any]:
+        self.body_reads.append(message_id)
+        for item in self.inbox:
+            if item["id"] == message_id:
+                body = _flatten_body(item["payload"])
+                return {**inbound_message_view(item), "body": body[:8000],
+                    "truncated": len(body) > 8000, "sent": "SENT" in item["labelIds"]}
         return {"id": message_id, "body": "", "sent": False}
 
 
@@ -688,16 +700,18 @@ class GmailApi:
         ) or {}
         payload = data.get("payload") or {}
         headers = _header_map(payload)
-        body = _flatten_body(payload)[:8000]
+        full_body = _flatten_body(payload)
+        body = full_body[:8000]
         return {
+            **inbound_message_view(data),
             "id": str(data.get("id") or message_id),
             "from": headers.get("from"),
             "to": headers.get("to"),
             "subject": headers.get("subject"),
             "date": headers.get("date"),
-            "snippet": data.get("snippet"),
             "body": body,
-            "sent": False,
+            "truncated": len(full_body) > 8000,
+            "sent": "SENT" in (data.get("labelIds") or []),
         }
 
 
@@ -708,7 +722,7 @@ THREADS_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads"
 # Everything needed to decide who a reply belongs to, and nothing more.
 # `format=metadata` never returns a body, so a background read cannot pull
 # message text into a person file even by accident.
-INBOUND_HEADERS = ("From", "To", "Cc", "Reply-To", "Delivered-To", "Subject", "Date")
+INBOUND_HEADERS = ("From", "To", "Cc", "Bcc", "Reply-To", "Delivered-To", "Subject", "Date", "Message-ID", "In-Reply-To")
 
 
 def _received_at(value: Any) -> str | None:
@@ -735,10 +749,13 @@ def inbound_message_view(data: dict[str, Any]) -> dict[str, Any]:
         "from": headers.get("from"),
         "to": headers.get("to"),
         "cc": headers.get("cc"),
+        "bcc": headers.get("bcc"),
+        "rfc_message_id": headers.get("message-id"),
+        "in_reply_to": headers.get("in-reply-to"),
         "reply_to": headers.get("reply-to"),
         "delivered_to": headers.get("delivered-to"),
         "subject": headers.get("subject"),
-        "snippet": str(data.get("snippet") or ""),
+        "snippet": html.unescape(str(data.get("snippet") or "")),
         "received_at": _received_at(data.get("internalDate")) or headers.get("date"),
         "history_id": str(data.get("historyId") or "") or None,
     }

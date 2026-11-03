@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from coworker.agent_run_approval import EFFECT_STATEMENTS
+from coworker.crm_mail_repository import MAIL_SCHEMA
 from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
 from coworker.crm_tasks import (
     CRM_CHANGES_COLUMNS,
@@ -1000,6 +1001,13 @@ def _adopt(description: str, count: Callable, apply: Callable) -> tuple[Migratio
     )
 
 
+def _add_tracked_mail(context: MigrationContext) -> int:
+    assert context.connection is not None
+    for statement in MAIL_SCHEMA:
+        context.connection.execute(statement)
+    return 0
+
+
 # --- the registry --------------------------------------------------------
 
 REGISTRY: tuple[StoreSpec, ...] = (
@@ -1131,6 +1139,13 @@ REGISTRY: tuple[StoreSpec, ...] = (
                 ),
                 count=_count_crm_changes,
                 apply=_widen_crm_changes,
+            ),
+            Migration(
+                from_version=5,
+                to_version=6,
+                description="Add tracked Gmail evidence, collection progress and pending analysis revisions.",
+                count=lambda context: 0,
+                apply=_add_tracked_mail,
             ),
         ),
         json_columns=(
@@ -1467,10 +1482,11 @@ def _plan_store(root: Path, spec: StoreSpec) -> StorePlan:
     )
 
 
-def plan_migrations(root: str | Path) -> MigrationPlan:
+def plan_migrations(root: str | Path, *, store_ids: Iterable[str] | None = None) -> MigrationPlan:
     """Read every registered store and report what it would take to bring it current."""
     root = Path(root).expanduser()
-    return MigrationPlan(tuple(_plan_store(root, spec) for spec in REGISTRY))
+    specs = REGISTRY if store_ids is None else tuple(spec_for(store_id) for store_id in store_ids)
+    return MigrationPlan(tuple(_plan_store(root, spec) for spec in specs))
 
 
 # --- backup and restore --------------------------------------------------

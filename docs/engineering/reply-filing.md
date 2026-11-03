@@ -5,6 +5,11 @@ Gmail replies, decides who each one belongs to, and what it does when it cannot
 decide. It extends [approved-send.md](approved-send.md), which produced the
 outbound identity this feature reads.
 
+The active refresh route now uses [tracked Gmail activity](gmail-activity.md)
+for both directions, bounded bodies, saved freshness and gap resolution. This
+guide describes the retained inbound classifier and legacy metadata-only
+`refresh_replies` function. The collection guide takes precedence for the route.
+
 ## Domain words
 
 - **Person file** — the durable record for one candidate.
@@ -100,9 +105,8 @@ on a timestamp, or on the cursor.
   in between.
 
 Because all three are keyed on the message, repeating an interrupted pass does
-not duplicate those records. A separate limitation remains when a previously
-unassigned reply is later filed: the earlier knowledge gap is not automatically
-closed (see below).
+not duplicate those records. The active collector also resolves the matching
+message's earlier knowledge gap while retaining its explanation and audit.
 
 ## What a filed reply records
 
@@ -123,9 +127,13 @@ a director Allow. The reply event is what satisfies it.
 
 - `last_contact_at` and `last_contact_direction`
 - `replied` and `replied_at`
-- `follow_up`, which is `reply_unanswered` when the newest mail event is
-  inbound, `reply_needs_review` when an unassigned reply names this person, and
-  otherwise nothing.
+- `follow_up`, which is `reply_unanswered` when a thread's latest incoming
+  message has no later matching response, `reply_needs_review` when an unresolved
+  unassigned message names this person, and otherwise nothing.
+- `unanswered_message_ids`, identifying the per-thread reminders.
+
+Source timestamps determine order. A response on another thread cannot clear a
+reminder. See the collection guide for timestamp and In-Reply-To rules.
 
 Both `list_board` and `get(expand_sources=True)` carry these, so the Board and
 the person file read the same derivation. There is no deal, no stage, no
@@ -171,17 +179,14 @@ found real holes in the suite, both now covered:
 
 ## Known gaps
 
-A successfully filed reply does not close an earlier `unassigned_reply`
-knowledge gap for the same message. The person file can therefore retain a
-resolved ambiguity as an open gap; idempotent filing does not imply gap
-resolution. [#133](https://github.com/FisherXZ/Sourcecado/issues/133) tracks this
-behavior, confirmed in the
+A direct call to legacy `refresh_replies` does not close an earlier
+`unassigned_reply` knowledge gap. The active `refresh_mail` collector resolves
+the same-person/message gap, addressing the behavior recorded in
+[#133](https://github.com/FisherXZ/Sourcecado/issues/133) and the
 [correctness review](../audit/2026-09-21-onboarding-correctness-review.md).
 
 The reply cursor lives in a `reply_sync` table inside `people.db` rather than in
 its own store. That keeps it inside the migration registry's backup and rollback
 coverage, which a new database file would not have had without an entry in
-`migrations.REGISTRY`. Adding the table did not change `PEOPLE_DB_VERSION`,
-which follows how the other tables in that module are created but leaves the
-schema change unversioned. Both are worth revisiting when the registry is next
-touched.
+`migrations.REGISTRY`. The tracked-mail schema now uses the registered schema
+3 → 4 migration; `reply_sync` remains in the same database and rollback scope.
