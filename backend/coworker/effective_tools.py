@@ -46,7 +46,7 @@ class EffectiveToolCatalog:
         )
 
 
-_GMAIL = frozenset({"gmail_search", "gmail_read", "gmail_draft", "gmail_send"})
+_GMAIL = frozenset({"gmail_search", "gmail_read", "gmail_draft", "gmail_send", "crm_refresh_mail"})
 _DRIVE = frozenset({"drive_search", "drive_list_folder", "drive_read"})
 _CALENDAR = frozenset(
     {"calendar_list", "calendar_create", "calendar_update"}

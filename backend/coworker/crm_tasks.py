@@ -186,6 +186,14 @@ def validate_timezone(name: object) -> str:
     return name
 
 
+def operator_timezone(store: Any) -> str:
+    """The director's saved IANA timezone, or the default when unset or invalid."""
+    try:
+        return validate_timezone(store.get_setting(TIMEZONE_SETTING) if store is not None else None)
+    except TaskError:
+        return DEFAULT_TIMEZONE
+
+
 def today_in(timezone: str, *, now: datetime | None = None) -> date:
     moment = now if now is not None else datetime.now(UTC)
     return moment.astimezone(ZoneInfo(timezone)).date()

@@ -43,6 +43,21 @@ def fingerprint(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def saved_research(person):
+    """Saved research on one expanded person record, newest first. Never calls Monid."""
+    rows = [row for row in person.get("attachments") or []
+            if row.get("type") == "artifact" and (row.get("fields") or {}).get("artifact_type") == "monid_research"]
+    rows.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+    latest = {}
+    for row in rows:
+        fields = row["fields"]
+        latest.setdefault(fields.get("approval_id"), {
+            **{key: fields.get(key) for key in ("approval_id", "status", "remote_provider", "endpoint", "quoted_cost_usd",
+                "max_cost_usd", "actual_cost_usd", "cost_unknown", "over_budget", "output")},
+            "saved_at": row.get("updated_at") or row.get("created_at")})
+    return list(latest.values())[:20]
+
+
 class MonidResearchActions:
     def __init__(self, *, people, store, inbox, secrets_store, http=None, agent_runs=None):
         self.people, self.store, self.inbox, self.secrets = people, store, inbox, secrets_store
@@ -319,17 +334,7 @@ class MonidResearchActions:
         person = self.people.get(pid, expand_sources=True)
         if person is None:
             raise MonidError("This person is unavailable.")
-        rows = [row for row in person.get("attachments") or []
-                if row.get("type") == "artifact" and (row.get("fields") or {}).get("artifact_type") == "monid_research"]
-        rows.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
-        latest = {}
-        for row in rows:
-            fields = row["fields"]
-            latest.setdefault(fields.get("approval_id"), {
-                **{key: fields.get(key) for key in ("approval_id", "status", "remote_provider", "endpoint", "quoted_cost_usd",
-                    "max_cost_usd", "actual_cost_usd", "cost_unknown", "over_budget", "output")},
-                "saved_at": row.get("updated_at") or row.get("created_at")})
-        return list(latest.values())[:20]
+        return saved_research(person)
 
     def read_result(self, pid, approval_id):
         item = self.inbox.get(approval_id) or {}

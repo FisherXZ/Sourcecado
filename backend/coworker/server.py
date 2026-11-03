@@ -151,7 +151,7 @@ from coworker.reply_filing import InboundReader, refresh_replies
 from coworker.crm_analysis import AnalysisService, ConversationReader
 from coworker.crm_maintenance import AnalysisMaintenance, RefreshCoordinator
 from coworker.crm_service import CrmService
-from coworker.crm_mail import TrackedMailReader, refresh_mail
+from coworker.crm_mail import collect_tracked_mail as collect_mail
 from coworker.crm_mail_repository import MailRepository
 from coworker.crm_drafts import prepare_task_draft
 from coworker.crm_tasks import source_ids as crm_source_ids
@@ -2025,10 +2025,8 @@ def create_app(
         return HTMLResponse("<p>Gmail connected. You can close this tab and go back to Sourcecado.</p>")
 
     mail_repository=MailRepository(app.state.people)
-    mail_refresh_lock=threading.Lock()
     def collect_tracked_mail():
-        with mail_refresh_lock:
-            return refresh_mail(app.state.people, TrackedMailReader(app.state.gmail))
+        return collect_mail(app.state.people, app.state.gmail)
     app.state.collect_tracked_mail=collect_tracked_mail
 
     def current_board():

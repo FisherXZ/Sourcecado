@@ -34,6 +34,7 @@ from coworker.gmail import (
     gmail_evidence,
 )
 from coworker.board_tools import BOARD_TOOL_NAMES, BOARD_TOOL_SCHEMAS, execute_board_tool
+from coworker.crm_person_file import person_file_evidence
 from coworker.crm_tools import CRM_TOOL_NAMES, CRM_TOOL_SCHEMAS, execute_crm_tool
 from coworker.monid_tools import MONID_NAMES, MONID_TOOL_SCHEMAS, execute_monid
 from coworker.consequential_policy import ACTION_TOOLS, supported_mcp_read
@@ -509,6 +510,8 @@ _EVIDENCE_ADAPTERS = {
     "fs_read": workspace_file_evidence,
     "fs_search": workspace_file_evidence,
     "drive_index_query": workspace_file_evidence,
+    # Sourcecado-owned Person File fields; mail subjects and research sources fenced.
+    "crm_get_person": person_file_evidence,
 }
 
 
@@ -642,7 +645,8 @@ def execute(
             return False, {"status": "unavailable", "code": "people_unavailable", "error": "The local person store is unavailable."}
         return execute_crm_tool(name, args, people=people, store=store,
             session_id=session_id, run_id=run_id, allowed_source_ids=allowed_source_ids,
-            directive=crm_directive, mutation_budget=crm_mutation_budget)
+            directive=crm_directive, mutation_budget=crm_mutation_budget,
+            gmail=gmail, apollo_configured=bool(apollo_key))
     if name in WORKSPACE_TOOL_NAMES:
         if workspace_runtime is None:
             return False, {"status": "failed", "error": "workspace runtime missing"}
@@ -666,6 +670,7 @@ def execute(
             name,
             args,
             people=people,
+            store=store,
             actor=actor,
             session_id=session_id,
             run_id=run_id,
