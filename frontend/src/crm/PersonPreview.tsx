@@ -243,7 +243,6 @@ export const PersonPreview = forwardRef<PreviewHandle, {
         <DescriptionEditor personId={personId} description={descriptions.detailed}
           onSaved={next => { setFile(current => current ? { ...current, descriptions: next } : current); window.dispatchEvent(new Event("sourcecado:board-changed")); }} />
       </details>
-      {person.sequence_state === "done" ? <p>Unfinished tasks stay open when a relationship is Done.</p> : null}
       <TaskList personId={personId} headingLevel={3} />
       <SavedTaskDrafts file={file} />
       <section className="preview-section"><h3>Suggestions to review</h3>

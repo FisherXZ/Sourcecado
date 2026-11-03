@@ -339,10 +339,10 @@
 .contacts-table th:nth-child(1) { width: 17%; }
 .contacts-table th:nth-child(2) { width: 12%; }
 .contacts-table th:nth-child(3) { width: 11%; }
-.contacts-table th:nth-child(4) { width: 11%; }
+.contacts-table th:nth-child(4) { width: 13%; }
 .contacts-table th:nth-child(5) { width: 22%; }
 .contacts-table th:nth-child(6) { width: 15%; }
-.contacts-table th:nth-child(7) { width: 12%; }
+.contacts-table th:nth-child(7) { width: 10%; }
 
 .contacts-table tbody tr {
   height: 38px;
@@ -918,4 +918,10 @@
   .contacts-table tbody tr {
     height: 44px;
   }
+}
+
+/* The preview is narrower than a task row's full action set: let actions wrap below the title. */
+.person-preview .task-row-actions {
+  flex: 1 1 100%;
+  min-width: 0;
 }
