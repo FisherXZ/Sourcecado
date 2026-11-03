@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { AfterSendReminder } from "./AfterSendReminder";
 
 import {
   createFollowUpDraft,
@@ -309,6 +310,7 @@ export function FollowUpPanel({
                 {thread ? `“${thread.subject || "No subject"}”` : "a new thread"}.
               </p>
               <p>The task is still open. Mark it done when the follow-up is complete.</p>
+              <AfterSendReminder key={String(sent.message_id)} personId={personId} sent={sent} />
             </div>
           ) : null}
 

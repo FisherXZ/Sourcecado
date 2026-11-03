@@ -134,6 +134,34 @@ that missing receipt. Startup does not currently repair it; projection repair,
 safe run continuation, and delivery of recorded final answers remain in
 [#128](https://github.com/FisherXZ/Sourcecado/issues/128).
 
+## Optional reminder after a send
+
+The first-email and task follow-up panels offer **Set follow-up** only after
+a successful send result contains `sent: true` and a Gmail message ID. The
+director chooses a calendar date in the saved timezone, edits the task text,
+and saves or skips. There is no default date and no task created by mail
+refresh, an incoming reply, denial, failure or an uncertain send outcome.
+
+`GET /v1/people/{id}/sent-messages/{message_id}/reminder` returns the saved
+timezone and a stable message-specific operation ID. Both this read and the
+corresponding `POST` require the person's saved send event and its succeeded,
+person-bound send approval to name that exact message. A missing receipt does
+not authorize a reminder; never resend to repair it. The panel keeps a failed
+save's date and text and retries only the task. If the saved timezone changes,
+refresh the follow-up options to review the date in that timezone.
+
+`crm_reminders.py` has no connector access. It creates one ordinary task through
+the existing transactional task writer, atomically with a person-owned Gmail
+source pointer, task history and operation receipt. Repeated or concurrent
+saves, including after restart, return the same task. Changed arguments for an
+already saved operation conflict; use the normal task editor to change it.
+Replies do not complete or remove this human task, and creating it does not
+change the sequence. Existing task controls provide editing, completion,
+cancellation and edit undo.
+
+Component screenshots and visual limitations are recorded in
+[after-send reminder evidence](../evidence/2026-11-02-after-send-reminders/README.md).
+
 ## Testing
 
 `backend/tests/test_approved_send.py`, `backend/tests/test_follow_up_reply.py`

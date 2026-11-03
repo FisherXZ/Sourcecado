@@ -55,6 +55,7 @@ from coworker.apollo import (
     enrichment_resource,
 )
 from coworker.apollo_curation import curate_apollo_candidates
+from coworker.crm_reminders import reminder_router
 from coworker.bundle_redaction import registered_secret_values
 from coworker.calendar import calendar_from_secrets
 from coworker.connectors.google_oauth import (
@@ -2129,6 +2130,9 @@ def create_app(
             return validate_timezone(saved)
         except TaskError:
             return DEFAULT_TIMEZONE
+
+    app.include_router(reminder_router(people=app.state.people, tasks=app.state.tasks,
+                                      store=app.state.store, timezone=_operator_timezone))
 
     def _task_error(exc: TaskError) -> JSONResponse:
         if isinstance(exc, TaskNotFound):

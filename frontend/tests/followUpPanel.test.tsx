@@ -122,7 +122,7 @@ describe("Follow-up panel", () => {
     }));
     api.decideApproval.mockResolvedValue({
       ok: true,
-      result: { sent: true, to: "ada@analytic.example", thread_id: "thread_1" },
+      result: { sent: true, to: "ada@analytic.example", thread_id: "thread_1", message_id: "reply_message_1" },
     });
   });
 
@@ -181,6 +181,7 @@ describe("Follow-up panel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Allow once and send" }));
     expect(await screen.findByText(/The task is still open/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Set follow-up" })).toBeVisible();
     expect(api.decideApproval).toHaveBeenCalledWith("send_1", "allow");
     expect(readFollowUpText("per_1", "task_1")).toBeNull();
   });

@@ -1482,6 +1482,28 @@ export async function requestEnrichApproval(
   return { id: item.id, reason: item.reason };
 }
 
+export type AfterSendReminderContext = {
+  timezone: string;
+  operation_id: string;
+  title: string;
+  task: PersonTask | null;
+};
+
+export async function getAfterSendReminder(personId: string, messageId: string): Promise<AfterSendReminderContext> {
+  const response = await get(`/v1/people/${encodeURIComponent(personId)}/sent-messages/${encodeURIComponent(messageId)}/reminder`);
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || "Couldn’t load follow-up options. Try again.");
+  return body;
+}
+
+export async function saveAfterSendReminder(personId: string, messageId: string, input: {
+  title: string; dueDate: string; operationId: string; timezone: string;
+}): Promise<TaskSaveResult> {
+  return await personPost(personId, `sent-messages/${encodeURIComponent(messageId)}/reminder`, {
+    title: input.title, due_date: input.dueDate, operation_id: input.operationId, timezone: input.timezone,
+  }) as TaskSaveResult;
+}
+
 export async function decideApproval(
   id: string,
   decision: "allow" | "deny",
