@@ -169,7 +169,8 @@ make eval-sourcing
 
 `make test` runs Python and GUI tests. `make build` type-checks TypeScript and
 builds the browser bundle; it is not a native app build. The sourcing eval is
-also a CI gate. CI additionally builds and checks the macOS artifact. Python and
+also a CI gate. The macOS artifact build is available through a manual run of
+the CI workflow; it does not run on each PR or push. Python and
 GUI lint/type/coverage gates are not all in place; see
 [#166](https://github.com/FisherXZ/Sourcecado/issues/166).
 

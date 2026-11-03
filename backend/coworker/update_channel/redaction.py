@@ -62,7 +62,11 @@ def registered_secrets(
     for name, value in dict(os.environ if environ is None else environ).items():
         if not any(word in name.upper() for word in _CREDENTIAL_WORDS):
             continue
-        if len(value) < _MIN_ENV_LENGTH or value.startswith("/") or "://" in value:
+        if len(value) < _MIN_ENV_LENGTH or "://" in value:
+            continue
+        # Names identify file-valued configuration. A leading slash alone is
+        # not a path: it is also a valid first character in a base64 secret.
+        if value.startswith("/") and name.upper().endswith(("_FILE", "_PATH", "_DIR", "_DIRECTORY")):
             continue
         values.add(value)
     return frozenset(values)

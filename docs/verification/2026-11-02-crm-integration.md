@@ -42,3 +42,9 @@ All screenshots use fictional people and isolated fake services. They are implem
 ## Acceptance limits
 
 All connector, provider and mail examples in implementation verification use fake services and isolated synthetic state. No real mail was sent, no Apollo credits were spent and operator state was not migrated. Real Gmail/account renewal, permitted interpretation examples, signed/native distribution and Fisher's #212 desktop acceptance remain separate checks. #165 and #240/#241/#243 are not completed by this integration.
+
+## PR checks
+
+Fisher approved removing the recurring macOS preview job from automatic PR CI. It is now manual (`workflow_dispatch`) in the same workflow, preserving the existing preview build-number sequence and artifact/signing steps. Python backend, sourcing evaluations and Desktop GUI tests/build remain automatic gates. Native artifact acceptance is not implied by this change.
+
+Remote checks exposed two API tests that raced the lifecycle analysis worker; both now deliberately exercise completion ownership with barriers and bounded waits. A separate Linux failure exposed slash-prefixed base64 signing seeds being mistaken for file paths. The scanner now distinguishes named file/path configuration from credential values; deterministic regressions preserve the no-leak refusal.
