@@ -355,3 +355,178 @@ def test_handoff_four_fields_survive_get(tmp_path):
     loaded = PersonStore(tmp_path).get(person["person_id"])
     assert loaded is not None
     assert loaded["handoff_they_want"] == "She asked about student builders"
+
+
+# --- Saved-person finder search (#242) ---
+
+
+def _kept(store, apollo_id, first, last, title, company):
+    return store.keep_from_apollo(
+        apollo_id=apollo_id,
+        first_name=first,
+        last_name_obfuscated=last,
+        title=title,
+        company=company,
+    )
+
+
+def test_search_finds_both_kept_backlog_and_active_people_with_lane(tmp_path):
+    store = PersonStore(tmp_path)
+    kept = _kept(store, "a1", "Maya", "Chen", "Engineer", "Acme Labs")
+    active = _kept(store, "a2", "Noor", "Ali", "Designer", "Acme Labs")
+    store.set_sequence(active["person_id"], "open", actor="director")
+
+    results = store.search("acme")
+
+    by_id = {row["person_id"]: row for row in results}
+    assert kept["person_id"] in by_id
+    assert active["person_id"] in by_id
+    assert by_id[kept["person_id"]]["board_lane"] == "backlog"
+    assert by_id[kept["person_id"]]["sequence_state"] is None
+    assert by_id[active["person_id"]]["board_lane"] == "open"
+    assert by_id[active["person_id"]]["sequence_state"] == "open"
+
+
+def test_search_excludes_deleted_people(tmp_path):
+    store = PersonStore(tmp_path)
+    person = _kept(store, "a1", "Maya", "Chen", "Engineer", "Acme Labs")
+    store.delete(
+        person["person_id"],
+        expected_version=person["version"],
+        actor="director",
+        rationale_summary="duplicate",
+    )
+
+    assert store.search("maya") == []
+    assert store.search("acme") == []
+
+
+def test_search_returns_both_people_with_the_same_name(tmp_path):
+    store = PersonStore(tmp_path)
+    one = _kept(store, "a1", "Alex", "Rao", "PM", "Acme")
+    two = _kept(store, "a2", "Alex", "Rao", "PM", "Globex")
+
+    results = store.search("alex rao")
+    ids = {row["person_id"] for row in results}
+    assert ids == {one["person_id"], two["person_id"]}
+
+    # A company token narrows the duplicate name to one person.
+    narrowed = store.search("alex globex")
+    assert [row["person_id"] for row in narrowed] == [two["person_id"]]
+
+
+def test_search_matches_masked_surname_person_without_using_the_mask(tmp_path):
+    store = PersonStore(tmp_path)
+    person = _kept(store, "a1", "Alyssa", "W***n", "Partner", "Codeology")
+
+    # Found by first name and company, which are real identity data.
+    assert person["person_id"] in {r["person_id"] for r in store.search("alyssa")}
+    assert person["person_id"] in {r["person_id"] for r in store.search("codeology")}
+    # The redacted surname fragment is never a usable match key.
+    assert store.search("w**n") == []
+    hit = store.search("alyssa")[0]
+    assert hit["last_name"] is None
+    assert hit["last_name_status"] == "hidden_by_apollo"
+    assert "W***n" not in str(store.search("alyssa"))
+
+
+def test_search_known_email_matches_exactly_and_never_returns_the_address(tmp_path):
+    store = PersonStore(tmp_path)
+    person = _kept(store, "a1", "Maya", "Chen", "Engineer", "Acme Labs")
+    store.apply_enrichment(person["person_id"], email="maya@acme.test")
+    other = _kept(store, "a2", "Noor", "Ali", "Designer", "Globex")
+
+    exact = store.search("MAYA@ACME.TEST")
+    assert [row["person_id"] for row in exact] == [person["person_id"]]
+    assert exact[0]["match_kind"] == "email"
+    assert exact[0]["has_email"] is True
+    # The stored address must never appear anywhere in search output.
+    assert "maya@acme.test" not in str(store.search("maya")).lower()
+    # A partial email is not a match (exact-only), and no address leaks.
+    assert store.search("maya@acme") == []
+    # Someone without an email reports the state, not an address.
+    no_email = [r for r in store.search("noor") if r["person_id"] == other["person_id"]][0]
+    assert no_email["has_email"] is False
+
+
+def test_search_is_bounded_by_limit_and_a_hard_cap(tmp_path):
+    store = PersonStore(tmp_path)
+    for index in range(60):
+        _kept(store, f"a{index}", "Sam", f"Num{index}", "Analyst", "Acme Labs")
+
+    assert len(store.search("acme", limit=20)) == 20
+    assert len(store.search("acme", limit=999)) == 50  # clamped to SEARCH_LIMIT_MAX
+    assert len(store.search("acme", limit=0)) == 1  # clamped up to at least 1
+
+
+def test_search_empty_query_returns_nothing(tmp_path):
+    store = PersonStore(tmp_path)
+    _kept(store, "a1", "Maya", "Chen", "Engineer", "Acme Labs")
+    assert store.search("") == []
+    assert store.search("   ") == []
+
+
+def test_search_runs_on_a_bare_local_store_without_any_enrichment_client(tmp_path):
+    # PersonStore needs only a local directory — no Apollo/Gmail client — so
+    # search() structurally cannot fetch an email or spend an enrichment credit.
+    store = PersonStore(tmp_path)
+    _kept(store, "a1", "Maya", "Chen", "Engineer", "Acme Labs")
+    results = store.search("maya")
+    assert [row["match_kind"] for row in results] == ["name"]
+
+
+def test_resolve_shortlist_marks_saved_apollo_ids_and_skips_deleted(tmp_path):
+    store = PersonStore(tmp_path)
+    kept = _kept(store, "live1", "Maya", "Chen", "Engineer", "Acme Labs")
+    gone = _kept(store, "dead1", "Noor", "Ali", "Designer", "Globex")
+    store.delete(
+        gone["person_id"],
+        expected_version=gone["version"],
+        actor="director",
+        rationale_summary="removed",
+    )
+
+    out = store.resolve_shortlist(
+        [
+            {"apollo_id": "live1", "name": "Maya Chen"},
+            {"apollo_id": "dead1", "name": "Noor Ali"},
+            {"apollo_id": "unknown1", "name": "Nobody Here"},
+        ]
+    )
+
+    assert set(out["resolved"]) == {"live1"}
+    assert out["resolved"]["live1"]["person_id"] == kept["person_id"]
+    assert out["resolved"]["live1"]["board_lane"] == "backlog"
+    # A deleted person's id is neither resolved nor a possible match.
+    assert "dead1" not in out["resolved"]
+    assert out["possible"] == {}
+
+
+def test_resolve_shortlist_flags_name_only_candidate_as_possible_not_resolved(tmp_path):
+    store = PersonStore(tmp_path)
+    saved = _kept(store, "saved-apollo", "Maya", "Chen", "Engineer", "Acme Labs")
+
+    # A different Apollo id but the same full name -> possible match, never merged.
+    out = store.resolve_shortlist(
+        [{"apollo_id": "other-apollo", "name": "maya  CHEN"}]
+    )
+
+    assert out["resolved"] == {}
+    assert [m["person_id"] for m in out["possible"]["other-apollo"]] == [
+        saved["person_id"]
+    ]
+
+    # The same candidate whose id IS saved is "Already saved", not a possible match.
+    same = store.resolve_shortlist([{"apollo_id": "saved-apollo", "name": "Maya Chen"}])
+    assert set(same["resolved"]) == {"saved-apollo"}
+    assert same["possible"] == {}
+
+
+def test_resolve_shortlist_does_not_name_match_a_masked_surname(tmp_path):
+    store = PersonStore(tmp_path)
+    _kept(store, "masked", "Alyssa", "W***n", "Partner", "Codeology")
+
+    # The saved person has no canonical surname, so a full-name candidate can't
+    # produce a false "possible match".
+    out = store.resolve_shortlist([{"apollo_id": "cand", "name": "Alyssa Wilson"}])
+    assert out["possible"] == {}

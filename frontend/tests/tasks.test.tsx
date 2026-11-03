@@ -278,6 +278,40 @@ describe("shared person tasks", () => {
     );
   });
 
+  it("offers Prepare draft on open tasks only, opening that task's follow-up", async () => {
+    fakeServer();
+    render(<TaskList personId="per_maya" heading="Maya's tasks" />);
+    const list = await screen.findByRole("region", { name: "Maya's tasks" });
+    await within(list).findByText("No open tasks for this person.");
+    await addTask(list, { title: "Send project examples" });
+
+    const prepare = await within(list).findByRole("link", {
+      name: "Prepare a follow-up draft for Send project examples",
+    });
+    expect(prepare.getAttribute("href")).toBe("#/people/per_maya/follow-up/task_1");
+    // Reviewed Gmail drafting is the primary action; local text stays a fallback.
+    expect(within(list).queryByRole("button", {
+      name: "Prepare draft for Send project examples",
+    })).toBeNull();
+    const fallback = within(list).getByText("Local draft text").closest("details");
+    expect(fallback).not.toHaveAttribute("open");
+    fireEvent.click(within(list).getByText("Local draft text"));
+    expect(within(list).getByRole("button", {
+      name: "Prepare draft for Send project examples",
+    })).toBeVisible();
+    // Preparing is navigation only: it never saves the task.
+    expect(api.updateTask).not.toHaveBeenCalled();
+
+    fireEvent.click(within(list).getByRole("button", { name: "Mark task Send project examples done" }));
+    await waitFor(() =>
+      expect(
+        within(list).queryByRole("link", {
+          name: "Prepare a follow-up draft for Send project examples",
+        }),
+      ).toBeNull(),
+    );
+  });
+
   it("filters the Tasks view by the same status filter and search as Contacts", async () => {
     fakeServer();
     render(<BoardView />);

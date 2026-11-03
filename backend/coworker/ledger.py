@@ -17,6 +17,7 @@ _NOT_FILED = frozenset(
         "apollo_search_people",
         "board_get",
         "board_query",
+        "board_search",
         "board_upsert",
         "board_mutate",
         "board_delete",

@@ -23,6 +23,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "board_query",
   "crm_list_tasks",
   "crm_list_attention",
+  "board_search",
 ]);
 
 /**

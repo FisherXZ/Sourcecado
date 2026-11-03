@@ -460,6 +460,7 @@ SOURCECADO_OWNED = frozenset(
         "gmail_send",
         "board_get",
         "board_query",
+        "board_search",
         "board_upsert",
         "board_mutate",
         "board_delete",

@@ -5,6 +5,10 @@ import uuid
 
 from coworker.crm_service import CrmService
 from coworker.crm_tasks import TaskConflict, TaskError, _clean_operation_id, _fingerprint
+from coworker.crm_sources import source_ids, sources_visible
+from coworker.reply_filing import build_index,classify
+from coworker.crm_mail import classify_outbound
+from coworker.run_evidence import Evidence
 
 
 async def prepare_task_draft(*, people, provider, person_id, task_id, expected_version, operation_id, proposal=False):
@@ -18,9 +22,18 @@ async def prepare_task_draft(*, people, provider, person_id, task_id, expected_v
         row = people._conn.execute("SELECT * FROM crm_proposals WHERE person_id=? AND proposal_id=? AND state='pending'", (person_id, task_id)).fetchone()
         if row is None:
             raise TaskConflict("This suggestion is no longer pending", code="crm_conflict")
-        fields = json.loads(row["value_json"])
+        fields = {"text":row["proposed_value"]} if row["target_kind"]=="description" else json.loads(row["proposed_value"])
         return {"task_id": task_id, "version": 0, "title": fields.get("title", fields.get("text", "Suggested follow-up")),
             "details": fields.get("details", ""), "source_refs": json.loads(row["source_refs"]), "unaccepted_suggestion": True}
+    def validate_current_sources():
+        with people._lock:
+            refs=source_ids(people,person_id,current_task()['source_refs'],set())
+            fields={ref['id']:ref['fields'] for ref in people._attachments_for(person_id) if ref['type']=='source_ref'}
+            mids={fields[sid].get('message_id') for sid in refs}
+            for row in people._conn.execute("SELECT fields_json,restricted FROM person_attachments WHERE person_id=? AND record_type='source_ref'",(person_id,)):
+                if row['restricted'] and json.loads(row['fields_json']).get('message_id') in mids:
+                    raise TaskError('source is private')
+
     with people._lock:
         replay = crm.tasks._replay(operation, fingerprint)
         if replay:
@@ -31,22 +44,34 @@ async def prepare_task_draft(*, people, provider, person_id, task_id, expected_v
         crm._version(task["version"], expected_version)
         # Resolve source ownership before selecting context. Recency alone can
         # select an unrelated conversation with the same person.
-        threads = set()
-        for source in task["source_refs"]:
-            if not isinstance(source, dict):
-                continue
-            rows = people._conn.execute("""SELECT account,thread_id FROM gmail_messages
-                WHERE person_id=? AND message_id=? AND thread_id=? AND (? IS NULL OR account=?)""",
-                (person_id, source.get("message_id"), source.get("thread_id"), source.get("account"), source.get("account")))
-            threads.update((row["account"], row["thread_id"]) for row in rows)
-        messages = []
-        thread = next(iter(threads)) if len(threads) == 1 else None
-        if thread:
-            messages = [dict(row) for row in people._conn.execute("""SELECT thread_id,direction,body,body_state
-                FROM gmail_messages WHERE person_id=? AND account=? AND thread_id=? ORDER BY updated_at DESC LIMIT 5""",
-                (person_id, *thread))]
+        refs=source_ids(people,person_id,task['source_refs'],set())
+        attachments={ref['id']:ref for ref in people._attachments_for(person_id) if ref['type']=='source_ref'}
+        threads=set()
+        selected=[]
+        index=build_index(people)
+        for sid in refs:
+            fields=attachments[sid]['fields'];mid=fields.get('message_id')
+            aliases=[row for row in people._conn.execute("SELECT id,fields_json,restricted FROM person_attachments WHERE person_id=? AND record_type='source_ref'",(person_id,)) if json.loads(row['fields_json']).get('message_id')==mid]
+            if any(row['restricted'] for row in aliases):raise TaskError('source is private')
+            rows=people._conn.execute('SELECT * FROM gmail_messages WHERE person_id=? AND message_id=? AND thread_id=?',(person_id,mid,fields.get('thread_id'))).fetchall()
+            if len(rows)!=1:continue
+            row=dict(rows[0])
+            event=people._conn.execute('SELECT payload FROM events WHERE person_id=? AND external_key=?',(person_id,'gmail:message:'+str(mid))).fetchone()
+            if not event:continue
+            meta=json.loads(event[0]);meta['id']=mid
+            meta['label_ids']=['SENT'] if row['direction']=='outbound' else []
+            verdict=classify_outbound(meta,index,account=row['account']) if row['direction']=='outbound' else classify(meta,index)
+            if verdict.evidence is not Evidence.PRESENT or verdict.person_id!=person_id:continue
+            threads.add((row['account'],row['thread_id']))
+            if row['body_state']=='present':selected.append(row)
+        thread=next(iter(threads)) if len(threads)==1 else None
+        messages=[{k:row[k] for k in ('thread_id','direction','body','body_state')} for row in selected[:5]] if thread else []
+        descriptions={slot:record for slot,record in people.descriptions(person_id).items() if sources_visible(people,person_id,record['source_refs'],set())}
         context = {"person": {k: person.get(k) for k in ("first_name", "last_name", "company", "target")},
-            "task": task, "descriptions": people.descriptions(person_id), "untrusted_messages": messages}
+            "task": task, "descriptions": descriptions, "untrusted_messages": messages}
+    # Recheck grants immediately before model dispatch. A stored task is not
+    # permission to read a newly restricted source or a public duplicate alias.
+    validate_current_sources()
     if provider is None:
         raise TaskError("Configure a model to prepare draft text. Your task is kept.")
     text = ""
@@ -75,7 +100,9 @@ async def prepare_task_draft(*, people, provider, person_id, task_id, expected_v
         if replay:
             return replay
         crm._person(person_id)
-        crm._version(current_task()["version"], expected_version)
+        latest=current_task()
+        validate_current_sources()
+        crm._version(latest["version"], expected_version)
         artifact_id, now = "artifact_" + uuid.uuid4().hex, people._now()
         value = {**value, "artifact_type": "follow_up_draft", "task_id": None if proposal else task_id, "proposal_id": task_id if proposal else None,
             "local_only": True, "sent": False, "thread_id": thread[1] if thread else None,

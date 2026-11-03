@@ -42,6 +42,10 @@ DESCRIPTION_SLOTS = ("general", "detailed")
 # concise Contacts overview; the detailed slot is the readable person-file prose.
 DESCRIPTION_LIMITS = {"general": 500, "detailed": 8000}
 ATTACHMENT_TYPES = frozenset({"artifact", "knowledge_gap", "source_ref"})
+# Saved-person finder (#242). Results are bounded so the finder never returns an
+# unbounded list; the hard cap protects the UI and the assistant tool alike.
+SEARCH_LIMIT_DEFAULT = 20
+SEARCH_LIMIT_MAX = 50
 PERSON_PATCH_FIELDS = frozenset(
     {
         "first_name",
@@ -818,6 +822,7 @@ class PersonStore:
         actor: str = "director",
         session_id: str | None = None,
         run_id: str | None = None,
+        task_id: str | None = None,
     ) -> dict[str, Any]:
         """File the durable receipt for one approved send, then open the person.
 
@@ -840,6 +845,9 @@ class PersonStore:
             "account": account,
             "approval_id": approval_id,
         }
+        if task_id:
+            # Recorded only. Sending does not complete the task.
+            payload["task_id"] = task_id
         with self._lock:
             row = self._load_person_row(person_id)
             already = self._conn.execute(
@@ -1144,6 +1152,47 @@ class PersonStore:
                     session_id=None, run_id=None)
                 self._snapshot(person_id, version, now)
 
+
+    def mail_threads(self, person_id: str) -> list[dict[str, Any]]:
+        """This person's Gmail threads, newest first.
+
+        Only threads with an approved send to them or a reply verified as
+        theirs. Replies we could not match to one person are not included.
+        """
+        threads: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for event in self.timeline(person_id):
+            payload = (
+                event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            )
+            thread_id = str(payload.get("thread_id") or "").strip()
+            if not thread_id:
+                continue
+            if event.get("kind") == "send" and payload.get("sent"):
+                direction = "outbound"
+                at = str(event.get("created_at") or "") or None
+            elif payload.get("direction") == "inbound":
+                direction = "inbound"
+                at = payload.get("received_at") or event.get("created_at")
+            else:
+                continue
+            entry = threads.setdefault(
+                thread_id,
+                {"thread_id": thread_id, "subject": None, "message_count": 0},
+            )
+            subject = str(payload.get("subject") or "").strip()
+            if subject:
+                entry["subject"] = subject
+            entry["message_count"] += 1
+            entry["last_direction"] = direction
+            entry["last_at"] = at
+            entry["last_message_id"] = payload.get("message_id")
+            entry["url"] = f"https://mail.google.com/mail/u/0/#all/{thread_id}"
+            # Events are in write order, so the latest thread ends up last.
+            if thread_id in order:
+                order.remove(thread_id)
+            order.append(thread_id)
+        return [threads[thread_id] for thread_id in reversed(order)]
 
     def mail_state(self, person_id: str) -> dict[str, Any]:
         """Last contact, replied state, and whether the person needs attention.
@@ -1656,6 +1705,179 @@ class PersonStore:
                 continue
             matched.append(person)
         return matched
+
+    def _search_result(
+        self, row: sqlite3.Row, *, match_kind: str
+    ) -> dict[str, Any]:
+        """Lean identity projection for the finder.
+
+        Returns only identity columns plus sequence context. It never returns
+        the stored email address (only ``has_email`` state), never exposes the
+        masked Apollo surname as a name, and never touches attachments/sources,
+        so restricted content can never leak through search.
+        """
+        person = self._person_dict(row)
+        assert person is not None
+        sequence_state = person.get("sequence_state")
+        lane = sequence_state if sequence_state in SEQUENCE_STATES else "backlog"
+        return {
+            "person_id": person["person_id"],
+            "first_name": person.get("first_name"),
+            "last_name": person.get("last_name"),
+            "last_name_status": person["last_name_status"],
+            "title": person.get("title"),
+            "company": person.get("company"),
+            "sequence_state": sequence_state,
+            "board_lane": lane,
+            "has_email": bool(_clean(person.get("email"))),
+            "apollo_id": person.get("apollo_id"),
+            "match_kind": match_kind,
+        }
+
+    def search(self, text: str, *, limit: int = SEARCH_LIMIT_DEFAULT) -> list[dict[str, Any]]:
+        """Find saved people by name, company, title, or known email.
+
+        Searches every saved person (all board lanes, including ``backlog`` —
+        people kept before outreach), excludes soft-deleted records, and is a
+        pure read of the local ``people`` table: it imports nothing from Apollo
+        or Gmail, so it can never fetch an email or spend an enrichment credit.
+
+        Matching: a case-insensitive substring over first name, canonical last
+        name, company, and title — every whitespace token must appear in at
+        least one of those fields. The masked Apollo surname is never part of
+        the predicate (a redacted surname is not a usable match key). Known
+        email matches only when the whole query equals the stored address
+        exactly; the address itself is never returned.
+        """
+        query = (text or "").strip()
+        if not query:
+            return []
+        capped = min(max(int(limit or 0), 1), SEARCH_LIMIT_MAX)
+        query_lower = query.lower()
+        tokens = [token for token in query_lower.split() if token]
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM people
+                WHERE deleted_at IS NULL
+                ORDER BY updated_at DESC, person_id
+                """
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            first = str(row["first_name"] or "").lower()
+            # Canonical surname only; the masked column is deliberately ignored.
+            last = str(row["last_name"] or "").lower()
+            company = str(row["company"] or "").lower()
+            title = str(row["title"] or "").lower()
+            email = str(row["email"] or "").lower()
+            name_fields = f"{first} {last}"
+            email_hit = bool(email) and email == query_lower
+            token_hit = bool(tokens) and all(
+                token in name_fields or token in company or token in title
+                for token in tokens
+            )
+            if not (email_hit or token_hit):
+                continue
+            if email_hit:
+                match_kind = "email"
+            elif any(token in name_fields for token in tokens):
+                match_kind = "name"
+            elif any(token in company for token in tokens):
+                match_kind = "company"
+            else:
+                match_kind = "title"
+            results.append(self._search_result(row, match_kind=match_kind))
+
+        def _exact_name_first(result: dict[str, Any]) -> int:
+            full = " ".join(
+                part
+                for part in (result.get("first_name"), result.get("last_name"))
+                if part
+            ).strip().lower()
+            return 0 if full and full == query_lower else 1
+
+        # Stable sort keeps the SQL recency order within each group.
+        results.sort(key=_exact_name_first)
+        return results[:capped]
+
+    def _identity_brief(self, person: dict[str, Any]) -> dict[str, Any]:
+        """Lean identity fields shared by the finder and the shortlist badges."""
+        sequence_state = person.get("sequence_state")
+        lane = sequence_state if sequence_state in SEQUENCE_STATES else "backlog"
+        return {
+            "person_id": person["person_id"],
+            "first_name": person.get("first_name"),
+            "last_name": person.get("last_name"),
+            "last_name_status": person.get("last_name_status"),
+            "title": person.get("title"),
+            "company": person.get("company"),
+            "sequence_state": sequence_state,
+            "board_lane": lane,
+        }
+
+    @staticmethod
+    def _normalized_full_name(first: object, last: object) -> str:
+        first_text = str(first or "").strip()
+        last_text = str(last or "").strip()
+        if not first_text or not last_text:
+            return ""
+        return " ".join(f"{first_text} {last_text}".lower().split())
+
+    def resolve_shortlist(
+        self, candidates: list[dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        """Classify Apollo shortlist candidates against saved identities.
+
+        Keyed by each candidate's Apollo id:
+        - ``resolved`` — an exact ``apollo_id`` match to a saved person. This is
+          the authoritative "Already saved" signal, the same ``apollo_id``-keyed
+          lookup the keep/curate path uses, so retry-Keep opens the same record.
+        - ``possible`` — a candidate that is NOT saved by id but whose exact
+          normalized full name matches one or more saved people. Shown as a
+          "possible match" so a likely duplicate is never kept silently. It is
+          deliberately conservative (exact first+last only, never a masked
+          surname) to avoid false positives, and it never merges anything.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM people WHERE deleted_at IS NULL"
+            ).fetchall()
+        by_apollo: dict[str, dict[str, Any]] = {}
+        by_name: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            person = self._person_dict(row)
+            assert person is not None
+            apollo_id = _clean(person.get("apollo_id"))
+            if apollo_id:
+                by_apollo[apollo_id] = person
+            key = self._normalized_full_name(
+                person.get("first_name"), person.get("last_name")
+            )
+            if key:
+                by_name.setdefault(key, []).append(person)
+
+        resolved: dict[str, dict[str, Any]] = {}
+        possible: dict[str, list[dict[str, Any]]] = {}
+        seen: set[str] = set()
+        for candidate in candidates or []:
+            if not isinstance(candidate, dict):
+                continue
+            apollo_id = _clean(candidate.get("apollo_id"))
+            if not apollo_id or apollo_id in seen:
+                continue
+            seen.add(apollo_id)
+            saved = by_apollo.get(apollo_id)
+            if saved is not None:
+                resolved[apollo_id] = self._identity_brief(saved)
+                continue
+            key = " ".join(str(candidate.get("name") or "").lower().split())
+            matches = by_name.get(key) if key else None
+            if matches:
+                possible[apollo_id] = [
+                    self._identity_brief(person) for person in matches
+                ]
+        return {"resolved": resolved, "possible": possible}
 
     def patch(
         self,

@@ -10,6 +10,12 @@ from coworker.people import PersonStore
 from coworker.provider import FakeProvider
 
 
+
+def owned_source(people,pid,message_id,thread):
+    people.apply_enrichment(pid,email='maya@example.com')
+    people.record_approved_send(pid,message_id='sent-'+thread,thread_id=thread,draft_id='draft-'+thread,to='maya@example.com',subject='Follow up',body_digest='reviewed',account='director@example.com',approval_id='approval-'+thread)
+    return people.upsert_attachment(pid,record_type='source_ref',fields={'provider':'Gmail','message_id':message_id,'thread_id':thread},idempotency_key='test-source:'+message_id,actor='assistant',rationale_summary='Link owned mail')['id']
+
 def test_preparation_is_durable_local_and_retry_safe_without_email(tmp_path):
     people = PersonStore(tmp_path)
     pid = people.keep_from_apollo(apollo_id="maya", first_name="Maya", last_name_obfuscated="Patel", title="Director", company="Lumen")["person_id"]
@@ -46,10 +52,10 @@ def test_draft_uses_task_conversation_instead_of_newer_unrelated_thread(tmp_path
     people = PersonStore(tmp_path)
     pid = people.keep_from_apollo(apollo_id="maya", first_name="Maya", last_name_obfuscated="Patel", title="Director", company="Lumen")["person_id"]
     mail = MailRepository(people)
-    mail.save_message(pid, {"id": "request", "thread_id": "examples"}, direction="inbound", account="director@example.com",
+    mail.save_message(pid, {"id": "request", "thread_id": "examples","from":"maya@example.com","to":"director@example.com"}, direction="inbound", account="director@example.com",
         content={"body": "Please send the project examples.", "body_state": "present"})
     task = TaskService(people).create(pid, title="Send examples", timezone="UTC", actor="assistant", operation_id="sourced-task",
-        source_refs=({**source_ref("request", "examples", "director@example.com"), "account": "director@example.com"},))["task"]
+        source_refs=(owned_source(people,pid,"request","examples"),))["task"]
     mail.save_message(pid, {"id": "other", "thread_id": "unrelated"}, direction="inbound", account="director@example.com",
         content={"body": "UNRELATED PRIVATE TALKING POINT", "body_state": "present"})
     provider = FakeProvider(deltas=(json.dumps({"subject": "Examples", "body": "Hi Maya, [review needed: add examples]."}),))
@@ -69,7 +75,7 @@ def test_ambiguous_source_threads_stay_local_with_explicit_review_warning(tmp_pa
     for thread in ("one", "two"):
         MailRepository(people).save_message(pid, {"id": thread, "thread_id": thread}, direction="inbound", account="director@example.com",
             content={"body": "PRIVATE THREAD " + thread, "body_state": "present"})
-        sources.append({**source_ref(thread, thread, "director@example.com"), "account": "director@example.com"})
+        sources.append(owned_source(people,pid,thread,thread))
     task = TaskService(people).create(pid, title="Reconnect", timezone="UTC", actor="assistant", operation_id="ambiguous-task", source_refs=tuple(sources))["task"]
     provider = FakeProvider(deltas=(json.dumps({"subject": "Checking in", "body": "[review needed]"}),))
     result = asyncio.run(prepare_task_draft(people=people, provider=provider, person_id=pid, task_id=task["task_id"],
@@ -93,3 +99,20 @@ def test_provider_failure_is_bounded_and_keeps_task(tmp_path):
     assert "private provider response" not in str(failure.value)
     assert TaskService(people).get(pid, task["task_id"])["state"] == "open"
     assert not people.get(pid, expand_sources=True)["artifacts"]
+
+
+def test_new_private_alias_during_generation_prevents_durable_draft(tmp_path):
+    from coworker.crm_mail_repository import MailRepository
+    people=PersonStore(tmp_path)
+    pid=people.keep_from_apollo(apollo_id='maya',first_name='Maya',last_name_obfuscated=None,title='Lead',company='Lumen')['person_id']
+    MailRepository(people).save_message(pid,{'id':'request','thread_id':'examples','from':'maya@example.com','to':'director@example.com'},direction='inbound',account='director@example.com',content={'body':'Please send project examples.','body_state':'present'})
+    sid=owned_source(people,pid,'request','examples')
+    task=TaskService(people).create(pid,title='Send examples',timezone='UTC',actor='assistant',operation_id='private-draft-task',source_refs=(sid,))['task']
+    class RestrictingProvider(FakeProvider):
+        async def astream(self,**kwargs):
+            people.upsert_attachment(pid,record_type='source_ref',fields={'provider':'Gmail','message_id':'request','thread_id':'examples','sensitivity':'restricted'},idempotency_key='new-private-alias',actor='director',rationale_summary='Restrict this mail')
+            async for chunk in super().astream(**kwargs):yield chunk
+    provider=RestrictingProvider(deltas=(json.dumps({'subject':'Examples','body':'Review these examples'}),))
+    with pytest.raises((TaskError,ValueError),match='private'):
+        asyncio.run(prepare_task_draft(people=people,provider=provider,person_id=pid,task_id=task['task_id'],expected_version=1,operation_id='new-private-draft'))
+    assert not people.get(pid,expand_sources=True)['artifacts']

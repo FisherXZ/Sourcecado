@@ -28,6 +28,7 @@ AUTO = frozenset(
         "web_search",
         "board_get",
         "board_query",
+        "board_search",
         "board_upsert",
         "board_mutate",
         *CRM_TOOL_NAMES,
@@ -61,6 +62,7 @@ RETRY_SAFE = frozenset(
         "board_get",
         "board_query",
         *CRM_READ_TOOLS,
+        "board_search",
     }
 )
 _MCP_WRITE = re.compile(r"write|create|delete|update", re.I)

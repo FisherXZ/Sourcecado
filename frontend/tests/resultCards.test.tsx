@@ -11,6 +11,7 @@ import { livingBrief } from "./livingBrief";
 vi.mock("../src/api", () => ({
   curateApolloCandidates: vi.fn(),
   openPersonSourcingChat: vi.fn(),
+  resolveApolloIdentities: vi.fn().mockResolvedValue({}),
 }));
 
 function call(

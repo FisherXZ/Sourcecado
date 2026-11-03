@@ -25,6 +25,7 @@ const chatSend = vi.fn();
 let onChatEvent: ((event: Record<string, unknown>) => void) | undefined;
 
 vi.mock("../src/api", () => ({
+  resolveApolloIdentities: vi.fn().mockResolvedValue({}),
   connectCalendar: vi.fn(),
   connectDrive: vi.fn(),
   connectGmail: vi.fn(),

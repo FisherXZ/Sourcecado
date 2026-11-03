@@ -19,7 +19,8 @@ def test_refresh_and_saved_reads_share_activity_and_freshness_after_restart(tmp_
     assert refreshed["refresh"]["outgoing"] == 1
     saved = client.get(f"/v1/people/{pid}", headers=HEADERS).json()
     assert saved["mail_sync"]["status"] == "ok"
-    assert saved["mail_analysis"]["status"] == "retrying"
+    # Refresh guarantees collection, while analysis may still be queued.
+    assert saved["mail_analysis"]["status"] in {"pending", "retrying"}
     assert saved["mail_analysis"]["analyzed_revision"] == 0
     assert saved["mail_analysis"]["latest_evidence_revision"] > 0
     assert all("body" not in event["payload"] for event in saved["timeline"])

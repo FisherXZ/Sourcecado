@@ -703,6 +703,76 @@ export async function getCrmProposals(): Promise<{ proposals: CrmProposal[]; tru
   return response.json();
 }
 
+/** One saved-person finder hit (#242). Never carries the email address itself. */
+export type SavedPersonMatch = {
+  person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  last_name_status: "known" | "hidden_by_apollo" | "missing";
+  title: string | null;
+  company: string | null;
+  sequence_state: string | null;
+  board_lane: "backlog" | "open" | "in_conversation" | "done";
+  has_email: boolean;
+  apollo_id: string | null;
+  match_kind: "email" | "name" | "company" | "title";
+};
+
+export type SavedPeopleSearchResult = {
+  results: SavedPersonMatch[];
+  count: number;
+  query: string;
+};
+
+/** Resolved saved record for one Apollo candidate (badge / possible-match). */
+export type ResolvedApolloIdentity = {
+  person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  last_name_status?: "known" | "hidden_by_apollo" | "missing";
+  title: string | null;
+  company: string | null;
+  sequence_state: string | null;
+  board_lane: "backlog" | "open" | "in_conversation" | "done";
+};
+
+export type ShortlistCandidate = { apollo_id?: string | null; name?: string | null };
+
+/**
+ * Shortlist candidates classified against saved identities, keyed by Apollo id:
+ * `resolved` = exact id match ("Already saved"); `possible` = name-only match
+ * ("possible match", never merged).
+ */
+export type ShortlistMatches = {
+  resolved: Record<string, ResolvedApolloIdentity>;
+  possible: Record<string, ResolvedApolloIdentity[]>;
+};
+
+export async function searchSavedPeople(
+  query: string,
+  limit = 20,
+): Promise<SavedPeopleSearchResult> {
+  const res = await get(
+    `/v1/people/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`people search ${res.status}`);
+  return res.json();
+}
+
+export async function resolveApolloIdentities(
+  candidates: ShortlistCandidate[],
+): Promise<ShortlistMatches> {
+  const res = await fetch(`${httpBase()}/v1/people/resolve-identities`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ candidates }),
+  });
+  if (!res.ok) throw new Error(`resolve identities ${res.status}`);
+  const data = await res.json();
+  return { resolved: data.resolved ?? {}, possible: data.possible ?? {} };
+
+}
+
 export async function refreshReplies(): Promise<{
   refresh: ReplyRefreshResult;
   board: Board;
@@ -1165,6 +1235,8 @@ export type OutreachDraft = {
   readonly body_digest: string;
   readonly account: string | null;
   readonly sent: boolean;
+  /** The Gmail thread the draft is in, if Gmail reports one. */
+  readonly thread_id?: string | null;
 };
 
 /** The binding a send approval carries. Never the body, only its digest. */
@@ -1176,6 +1248,9 @@ export type SendAuthorityResource = {
   readonly to: string;
   readonly subject: string;
   readonly body_digest: string;
+  /** Set when the approval is tied to one Gmail thread. */
+  readonly thread_id?: string;
+  readonly task_id?: string;
 };
 
 export type PendingSendApproval = {
@@ -1229,14 +1304,170 @@ export async function readOutreachDraft(
 
 export async function requestSendApproval(
   personId: string,
-  input: { sessionId: string; draftId: string; reviewedBodyDigest: string },
+  input: {
+    sessionId: string;
+    draftId: string;
+    reviewedBodyDigest: string;
+    expectedThreadId?: string | null;
+    taskId?: string | null;
+  },
 ): Promise<PendingSendApproval> {
-  const body = await personPost(personId, "outreach/send-approval", {
+  const payload: Record<string, unknown> = {
     session_id: input.sessionId,
     draft_id: input.draftId,
     reviewed_body_digest: input.reviewedBodyDigest,
-  });
+  };
+  if (input.expectedThreadId) payload.expected_thread_id = input.expectedThreadId;
+  if (input.taskId) payload.task_id = input.taskId;
+  const body = await outreachRequest(personId, "POST", "outreach/send-approval", payload);
   return (body as { item: PendingSendApproval }).item;
+}
+
+/** A failed follow-up request. `draft` is the current Gmail draft, if known. */
+export class FollowUpError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly draft: OutreachDraft | null;
+
+  constructor(message: string, status: number, code: string | null, draft: OutreachDraft | null) {
+    super(message);
+    this.name = "FollowUpError";
+    this.status = status;
+    this.code = code;
+    this.draft = draft;
+  }
+}
+
+async function outreachRequest(
+  personId: string,
+  method: "GET" | "POST" | "PUT",
+  path: string,
+  payload?: Record<string, unknown>,
+): Promise<unknown> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(personId)}/${path}`,
+    {
+      method,
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
+    },
+  );
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    body = {};
+  }
+  if (!res.ok) {
+    throw new FollowUpError(
+      typeof body.error === "string" ? body.error : `${path} ${res.status}`,
+      res.status,
+      typeof body.code === "string" ? body.code : null,
+      body.draft && typeof body.draft === "object" ? (body.draft as OutreachDraft) : null,
+    );
+  }
+  return body;
+}
+
+export type FollowUpThread = {
+  readonly thread_id: string;
+  readonly subject: string | null;
+  readonly message_count: number;
+  readonly last_direction: "inbound" | "outbound";
+  readonly last_at: string | null;
+  readonly url: string;
+};
+
+export type FollowUpPreparation = {
+  readonly task: {
+    readonly task_id: string;
+    readonly title: string;
+    readonly details: string;
+    readonly due_date: string | null;
+    readonly state: string;
+    readonly version: number;
+  };
+  readonly person: {
+    readonly person_id: string;
+    readonly label: string;
+    readonly email: string | null;
+    readonly sequence_state: string | null;
+  };
+  readonly account: string | null;
+  readonly recipient: string | null;
+  readonly thread: FollowUpThread | null;
+  readonly threads: FollowUpThread[];
+  readonly subject: string;
+  readonly body: string;
+  readonly talking_points: { readonly origin: string; readonly text: string }[];
+  readonly sources: { readonly id: string; readonly provider: string; readonly title: string | null }[];
+  readonly restricted_source_count: number;
+  readonly blockers: { readonly code: string; readonly message: string }[];
+  readonly assistant_prompt: string;
+};
+
+/** Read-only. Creates no draft and sends nothing. */
+export async function prepareFollowUp(
+  personId: string,
+  taskId: string,
+  threadId?: string | null,
+): Promise<{
+  follow_up: FollowUpPreparation;
+  sourcing_chat: { session_id: string; person_id: string } | null;
+}> {
+  const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : "";
+  const body = await outreachRequest(
+    personId,
+    "GET",
+    `tasks/${encodeURIComponent(taskId)}/follow-up${query}`,
+  );
+  return body as {
+    follow_up: FollowUpPreparation;
+    sourcing_chat: { session_id: string; person_id: string } | null;
+  };
+}
+
+/** Create the Gmail draft: a reply in `threadId`, or a new email. */
+export async function createFollowUpDraft(
+  personId: string,
+  input: {
+    sessionId: string;
+    body: string;
+    subject?: string;
+    threadId?: string | null;
+    taskId?: string | null;
+  },
+): Promise<OutreachDraft> {
+  const payload: Record<string, unknown> = {
+    session_id: input.sessionId,
+    body: input.body,
+  };
+  if (input.subject) payload.subject = input.subject;
+  if (input.threadId) payload.thread_id = input.threadId;
+  if (input.taskId) payload.task_id = input.taskId;
+  const body = await outreachRequest(personId, "POST", "outreach/draft", payload);
+  return (body as { draft: OutreachDraft }).draft;
+}
+
+/** Save an edit to the Gmail draft. Fails if it changed in Gmail meanwhile. */
+export async function editOutreachDraft(
+  personId: string,
+  draftId: string,
+  input: { sessionId: string; body: string; subject?: string; expectedBodyDigest: string },
+): Promise<OutreachDraft> {
+  const payload: Record<string, unknown> = {
+    session_id: input.sessionId,
+    body: input.body,
+    expected_body_digest: input.expectedBodyDigest,
+  };
+  if (input.subject) payload.subject = input.subject;
+  const body = await outreachRequest(
+    personId,
+    "PUT",
+    `outreach/draft/${encodeURIComponent(draftId)}`,
+    payload,
+  );
+  return (body as { draft: OutreachDraft }).draft;
 }
 
 export async function requestEnrichApproval(

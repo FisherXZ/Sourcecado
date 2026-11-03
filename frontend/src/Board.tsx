@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 
 import { DescriptionEditor, describeDescription } from "./DescriptionEditor";
+import { FindSavedPerson } from "./FindSavedPerson";
+import { Glyph } from "./generative/ResultCard";
 import {
   defaultPersonDescriptions,
   getBoard,
@@ -15,7 +17,6 @@ import { TaskList, TASKS_CHANGED } from "./Tasks";
 import { MailFreshness } from "./crm/MailFreshness";
 import { PersonPreview, type PreviewHandle } from "./crm/PersonPreview";
 import { GlobalSuggestions } from "./crm/GlobalSuggestions";
-import { Glyph } from "./generative/ResultCard";
 
 function personName(person: BoardPerson): string {
   return [person.first_name, person.last_name].filter(Boolean).join(" ") || "Unknown person";
@@ -403,6 +404,8 @@ export function BoardView() {
     setSelected(null);
     returnFocus.current?.focus();
   }
+  const [finderOpen, setFinderOpen] = useState(false);
+
 
   useEffect(() => {
     let active = true;
@@ -431,6 +434,20 @@ export function BoardView() {
       window.removeEventListener("sourcecado:board-changed", refresh);
       window.removeEventListener(TASKS_CHANGED, refresh);
     };
+  }, []);
+
+  // Contacts-scoped "/" shortcut opens the finder. It never collides with the
+  // global ⌘K palette, and is ignored while the director is typing in a field.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      event.preventDefault();
+      setFinderOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   async function checkReplies() {
@@ -473,6 +490,15 @@ export function BoardView() {
         <ViewSwitch active={view} onChange={setView} />
         <div className="board-page-actions">
           <button type="button" onClick={resetView}><Glyph name="retry" />Reset view</button>
+          <button
+            type="button"
+            className="board-finder-trigger"
+            onClick={() => setFinderOpen(true)}
+          >
+            <Glyph name="inspect" />
+            Find saved person
+          </button>
+
           <button type="button" disabled={checking} onClick={() => void checkReplies()}>
             {checking ? "Checking Gmail…" : "Refresh Gmail"}
           </button>
@@ -480,6 +506,7 @@ export function BoardView() {
         </div>
         {board ? <MailFreshness state={board.mail_sync} /> : null}
       </header>
+      {finderOpen ? <FindSavedPerson onClose={() => setFinderOpen(false)} /> : null}
       {board === null && !failed ? <p role="status">Loading contacts…</p> : null}
       {failed ? (
         <section className="route-error" role="alert">

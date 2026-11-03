@@ -311,6 +311,7 @@ _TOOL_SOURCES: dict[str, tuple[str | None, str]] = {
     "drive_read": ("drive", "Google Drive"),
     "board_get": (None, "Board"),
     "board_query": (None, "Board"),
+    "board_search": (None, "Board"),
     "board_upsert": (None, "Board"),
     "board_mutate": (None, "Board"),
     "board_delete": (None, "Board"),
