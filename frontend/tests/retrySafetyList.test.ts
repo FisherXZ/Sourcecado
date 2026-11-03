@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { backendPermissionNames as names } from "./backendPermissions";
 
 import { describe, expect, it } from "vitest";
 
@@ -9,15 +9,6 @@ import { READ_ONLY_TOOLS } from "../src/chat/retrySafety";
  * the backend decides, so these tests read `permissions.py` and fail when the
  * two drift apart.
  */
-const source = readFileSync("../backend/coworker/permissions.py", "utf8");
-
-function names(variable: string): Set<string> {
-  const match = source.match(
-    new RegExp(`^${variable} = frozenset\\(\\s*\\{([^}]*)\\}`, "m"),
-  );
-  expect(match, `${variable} in permissions.py`).not.toBeNull();
-  return new Set(Array.from(match![1]!.matchAll(/"([a-z_]+)"/g), (item) => item[1]!));
-}
 
 describe("the read-only tool list for Retry", () => {
   const auto = names("AUTO");

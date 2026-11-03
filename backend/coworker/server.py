@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import asyncio
 import html
 import json
@@ -11,6 +12,7 @@ import re
 import secrets
 import threading
 import time
+import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,9 +43,10 @@ from coworker.agent_run_reconcile import (
     review_queue,
 )
 from coworker.agent_run_repository import AgentRunRepository
+from coworker.agent_run_resume import restart as agent_run_restart
 from coworker.attachments import AttachmentStore
 from coworker.attachments_api import attachments_router
-from coworker.agent_run_resume import restart as agent_run_restart
+from coworker.provider import provider_accepts_images
 from coworker.apollo import (
     ENRICH_CREDIT_COST,
     MISSING_KEY as APOLLO_MISSING_KEY,
@@ -111,6 +114,7 @@ from coworker.gmail import (
     GmailError,
     GmailOutcomeUnknown,
     MissingGmail,
+    ReplyTarget,
     SendAuthority,
     SendAuthorityError,
     authority_for_draft,
@@ -118,8 +122,15 @@ from coworker.gmail import (
     gmail_from_secrets,
     send_reviewed_draft,
 )
+from coworker.follow_up import prepare_follow_up
 from coworker.inbox import Inbox
 from coworker.mcp import LiveMcp, write_default_mcp_json
+from coworker.connector_probe import (
+    ConnectorProbes,
+    ProbeResult,
+    default_fingerprints,
+    probe_google,
+)
 from coworker.mcp_oauth import McpOAuth
 from coworker.meeting_evidence import MeetingEvidenceStore
 from coworker.brief import (
@@ -129,9 +140,17 @@ from coworker.brief import (
     project,
     prompt_context,
 )
-from coworker.people import DESCRIPTION_SLOTS, PersonStore
+from coworker.people import DESCRIPTION_SLOTS, SEARCH_LIMIT_DEFAULT, CrmMigrationRequired, PersonStore
 from coworker.persona import ManifestError, Persona, load_persona
 from coworker.reply_filing import InboundReader, refresh_replies
+from coworker.crm_analysis import AnalysisService, ConversationReader
+from coworker.crm_maintenance import AnalysisMaintenance, RefreshCoordinator
+from coworker.crm_service import CrmService
+from coworker.crm_mail import TrackedMailReader, refresh_mail
+from coworker.crm_mail_repository import MailRepository
+from coworker.crm_drafts import prepare_task_draft
+from coworker.crm_tasks import source_ids as crm_source_ids
+from coworker.crm_descriptions import DescriptionService
 from coworker.prompt_contract import (
     AssembledSystemPrompt,
     PromptDefinition,
@@ -142,7 +161,6 @@ from coworker.prompt_contract import (
 from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
 from coworker.provider import (
     ToolCall,
-    provider_accepts_images,
     provider_model_metadata,
     provider_verifications,
     safe_model_identifier,
@@ -414,7 +432,19 @@ def create_app(
     if not token:
         raise ValueError("backend token must be non-empty")
 
-    app = FastAPI(title="Club backend", version="0.0.2")
+    @asynccontextmanager
+    async def lifespan(app):
+        maintenance = asyncio.create_task(app.state.crm_refresh.run())
+        try:
+            yield
+        finally:
+            maintenance.cancel()
+            try:
+                await maintenance
+            except asyncio.CancelledError:
+                pass
+
+    app = FastAPI(title="Club backend", version="0.0.2",lifespan=lifespan)
     app.state.token = token
     if provider is _UNSET:
         provider_chain = verified_provider_chain()
@@ -433,6 +463,7 @@ def create_app(
     app.state.store = ConversationStore(root)
     app.state.people = PersonStore(root)
     app.state.tasks = TaskService(app.state.people)
+    app.state.crm = CrmService(app.state.people)
     app.state.meeting_evidence = MeetingEvidenceStore(root, people=app.state.people)
     app.state.workspace_runtime = workspace_runtime or WorkspaceRuntime(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
@@ -468,13 +499,8 @@ def create_app(
             people=app.state.people,
         )
     )
-    app.state.attachments = AttachmentStore(root)
-    app.include_router(
-        attachments_router(
-            store=app.state.attachments,
-            accepts_images=lambda: provider_accepts_images(app.state.provider),
-        )
-    )
+    app.state.attachments=AttachmentStore(root)
+    app.include_router(attachments_router(store=app.state.attachments,accepts_images=lambda:provider_accepts_images(app.state.provider)))
     app.state.agent_runs = AgentRunRepository(root)
     # This process becomes an Agent Run owner here, and it is the process that
     # starts the backend, so this is where the marker belongs. The marker holds
@@ -512,6 +538,11 @@ def create_app(
             config_path=Path(root) / "mcp.json",
             oauth=app.state.mcp_oauth,
         )
+    )
+    app.state.connector_probes = ConnectorProbes(
+        google=lambda: probe_google(app.state.secrets, app.state.http),
+        granola=lambda: app.state.mcp.probe(),
+        fingerprints=default_fingerprints(app.state.secrets),
     )
 
     def _effective_tool_catalog(
@@ -732,6 +763,7 @@ def create_app(
                 actor="director",
                 session_id=str(item.get("session_id") or "") or None,
                 run_id=str(item.get("run_id") or "") or None,
+                task_id=authority.task_id,
             )
         except Exception as exc:
             # The message is already gone. Report the send truthfully and say
@@ -1699,10 +1731,20 @@ def create_app(
 
     @app.get("/v1/connectors")
     def connectors():
+        return _connector_catalog()
+
+    @app.post("/v1/connectors/check")
+    def connectors_check():
+        # Read-only probes; Apollo is never probed, so no credit is spent.
+        app.state.connector_probes.check()
+        return _connector_catalog()
+
+    def _connector_catalog() -> dict[str, Any]:
         profile = load_google(app.state.secrets)
         email = profile.get("email")
         refresh = bool(profile.get("refresh_token"))
         granola = app.state.secrets.get("mcp-oauth:granola") or {}
+        google_probe = app.state.connector_probes.result("google")
 
         def normalized_connector(
             *,
@@ -1718,7 +1760,12 @@ def create_app(
             available_actions: list[str],
             authorization_group: str | None = None,
             manual_configuration: bool = False,
+            probe: ProbeResult | None = None,
         ) -> dict[str, Any]:
+            # A failed live check outranks what the saved credential implies.
+            if probe is not None and probe.outcome != "ok" and status != "available":
+                status = "reconnect_required" if probe.outcome == "rejected" else "failed"
+                available_actions = ["reconnect", "disconnect"]
             if status == "connected":
                 health = {
                     "category": "healthy",
@@ -1736,6 +1783,22 @@ def create_app(
                     "category": "grant_scopes",
                     "action_label": "Finish setup",
                     "message": "Reconnect and approve the listed permissions.",
+                }
+            elif status in ("reconnect_required", "failed") and probe is not None:
+                rejected = status == "reconnect_required"
+                health = {
+                    "category": "error",
+                    "label": "Reconnect required" if rejected else "Connection failed",
+                    "message": probe.detail,
+                }
+                recovery = {
+                    "category": "reconnect" if rejected else "retry",
+                    "action_label": "Reconnect",
+                    "message": (
+                        "Reconnect, then return to this page."
+                        if rejected
+                        else "Check that this device is online, then open this page again."
+                    ),
                 }
             else:
                 health = {
@@ -1763,8 +1826,8 @@ def create_app(
                 "missing_scopes": missing_scopes,
                 "health": health,
                 "recovery": recovery,
-                # A completed sign-in proved the grant; a saved key was never
-                # checked. Neither is a live probe of the connection today.
+                # A completed sign-in or a passing live check proved the
+                # grant; a saved Apollo key is never checked.
                 "verified": status == "connected" and not manual_configuration,
                 "supported_actions": supported_actions,
                 "available_actions": available_actions,
@@ -1818,6 +1881,7 @@ def create_app(
                         else ["disconnect"]
                     ),
                     authorization_group="google",
+                    probe=google_probe,
                 ),
                 normalized_connector(
                     connector_id="drive",
@@ -1837,6 +1901,7 @@ def create_app(
                         else ["disconnect"]
                     ),
                     authorization_group="google",
+                    probe=google_probe,
                 ),
                 normalized_connector(
                     connector_id="calendar",
@@ -1858,6 +1923,7 @@ def create_app(
                         else ["disconnect"]
                     ),
                     authorization_group="google",
+                    probe=google_probe,
                 ),
                 normalized_connector(
                     connector_id="apollo",
@@ -1884,6 +1950,7 @@ def create_app(
                     supported_actions=["Search meeting notes", "Read meeting context"],
                     available_actions=["disconnect"] if granola_connected else ["connect"],
                     authorization_group="granola",
+                    probe=app.state.connector_probes.result("granola"),
                 ),
             ]
         }
@@ -2035,9 +2102,25 @@ def create_app(
             )
         return HTMLResponse("<p>Gmail connected. You can close this tab and go back to Sourcecado.</p>")
 
+    mail_repository=MailRepository(app.state.people)
+    mail_refresh_lock=threading.Lock()
+    def collect_tracked_mail():
+        with mail_refresh_lock:
+            return refresh_mail(app.state.people, TrackedMailReader(app.state.gmail))
+    app.state.collect_tracked_mail=collect_tracked_mail
+
+    def current_board():
+        with app.state.people._lock:
+            board = app.state.people.list_board()
+            attention = app.state.crm.contacts(timezone=_operator_timezone(), limit=10000, include_saved=True)["contacts"]
+            by_id = {row["person_id"]: {**row, "attention_rank": rank} for rank, row in enumerate(attention)}
+            return {**{lane: [by_id.get(p["person_id"], p) for p in people] for lane, people in board.items()},
+                "mail_sync": mail_repository.public_sync_state()}
+
+
     @app.get("/v1/board")
-    def board_get():
-        return app.state.people.list_board()
+    def board_get(include_mail_state: bool = False):
+        return current_board() if include_mail_state else app.state.people.list_board()
 
     def _operator_timezone() -> str:
         """The director's saved IANA timezone; task dates are days in it."""
@@ -2057,16 +2140,92 @@ def create_app(
             return JSONResponse(body, status_code=409)
         return JSONResponse({"error": str(exc)}, status_code=400)
 
+    app.state.crm_analysis=AnalysisMaintenance(app.state.people,lambda:_crm_analysis())
+    app.state.crm_refresh=RefreshCoordinator(collect_tracked_mail,app.state.crm_analysis,connected=lambda:app.state.gmail is not None)
+
+    @app.post("/v1/crm/refresh", status_code=202)
+    async def crm_refresh(force: bool = True):
+        last = mail_repository.sync_state().get("last_success_at")
+        fresh = False
+        if last:
+            try:
+                fresh = (datetime.now(UTC) - datetime.fromisoformat(last.replace("Z", "+00:00"))).total_seconds() < 60
+            except ValueError:
+                pass
+        if force or not fresh:
+            app.state.crm_analysis.provider = app.state.provider
+            app.state.crm_analysis.timezone = _operator_timezone()
+            app.state.crm_refresh.request()
+        return {"status": "current" if fresh and not force else "pending", "mail_sync": mail_repository.public_sync_state()}
+
+
+    @app.post("/v1/people/{person_id}/crm-analysis/retry", status_code=202)
+    async def crm_analysis_retry(person_id: str):
+        try:
+            app.state.crm_analysis.retry(person_id)
+            app.state.crm_analysis.provider = app.state.provider
+            app.state.crm_refresh.request()
+            return {"status": "pending"}
+        except TaskError as exc:
+            return _task_error(exc)
+
+
+    @app.get("/v1/crm/contacts")
+    def crm_contacts(limit: int = 100, offset: int = 0, query: str = "", state: str | None = None, needs_attention: bool = False):
+        if state is not None and state not in ("open", "in_conversation", "done"):
+            return JSONResponse({"error": "unknown sequence state"}, status_code=400)
+        return app.state.crm.contacts(timezone=_operator_timezone(), limit=max(1,min(limit,200)),
+            offset=max(0,offset), query=query[:500], state=state, needs_attention=needs_attention)
+
+
+    @app.get("/v1/crm/proposals")
+    def crm_proposals(limit: int = 100, offset: int = 0):
+        return app.state.crm.all_proposals(limit=max(1,min(limit,200)), offset=max(0,offset))
+
+
+    @app.patch("/v1/people/{person_id}/attention")
+    async def crm_attention(person_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.crm.set_attention(person_id, reason=payload.get("reason"), until=payload.get("until"),
+                expected_version=payload.get("expected_version"), operation_id=payload.get("operation_id"))
+        except TaskError as exc:
+            return _task_error(exc)
+
+
+    @app.post("/v1/people/{person_id}/crm-proposals/{proposal_id}/resolve")
+    async def crm_resolve(person_id: str, proposal_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.crm.resolve(person_id, proposal_id, decision=payload.get("decision"),
+                value=payload.get("value"), operation_id=payload.get("operation_id"), timezone=_operator_timezone())
+        except TaskError as exc:
+            return _task_error(exc)
+
+
+    @app.post("/v1/people/{person_id}/crm-reviews/{message_id}/dismiss")
+    async def crm_dismiss_review(person_id: str, message_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return app.state.crm.dismiss_review(person_id, message_id, operation_id=payload.get("operation_id"))
+        except TaskError as exc:
+            return _task_error(exc)
+
+
     @app.get("/v1/crm/tasks")
     def crm_tasks(
         person_id: str | None = None,
         state: str = "open",
         limit: int = LIST_LIMIT_DEFAULT,
+        offset: int = 0,
     ):
         """One list of task records for Contacts and every person file.
 
-        Without `person_id` it is the global view, limited to people in an
-        active sequence so a task never moves a kept person into Contacts.
+        The global Tasks view includes every live saved person. Saving a task
+        never changes sequence membership in the Contacts people table.
         """
         states = TASK_STATES if state == "all" else (state,)
         try:
@@ -2074,11 +2233,13 @@ def create_app(
                 timezone=_operator_timezone(),
                 person_id=person_id or None,
                 states=states,
-                active_sequences_only=not person_id,
+                active_sequences_only=False,permitted_only=True,
                 limit=limit,
+                offset=offset,
             )
         except TaskError as exc:
             return _task_error(exc)
+
 
     @app.post("/v1/people/{person_id}/tasks", status_code=201)
     async def people_task_create(person_id: str, request: Request):
@@ -2124,11 +2285,40 @@ def create_app(
         except TaskError as exc:
             return _task_error(exc)
 
+    @app.post("/v1/people/{person_id}/tasks/{task_id}/prepare")
+    async def crm_prepare_draft(person_id: str, task_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return await prepare_task_draft(people=app.state.people, provider=app.state.provider,
+                person_id=person_id, task_id=task_id, expected_version=payload.get("expected_version"),
+                operation_id=payload.get("operation_id"))
+        except TaskError as exc:
+            return _task_error(exc)
+        except Exception:
+            return JSONResponse({"error": "Draft preparation is unavailable. Saved work is kept."}, status_code=503)
+
+
+    @app.post("/v1/people/{person_id}/crm-proposals/{proposal_id}/prepare")
+    async def crm_prepare_suggestion(person_id: str, proposal_id: str, payload: dict[str, Any] = Body(...)):
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        try:
+            return await prepare_task_draft(people=app.state.people, provider=app.state.provider,
+                person_id=person_id, task_id=proposal_id, expected_version=0,
+                operation_id=payload.get("operation_id"), proposal=True)
+        except TaskError as exc:
+            return _task_error(exc)
+        except Exception:
+            return JSONResponse({"error": "Draft preparation is unavailable. Saved work is kept."}, status_code=503)
+
+
     @app.get("/v1/people/{person_id}/tasks/{task_id}/changes")
     def people_task_changes(person_id: str, task_id: str):
         """The recorded history of one task, oldest first."""
         try:
-            app.state.tasks.get(person_id, task_id)
+            task = app.state.tasks.get(person_id, task_id)
+            crm_source_ids(app.state.people, person_id, task["source_refs"], None)
         except TaskError as exc:
             return _task_error(exc)
         return {"changes": app.state.tasks.changes(task_id)}
@@ -2139,25 +2329,22 @@ def create_app(
         if not isinstance(payload, dict):
             return JSONResponse({"error": "expected a JSON object"}, status_code=400)
         try:
-            return app.state.tasks.undo(
+            return app.state.crm.undo(
                 person_id,
                 change_id,
                 operation_id=payload.get("operation_id"),
-                actor="director",
                 reason=payload.get("reason"),
+                actor="director",
             )
-        except TaskError as exc:
+        except (TaskError, ValueError) as exc:
             return _task_error(exc)
 
     @app.post("/v1/replies/refresh")
-    def replies_refresh():
-        """Read inbound Gmail since the cursor and file what it can attribute.
+    async def replies_refresh():
+        """Share collection with maintenance; model analysis continues separately."""
+        result = await app.state.crm_refresh.collection_result()
+        return {"refresh": result, "board": current_board()}
 
-        Read and filing only. The reader handed to the refresh exposes four
-        Gmail read calls, so nothing on this path can enrich, draft, or send.
-        """
-        result = refresh_replies(app.state.people, InboundReader(app.state.gmail))
-        return {"refresh": result, "board": app.state.people.list_board()}
 
     @app.post("/v1/apollo/curate")
     async def apollo_curate(request: Request):
@@ -2225,15 +2412,62 @@ def create_app(
     @app.post("/v1/people/{person_id}/sequence")
     async def people_sequence(person_id: str, request: Request):
         payload = await request.json()
-        state = str(payload.get("state") or "")
-        actor = str(payload.get("actor") or "director")
-        if app.state.people.get(person_id) is None:
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        person = app.state.people.get(person_id)
+        if person is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         try:
-            person = app.state.people.set_sequence(person_id, state, actor=actor)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return {"person": person}
+            result = app.state.crm.set_status(
+                person_id,
+                state=payload.get("state"),
+                expected_version=payload.get("expected_version", person["version"]),
+                operation_id=payload.get("operation_id") or "sequence_" + uuid.uuid4().hex,
+            )
+            return {**result, "person": app.state.people.get(person_id)}
+        except (TaskError, ValueError) as exc:
+            return _task_error(exc)
+
+    # IMPORTANT: static /v1/people/* routes MUST be declared before the
+    # /v1/people/{person_id} param route below. Starlette matches in
+    # declaration order with no specificity ranking, so a static path placed
+    # after the param route would be captured as person_id="search" and 404.
+    @app.get("/v1/people/search")
+    def people_search(q: str = "", limit: int = SEARCH_LIMIT_DEFAULT):
+        """Find saved people by name, company, title, or known email.
+
+        Read-only over the local person store: never fetches an email or spends
+        an enrichment credit. Distinguishes no-match (empty list) from failure
+        (non-2xx) for the client.
+        """
+        results = app.state.people.search(q or "", limit=limit)
+        return {"results": results, "count": len(results), "query": q or ""}
+
+    @app.post("/v1/people/resolve-identities")
+    async def people_resolve_identities(request: Request):
+        """Classify Apollo shortlist candidates against saved identities.
+
+        Returns `resolved` (exact apollo_id -> 'Already saved') and `possible`
+        (apollo_id -> name-only matches, shown as a 'possible match'), both keyed
+        by the candidate's Apollo id.
+        """
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list):
+            return JSONResponse(
+                {"error": "candidates must be a list"}, status_code=400
+            )
+        cleaned = [
+            {
+                "apollo_id": candidate.get("apollo_id"),
+                "name": candidate.get("name"),
+            }
+            for candidate in candidates
+            if isinstance(candidate, dict)
+        ]
+        return app.state.people.resolve_shortlist(cleaned)
 
     @app.get("/v1/people/{person_id}")
     def people_get(person_id: str):
@@ -2253,11 +2487,15 @@ def create_app(
             )
         return {
             "person": person,
+            "crm_proposals": app.state.crm.proposals(person_id),
+            "crm_changes": app.state.crm.recent_changes(person_id),
             "descriptions": app.state.people.descriptions(person_id),
             # The redacted timeline goes in, so nothing the person view hides
             # from the ledger can reappear through the brief.
             "brief": brief_payload(project(person, timeline, session_id=session_id)),
             "timeline": timeline,
+            "mail_sync": mail_repository.public_sync_state(),
+            "mail_analysis": mail_repository.analysis_state(person_id),
             "versions": app.state.people.versions(person_id),
             "meeting_evidence": app.state.meeting_evidence.for_person(person_id),
             "sourcing_chat": (
@@ -2266,6 +2504,7 @@ def create_app(
                 else None
             ),
         }
+
 
     @app.post("/v1/people/{person_id}/handoff")
     async def people_handoff(person_id: str, request: Request):
@@ -2335,94 +2574,118 @@ def create_app(
             "unchanged": False,
         }
 
+    def _crm_analysis() -> AnalysisService:
+        return AnalysisService(app.state.people, provider=app.state.provider,
+            failovers=app.state.provider_failovers, reader=ConversationReader(app.state.gmail), timezone=_operator_timezone())
+
+    @app.get("/v1/people/{person_id}/descriptions/{slot}/changes")
+    def people_description_changes(person_id: str, slot: str):
+        if slot not in DESCRIPTION_SLOTS:
+            return JSONResponse({"error": "unknown description slot"}, status_code=404)
+        try:
+            return {"changes": DescriptionService(app.state.people).changes(person_id, slot)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/v1/people/{person_id}/analysis")
+    def people_analysis_state(person_id: str):
+        try:
+            return _crm_analysis().state(person_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.post("/v1/people/{person_id}/analysis")
+    async def people_analyze(person_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) - {"retry"} or ("retry" in payload and type(payload["retry"]) is not bool):
+            return JSONResponse({"error": "expected an object with optional boolean retry"}, status_code=400)
+        try:
+            return await _crm_analysis().analyze(person_id, retry=payload.get("retry", False))
+        except CrmMigrationRequired as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=409)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/v1/people/{person_id}/proposals")
+    def people_proposals(person_id: str, state: str = "pending"):
+        try:
+            return {"proposals": _crm_analysis().proposals(person_id, state=state)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/v1/people/{person_id}/proposals/{proposal_id}/resolve")
+    async def people_resolve_proposal(person_id: str, proposal_id: str, request: Request):
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) != {"action", "expected_version"} or type(payload.get("expected_version")) is not int:
+            return JSONResponse({"error": "action and expected_version are required"}, status_code=400)
+        try:
+            return _crm_analysis().resolve(person_id, proposal_id, action=payload["action"], expected_version=payload["expected_version"])
+        except TaskConflict as exc:
+            return _task_error(exc)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
     @app.patch("/v1/people/{person_id}/descriptions/{slot}")
     async def people_description(person_id: str, slot: str, request: Request):
-        """Save a person-description slot, or release it to the assistant.
-
-        One route covers both actions (spec §7.2). Concurrency is slot-scoped:
-        the client sends the slot's `expected_version`. A text save makes the
-        slot human-authored (an empty string is an intentional, protected
-        blank); `release: true` hands the slot back to the assistant.
-        """
         if app.state.people.get(person_id) is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         if slot not in DESCRIPTION_SLOTS:
-            return JSONResponse(
-                {"error": "unknown description slot"}, status_code=404
-            )
+            return JSONResponse({"error": "unknown description slot"}, status_code=404)
         payload = await request.json()
-        expected_version = payload.get("expected_version")
-        if not isinstance(expected_version, int) or isinstance(expected_version, bool):
-            return JSONResponse(
-                {"error": "expected_version is required"}, status_code=400
-            )
-        release = bool(payload.get("release"))
+        if not isinstance(payload, dict):
+            return JSONResponse({"error": "expected a JSON object"}, status_code=400)
+        expected = payload.get("expected_version")
+        release = payload.get("release", False)
         text = payload.get("text")
-        if not release:
-            if text is None:
-                return JSONResponse(
-                    {"error": "text or release is required"}, status_code=400
-                )
-            if not isinstance(text, str):
-                return JSONResponse(
-                    {"error": "text must be a string"}, status_code=400
-                )
-
-        current = app.state.people.descriptions(person_id)[slot]
-        if int(current["version"]) != expected_version:
+        if type(expected) is not int or type(release) is not bool:
             return JSONResponse(
-                {
-                    "error": (
-                        "stale record version: "
-                        f"expected {expected_version}, current {current['version']}"
-                    )
-                },
-                status_code=409,
+                {"error": "expected_version and release must have the correct types"},
+                status_code=400,
             )
-        if release:
-            unchanged = current["authority"] == "assistant"
-        else:
-            unchanged = (
-                current["authority"] == "human" and (current["text"] or "") == text
-            )
-        if unchanged:
-            return {
-                "descriptions": app.state.people.descriptions(person_id),
-                "description": current,
-                "person": app.state.people.get(person_id, expand_sources=True),
-                "versions": app.state.people.versions(person_id),
-                "saved": False,
-                "unchanged": True,
-            }
+        if not release and not isinstance(text, str):
+            return JSONResponse({"error": "text or release is required"}, status_code=400)
+        current = app.state.people.descriptions(person_id)[slot]
+        if not payload.get("operation_id"):
+            if expected != current["version"]:
+                return JSONResponse({"error": "stale record version"}, status_code=409)
+            if (release and current["authority"] == "assistant") or (
+                not release
+                and current["authority"] == "human"
+                and (current["text"] or "") == text
+            ):
+                return {
+                    "descriptions": app.state.people.descriptions(person_id),
+                    "description": current,
+                    "person": app.state.people.get(person_id, expand_sources=True),
+                    "versions": app.state.people.versions(person_id),
+                    "saved": False,
+                    "unchanged": True,
+                }
         try:
-            description = app.state.people.patch_description(
+            result = app.state.crm.save_description(
                 person_id,
                 slot,
-                expected_version=expected_version,
-                text=None if release else text,
+                text=text,
                 release=release,
+                expected_version=expected,
+                operation_id=payload.get("operation_id")
+                or "description_" + uuid.uuid4().hex,
                 actor="director",
-                rationale_summary=str(
-                    payload.get("rationale_summary")
-                    or (
-                        "Director let the assistant maintain the description."
-                        if release
-                        else "Director edited the description."
-                    )
-                ),
+                reason=payload.get("rationale_summary")
+                or "Director edited the description.",
             )
-        except ValueError as exc:
-            message = str(exc)
-            status = 422 if "exceeds" in message else 409
-            return JSONResponse({"error": message}, status_code=status)
-        return {
-            "descriptions": app.state.people.descriptions(person_id),
-            "description": description,
-            "person": app.state.people.get(person_id, expand_sources=True),
-            "versions": app.state.people.versions(person_id),
-            "saved": True,
-            "unchanged": False,
-        }
+            return {
+                **result,
+                "descriptions": app.state.people.descriptions(person_id),
+                "person": app.state.people.get(person_id, expand_sources=True),
+                "versions": app.state.people.versions(person_id),
+                "saved": True,
+                "unchanged": False,
+            }
+        except (TaskError, ValueError) as exc:
+            if "exceeds" in str(exc):
+                return JSONResponse({"error": str(exc)}, status_code=422)
+            return _task_error(exc)
 
     def _granola_meetings() -> dict[str, Any]:
         if app.state.mcp is None or not app.state.mcp.has(
@@ -2658,18 +2921,149 @@ def create_app(
             )
         return session_id, None
 
+    def _gmail_account() -> str | None:
+        reader = getattr(app.state.gmail, "account", None)
+        if not callable(reader):
+            return None
+        try:
+            return reader() or None
+        except Exception:
+            return None
+
+    def _draft_view(snapshot: dict[str, Any], **extra: Any) -> dict[str, Any]:
+        return {
+            "id": snapshot["draft_id"],
+            "to": snapshot["to"],
+            "subject": snapshot["subject"],
+            "body": snapshot["body"],
+            "body_digest": snapshot["body_digest"],
+            "account": snapshot["account"],
+            "thread_id": snapshot.get("thread_id"),
+            # Gmail deletes a draft when it is sent, so a draft we can read
+            # has not been sent.
+            "sent": False,
+            **extra,
+        }
+
+    def _filed_thread(person_id: str, thread_id: str) -> dict[str, Any] | None:
+        """The thread if it is one of this person's threads, else None."""
+        return next(
+            (
+                row
+                for row in app.state.people.mail_threads(person_id)
+                if row["thread_id"] == thread_id
+            ),
+            None,
+        )
+
+    def _follow_up_task(person_id: str, task_id: str) -> tuple[dict | None, JSONResponse | None]:
+        if not task_id:
+            return None, None
+        try:
+            return app.state.tasks.get(person_id, task_id), None
+        except TaskError as exc:
+            return None, _task_error(exc)
+
+    def _reply_target(thread_id: str) -> tuple[ReplyTarget | None, JSONResponse | None]:
+        try:
+            return app.state.gmail.reply_target(thread_id=thread_id), None
+        except GmailError as exc:
+            return None, JSONResponse(
+                {
+                    "error": f"Couldn't read the Gmail thread, so no draft was made. {exc}",
+                    "code": "thread_unavailable",
+                },
+                status_code=502,
+            )
+
+    def _thread_not_preserved(snapshot: dict[str, Any], thread_id: str) -> JSONResponse:
+        # Don't quietly start a new thread. Report the draft; the send check
+        # will refuse it because it is in the wrong thread.
+        return JSONResponse(
+            {
+                "error": (
+                    "Gmail put this draft in a different thread, so Sourcecado "
+                    "will not send it. Your text is kept."
+                ),
+                "code": "thread_not_preserved",
+                "draft": _draft_view(snapshot),
+                "expected_thread_id": thread_id,
+            },
+            status_code=409,
+        )
+
+    @app.get("/v1/people/{person_id}/tasks/{task_id}/follow-up")
+    def people_task_follow_up(person_id: str, task_id: str, thread_id: str | None = None):
+        """Prepare a follow-up email for one open task. Read-only.
+
+        Creates no draft, sends nothing, does not change the task and does
+        not enrich. A missing email blocks sending, not writing.
+        """
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        task, refusal = _follow_up_task(person_id, task_id)
+        if refusal is not None:
+            return refusal
+        assert task is not None
+        if task["state"] != "open":
+            return JSONResponse(
+                {
+                    "error": "Only an open task can be followed up.",
+                    "code": "task_not_open",
+                },
+                status_code=409,
+            )
+        timeline = [_public_event(event) for event in app.state.people.timeline(person_id)]
+        try:
+            session_id = app.state.people.session_for_person(person_id)
+        except ValueError:
+            session_id = None
+        brief = brief_payload(project(person, timeline, session_id=session_id))
+        try:
+            prepared = prepare_follow_up(
+                person=person,
+                task=task,
+                threads=app.state.people.mail_threads(person_id),
+                descriptions=app.state.people.descriptions(person_id),
+                brief=brief,
+                account=_gmail_account(),
+                thread_id=(thread_id or "").strip() or None,
+                label=str(brief.get("who") or "this person"),
+            )
+        except ValueError as exc:
+            return JSONResponse(
+                {"error": str(exc), "code": "thread_not_on_file"}, status_code=404
+            )
+        return {
+            "follow_up": prepared,
+            "sourcing_chat": (
+                {"session_id": session_id, "person_id": person_id}
+                if session_id is not None
+                else None
+            ),
+        }
+
     @app.post("/v1/people/{person_id}/outreach/draft", status_code=201)
     async def people_outreach_draft(person_id: str, request: Request):
         """Draft outreach for a bound person. The recipient is never guessed.
 
         The address comes from the person file, not from the request and not
         from the model. Creating a draft sends nothing.
+
+        With ``thread_id`` the draft is a reply in that thread, which must be
+        one of this person's threads. It uses the thread's subject so Gmail
+        keeps it in the thread. If Gmail puts it elsewhere, the request fails.
         """
         person = app.state.people.get(person_id)
         if person is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         payload = await request.json()
         session_id, refusal = _bound_sourcing_session(person_id, payload)
+        if refusal is not None:
+            return refusal
+        task_id = str(payload.get("task_id") or "").strip()
+        _task, refusal = _follow_up_task(person_id, task_id)
         if refusal is not None:
             return refusal
         to = str(person.get("email") or "").strip()
@@ -2681,14 +3075,31 @@ def create_app(
                 },
                 status_code=409,
             )
-        subject = str(payload.get("subject") or "").strip()
+        thread_id = str(payload.get("thread_id") or "").strip()
+        reply: ReplyTarget | None = None
+        if thread_id:
+            if _filed_thread(person_id, thread_id) is None:
+                return JSONResponse(
+                    {
+                        "error": "That Gmail conversation is not filed on this person.",
+                        "code": "thread_not_on_file",
+                    },
+                    status_code=409,
+                )
+            reply, refusal = _reply_target(thread_id)
+            if refusal is not None:
+                return refusal
+            assert reply is not None
+        subject = reply.subject if reply else str(payload.get("subject") or "").strip()
         body = str(payload.get("body") or "").strip()
         if not subject or not body:
             return JSONResponse(
                 {"error": "subject and body are required"}, status_code=400
             )
         try:
-            created = app.state.gmail.create_draft(to=to, subject=subject, body=body)
+            created = app.state.gmail.create_draft(
+                to=to, subject=subject, body=body, **({"reply": reply} if reply else {})
+            )
         except GmailError as exc:
             return JSONResponse({"error": str(exc)}, status_code=502)
         draft_id = str(created.get("id") or "")
@@ -2696,16 +3107,10 @@ def create_app(
             snapshot = draft_snapshot(app.state.gmail, draft_id=draft_id)
         except SendAuthorityError as exc:
             return JSONResponse({"error": str(exc)}, status_code=502)
+        if thread_id and snapshot["thread_id"] != thread_id:
+            return _thread_not_preserved(snapshot, thread_id)
         return {
-            "draft": {
-                "id": draft_id,
-                "to": snapshot["to"],
-                "subject": snapshot["subject"],
-                "body": snapshot["body"],
-                "body_digest": snapshot["body_digest"],
-                "account": snapshot["account"],
-                "sent": False,
-            },
+            "draft": _draft_view(snapshot, task_id=task_id or None),
             "person_id": person_id,
             "session_id": session_id,
         }
@@ -2721,27 +3126,89 @@ def create_app(
             return JSONResponse(
                 {"error": str(exc), "code": exc.code}, status_code=404
             )
-        return {
-            "draft": {
-                "id": snapshot["draft_id"],
-                "to": snapshot["to"],
-                "subject": snapshot["subject"],
-                "body": snapshot["body"],
-                "body_digest": snapshot["body_digest"],
-                "account": snapshot["account"],
-                # Reaching this line means Gmail still holds the draft, and
-                # Gmail only holds drafts that have not been sent.
-                "sent": False,
-            }
-        }
+        return {"draft": _draft_view(snapshot)}
+
+    @app.put("/v1/people/{person_id}/outreach/draft/{draft_id}")
+    async def people_outreach_draft_edit(person_id: str, draft_id: str, request: Request):
+        """Save an edit to the Gmail draft from inside Sourcecado.
+
+        Refused if the draft changed in Gmail since the director opened it.
+        The recipient and thread stay the same. The new text has a new digest,
+        so an approval for the old text can no longer send.
+        """
+        person = app.state.people.get(person_id)
+        if person is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        payload = await request.json()
+        session_id, refusal = _bound_sourcing_session(person_id, payload)
+        if refusal is not None:
+            return refusal
+        body = str(payload.get("body") or "").strip()
+        expected = str(payload.get("expected_body_digest") or "").strip()
+        if not body or not expected:
+            return JSONResponse(
+                {"error": "body and expected_body_digest are required"},
+                status_code=400,
+            )
+        try:
+            current = draft_snapshot(app.state.gmail, draft_id=draft_id)
+        except SendAuthorityError as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=404)
+        if current["body_digest"] != expected:
+            return JSONResponse(
+                {
+                    "error": "This draft changed in Gmail since you opened it.",
+                    "code": "stale_draft",
+                    "draft": _draft_view(current),
+                },
+                status_code=409,
+            )
+        to = str(person.get("email") or "").strip()
+        if not to or current["to"].strip().casefold() != to.casefold():
+            return JSONResponse(
+                {
+                    "error": "This draft is addressed to someone other than this person.",
+                    "code": "recipient_not_bound",
+                },
+                status_code=409,
+            )
+        thread_id = current.get("thread_id") or ""
+        reply: ReplyTarget | None = None
+        if thread_id and _filed_thread(person_id, thread_id) is not None:
+            reply, refusal = _reply_target(thread_id)
+            if refusal is not None:
+                return refusal
+            assert reply is not None
+        subject = (
+            reply.subject
+            if reply
+            else str(payload.get("subject") or "").strip() or current["subject"]
+        )
+        try:
+            app.state.gmail.update_draft(
+                draft_id=draft_id,
+                to=to,
+                subject=subject,
+                body=body,
+                **({"reply": reply} if reply else {}),
+            )
+            snapshot = draft_snapshot(app.state.gmail, draft_id=draft_id)
+        except SendAuthorityError as exc:
+            return JSONResponse({"error": str(exc), "code": exc.code}, status_code=502)
+        except GmailError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+        if reply and snapshot["thread_id"] != reply.thread_id:
+            return _thread_not_preserved(snapshot, reply.thread_id)
+        return {"draft": _draft_view(snapshot), "session_id": session_id}
 
     @app.post("/v1/people/{person_id}/outreach/send-approval", status_code=201)
     async def people_outreach_send_approval(person_id: str, request: Request):
         """Park one send approval bound to one reviewed draft version.
 
         Nothing is sent here. This records what the director is being asked to
-        authorize: the account, the draft, the recipient, the subject, and the
-        digest of the body version they read. POST /v1/inbox/{id} decides it.
+        authorize: the account, the draft, the recipient, the subject, the
+        digest of the body version they read and, for a reply, the thread.
+        POST /v1/inbox/{id} decides it.
         """
         person = app.state.people.get(person_id)
         if person is None:
@@ -2757,6 +3224,19 @@ def create_app(
                 {"error": "draft_id and reviewed_body_digest are required"},
                 status_code=400,
             )
+        thread_id = str(payload.get("expected_thread_id") or "").strip() or None
+        if thread_id and _filed_thread(person_id, thread_id) is None:
+            return JSONResponse(
+                {
+                    "error": "That Gmail conversation is not filed on this person.",
+                    "code": "thread_not_on_file",
+                },
+                status_code=409,
+            )
+        task_id = str(payload.get("task_id") or "").strip()
+        _task, refusal = _follow_up_task(person_id, task_id)
+        if refusal is not None:
+            return refusal
         approval_id = f"send_{secrets.token_hex(8)}"
         try:
             authority = authority_for_draft(
@@ -2765,6 +3245,8 @@ def create_app(
                 person_id=person_id,
                 draft_id=draft_id,
                 reviewed_body_digest=reviewed,
+                expected_thread_id=thread_id,
+                task_id=task_id or None,
             )
         except SendAuthorityError as exc:
             return JSONResponse(

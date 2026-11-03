@@ -156,6 +156,39 @@ def test_a_dispatched_effect_is_recorded_before_the_call_and_settled_after(tmp_p
     assert repo.list_effects(run_id) == [settled.effect]
 
 
+@pytest.mark.parametrize("fail_after_checkpoint", [False, True])
+def test_effect_completion_and_bounded_outcome_references_commit_together(tmp_path, fail_after_checkpoint):
+    repo, owner = _repo(tmp_path)
+    started = _start(repo, owner)
+    dispatch = repo.dispatch_effect(started.lease, tool_name="crm_create_task", arguments={}, tool_call_id="call-crm", now=NOW)
+    if fail_after_checkpoint:
+        repo._conn.execute("""CREATE TRIGGER refuse_settlement BEFORE UPDATE OF status ON agent_run_effects
+                              WHEN NEW.status = 'succeeded' BEGIN SELECT RAISE(ABORT, 'refuse outcome'); END""")
+        repo._conn.commit()
+    kwargs = dict(ok=True, outcome_ref="chg-one", person_id="person-one",
+        source_refs=[{"id": "source-one", "title": "CRM source reference", "body": "PRIVATE BODY"}],
+        artifact_refs=[{"id": "chg-one", "artifact_type": "crm_change", "title": "CRM change", "text": "PRIVATE TEXT"}], now=NOW)
+    if fail_after_checkpoint:
+        with pytest.raises(sqlite3.IntegrityError):
+            repo.record_effect_outcome(dispatch.lease, dispatch.effect["effect_id"], **kwargs)
+    else:
+        settled = repo.record_effect_outcome(dispatch.lease, dispatch.effect["effect_id"], **kwargs)
+        assert settled.effect["outcome_ref"] == "chg-one"
+    run = repo.get_run(started.run["run_id"])
+    checkpoints = repo.list_checkpoints(run["run_id"])
+    assert [cp["kind"] for cp in checkpoints] == (["run_started", "tool_pending"] if fail_after_checkpoint else ["run_started", "tool_pending", "tool_completed"])
+    if fail_after_checkpoint:
+        assert run["source_refs"] == run["artifact_refs"] == []
+        assert repo.list_effects(run["run_id"])[0]["status"] == "dispatched"
+    else:
+        assert run["person_id"] == "person-one"
+        assert [ref["id"] for ref in run["source_refs"]] == ["source-one"]
+        assert [ref["id"] for ref in run["artifact_refs"]] == ["chg-one"]
+        assert checkpoints[-1]["payload"]["source_ref_ids"] == ["source-one"]
+        assert checkpoints[-1]["payload"]["artifact_ref_ids"] == ["chg-one"]
+        assert "PRIVATE" not in str(run)
+
+
 def test_a_failure_the_process_actually_observed_is_recorded_as_failed(tmp_path):
     repo, owner = _repo(tmp_path)
     started = _start(repo, owner)

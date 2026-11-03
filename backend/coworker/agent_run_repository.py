@@ -626,6 +626,9 @@ class AgentRunRepository:
         error_class: str | None = None,
         error_summary: str | None = None,
         duration_ms: int | None = None,
+        person_id: str | None = None,
+        source_refs: Iterable[dict[str, Any]] = (),
+        artifact_refs: Iterable[dict[str, Any]] = (),
         now: datetime | None = None,
     ) -> EffectCommit:
         """Close the window. Only the process that dispatched may say what happened.
@@ -659,7 +662,8 @@ class AgentRunRepository:
             payload["tool_call_id"] = existing["tool_call_id"]
             payload["approval_id"] = existing["approval_id"]
             row = self._effect_checkpoint(
-                lease, "tool_completed", "running", payload, stamp, release=False
+                lease, "tool_completed", "running", payload, stamp, release=False,
+                person_id=person_id, source_refs=source_refs, artifact_refs=artifact_refs,
             )
             changed = self._conn.execute(
                 """
@@ -1039,13 +1043,15 @@ class AgentRunRepository:
         stamp: str,
         *,
         release: bool,
+        person_id: str | None = None,
+        source_refs: Iterable[dict[str, Any]] = (),
+        artifact_refs: Iterable[dict[str, Any]] = (),
     ) -> dict[str, Any]:
         """The run half of an external-effect write. Caller is inside `_write`.
 
-        Deliberately narrower than `checkpoint`: an effect write carries no
-        usage, no source or artifact references, and no terminal result, so it
-        merges none of them. It moves the state, appends the step, and drops the
-        lease when the run comes to rest.
+        Completion references merge in this transaction, beside the effect's
+        settled outcome. Calling the public checkpoint writer here would open
+        a nested SQLite transaction. Usage and terminal results stay separate.
         """
         row = self._row(lease.run_id)
         if row is None:
@@ -1054,11 +1060,18 @@ class AgentRunRepository:
         current = str(row["current_state"])
         validate_transition(kind, current, state)
         sequence = int(row["checkpoint_sequence"]) + 1
+        sources = project_source_refs(list(source_refs)[:50])
+        artifacts = project_artifact_refs(list(artifact_refs)[:50])
+        if sources:
+            payload["source_ref_ids"] = [ref["id"] for ref in sources]
+        if artifacts:
+            payload["artifact_ref_ids"] = [ref["id"] for ref in artifacts]
         changed = self._conn.execute(
             """
             UPDATE agent_runs SET
                 current_state = ?, checkpoint_sequence = ?, version = version + 1,
-                updated_at = ?,
+                updated_at = ?, person_id = COALESCE(?, person_id),
+                source_refs = ?, artifact_refs = ?,
                 lease_owner = CASE WHEN ? THEN NULL ELSE lease_owner END,
                 lease_owner_host = CASE WHEN ? THEN NULL ELSE lease_owner_host END,
                 lease_owner_pid = CASE WHEN ? THEN NULL ELSE lease_owner_pid END,
@@ -1069,6 +1082,9 @@ class AgentRunRepository:
                 state,
                 sequence,
                 stamp,
+                _optional_id(person_id),
+                _dump(merge_unique_refs(json_list(row["source_refs"]), sources)),
+                _dump(merge_unique_refs(json_list(row["artifact_refs"]), artifacts)),
                 release,
                 release,
                 release,

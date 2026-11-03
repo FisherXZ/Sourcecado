@@ -1195,7 +1195,15 @@ def test_the_inbound_reader_exposes_four_read_calls_and_nothing_else():
         if not name.startswith("_") and callable(getattr(InboundReader, name))
     }
     assert surface == {"profile_history_id", "history", "thread", "inbound_message"}
-    for name in ("send", "create_draft", "get_draft", "drafts", "sends"):
+    for name in (
+        "send",
+        "create_draft",
+        "update_draft",
+        "get_draft",
+        "reply_target",
+        "drafts",
+        "sends",
+    ):
         assert not hasattr(InboundReader, name)
 
 
@@ -1205,8 +1213,14 @@ class TripwireGmail(FakeGmail):
     def send(self, *, draft_id: str):
         raise AssertionError("a background refresh reached Gmail send")
 
-    def create_draft(self, *, to: str, subject: str, body: str):
+    def create_draft(self, *, to: str, subject: str, body: str, reply=None):
         raise AssertionError("a background refresh reached Gmail draft")
+
+    def update_draft(self, *, draft_id: str, to: str, subject: str, body: str, reply=None):
+        raise AssertionError("a background refresh reached a Gmail draft edit")
+
+    def reply_target(self, *, thread_id: str):
+        raise AssertionError("a background refresh prepared a Gmail reply")
 
     def get_draft(self, *, draft_id: str):
         raise AssertionError("a background refresh reached a Gmail draft read")

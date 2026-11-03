@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES
+from coworker.crm_tools import CRM_READ_TOOLS, CRM_TOOL_NAMES
 
 AUTO = frozenset(
     {
@@ -27,8 +28,10 @@ AUTO = frozenset(
         "web_search",
         "board_get",
         "board_query",
+        "board_search",
         "board_upsert",
         "board_mutate",
+        *CRM_TOOL_NAMES,
     }
 )
 ASK = frozenset(
@@ -58,6 +61,8 @@ RETRY_SAFE = frozenset(
         "apollo_search_people",
         "board_get",
         "board_query",
+        *CRM_READ_TOOLS,
+        "board_search",
     }
 )
 _MCP_WRITE = re.compile(r"write|create|delete|update", re.I)

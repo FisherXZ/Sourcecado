@@ -733,3 +733,20 @@ describe("ActivityGroup process layer", () => {
     expect(screen.queryByText("Tim")).not.toBeInTheDocument();
   });
 });
+
+// CRM receipts keep the current step-row presentation after the chat merge.
+describe("CRM operation labels", () => {
+  it.each([
+    ["crm_list_tasks", "Read saved tasks"],
+    ["crm_list_attention", "Read attention"],
+    ["crm_set_attention", "Updated attention flag"],
+    ["crm_resolve_proposal", "Reviewed suggestion"],
+    ["crm_create_task", "Created task"],
+    ["crm_update_task", "Updated task"],
+    ["crm_update_description", "Updated description"],
+    ["crm_undo_change", "Undid CRM change"],
+  ])("names %s in the visible step", (toolName, label) => {
+    render(<ActivityGroup tools={[tool({ toolName, result: { status: "complete" } })]} messageState="complete" />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+});

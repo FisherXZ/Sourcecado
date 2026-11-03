@@ -15,7 +15,7 @@ describe("Contacts and person-file styles", () => {
       /\.contacts-table\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*820px;[^}]*border-collapse:\s*collapse;/,
     );
     expect(styles).toMatch(
-      /\.contacts-table tbody tr\s*\{[^}]*height:\s*56px;[^}]*border-bottom:\s*1px solid var\(--border\);/,
+      /\.contacts-table tbody tr\s*\{[^}]*height:\s*38px;[^}]*border-bottom:\s*1px solid var\(--border\);/,
     );
     expect(styles).toMatch(
       /@media \(max-width: 767px\)[\s\S]*?\.contacts-filters button,\s*\.contacts-search input\s*\{[^}]*min-height:\s*44px;/,

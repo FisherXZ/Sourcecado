@@ -218,7 +218,9 @@ def test_revert_restores_replaced_description_text_and_protection(tmp_path):
     restored = store.descriptions(pid)["general"]
     assert restored["text"] == "Original summary."
     assert restored["authority"] == "human"
-    assert restored["version"] == 1
+    assert restored["version"] == 3
+    with pytest.raises(ValueError, match="stale"):
+        _save(store, pid, "general", "Stale pre-revert editor", expected_version=1)
 
 
 def test_revert_restores_human_protection_after_release(tmp_path):
@@ -248,7 +250,7 @@ def test_revert_restores_human_protection_after_release(tmp_path):
     assert restored["text"] == "Mine to keep."
 
 
-def test_revert_to_a_pre_description_version_clears_the_row(tmp_path):
+def test_revert_to_a_pre_description_version_clears_text_with_a_new_version(tmp_path):
     store = PersonStore(tmp_path)
     person = _person(store)
     pid = person["person_id"]
@@ -261,7 +263,7 @@ def test_revert_to_a_pre_description_version_clears_the_row(tmp_path):
     general = store.descriptions(pid)["general"]
     assert general["text"] is None
     assert general["authority"] == "assistant"
-    assert general["version"] == 0
+    assert general["version"] == 2
 
 
 # --- API --------------------------------------------------------------------

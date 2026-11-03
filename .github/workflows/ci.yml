@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
@@ -58,7 +59,9 @@ jobs:
       - name: Typecheck and build
         run: npm run build
 
+  # Native preview builds remain available on demand, outside PR/push gates.
   macos-preview:
+    if: github.event_name == 'workflow_dispatch'
     name: macOS preview artifact
     runs-on: macos-latest
     timeout-minutes: 30

@@ -1,11 +1,16 @@
 # Active and deferred backlog
 
-Decision: 2026-09-21. Fisher approved a focused active backlog and then removed
-the proposed Done/reopen and living-brief tickets. Eight issues remain active.
-The earlier [38-issue review](audit/2026-09-21-onboarding-backlog.md) records the
-findings before this scope decision.
+Current scope: the local CRM sprint under [#199](https://github.com/FisherXZ/Sourcecado/issues/199), extended on October 19. The director can find and keep people, deliberately enrich, review/send, track tasks and replies, and reopen saved work after restart. Local single-operator state and specific send/enrichment approval remain required.
 
-## Active work
+## CRM integration
+
+The November 2 integration brings together guarded chat (#239), tracked Gmail (#244), description analysis (#245), email requests to tasks (#246), Contacts attention/preview (#247), reviewed follow-ups (#248), connector checks (#256), and saved-person search (#293). It reconciles their schema and shared write paths; branch integration is not release acceptance. See the [integration verification record](verification/2026-11-02-crm-integration.md) for measured outcomes and limits.
+
+The shared approval work in #165, deliberate preview enrichment #240, post-send reminders #241, identity corrections #243 and the remaining issue-specific acceptance checks stay open. Fisher performs the final native desktop journey in [#212](https://github.com/FisherXZ/Sourcecado/issues/212). No tests or PR status certify a real send, paid enrichment or release by themselves.
+
+## September 21 onboarding selection (historical)
+
+The following eight-ticket list records the earlier onboarding selection. It is not the current complete CRM backlog. #169 and #181 have since merged.
 
 The order below helps a teammate start with small changes. It is not a severity
 ranking; the approval and recovery work needs an experienced owner or pairing.
@@ -69,8 +74,7 @@ Their original descriptions and comments remain available for reopening.
 
 ## Parts kept for later
 
-- #181 now covers shared status wording and existing Connect/Fix actions. Live
-  probes, last-verified timestamps and icons are deferred.
+- #181 delivered shared status wording and existing Connect/Fix actions. #256 adds on-demand Google and Granola probes for #222; Apollo stays Configured until a credit-free check exists. Background probes and last-verified timestamps remain outside that slice.
 - #165 includes the send/enrich service extraction from #167. Other router,
   client and store refactoring remains deferred.
 - Closing #134 does not certify a release. Its acceptance checklist and prior

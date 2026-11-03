@@ -1,0 +1,8 @@
+Contacts sort survives reload
+Flag save and scoped Undo work through real API
+Status save and scoped Undo work through real API
+Suggestion acceptance and Undo use the shared saved task
+Follow-up navigation protects unsaved preview edits
+Finder includes kept people and keyboard activation opens focused Noor
+Contacts and preview fit390 without page horizontal overflow
+No browser page errors

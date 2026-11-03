@@ -83,7 +83,7 @@ def test_prompt_diagnostics_report_only_effective_names_and_classes(
     assert set(tools[0]) == {"name", "approval_class"}
     encoded = json.dumps(tools)
     assert "parameters" not in encoded
-    assert "description" not in encoded
+    assert all(set(item) == {"name", "approval_class"} for item in tools)
     assert "PLANTED-SECRET" not in encoded
 
 

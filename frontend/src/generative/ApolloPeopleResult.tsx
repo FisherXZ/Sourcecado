@@ -1,9 +1,11 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import {
   curateApolloCandidates,
   openPersonSourcingChat,
+  resolveApolloIdentities,
   type ApolloCurationResult,
+  type ShortlistMatches,
 } from "../api";
 import { usePopulateComposer } from "../chat/ComposerDraftContext";
 import { useInInspector } from "../chat/inInspector";
@@ -144,6 +146,60 @@ export function ApolloPeopleResult({
   const [openingPersonId, setOpeningPersonId] = useState<string | null>(null);
   const [chatActionFailed, setChatActionFailed] = useState(false);
   const [failedCandidates, setFailedCandidates] = useState<FailedCandidate[]>([]);
+  // Shortlist candidates classified against saved identities (#242), keyed by
+  // Apollo id: `resolved` = already saved; `possible` = name-only match.
+  // Read-only: resolving never keeps, enriches, or spends credits.
+  const [savedMatches, setSavedMatches] = useState<ShortlistMatches>({
+    resolved: {},
+    possible: {},
+  });
+  const candidatesKey = useMemo(() => {
+    const rows = record(result)?.people;
+    if (!Array.isArray(rows)) return "";
+    return rows
+      .map((row) => {
+        const raw = record(row);
+        const apolloId = text(raw?.apolloId);
+        if (!apolloId) return null;
+        const first = text(raw?.firstName);
+        const rawLast = text(raw?.lastNameObfuscated);
+        // Only a real (unmasked) surname contributes to a name match.
+        const last = rawLast && hasApolloNameMask(rawLast) ? null : rawLast;
+        const name = [first, last].filter(Boolean).join(" ");
+        return { apollo_id: apolloId, name };
+      })
+      .filter((value): value is { apollo_id: string; name: string } => value !== null)
+      .map((candidate) => `${candidate.apollo_id}\t${candidate.name}`)
+      .join("\n");
+  }, [result]);
+  useEffect(() => {
+    if (!candidatesKey) {
+      setSavedMatches({ resolved: {}, possible: {} });
+      return;
+    }
+    const candidates = candidatesKey.split("\n").map((line) => {
+      const [apollo_id, name = ""] = line.split("\t");
+      return { apollo_id, name };
+    });
+    let active = true;
+    // Promise.resolve keeps the effect safe if the resolver is stubbed out.
+    Promise.resolve(resolveApolloIdentities(candidates)).then(
+      (matches) => {
+        if (active) {
+          setSavedMatches({
+            resolved: matches?.resolved ?? {},
+            possible: matches?.possible ?? {},
+          });
+        }
+      },
+      () => {
+        if (active) setSavedMatches({ resolved: {}, possible: {} });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [candidatesKey]);
   const populateComposer = usePopulateComposer();
   const { select, threadId } = useInspector();
   // The copy in the inspector only shows. The thread card is the one place to
@@ -660,6 +716,27 @@ export function ApolloPeopleResult({
                 <Gap>Surname hidden by Apollo</Gap>
               ) : candidate.firstName && !candidate.lastName ? (
                 <Gap>No surname</Gap>
+              ) : null}
+              {savedMatches.resolved[candidate.id] ? (
+                <a
+                  className="apollo-already-saved"
+                  href={`#/people/${encodeURIComponent(
+                    savedMatches.resolved[candidate.id]!.person_id,
+                  )}`}
+                >
+                  <Glyph name="keep" />
+                  Already saved
+                </a>
+              ) : savedMatches.possible[candidate.id]?.length ? (
+                <a
+                  className="apollo-possible-match"
+                  href={`#/people/${encodeURIComponent(
+                    savedMatches.possible[candidate.id]![0]!.person_id,
+                  )}`}
+                >
+                  <Glyph name="info" />
+                  Possible match — review
+                </a>
               ) : null}
             </span>
             <span className="sourcecado-card-cell sourcecado-card-cell-role">

@@ -280,3 +280,26 @@ def test_the_whole_update_outcome_passes_the_scan_a_bundle_would_apply(tmp_path)
 def test_the_outcome_is_plain_json_so_a_bundle_can_carry_it(tmp_path):
     outcome = _rolled_back_with(tmp_path, "the backend exited immediately")
     assert json.loads(json.dumps(outcome.to_dict()))["status"] == "rolled_back"
+
+
+def test_slash_prefixed_signing_seed_is_not_mistaken_for_a_file_path(tmp_path, monkeypatch, capsys):
+    # A valid 32-byte seed can encode with a leading slash; this is public test
+    # data, not a key loaded from a developer or CI credential store.
+    encoded = base64.b64encode(bytes([255]) + bytes(31)).decode('ascii')
+    monkeypatch.setenv(KEY_ENV, encoded)
+    cli = _cli()
+    artifact = fx.artifact(tmp_path, version='0.0.2')
+    output = tmp_path / 'slash-seed.json'
+    assert cli.main(_generate_argv(artifact, output, **{'--commit': encoded})) == cli.EXIT_LEAK
+    assert not output.exists()
+    error = capsys.readouterr().err
+    assert 'registered_secret' in error and encoded not in error
+
+
+def test_named_credential_paths_are_excluded_but_slash_tokens_are_registered():
+    from coworker.update_channel.redaction import registered_secrets
+    encoded = base64.b64encode(bytes([255]) + bytes(31)).decode('ascii')
+    path = '/tmp/sourcecado-test-signing-key.pem'
+    values = registered_secrets(environ={'OTHER_API_TOKEN':encoded,'TLS_PRIVATE_KEY_FILE':path})
+    assert encoded in values
+    assert path not in values

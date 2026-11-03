@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { TaskDraft } from "./crm/TaskDraft";
 
 import {
   createTask,
@@ -15,7 +16,10 @@ import {
   type TaskDueStatus,
   type TaskFields,
   type TaskListing,
+  type TaskSourceLink,
 } from "./api";
+import { followUpHash } from "./app/route";
+import { Icon } from "./icons";
 
 /** Fired after any task save so every mounted list reloads the same records. */
 export const TASKS_CHANGED = "sourcecado:tasks-changed";
@@ -76,6 +80,29 @@ function taskPersonName(task: PersonTask): string {
   return (
     [person?.first_name, person?.last_name].filter(Boolean).join(" ") || "Unknown person"
   );
+}
+
+function sourceUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function TaskSources({ links }: { links?: TaskSourceLink[] }) {
+  const sources = (links ?? []).slice(0, 3).flatMap((source) => {
+    const href = source.url ? sourceUrl(source.url) : null;
+    if (source.url && !href) return [];
+    const label = `Source: ${source.label}`;
+    return [href ? (
+      <a key={source.id} href={href} target="_blank" rel="noreferrer">{label}</a>
+    ) : (
+      <span key={source.id}>{label}</span>
+    )];
+  });
+  return sources.length ? <span className="task-meta">{sources}</span> : null;
 }
 
 function saveFailure(error: unknown): string {
@@ -255,7 +282,7 @@ function TaskEditor({ task, onClose }: { task: PersonTask; onClose: () => void }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const operation = useOperationId();
-  const idPrefix = `task-edit-${task.task_id}`;
+  const idPrefix = useId();
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -409,8 +436,9 @@ function TaskHistory({ task, onClose }: { task: PersonTask; onClose: () => void 
                     <span>{change.reason}</span>
                   ) : null}
                 </span>
+                <TaskSources links={change.source_links} />
               </span>
-              {change.action !== "create" ? (
+              {(change.can_undo ?? change.action !== "create") ? (
                 <button
                   type="button"
                   className="task-row-action"
@@ -504,6 +532,7 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
               </span>
               <span>{task.origin === "assistant" ? "Added by assistant" : "Added by you"}</span>
             </span>
+            <TaskSources links={task.source_links} />
             {notice ? <p className="task-row-notice" role="alert">{notice}</p> : null}
           </div>
           <div className="task-row-actions">
@@ -519,6 +548,14 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
               </button>
             ) : (
               <>
+                <a
+                  id={`task-prepare-${task.task_id}`}
+                  className="task-row-action task-row-prepare"
+                  href={followUpHash(task.person_id, task.task_id)}
+                  aria-label={`Prepare a follow-up draft for ${task.title}`}
+                >
+                  <Icon name="draft" /> Prepare draft
+                </a>
                 <button
                   type="button"
                   className="task-row-action"
@@ -563,6 +600,11 @@ function TaskRow({ task, showPerson }: { task: PersonTask; showPerson: boolean }
         </>
       )}
       {history ? <TaskHistory task={task} onClose={() => setHistory(false)} /> : null}
+      {!finished && !editing ? <details className="task-draft-fallback">
+        <summary>Local draft text</summary>
+        <p>Prepare saved text here if Gmail drafting is unavailable.</p>
+        <TaskDraft task={task} />
+      </details> : null}
     </li>
   );
 }
@@ -593,6 +635,7 @@ export function TaskList({
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [pages, setPages] = useState(1);
   const addButton = useRef<HTMLButtonElement>(null);
   const Heading = `h${headingLevel}` as "h2" | "h3";
   const GroupHeading = `h${headingLevel + 1}` as "h3" | "h4";
@@ -601,9 +644,12 @@ export function TaskList({
   useEffect(() => {
     let active = true;
     setLoading(true);
-    listTasks({ ...(personId ? { personId } : {}), state: "all" }).then(
-      (next) => {
+    Promise.all(Array.from({ length: pages }, (_, page) =>
+      listTasks({ ...(personId ? { personId } : {}), state: "all", offset: page * 200, limit: 200 }),
+    )).then(
+      (results) => {
         if (!active) return;
+        const next = { ...results[0], tasks: [...new Map(results.flatMap(r => r.tasks).map(task => [task.task_id, task])).values()], truncated: results[results.length - 1].truncated };
         setListing(next);
         setFailed(false);
         setLoading(false);
@@ -618,15 +664,17 @@ export function TaskList({
     return () => {
       active = false;
     };
-  }, [attempt, personId]);
+  }, [attempt, personId, pages]);
 
   useEffect(() => {
     const reload = () => setAttempt((value) => value + 1);
     window.addEventListener(TASKS_CHANGED, reload);
     window.addEventListener("sourcecado:board-changed", reload);
+    const timer = window.setInterval(reload, 15000);
     return () => {
       window.removeEventListener(TASKS_CHANGED, reload);
       window.removeEventListener("sourcecado:board-changed", reload);
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -689,7 +737,7 @@ export function TaskList({
         <p className="task-list-status" role="status">
           {personId
             ? "No open tasks for this person."
-            : "No open tasks for people in Contacts."}
+            : "No open tasks for saved people."}
         </p>
       ) : null}
       {filteredOut ? (
@@ -729,10 +777,10 @@ export function TaskList({
         </details>
       ) : null}
       {listing?.truncated ? (
-        <p className="task-list-status">Showing the first {listing.tasks.length} tasks.</p>
+        <p className="task-list-status">Showing the first {listing.tasks.length} tasks. <button type="button" disabled={loading} onClick={() => setPages(n => n + 1)}>Load more tasks</button></p>
       ) : null}
       {listing ? (
-        <p className="task-list-timezone">Dates use {listing.timezone}.</p>
+        <p className="task-list-timezone">New task dates use {listing.timezone}. Existing tasks keep their saved timezone.</p>
       ) : null}
     </section>
   );

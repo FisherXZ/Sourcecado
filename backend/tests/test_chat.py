@@ -435,14 +435,22 @@ def test_ws_normal_terminal_drains_exactly_one_next_queue_item(tmp_path):
         ):
             event = ws.receive_json()
             events.append(event)
-        time.sleep(0.08)
-        assert len(provider.calls) == 2
         while sum(
             event["type"] in {"turn_end", "turn_stopped", "error"}
             for event in events
         ) < 2:
             events.append(ws.receive_json())
+        while not any(
+            event["type"] == "queue_snapshot"
+            and event.get("status") == "idle"
+            and event.get("items") == []
+            for event in events
+        ):
+            events.append(ws.receive_json())
 
+    # Observe completion instead of sleeping while the websocket producer may
+    # be waiting for us to drain its frames on a slower CI runner.
+    assert len(provider.calls) == 2
     assert provider.calls[1][-1] == {"role": "user", "content": "queued follow-up"}
     assert built.state.store.list_queue(sid) == []
     assert [event["type"] for event in events].count("turn_start") == 2

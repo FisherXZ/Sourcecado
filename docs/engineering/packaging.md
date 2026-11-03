@@ -8,6 +8,11 @@ Design decisions and their reasoning live in [ADR 0003](adr/0003-macos-preview-a
 - Python 3.14 with pip. The build script installs `backend/requirements.lock` with `--require-hashes` in a temporary virtual environment.
 - Node 24 (pinned in the root `.nvmrc`) with `frontend/node_modules` installed (`npm ci`).
 
+When updating dependencies, regenerate the hash lock from `backend/` with
+`uv pip compile --universal --generate-hashes --python-version 3.14 -o requirements.lock requirements.txt`.
+The universal lock retains platform markers so a Windows development update
+does not replace Linux/macOS dependencies used by CI and packaging.
+
 ## Native development
 
 After [contributor setup](../../CONTRIBUTING.md), run `make native` from the repository root with your isolated `CLUB_STATE_DIR` exported. It invokes `npm run tauri:dev`, which passes `src-tauri/tauri.dev.conf.json` and clears `bundle.resources` for this development invocation. No frozen backend is needed: the debug shell starts `backend/.venv/bin/python -m coworker.run`.

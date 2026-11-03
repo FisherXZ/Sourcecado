@@ -374,9 +374,16 @@ export type BoardPerson = {
   replied_at?: string | null;
   follow_up?: FollowUp;
   descriptions?: PersonDescriptions;
+  version?: number;
+  attention_rank?: number;
+  attention_reason?: string | null;
+  attention_until?: string | null;
+  attention_reasons?: Array<{ code: string; label: string; count?: number }>;
+  next_action?: PersonTask | null;
 };
 
 export type Board = {
+  mail_sync?: MailSyncState;
   backlog: BoardPerson[];
   open: BoardPerson[];
   in_conversation: BoardPerson[];
@@ -391,7 +398,8 @@ export type PersonDescription = {
   slot: DescriptionSlot;
   text: string | null;
   authority: DescriptionAuthority;
-  source_refs: string[];
+  source_refs: Array<string | { url?: string; message_id?: string }>;
+  analyzed_input_revision?: number;
   version: number;
 };
 
@@ -438,13 +446,32 @@ export type PersonKnowledgeGap = {
 };
 
 export type ReplyRefreshResult = {
-  status: "ok" | "failed";
+  status: "ok" | "partial" | "failed";
   mode: string;
   scanned: number;
   filed: number;
   unassigned: number;
+  outgoing?: number;
+  remaining_threads?: number;
+  content_partial?: number;
+  mail_sync?: MailSyncState;
   cursor?: string | null;
   error?: string;
+};
+
+export type MailSyncState = {
+  status: "never" | "ok" | "partial" | "failed";
+  last_success_at: string | null;
+  last_attempt_at: string | null;
+  warning: string | null;
+  outbound_checked_at?: string | null;
+};
+
+export type MailAnalysisState = {
+  latest_evidence_revision: number;
+  analyzed_revision: number;
+  status: "not_analyzed" | "pending" | "current" | "retrying" | "failed";
+  attempts?: number;
 };
 
 /** One claim in the living brief, with the sources that back it. */
@@ -520,6 +547,10 @@ export type LivingBrief = {
 };
 
 export type PersonFile = {
+  crm_proposals?: CrmProposal[];
+  crm_changes?: CrmChange[];
+  mail_sync?: MailSyncState;
+  mail_analysis?: MailAnalysisState;
   person: BoardPerson &
     Record<string, unknown> & {
       sources?: PersonSourceRef[];
@@ -532,6 +563,7 @@ export type PersonFile = {
     kind: string;
     summary: string;
     payload: Record<string, unknown>;
+    created_at?: string;
   }>;
   versions?: Array<{ version: number; created_at: string }>;
   sourcing_chat: { session_id: string; person_id: string } | null;
@@ -622,9 +654,124 @@ export type ApolloCurationResult = {
 };
 
 export async function getBoard(): Promise<Board> {
-  const res = await get("/v1/board");
+  const res = await get("/v1/board?include_mail_state=true");
   if (!res.ok) throw new Error(`board ${res.status}`);
   return res.json();
+}
+
+export type CrmProposal = {
+  person_id: string;
+  person?: Pick<BoardPerson, "first_name" | "last_name" | "company" | "sequence_state">;
+  proposal_id: string;
+  kind: "task_create" | "task_update" | "description" | "status";
+  value: Record<string, unknown>;
+  current_value?: Record<string, unknown> | null;
+  reason: string;
+  source_refs: Array<{ url?: string; message_id?: string }>;
+};
+
+export type CrmChange = {
+  change_id: string;
+  can_undo?: boolean;
+  entity_type: string;
+  action: string;
+  reason: string;
+  actor: string;
+  created_at: string;
+  source_refs: string;
+};
+
+export async function crmRequest(path: string, body: Record<string, unknown>, method = "POST"): Promise<Record<string, unknown>> {
+  const response = await fetch(`${httpBase()}${path}`, {
+    method,
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(response.status === 409
+    ? "This record changed. Your text is kept; review the current version and try again."
+    : "Couldn’t save this change. Your work is kept; try again.");
+  return result;
+}
+
+export function startCrmRefresh(force = false) {
+  return crmRequest(`/v1/crm/refresh?force=${force}`, {});
+}
+
+export async function getCrmProposals(): Promise<{ proposals: CrmProposal[]; truncated: boolean }> {
+  const response = await get("/v1/crm/proposals");
+  if (!response.ok) throw new Error("Couldn’t load suggestions.");
+  return response.json();
+}
+
+/** One saved-person finder hit (#242). Never carries the email address itself. */
+export type SavedPersonMatch = {
+  person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  last_name_status: "known" | "hidden_by_apollo" | "missing";
+  title: string | null;
+  company: string | null;
+  sequence_state: string | null;
+  board_lane: "backlog" | "open" | "in_conversation" | "done";
+  has_email: boolean;
+  apollo_id: string | null;
+  match_kind: "email" | "name" | "company" | "title";
+};
+
+export type SavedPeopleSearchResult = {
+  results: SavedPersonMatch[];
+  count: number;
+  query: string;
+};
+
+/** Resolved saved record for one Apollo candidate (badge / possible-match). */
+export type ResolvedApolloIdentity = {
+  person_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  last_name_status?: "known" | "hidden_by_apollo" | "missing";
+  title: string | null;
+  company: string | null;
+  sequence_state: string | null;
+  board_lane: "backlog" | "open" | "in_conversation" | "done";
+};
+
+export type ShortlistCandidate = { apollo_id?: string | null; name?: string | null };
+
+/**
+ * Shortlist candidates classified against saved identities, keyed by Apollo id:
+ * `resolved` = exact id match ("Already saved"); `possible` = name-only match
+ * ("possible match", never merged).
+ */
+export type ShortlistMatches = {
+  resolved: Record<string, ResolvedApolloIdentity>;
+  possible: Record<string, ResolvedApolloIdentity[]>;
+};
+
+export async function searchSavedPeople(
+  query: string,
+  limit = 20,
+): Promise<SavedPeopleSearchResult> {
+  const res = await get(
+    `/v1/people/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`people search ${res.status}`);
+  return res.json();
+}
+
+export async function resolveApolloIdentities(
+  candidates: ShortlistCandidate[],
+): Promise<ShortlistMatches> {
+  const res = await fetch(`${httpBase()}/v1/people/resolve-identities`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+    body: JSON.stringify({ candidates }),
+  });
+  if (!res.ok) throw new Error(`resolve identities ${res.status}`);
+  const data = await res.json();
+  return { resolved: data.resolved ?? {}, possible: data.possible ?? {} };
+
 }
 
 export async function refreshReplies(): Promise<{
@@ -647,6 +794,13 @@ export async function getPerson(id: string): Promise<PersonFile> {
 
 export type TaskDueStatus = "overdue" | "today" | "upcoming" | "none";
 
+/** A currently permitted source pointer supplied by the server. */
+export type TaskSourceLink = {
+  id: string;
+  label: string;
+  url: string | null;
+};
+
 export type PersonTask = {
   task_id: string;
   person_id: string;
@@ -661,6 +815,8 @@ export type PersonTask = {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  source_refs?: string[];
+  source_links?: TaskSourceLink[];
   due_status?: TaskDueStatus;
   person?: {
     person_id: string;
@@ -696,6 +852,9 @@ export type TaskChange = {
   operation_id: string;
   compensates_change_id: string | null;
   created_at: string;
+  source_links?: TaskSourceLink[];
+  /** Server checks the current version and the automatic inference binding. */
+  can_undo?: boolean;
 };
 
 export type TaskFields = {
@@ -729,11 +888,13 @@ export function newOperationId(): string {
 }
 
 export async function listTasks(
-  options: { personId?: string; state?: "open" | "all" } = {},
+  options: { personId?: string; state?: "open" | "all"; offset?: number; limit?: number } = {},
 ): Promise<TaskListing> {
   const params = new URLSearchParams();
   if (options.personId) params.set("person_id", options.personId);
   if (options.state) params.set("state", options.state);
+  if (options.offset) params.set("offset", String(options.offset));
+  if (options.limit) params.set("limit", String(options.limit));
   const query = params.toString();
   const res = await get(`/v1/crm/tasks${query ? `?${query}` : ""}`);
   if (!res.ok) throw new Error(`tasks ${res.status}`);
@@ -1075,6 +1236,8 @@ export type OutreachDraft = {
   readonly body_digest: string;
   readonly account: string | null;
   readonly sent: boolean;
+  /** The Gmail thread the draft is in, if Gmail reports one. */
+  readonly thread_id?: string | null;
 };
 
 /** The binding a send approval carries. Never the body, only its digest. */
@@ -1086,6 +1249,9 @@ export type SendAuthorityResource = {
   readonly to: string;
   readonly subject: string;
   readonly body_digest: string;
+  /** Set when the approval is tied to one Gmail thread. */
+  readonly thread_id?: string;
+  readonly task_id?: string;
 };
 
 export type PendingSendApproval = {
@@ -1139,14 +1305,170 @@ export async function readOutreachDraft(
 
 export async function requestSendApproval(
   personId: string,
-  input: { sessionId: string; draftId: string; reviewedBodyDigest: string },
+  input: {
+    sessionId: string;
+    draftId: string;
+    reviewedBodyDigest: string;
+    expectedThreadId?: string | null;
+    taskId?: string | null;
+  },
 ): Promise<PendingSendApproval> {
-  const body = await personPost(personId, "outreach/send-approval", {
+  const payload: Record<string, unknown> = {
     session_id: input.sessionId,
     draft_id: input.draftId,
     reviewed_body_digest: input.reviewedBodyDigest,
-  });
+  };
+  if (input.expectedThreadId) payload.expected_thread_id = input.expectedThreadId;
+  if (input.taskId) payload.task_id = input.taskId;
+  const body = await outreachRequest(personId, "POST", "outreach/send-approval", payload);
   return (body as { item: PendingSendApproval }).item;
+}
+
+/** A failed follow-up request. `draft` is the current Gmail draft, if known. */
+export class FollowUpError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly draft: OutreachDraft | null;
+
+  constructor(message: string, status: number, code: string | null, draft: OutreachDraft | null) {
+    super(message);
+    this.name = "FollowUpError";
+    this.status = status;
+    this.code = code;
+    this.draft = draft;
+  }
+}
+
+async function outreachRequest(
+  personId: string,
+  method: "GET" | "POST" | "PUT",
+  path: string,
+  payload?: Record<string, unknown>,
+): Promise<unknown> {
+  const res = await fetch(
+    `${httpBase()}/v1/people/${encodeURIComponent(personId)}/${path}`,
+    {
+      method,
+      headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
+    },
+  );
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    body = {};
+  }
+  if (!res.ok) {
+    throw new FollowUpError(
+      typeof body.error === "string" ? body.error : `${path} ${res.status}`,
+      res.status,
+      typeof body.code === "string" ? body.code : null,
+      body.draft && typeof body.draft === "object" ? (body.draft as OutreachDraft) : null,
+    );
+  }
+  return body;
+}
+
+export type FollowUpThread = {
+  readonly thread_id: string;
+  readonly subject: string | null;
+  readonly message_count: number;
+  readonly last_direction: "inbound" | "outbound";
+  readonly last_at: string | null;
+  readonly url: string;
+};
+
+export type FollowUpPreparation = {
+  readonly task: {
+    readonly task_id: string;
+    readonly title: string;
+    readonly details: string;
+    readonly due_date: string | null;
+    readonly state: string;
+    readonly version: number;
+  };
+  readonly person: {
+    readonly person_id: string;
+    readonly label: string;
+    readonly email: string | null;
+    readonly sequence_state: string | null;
+  };
+  readonly account: string | null;
+  readonly recipient: string | null;
+  readonly thread: FollowUpThread | null;
+  readonly threads: FollowUpThread[];
+  readonly subject: string;
+  readonly body: string;
+  readonly talking_points: { readonly origin: string; readonly text: string }[];
+  readonly sources: { readonly id: string; readonly provider: string; readonly title: string | null }[];
+  readonly restricted_source_count: number;
+  readonly blockers: { readonly code: string; readonly message: string }[];
+  readonly assistant_prompt: string;
+};
+
+/** Read-only. Creates no draft and sends nothing. */
+export async function prepareFollowUp(
+  personId: string,
+  taskId: string,
+  threadId?: string | null,
+): Promise<{
+  follow_up: FollowUpPreparation;
+  sourcing_chat: { session_id: string; person_id: string } | null;
+}> {
+  const query = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : "";
+  const body = await outreachRequest(
+    personId,
+    "GET",
+    `tasks/${encodeURIComponent(taskId)}/follow-up${query}`,
+  );
+  return body as {
+    follow_up: FollowUpPreparation;
+    sourcing_chat: { session_id: string; person_id: string } | null;
+  };
+}
+
+/** Create the Gmail draft: a reply in `threadId`, or a new email. */
+export async function createFollowUpDraft(
+  personId: string,
+  input: {
+    sessionId: string;
+    body: string;
+    subject?: string;
+    threadId?: string | null;
+    taskId?: string | null;
+  },
+): Promise<OutreachDraft> {
+  const payload: Record<string, unknown> = {
+    session_id: input.sessionId,
+    body: input.body,
+  };
+  if (input.subject) payload.subject = input.subject;
+  if (input.threadId) payload.thread_id = input.threadId;
+  if (input.taskId) payload.task_id = input.taskId;
+  const body = await outreachRequest(personId, "POST", "outreach/draft", payload);
+  return (body as { draft: OutreachDraft }).draft;
+}
+
+/** Save an edit to the Gmail draft. Fails if it changed in Gmail meanwhile. */
+export async function editOutreachDraft(
+  personId: string,
+  draftId: string,
+  input: { sessionId: string; body: string; subject?: string; expectedBodyDigest: string },
+): Promise<OutreachDraft> {
+  const payload: Record<string, unknown> = {
+    session_id: input.sessionId,
+    body: input.body,
+    expected_body_digest: input.expectedBodyDigest,
+  };
+  if (input.subject) payload.subject = input.subject;
+  const body = await outreachRequest(
+    personId,
+    "PUT",
+    `outreach/draft/${encodeURIComponent(draftId)}`,
+    payload,
+  );
+  return (body as { draft: OutreachDraft }).draft;
 }
 
 export async function requestEnrichApproval(
@@ -1177,12 +1499,13 @@ export async function decideApproval(
 export async function setPersonSequence(
   id: string,
   state: string,
-  actor = "director"
+  actor = "director",
+  expectedVersion?: number,
 ): Promise<{ person: BoardPerson }> {
   const res = await fetch(`${httpBase()}/v1/people/${encodeURIComponent(id)}/sequence`, {
     method: "POST",
     headers: { "X-Club-Token": apiToken(), "Content-Type": "application/json" },
-    body: JSON.stringify({ state, actor }),
+    body: JSON.stringify({ state, actor, expected_version: expectedVersion }),
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || `sequence ${res.status}`);
@@ -1249,6 +1572,8 @@ export class DescriptionSaveError extends Error {
   }
 }
 
+const pendingDescriptionOperations = new Map<string, string>();
+
 export async function patchPersonDescription(
   id: string,
   slot: DescriptionSlot,
@@ -1264,6 +1589,10 @@ export async function patchPersonDescription(
   const payload: Record<string, unknown> = { expected_version: body.expectedVersion };
   if ("release" in body) payload.release = true;
   else payload.text = body.text;
+  const intent = JSON.stringify({ id, slot, ...payload });
+  const operation = pendingDescriptionOperations.get(intent) ?? newOperationId();
+  pendingDescriptionOperations.set(intent, operation);
+  payload.operation_id = operation;
   const res = await fetch(
     `${httpBase()}/v1/people/${encodeURIComponent(id)}/descriptions/${slot}`,
     {
@@ -1276,6 +1605,7 @@ export async function patchPersonDescription(
   if (!res.ok) {
     throw new DescriptionSaveError(res.status, data.error || `description ${res.status}`);
   }
+  pendingDescriptionOperations.delete(intent);
   return data;
 }
 
@@ -1983,6 +2313,23 @@ function normalizeConnector(value: unknown): Connector | null {
 export async function getConnectors(): Promise<{ connectors: Connector[] }> {
   const res = await get("/v1/connectors");
   if (!res.ok) throw new Error(`connectors ${res.status}`);
+  const body = record(await res.json());
+  const connectors = Array.isArray(body.connectors)
+    ? body.connectors.map(normalizeConnector).filter((item): item is Connector => item !== null)
+    : [];
+  return { connectors };
+}
+
+/**
+ * Run the backend's read-only connector probes and return the refreshed
+ * catalog. Results are cached server-side, so repeated calls are cheap.
+ */
+export async function checkConnectors(): Promise<{ connectors: Connector[] }> {
+  const res = await fetch(`${httpBase()}/v1/connectors/check`, {
+    method: "POST",
+    headers: { "X-Club-Token": apiToken() },
+  });
+  if (!res.ok) throw new Error(`connectors check ${res.status}`);
   const body = record(await res.json());
   const connectors = Array.isArray(body.connectors)
     ? body.connectors.map(normalizeConnector).filter((item): item is Connector => item !== null)
