@@ -1193,7 +1193,9 @@ def authority_for_draft(
         to=snapshot["to"],
         subject=snapshot["subject"],
         body_digest=snapshot["body_digest"],
-        thread_id=snapshot["thread_id"] if expected_thread_id else None,
+        # Gmail also assigns a conversation to a newly created draft. Bind it
+        # even when the director did not choose an existing reply thread.
+        thread_id=snapshot["thread_id"],
         task_id=task_id,
     )
 

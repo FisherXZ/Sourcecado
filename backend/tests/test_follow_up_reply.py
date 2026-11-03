@@ -407,6 +407,43 @@ def test_a_recipient_changed_after_approval_sends_nothing(tmp_path):
     assert gmail.send_attempts == []
 
 
+def test_a_new_thread_changed_after_follow_up_approval_sends_nothing(tmp_path):
+    gmail = _gmail()
+    app = _app(tmp_path, gmail)
+    client = TestClient(app)
+    person_id, session_id = _person(app)
+    task = _task(client, person_id)
+    created = client.post(
+        f"/v1/people/{person_id}/outreach/draft",
+        headers=HEADERS,
+        json={
+            "session_id": session_id,
+            "task_id": task["task_id"],
+            "subject": SUBJECT,
+            "body": REPLY_BODY,
+        },
+    )
+    assert created.status_code == 201, created.text
+    draft = created.json()["draft"]
+    # Live Gmail assigns a conversation even to a draft for a new thread.
+    gmail.drafts[0]["thread_id"] = "new_draft_thread"
+    parked = _park(
+        client, person_id, session_id, draft, thread_id=None, task_id=task["task_id"]
+    )
+    assert parked.status_code == 201, parked.text
+    item = parked.json()["item"]
+    assert gmail.send_attempts == []
+
+    gmail.drafts[0]["thread_id"] = "unreviewed_thread"
+    result = _decide(client, item["id"])
+
+    assert result.status_code == 200, result.text
+    assert result.json()["ok"] is False
+    assert result.json()["result"]["code"] == "thread_mismatch"
+    assert gmail.send_attempts == []
+    assert _task_state(client, person_id, task["task_id"]) == "open"
+
+
 def test_a_denied_follow_up_sends_nothing_and_leaves_the_task_open(tmp_path):
     gmail, app, client, person_id, session_id, thread_id, task = _flow(tmp_path)
     draft = _reply_draft(

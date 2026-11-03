@@ -42,7 +42,9 @@ produce the same person-bound credit/provenance receipt. Unifying these paths is
    `expected_thread_id`. The route re-reads the draft and refuses if it has
    changed since or sits in another conversation, so no approval is ever
    created for a body or thread nobody reviewed. It also refuses a draft
-   addressed to anyone other than this person. Nothing is sent here.
+   addressed to anyone other than this person. The approval binds Gmail's
+   actual draft thread, including a newly created conversation when no existing
+   reply thread was selected. Nothing is sent here.
 4. `POST /v1/inbox/{approval_id}` with `allow` decides it. This is the existing
    approval route; the send is not a special case of it.
 
