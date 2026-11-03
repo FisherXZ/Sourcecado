@@ -117,6 +117,77 @@ def test_agent_status_change_is_undone_by_crm_undo_change(tmp_path):
     assert people.get(pid)["sequence_state"] == "open"
 
 
+# --- board_mutate transition ------------------------------------------------
+
+
+def board_transition(people, pid, state, reason="Maya replied to the outreach"):
+    return execute("board_mutate", {"action": "transition", "person_id": pid, "to_state": state,
+        "expected_version": people.get(pid)["version"], "rationale_summary": reason},
+        people=people, session_id="chat-crm", run_id="run-crm")
+
+
+def file_sent_mail(people, pid):
+    people.append_event(pid, source="gmail", kind="send", summary="Sent draft d1",
+                        payload={"sent": True, "draft_id": "d1"}, tool="gmail_send")
+
+
+def test_board_transition_records_a_status_change_that_crm_undo_change_reverses(tmp_path):
+    people, pid = bound(tmp_path)
+    file_sent_mail(people, pid)
+    events_before = len(people.timeline(pid))
+    ok, moved = board_transition(people, pid, "in_conversation")
+    assert ok, moved
+    assert moved["person"]["sequence_state"] == "in_conversation"
+    change_id = moved["change"]["change_id"]
+    row = people._conn.execute("SELECT * FROM crm_changes WHERE change_id=?", (change_id,)).fetchone()
+    assert (row["entity_type"], row["entity_id"], row["actor"], row["session_id"], row["run_id"]) == (
+        "status", pid, "assistant", "chat-crm", "run-crm")
+    assert (json.loads(row["before_json"]), json.loads(row["after_json"])) == (
+        {"state": "open"}, {"state": "in_conversation"})
+    assert row["entity_version"] == people.get(pid)["version"]
+    assert row["reason"] == "Maya replied to the outreach"
+    # The store's state receipt stays the only timeline entry for the move.
+    assert [event["kind"] for event in people.timeline(pid)[events_before:]] == ["state"]
+    ok, file = invoke(people, "crm_get_person", {})
+    assert ok and file["changes"]["items"][0]["change_id"] == change_id
+    assert file["changes"]["items"][0]["can_undo"] is True
+    undo = {"change_id": change_id, "operation_id": "chat-undo-board", "reason": "Director undid the move"}
+    # Undo stays a director action: the assistant cannot reverse the move alone.
+    ok, refused = invoke(people, "crm_undo_change", undo)
+    assert not ok and refused["code"] == "unverified_director_request", refused
+    assert people.get(pid)["sequence_state"] == "in_conversation"
+    ok, undone = invoke(people, "crm_undo_change", undo, f"Undo status {change_id}",
+                        crm_mutation_budget=CRMMutationBudget())
+    assert ok, undone
+    assert undone["sequence"] == {"state": "open"}
+    assert people.get(pid)["sequence_state"] == "open"
+
+
+@pytest.mark.parametrize("state,error", [
+    ("in_conversation", "in_conversation requires sent outreach"),
+    ("done", "done requires a recorded outcome"),
+])
+def test_board_transition_keeps_the_assistant_sequence_guards(tmp_path, state, error):
+    people, pid = bound(tmp_path)
+    before = people.get(pid)
+    changes = people._conn.execute("SELECT COUNT(*) FROM crm_changes").fetchone()[0]
+    ok, refused = board_transition(people, pid, state, "No evidence on file")
+    assert not ok and error in refused["error"], refused
+    assert people.get(pid) == before
+    assert people._conn.execute("SELECT COUNT(*) FROM crm_changes").fetchone()[0] == changes
+
+
+def test_board_transition_to_done_after_an_outcome_is_undoable(tmp_path):
+    people, pid = bound(tmp_path, state="in_conversation")
+    people.capture_outcome(pid, outcome="accepted", expected_version=people.get(pid)["version"],
+                           actor="assistant", rationale_summary="Maya accepted")
+    ok, moved = board_transition(people, pid, "done", "Work on Maya is complete")
+    assert ok, moved
+    assert (moved["person"]["sequence_state"], moved["person"]["outcome"]) == ("done", "accepted")
+    assert CrmService(people).recent_changes(pid)[0]["change_id"] == moved["change"]["change_id"]
+    assert CrmService(people).recent_changes(pid)[0]["can_undo"] is True
+
+
 # --- crm_get_person ---------------------------------------------------------
 
 
@@ -230,6 +301,65 @@ def test_get_person_lists_are_bounded(tmp_path):
     assert len(result["mail_threads"]["items"]) == 10 and result["mail_threads"]["truncated"] is True
     assert len(result["monid_research"]["items"]) == 5 and result["monid_research"]["truncated"] is True
     assert all(len(item["sources"]) == 5 for item in result["monid_research"]["items"])
+
+
+def test_get_person_lists_versions_with_who_saved_each_one(tmp_path):
+    people, pid = bound(tmp_path)
+    people.patch(pid, fields={"title": "CTO"}, expected_version=people.get(pid)["version"],
+                 actor="director", rationale_summary="Director corrected the title")
+    people.patch(pid, fields={"handoff_who": "Maya, CTO at Lumen"}, expected_version=people.get(pid)["version"],
+                 actor="assistant", rationale_summary="Recorded who Maya is")
+    file_sent_mail(people, pid)
+    assert board_transition(people, pid, "in_conversation")[0]
+    people.patch_description(pid, "general", text="Seed founder", expected_version=0, actor="director",
+                             rationale_summary="Director description")
+    ok, result = invoke(people, "crm_get_person", {}, store=ConversationStore(tmp_path / "conversations"))
+    assert ok, result
+    saved = {entry["version"]: entry["created_at"] for entry in people.versions(pid)}
+    assert result["versions"] == {"truncated": False, "items": [
+        {"version": version, "created_at": saved[version], "actor": actor, "summary": summary}
+        for version, actor, summary in (
+            # Description receipts count slot versions, so this one stays unattributed.
+            (6, None, None),
+            (5, "assistant", "Moved to in conversation"),
+            (4, "assistant", "Recorded who Maya is"),
+            (3, "director", "Director corrected the title"),
+            (2, "director", "Director changed relationship status"),
+            # Keeping a new person writes its first version without a receipt.
+            (1, None, None),
+        )]}
+    assert result["sequence"]["version"] == 6 and result["partial"] is False
+
+
+def test_get_person_versions_are_the_newest_ten(tmp_path):
+    people, pid = bound(tmp_path)
+    for index in range(12):
+        people.patch(pid, fields={"handoff_wanted": f"Intro {index}"}, expected_version=people.get(pid)["version"],
+                     actor="assistant", rationale_summary=f"Handoff {index} " + "x" * 300)
+    ok, result = invoke(people, "crm_get_person", {})
+    assert ok, result
+    assert result["versions"]["truncated"] is True
+    items = result["versions"]["items"]
+    assert [item["version"] for item in items] == list(range(14, 4, -1))
+    assert items[0]["summary"] == ("Handoff 11 " + "x" * 300)[:200]
+    assert all(set(item) == {"version", "created_at", "actor", "summary"} for item in items)
+
+
+def test_get_person_versions_hide_who_saved_a_restricted_source(tmp_path):
+    people, pid = bound(tmp_path)
+    ref = people.upsert_attachment(pid, record_type="source_ref",
+        fields={"id": "gmail:private", "sensitivity": "restricted", "title": "Private"},
+        idempotency_key="private", actor="director", rationale_summary="Filed the confidential board memo")
+    version = people.get(pid)["version"]
+    store = ConversationStore(tmp_path / "conversations")
+    ok, hidden = invoke(people, "crm_get_person", {}, store=store)
+    assert ok and hidden["partial"] is True, hidden
+    assert hidden["versions"]["items"][0] == {"version": version, "created_at": people.versions(pid)[-1]["created_at"],
+                                              "restricted": True}
+    assert "confidential board memo" not in json.dumps(hidden)
+    ok, visible = invoke(people, "crm_get_person", {}, store=store, allowed_source_ids={ref["id"]})
+    assert ok and visible["partial"] is False, visible
+    assert visible["versions"]["items"][0]["summary"] == "Filed the confidential board memo"
 
 
 def test_get_person_fences_mail_subjects_and_research_sources_only(tmp_path):
