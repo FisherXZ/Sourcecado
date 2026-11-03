@@ -12,7 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from coworker.crm_tasks import CRM_TASK_STATEMENTS
+from coworker.crm_tasks import CRM_TASK_STATEMENTS, TaskConflict, _clean_operation_id, _fingerprint
+from coworker.crm_sources import source_ids
 from coworker.person_identity import (
     apollo_surname_is_masked,
     without_apollo_name_masks,
@@ -1592,13 +1593,17 @@ class PersonStore:
         rationale_summary: str,
         session_id: str | None = None,
         run_id: str | None = None,
+        operation_id: str | None = None,
+        human_requested: bool = False,
+        source_refs: object = None,
+        allowed_source_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Save a description slot's text, or release it back to the assistant.
 
         Concurrency is slot-scoped: `expected_version` is checked against the
         slot's own version, so an edit to `general` never false-conflicts with
-        an edit to `detailed` or the handoff. A text save flips authority to
-        "human" (an empty string is an intentional, protected blank); `release`
+        an edit to `detailed` or the handoff. A director-requested text save
+        flips authority to "human" (including an intentional blank); `release`
         flips it back to "assistant" and leaves the text in place for a later
         assistant writer. Either way the write takes a person snapshot and
         leaves a receipt, so audit and revert stay person-scoped.
@@ -1606,26 +1611,63 @@ class PersonStore:
         if slot not in DESCRIPTION_SLOTS:
             raise ValueError(f"unknown description slot {slot}")
         self._require_audit(actor, rationale_summary)
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
+            raise ValueError("expected_version must be a nonnegative integer")
+        human = actor == "director" or human_requested
+        if release and not human:
+            raise TaskConflict("only the director can release a human description", code="human_protected")
         if not release:
-            if text is None:
+            if not isinstance(text, str):
                 raise ValueError("a description save needs text or release")
             limit = DESCRIPTION_LIMITS[slot]
             if len(text) > limit:
                 raise ValueError(
                     f"{slot} description exceeds {limit} characters"
                 )
-        with self._lock:
+        operation = _clean_operation_id(operation_id) if operation_id is not None else None
+        with self._lock, self._conn:
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
             self._load_person_row(person_id)
+            refs = source_ids(self, person_id, source_refs, allowed_source_ids)
+            fingerprint = _fingerprint({
+                "op": "description.update", "person_id": person_id, "slot": slot,
+                "expected_version": expected_version, "text": text, "release": release,
+                "actor": actor, "human_requested": human_requested,
+                "source_refs": refs, "reason": rationale_summary,
+            })
+            if operation is not None:
+                prior = self._conn.execute(
+                    "SELECT payload FROM events WHERE external_key = ?",
+                    (f"crm-operation:{operation}",),
+                ).fetchone()
+                task_operation = self._conn.execute(
+                    "SELECT 1 FROM crm_operations WHERE operation_id = ?", (operation,)
+                ).fetchone()
+                if task_operation:
+                    raise TaskConflict("operation id already belongs to a task change", code="operation_conflict")
+                if prior:
+                    payload = json.loads(prior["payload"])
+                    if payload.get("fingerprint") != fingerprint:
+                        raise TaskConflict("operation id already belongs to a different change", code="operation_conflict")
+                    response = payload["crm_response"]
+                    source_ids(self, person_id, response["description"]["source_refs"], allowed_source_ids)
+                    return {**response, "replayed": True}
             current = self._conn.execute(
                 "SELECT * FROM person_descriptions WHERE person_id = ? AND slot = ?",
                 (person_id, slot),
             ).fetchone()
             current_version = int(current["version"]) if current is not None else 0
             if current_version != expected_version:
-                raise ValueError(
+                raise TaskConflict(
                     "stale record version: "
-                    f"expected {expected_version}, current {current_version}"
+                    f"expected {expected_version}, current {current_version}",
+                    code="description_conflict",
                 )
+            if current is not None:
+                source_ids(self, person_id, json.loads(current["source_refs"]), allowed_source_ids)
+                if not human and current["authority"] == "human":
+                    raise TaskConflict("human-edited description requires a director request", code="human_protected")
             now = self._now()
             next_slot_version = expected_version + 1
             if release:
@@ -1635,10 +1677,9 @@ class PersonStore:
                     str(current["source_refs"]) if current is not None else "[]"
                 )
             else:
-                new_authority = "human"
+                new_authority = "human" if human else "assistant"
                 new_text = text
-                # A human edit carries no source references.
-                new_source_refs = "[]"
+                new_source_refs = json.dumps(refs)
             created_at = (
                 str(current["created_at"]) if current is not None else now
             )
@@ -1672,23 +1713,31 @@ class PersonStore:
                 "UPDATE people SET version = ?, updated_at = ? WHERE person_id = ?",
                 (next_person_version, now, person_id),
             )
-            self._receipt(
-                person_id,
-                kind="description",
-                summary=rationale_summary.strip(),
-                payload={
+            description = self._descriptions(person_id)[slot]
+            event_id = _new_event_id()
+            response = {"description": description, "change": {
+                "change_id": event_id, "entity_type": "description",
+                "entity_id": f"{person_id}:{slot}", "entity_version": next_slot_version,
+                "actor": actor, "operation_id": operation,
+            }, "replayed": False}
+            payload = {
                     "slot": slot,
                     "authority": new_authority,
                     "released": bool(release),
                     "version": next_slot_version,
-                },
-                actor=actor,
-                session_id=session_id,
-                run_id=run_id,
+                }
+            if operation is not None:
+                payload.update(fingerprint=fingerprint, crm_response=response)
+            self._conn.execute(
+                """INSERT INTO events (event_id, person_id, source, kind, summary,
+                       payload, actor, session_id, run_id, external_key)
+                   VALUES (?, ?, 'sourcecado', 'description', ?, ?, ?, ?, ?, ?)""",
+                (event_id, person_id, rationale_summary.strip(), json.dumps(payload),
+                 actor, session_id, run_id, f"crm-operation:{operation}" if operation else None),
             )
             self._snapshot(person_id, next_person_version, now)
             self._conn.commit()
-        return self.descriptions(person_id)[slot]
+        return response if operation is not None else description
 
     def upsert_attachment(
         self,

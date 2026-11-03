@@ -30,6 +30,8 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from coworker.crm_sources import source_ids as _source_ids
+
 if TYPE_CHECKING:
     from coworker.people import PersonStore
 
@@ -145,6 +147,13 @@ class TaskError(ValueError):
 
 class TaskNotFound(TaskError):
     """Unknown, deleted or out-of-scope person or task. Maps to HTTP 404."""
+
+
+def source_ids(*args: Any) -> list[str]:
+    try:
+        return _source_ids(*args)
+    except ValueError as exc:
+        raise TaskError(str(exc)) from exc
 
 
 class TaskConflict(TaskError):
@@ -389,14 +398,17 @@ class TaskService:
 
     # --- operation receipts ------------------------------------------------
 
-    def _replay(self, operation_id: str, fingerprint: str) -> dict[str, Any] | None:
+    def _replay(self, operation_id: str, fingerprint: str, *, legacy_fingerprint: str | None = None) -> dict[str, Any] | None:
+        if self._conn.execute("SELECT 1 FROM events WHERE external_key = ?",
+                              (f"crm-operation:{operation_id}",)).fetchone():
+            raise TaskConflict("operation id already belongs to a description change", code="operation_conflict")
         row = self._conn.execute(
             "SELECT fingerprint, response_json FROM crm_operations WHERE operation_id = ?",
             (operation_id,),
         ).fetchone()
         if row is None:
             return None
-        if str(row["fingerprint"]) != fingerprint:
+        if str(row["fingerprint"]) not in {fingerprint, legacy_fingerprint}:
             raise TaskConflict(
                 "this operation id was already used for a different change",
                 code="operation_conflict",
@@ -509,6 +521,9 @@ class TaskService:
         reason: object = None,
         session_id: str | None = None,
         run_id: str | None = None,
+        human_requested: bool = False,
+        source_refs: object = None,
+        allowed_source_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         if actor not in ("director", "assistant"):
             raise TaskError(f"invalid actor {actor}")
@@ -519,20 +534,28 @@ class TaskService:
             "due_date": _clean_due_date(due_date),
         }
         timezone = validate_timezone(timezone)
-        fingerprint = _fingerprint(
-            {"op": "task.create", "person_id": person_id, "actor": actor, **clean}
-        )
-        origin = "human" if actor == "director" else "assistant"
+        origin = "human" if actor == "director" or human_requested else "assistant"
         # A director's own words are protected from later automatic rewrites.
         protected = (
             sorted(field for field in TASK_EDIT_FIELDS if clean[field])
             if origin == "human"
             else []
         )
-        with self._lock:
+        with self._lock, self._conn:
             try:
-                replay = self._replay(operation, fingerprint)
+                if not self._conn.in_transaction:
+                    self._conn.execute("BEGIN IMMEDIATE")
+                self._live_person(person_id)
+                refs = source_ids(self._people, person_id, source_refs, allowed_source_ids)
+                fingerprint = _fingerprint(
+                    {"op": "task.create", "person_id": person_id, "actor": actor,
+                     "human_requested": human_requested, "source_refs": refs,
+                     "timezone": timezone, "reason": reason, **clean}
+                )
+                legacy = _fingerprint({"op": "task.create", "person_id": person_id, "actor": actor, **clean}) if not human_requested and not refs else None
+                replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
                 if replay is not None:
+                    source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
                     return replay
                 self._live_person(person_id)
                 now = datetime.now(UTC).isoformat()
@@ -543,7 +566,7 @@ class TaskService:
                         task_id, person_id, title, details, due_date,
                         due_timezone, state, origin, protected_fields,
                         source_refs, version, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, '[]', 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         task_id,
@@ -554,6 +577,7 @@ class TaskService:
                         timezone if clean["due_date"] else None,
                         origin,
                         json.dumps(protected),
+                        json.dumps(refs),
                         now,
                         now,
                     ),
@@ -591,6 +615,8 @@ class TaskService:
         reason: object = None,
         session_id: str | None = None,
         run_id: str | None = None,
+        human_requested: bool = False,
+        allowed_source_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         if actor not in ("director", "assistant"):
             raise TaskError(f"invalid actor {actor}")
@@ -626,17 +652,27 @@ class TaskService:
                 "person_id": person_id,
                 "task_id": task_id,
                 "actor": actor,
+                "human_requested": human_requested,
+                "timezone": timezone,
+                "reason": reason,
                 "expected_version": expected_version,
                 "changes": clean,
             }
         )
-        with self._lock:
+        legacy = _fingerprint({"op": "task.update", "person_id": person_id, "task_id": task_id,
+                               "actor": actor, "expected_version": expected_version, "changes": clean}) if not human_requested else None
+        with self._lock, self._conn:
             try:
-                replay = self._replay(operation, fingerprint)
+                if not self._conn.in_transaction:
+                    self._conn.execute("BEGIN IMMEDIATE")
+                self._live_person(person_id)
+                replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
                 if replay is not None:
+                    source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
                     return replay
                 self._live_person(person_id)
                 before = self._task_dict(self._load_task(person_id, task_id))
+                source_ids(self._people, person_id, before["source_refs"], allowed_source_ids)
                 if before["version"] != expected_version:
                     raise TaskConflict(
                         "this task changed since you opened it",
@@ -651,6 +687,12 @@ class TaskService:
                 if not changed:
                     # Nothing differs: no new version, no history row.
                     return {"task": before, "change": None, "replayed": False}
+                if actor == "assistant" and not human_requested and "state" in changed:
+                    raise TaskConflict("assistant lifecycle changes require verified task fulfillment or a director request",
+                                       code="fulfillment_required", current=before)
+                if actor == "assistant" and not human_requested and set(changed) & set(before["protected_fields"]):
+                    raise TaskConflict("human-edited task fields require a director request",
+                                       code="human_protected", current=before)
                 action = "update"
                 if "state" in changed:
                     action = TASK_TRANSITIONS.get((before["state"], changed["state"]))
@@ -661,7 +703,7 @@ class TaskService:
                 # The director's own words and completion decisions are
                 # protected from later automatic rewrites.
                 protected = set(before["protected_fields"])
-                if actor == "director":
+                if actor == "director" or human_requested:
                     protected |= set(changed)
                 now = datetime.now(UTC).isoformat()
                 if "due_date" in changed:
@@ -743,6 +785,9 @@ class TaskService:
         reason: object = None,
         session_id: str | None = None,
         run_id: str | None = None,
+        human_requested: bool = False,
+        expected_version: int | None = None,
+        allowed_source_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Restore what one recorded change replaced, as a new change.
 
@@ -762,12 +807,21 @@ class TaskService:
                 "person_id": person_id,
                 "change_id": change_id,
                 "actor": actor,
+                "human_requested": human_requested,
+                "expected_version": expected_version,
+                "reason": reason,
             }
         )
-        with self._lock:
+        legacy = _fingerprint({"op": "task.undo", "person_id": person_id, "change_id": change_id,
+                               "actor": actor}) if not human_requested and expected_version is None else None
+        with self._lock, self._conn:
             try:
-                replay = self._replay(operation, fingerprint)
+                if not self._conn.in_transaction:
+                    self._conn.execute("BEGIN IMMEDIATE")
+                self._live_person(person_id)
+                replay = self._replay(operation, fingerprint, legacy_fingerprint=legacy)
                 if replay is not None:
+                    source_ids(self._people, person_id, replay["task"]["source_refs"], allowed_source_ids)
                     return replay
                 self._live_person(person_id)
                 row = self._conn.execute(
@@ -784,6 +838,9 @@ class TaskService:
                     raise TaskError("creating a task cannot be undone; cancel it instead")
                 task_id = str(row["entity_id"])
                 current = self._task_dict(self._load_task(person_id, task_id))
+                source_ids(self._people, person_id, current["source_refs"], allowed_source_ids)
+                if expected_version is not None and current["version"] != expected_version:
+                    raise TaskConflict("this task changed since you opened it", code="task_conflict", current=current)
                 if current["version"] != int(row["entity_version"]):
                     raise TaskConflict(
                         "this task changed again after that change",
@@ -798,8 +855,14 @@ class TaskService:
                 }
                 if not changed:
                     return {"task": current, "change": None, "replayed": False}
+                if actor == "assistant" and not human_requested and "state" in changed:
+                    raise TaskConflict("assistant lifecycle changes require verified task fulfillment or a director request",
+                                       code="fulfillment_required", current=current)
+                if actor == "assistant" and not human_requested and set(changed) & set(current["protected_fields"]):
+                    raise TaskConflict("human-edited task fields require a director request",
+                                       code="human_protected", current=current)
                 protected = set(current["protected_fields"])
-                if actor == "director":
+                if actor == "director" or human_requested:
                     protected |= set(changed) & set(TASK_CHANGE_FIELDS)
                 now = datetime.now(UTC).isoformat()
                 task = self._write(

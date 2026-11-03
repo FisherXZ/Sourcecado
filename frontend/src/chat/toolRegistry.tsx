@@ -260,6 +260,11 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     icon: "calendar",
     slot: "calendar",
   },
+  crm_list_tasks: { label: "Read saved tasks", activeLabel: "Reading saved tasks", category: "source", icon: "person" },
+  crm_create_task: { label: "Created task", activeLabel: "Creating task", category: "action", icon: "person" },
+  crm_update_task: { label: "Updated task", activeLabel: "Updating task", category: "action", icon: "person" },
+  crm_update_description: { label: "Updated description", activeLabel: "Updating description", category: "action", icon: "person" },
+  crm_undo_change: { label: "Undid CRM change", activeLabel: "Undoing CRM change", category: "action", icon: "person" },
   board_get: {
     label: "Read person file",
     activeLabel: "Reading person file",

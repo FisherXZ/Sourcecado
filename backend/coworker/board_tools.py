@@ -6,6 +6,7 @@ from typing import Any
 
 from coworker.brief import CHAT_HANDOFF_FIELD_CHARS, brief_payload, project
 from coworker.people import ATTACHMENT_TYPES, PersonStore
+from coworker.crm_sources import sources_visible
 
 _ATTACHMENT_SCHEMA = {"type": "string", "enum": sorted(ATTACHMENT_TYPES)}
 
@@ -222,17 +223,26 @@ def execute_board_tool(
                         "handoff_they_want",
                     }
                 }
+                descriptions = {}
+                hidden_description = False
+                for slot, description in people.descriptions(person_id).items():
+                    if sources_visible(people, person_id, description["source_refs"], allowed_source_ids):
+                        descriptions[slot] = description
+                    else:
+                        hidden_description = True
+                        descriptions[slot] = {"slot": slot, "restricted": True}
             except Exception:
                 return _partial_board_read(
                     "board_projection_failed",
                     "The Board person file could not be projected safely.",
                 )
             return True, {
-                "status": "complete",
-                "partial": False,
+                "status": "partial" if hidden_description else "complete",
+                "partial": hidden_description,
                 "person_id": person_id,
                 "person": person_receipt,
                 "brief": brief,
+                "descriptions": descriptions,
             }
         if name == "board_query":
             records = people.query(
