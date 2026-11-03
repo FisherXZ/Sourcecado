@@ -163,7 +163,7 @@ from coworker.prompt_contract import (
     SOURCING_DIRECTOR_V1,
     assemble_system_prompt,
 )
-from coworker.skills import BUILTIN_SKILLS, SkillLoader, catalog_text
+from coworker.skills import BUILTIN_SKILLS, SkillError, SkillLoader, catalog_text
 from coworker.provider import (
     ToolCall,
     provider_model_metadata,
@@ -176,7 +176,9 @@ from coworker.run_ledger_api import run_ledger_router
 from coworker.secrets import SecretStore
 from coworker.store import (
     MEMORY_CATEGORY_PREFERENCE,
+    MEMORY_MAX_CHARS,
     ConversationStore,
+    memory_fits_prompt,
     valid_session_id,
 )
 from coworker.telemetry import (
@@ -1257,7 +1259,92 @@ def create_app(
 
     @app.get("/v1/skills")
     def skills():
+        app.state.skills.rescan()
         return {"skills": app.state.skills.catalog()}
+
+    def _skill_saved(name: str) -> dict[str, Any]:
+        return {
+            "skill": next(
+                row for row in app.state.skills.catalog() if row["name"] == name
+            )
+        }
+
+    def _save_skill(name: str, payload: Any, *, create: bool) -> Any:
+        body = payload if isinstance(payload, dict) else {}
+        try:
+            saved = app.state.skills.save(
+                name,
+                purpose=str(body.get("purpose") or ""),
+                use_when=str(body.get("use_when") or ""),
+                instructions=str(body.get("instructions") or ""),
+                create=create,
+            )
+        except FileExistsError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except SkillError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except KeyError:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return _skill_saved(saved.name)
+
+    @app.post("/v1/skills")
+    def skill_create(payload: Any = Body(default=None)):
+        name = payload.get("name") if isinstance(payload, dict) else ""
+        return _save_skill(str(name or ""), payload, create=True)
+
+    @app.put("/v1/skills/{name}")
+    def skill_update(name: str, payload: Any = Body(default=None)):
+        return _save_skill(name, payload, create=False)
+
+    @app.delete("/v1/skills/{name}")
+    def skill_delete(name: str):
+        try:
+            app.state.skills.delete(name)
+        except SkillError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except KeyError:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"deleted": True, "name": name}
+
+    def _memory_text(payload: Any) -> str | JSONResponse:
+        raw = payload.get("content") if isinstance(payload, dict) else ""
+        content = " ".join(str(raw or "").split())
+        if not content:
+            return JSONResponse({"error": "Write the memory first."}, status_code=400)
+        if len(content) > MEMORY_MAX_CHARS or not memory_fits_prompt(content):
+            return JSONResponse(
+                {"error": f"Keep it under {MEMORY_MAX_CHARS} characters."},
+                status_code=422,
+            )
+        return content
+
+    @app.get("/v1/memory")
+    def memory_list():
+        return app.state.store.memory_page()
+
+    @app.post("/v1/memory")
+    def memory_create(payload: Any = Body(default=None)):
+        """The director writes a memory. Writing it is the review, so it is in use."""
+        content = _memory_text(payload)
+        if isinstance(content, JSONResponse):
+            return content
+        store = app.state.store
+        item = store.memory_classify(store.remember(content)["id"])
+        return {"memory": {**item, "in_use": True}}
+
+    @app.patch("/v1/memory/{memory_id}")
+    def memory_edit(memory_id: int, payload: Any = Body(default=None)):
+        """The director rewrites a memory. Their own text needs no second review."""
+        content = _memory_text(payload)
+        if isinstance(content, JSONResponse):
+            return content
+        store = app.state.store
+        item = store.memory_update(memory_id, content)
+        if item is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if item["person_id"] or item["session_id"]:
+            return {"memory": {**item, "in_use": False}}
+        return {"memory": {**store.memory_classify(memory_id), "in_use": True}}
 
     @app.get("/v1/memory/classification")
     def memory_classification():

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getSkills } from "../src/api";
+import { createSkill, getSkills } from "../src/api";
 
 const fetchMock = vi.fn();
 
@@ -50,6 +50,7 @@ describe("skills API boundary", () => {
         source: "builtin",
         status: "ready",
         instructions: "1. Read active Person Files.\n2. Show why-now evidence.",
+        builtinDefault: false,
       },
     ]);
     expect(JSON.stringify(body)).not.toContain("/Users/operator/private");
@@ -85,8 +86,52 @@ describe("skills API boundary", () => {
           source: "workspace",
           status: "ready",
           instructions: "",
+          builtinDefault: false,
         },
       ],
     });
+  });
+
+  it("saves a skill and reports a refusal with the backend's reason", async () => {
+    fetchMock.mockResolvedValueOnce(
+      response({
+        skill: {
+          name: "intro-email",
+          purpose: "Draft a first email.",
+          use_when: "",
+          source: "workspace",
+          status: "ready",
+          instructions: "Be brief.",
+          builtin_default: false,
+        },
+      }),
+    );
+
+    const saved = await createSkill({
+      name: "intro-email",
+      purpose: "Draft a first email.",
+      useWhen: "",
+      instructions: "Be brief.",
+    });
+
+    expect(saved.name).toBe("intro-email");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://backend.test/v1/skills");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: "intro-email",
+      purpose: "Draft a first email.",
+      use_when: "",
+      instructions: "Be brief.",
+    });
+
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: vi.fn().mockResolvedValue({ error: "A skill named intro-email already exists." }),
+    } as unknown as Response);
+    await expect(
+      createSkill({ name: "intro-email", purpose: "x", useWhen: "", instructions: "y" }),
+    ).rejects.toMatchObject({ status: 409, message: "A skill named intro-email already exists." });
   });
 });

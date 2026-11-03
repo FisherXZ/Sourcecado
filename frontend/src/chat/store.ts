@@ -233,6 +233,7 @@ export type SourcecadoEvent =
     };
 
 const LIVE_EVENT_BUFFER_LIMIT = 1000;
+const MEMORY_TOOLS = new Set(["remember", "memory_update", "memory_forget"]);
 
 /**
  * Reasoning is over once the answer text or a tool call starts, or the turn
@@ -705,6 +706,10 @@ export class SourcecadoChatStore {
       return;
     }
     if (event.type === "tool_finished") {
+      if (event.ok && MEMORY_TOOLS.has(event.name)) {
+        // The rail counts memories waiting for Keep.
+        window.dispatchEvent(new Event("sourcecado:memory-changed"));
+      }
       const completedAt = event.finished_at
         ? Date.parse(event.finished_at)
         : undefined;

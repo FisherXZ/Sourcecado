@@ -150,12 +150,20 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     activeLabel: "Loading skill",
     category: "action",
     icon: "tool",
+    argsSummary: (args) => {
+      const name = record(args)?.name;
+      return typeof name === "string" && name ? `/${name}` : null;
+    },
   },
   remember: {
     label: "Saved to memory",
     activeLabel: "Saving to memory",
     category: "action",
     icon: "tool",
+    argsSummary: (args) => {
+      const content = record(args)?.content;
+      return typeof content === "string" && content ? content : null;
+    },
   },
   memory_update: {
     label: "Updated memory",

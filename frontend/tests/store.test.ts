@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { convertStructuredMessage } from "../src/chat/messageAdapter";
 import { SourcecadoChatStore } from "../src/chat/store";
@@ -1502,5 +1502,32 @@ describe("issue #136 - a failed turn must say why", () => {
 
     const held = store.messagesFor("thread-alpha")[0];
     expect(held?.state).toBe("held");
+  });
+});
+
+describe("memory tools in a live turn", () => {
+  it("tell the rail to recount memories only when a memory tool succeeds", () => {
+    const changed = vi.fn();
+    window.addEventListener("sourcecado:memory-changed", changed);
+    const store = new SourcecadoChatStore([{ id: "thread-alpha", messages: [] }], "thread-alpha");
+    const base = {
+      version: 2,
+      session_id: "thread-alpha",
+      run_id: "run-1",
+      message_id: "message-1",
+      part_id: "part-1",
+    };
+    store.applyChatEvent({ ...base, type: "turn_start", event_id: "e1", state: "running" });
+    const finished = (id: string, name: string, ok: boolean) => {
+      store.applyChatEvent({ ...base, type: "tool_started", event_id: `${id}-s`, id, name, arguments: {} });
+      store.applyChatEvent({ ...base, type: "tool_finished", event_id: `${id}-f`, id, name, ok, result: {} });
+    };
+
+    finished("call-1", "now", true);
+    finished("call-2", "remember", false);
+    expect(changed).not.toHaveBeenCalled();
+    finished("call-3", "remember", true);
+    expect(changed).toHaveBeenCalledOnce();
+    window.removeEventListener("sourcecado:memory-changed", changed);
   });
 });

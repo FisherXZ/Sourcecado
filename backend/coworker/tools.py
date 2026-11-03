@@ -807,7 +807,15 @@ def execute(
             if not content:
                 return False, {"error": "content is required"}
             item = store.remember(content)
-            return True, {"saved": True, "id": item["id"], "content": item["content"]}
+            # Say where the row is, so the model tells the director the truth:
+            # it is saved, and it reaches later chats once they keep it.
+            return True, {
+                "saved": True,
+                "id": item["id"],
+                "content": item["content"],
+                "in_use": False,
+                "next": "The director keeps it on the Memory page before later chats use it.",
+            }
         mid = _memory_id(args.get("memory_id"))
         if mid is None:
             return False, {"error": "memory_id is required"}
@@ -818,7 +826,13 @@ def execute(
             item = store.memory_update(mid, content)
             if item is None:
                 return False, {"error": f"no memory #{mid}"}
-            return True, {"updated": True, "id": item["id"], "content": item["content"]}
+            return True, {
+                "updated": True,
+                "id": item["id"],
+                "content": item["content"],
+                "in_use": False,
+                "next": "The director keeps it on the Memory page before later chats use it.",
+            }
         if not store.memory_forget(mid):
             return False, {"error": f"no memory #{mid}"}
         return True, {"forgotten": True, "id": mid}
