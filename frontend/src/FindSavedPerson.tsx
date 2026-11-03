@@ -108,6 +108,9 @@ export function FindSavedPerson({ onClose }: { onClose: () => void }) {
       event.preventDefault();
       setSelected((index) => Math.max(index - 1, 0));
     } else if (event.key === "Enter") {
+      // A focused result row (reached with Tab) opens itself through its own
+      // click; only Enter in the search box uses the highlighted row.
+      if (event.target !== inputRef.current) return;
       event.preventDefault();
       const person = results[selected];
       if (person) openPerson(person);
@@ -182,6 +185,7 @@ export function FindSavedPerson({ onClose }: { onClose: () => void }) {
                   aria-selected={index === selected}
                   className={`find-saved-person-row${index === selected ? " is-active" : ""}`}
                   onMouseEnter={() => setSelected(index)}
+                  onFocus={() => setSelected(index)}
                   onClick={() => openPerson(person)}
                 >
                   <span className="find-saved-person-avatar" aria-hidden="true">

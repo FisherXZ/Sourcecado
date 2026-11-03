@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FindSavedPerson } from "../src/FindSavedPerson";
@@ -124,6 +124,33 @@ describe("Find saved person finder", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
 
+    expect(window.location.hash).toBe("#/people/person-2");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("opens the Tab-focused result on Enter, not the highlighted first row", async () => {
+    const onClose = vi.fn();
+    api.searchSavedPeople.mockResolvedValue({
+      results: [match(), match({ person_id: "person-2", first_name: "Noor", last_name: "Ali" })],
+      count: 2,
+      query: "a",
+    });
+    render(<FindSavedPerson onClose={onClose} />);
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "a" } });
+    await waitFor(() => expect(screen.getByText("Noor Ali")).toBeTruthy());
+
+    const noor = screen.getByRole("option", { name: /Noor Ali/ });
+    act(() => noor.focus());
+    expect(noor.getAttribute("aria-selected")).toBe("true");
+
+    // The finder must leave Enter on a focused row to the button itself.
+    const notPrevented = fireEvent.keyDown(noor, { key: "Enter" });
+    expect(notPrevented).toBe(true);
+    expect(window.location.hash).toBe("#/board");
+
+    // jsdom does not synthesize the native Enter→click on a button.
+    fireEvent.click(noor);
     expect(window.location.hash).toBe("#/people/person-2");
     expect(onClose).toHaveBeenCalled();
   });
