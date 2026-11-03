@@ -438,7 +438,7 @@ def test_tasks_survive_a_restart_with_the_same_identity(tmp_path):
     assert replay.json()["task"]["task_id"] == created["task_id"]
 
 
-def test_a_task_does_not_start_outreach_or_add_a_kept_person_to_contacts(tmp_path):
+def test_a_task_does_not_start_outreach_for_a_kept_person(tmp_path):
     app = _app(tmp_path)
     client = TestClient(app)
     kept = _keep(app.state.people)
