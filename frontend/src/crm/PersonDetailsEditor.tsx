@@ -233,14 +233,14 @@ export const PersonDetailsEditor = forwardRef<
     }
   }, [draft, pid]);
   useEffect(() => {
-    if (draft && !review)
-      editor.current
-        ?.querySelector<HTMLInputElement>(
-          focusField.current
-            ? `input[name="${focusField.current}"]`
-            : "input[name]",
-        )
-        ?.focus();
+    if (draft && !review) {
+      const input = editor.current?.querySelector<HTMLInputElement>(
+        focusField.current ? `input[name="${focusField.current}"]` : "input[name]",
+      );
+      input?.focus();
+      // Like Attio: an existing value is selected so typing replaces it.
+      input?.select();
+    }
     focusField.current = null;
   }, [draft?.scope, Boolean(draft), Boolean(review)]);
   useEffect(() => {

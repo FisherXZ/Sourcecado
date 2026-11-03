@@ -217,8 +217,10 @@ it("edits one value in place: Escape cancels, Enter saves a role without review"
   fireEvent.click(
     within(details).getByRole("button", { name: "Edit role: Lead" }),
   );
-  const role = within(details).getByLabelText("Role");
+  const role = within(details).getByLabelText("Role") as HTMLInputElement;
   await waitFor(() => expect(role).toHaveFocus());
+  // The existing value is selected, so typing replaces it instead of appending.
+  expect([role.selectionStart, role.selectionEnd]).toEqual([0, role.value.length]);
   fireEvent.change(role, { target: { value: "Principal" } });
   fireEvent.keyDown(role, { key: "Escape" });
   expect(within(details).queryByLabelText("Role")).toBeNull();
