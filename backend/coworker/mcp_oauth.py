@@ -175,7 +175,8 @@ class McpOAuth:
         """
         key = f"mcp-oauth:{server}"
         with _RENEW_LOCK:
-            saved = dict(self.secrets.get(key) or {})
+            original = self.secrets.get(key)
+            saved = dict(original or {})
             current = str(saved.get("access_token") or "")
             if rejected is not None and current and current != rejected:
                 return current
@@ -224,5 +225,9 @@ class McpOAuth:
             if rotated:
                 saved["refresh_token"] = rotated
             saved["token_url"] = token_url
-            self.secrets.put(key, saved)
+            if not self.secrets.replace_if_unchanged({key: original}, {key: saved}):
+                raise RenewalUnavailable(
+                    "Granola sign-in changed during renewal. Check the connection again.",
+                    kind="unreachable",
+                )
             return access

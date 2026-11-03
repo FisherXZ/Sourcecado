@@ -24,6 +24,7 @@ Python venv; a packaged app uses the frozen backend.
 - [Runtime language](runtime-language.md)
 - [Agent runs and recovery](agent-runs.md)
 - [Tool availability and permissions](effective-tools.md)
+- [Connector health and credential renewal](connector-health.md)
 - [Run ledger](run-ledger.md), [budgets](run-budgets.md), and [evaluation harness](evaluations.md)
 - [Compaction](compaction.md), [context projection](context-projection.md), and [evidence envelope](evidence-envelope.md)
 - [Chat attachments](chat-attachments.md)

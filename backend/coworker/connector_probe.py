@@ -11,11 +11,10 @@ authorization header, so outcomes carry fixed plain-language detail only.
 
 from __future__ import annotations
 
-import hashlib
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Literal
 
 from coworker.apollo import LiveHttp
@@ -24,7 +23,9 @@ from coworker.connectors.google_oauth import (
     google_client_credentials,
     load_google,
 )
-from coworker.connectors.token_renewal import CredentialRejected, RenewalUnavailable
+from coworker.connectors.token_renewal import (
+    CredentialRejected, RenewalUnavailable, credential_fingerprint,
+)
 
 Outcome = Literal["ok", "rejected", "unreachable"]
 
@@ -36,14 +37,9 @@ PROBE_CACHE_SECONDS = 60.0
 class ProbeResult:
     outcome: Outcome
     detail: str
-
-
-def credential_fingerprint(*parts: object) -> str | None:
-    """A one-way key for the credential a probe ran against. Never stored raw."""
-    material = "\x00".join(str(part or "") for part in parts)
-    if not material.strip("\x00"):
-        return None
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+    # Internal identity of the token actually checked, including self-renewal.
+    # It is never sent in the catalog or used as operator-facing detail.
+    credential_fingerprint: str | None = field(default=None, compare=False, repr=False)
 
 
 def google_fingerprint(secrets: Any) -> str | None:
@@ -80,6 +76,7 @@ def probe_google(secrets: Any, http: Any | None) -> ProbeResult:
         return ProbeResult(
             "rejected",
             "Google no longer accepts the saved sign-in. Reconnect to restore access.",
+            tokens.credential_fingerprint,
         )
     except RenewalUnavailable as exc:
         if exc.kind == "setup":
@@ -87,9 +84,10 @@ def probe_google(secrets: Any, http: Any | None) -> ProbeResult:
                 "unreachable",
                 "Google rejected this device's sign-in setup. "
                 "Check the Google OAuth client settings.",
+                tokens.credential_fingerprint,
             )
-        return ProbeResult("unreachable", str(exc))
-    return ProbeResult("ok", "This connection is ready to use.")
+        return ProbeResult("unreachable", str(exc), tokens.credential_fingerprint)
+    return ProbeResult("ok", "This connection is ready to use.", tokens.credential_fingerprint)
 
 
 ProbeFn = Callable[[], ProbeResult]
@@ -153,11 +151,12 @@ class ConnectorProbes:
                     result = future.result(timeout=max(0.0, deadline - self._clock()))
                 except FutureTimeout:
                     result = ProbeResult("unreachable", "The connection check timed out.")
-                # A probe may renew the token it checks, so file the result
-                # under the credential as it stands after the probe.
-                fingerprint = self._fingerprints[key]() or due[key]
+                # Only the probe can attest a renewed credential. A sign-in
+                # completed while it ran must not inherit the old result.
+                fingerprint = result.credential_fingerprint or due[key]
                 with self._lock:
-                    self._results[key] = (fingerprint, self._clock(), result)
+                    if fingerprint == self._fingerprints[key]():
+                        self._results[key] = (fingerprint, self._clock(), result)
         finally:
             # A hung probe must not hold the request open past its deadline.
             pool.shutdown(wait=False, cancel_futures=True)

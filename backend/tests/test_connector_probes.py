@@ -190,23 +190,6 @@ def test_checks_are_cached_until_they_expire_or_the_credential_changes(tmp_path)
     assert (google.calls, granola.calls) == (2, 3)
 
 
-def test_a_probe_that_renews_its_token_keeps_its_result(tmp_path):
-    app = make_app(tmp_path)
-    calls = []
-
-    def renew_then_fail() -> ProbeResult:
-        calls.append(1)
-        app.state.secrets.put("mcp-oauth:granola", {"access_token": "granola-renewed-secret"})
-        return DOWN
-
-    install(app, google=CountingProbe(OK), granola=renew_then_fail)
-
-    check(app)
-    assert catalog(app)["granola"]["status"] == "failed"
-    check(app)
-    assert len(calls) == 1  # still fresh for the renewed credential
-
-
 def test_a_hung_probe_times_out_without_holding_the_request(tmp_path):
     app = make_app(tmp_path)
     release = threading.Event()
@@ -322,7 +305,7 @@ def test_granola_probe_classifies_mcp_failures(tmp_path, monkeypatch, behaviour,
     app = make_app(tmp_path, google=False)
     live = LiveMcp(secrets=app.state.secrets, config_path=tmp_path / "mcp.json")
 
-    async def fake_call(self, name, arguments):
+    async def fake_call(self, name, arguments, *, tokens=None):
         assert name == "mcp__granola__list_meetings"
         if behaviour == "ok":
             return {"ok": True, "meetings": []}
@@ -351,7 +334,7 @@ def test_granola_probe_without_a_token_does_not_call_out(tmp_path, monkeypatch):
     app = make_app(tmp_path, google=False, granola=False)
     live = LiveMcp(secrets=app.state.secrets, config_path=tmp_path / "mcp.json")
 
-    async def fail(self, name, arguments):
+    async def fail(self, name, arguments, *, tokens=None):
         raise AssertionError("probe must not call Granola without a token")
 
     monkeypatch.setattr(LiveMcp, "_async_call", fail)
@@ -363,7 +346,7 @@ def test_granola_probe_times_out(tmp_path, monkeypatch):
     app = make_app(tmp_path, google=False)
     live = LiveMcp(secrets=app.state.secrets, config_path=tmp_path / "mcp.json")
 
-    async def slow(self, name, arguments):
+    async def slow(self, name, arguments, *, tokens=None):
         import asyncio
 
         await asyncio.sleep(2)

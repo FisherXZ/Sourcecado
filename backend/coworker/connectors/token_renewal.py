@@ -8,7 +8,16 @@ A token endpoint's error can echo the request, so its text never travels.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Literal
+
+
+def credential_fingerprint(*parts: object) -> str | None:
+    """Identify a checked credential without carrying its secrets into results."""
+    material = "\x00".join(str(part or "") for part in parts)
+    if not material.strip("\x00"):
+        return None
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 class RenewalError(RuntimeError):

@@ -367,8 +367,8 @@ def live_granola(tmp_path, monkeypatch, token_replies, accepted=("granola-fresh"
     )
     seen = []
 
-    async def fake_call(self, name, arguments):
-        token = self._tokens().get("access_token")
+    async def fake_call(self, name, arguments, *, tokens=None):
+        token = tokens.get("access_token")
         seen.append(token)
         if token not in accepted:
             raise ExceptionGroup("task group", [_unauthorized()])

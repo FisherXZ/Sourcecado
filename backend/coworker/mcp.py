@@ -174,7 +174,7 @@ class LiveMcp:
         return self._call_live(name, arguments or {})
 
     def _attempt(
-        self, name: str, arguments: dict[str, Any], timeout: float
+        self, name: str, arguments: dict[str, Any], timeout: float, *, tokens: dict[str, Any]
     ) -> tuple[str, dict[str, Any] | None, BaseException | None]:
         """One MCP call on its own thread: ("ok"|"error"|"timeout", result, error)."""
         import asyncio
@@ -184,7 +184,7 @@ class LiveMcp:
 
         def worker() -> None:
             try:
-                box["result"] = asyncio.run(self._async_call(name, arguments))
+                box["result"] = asyncio.run(self._async_call(name, arguments, tokens=tokens))
             except Exception as exc:  # including an ExceptionGroup from the MCP task group
                 box["error"] = exc
 
@@ -199,22 +199,26 @@ class LiveMcp:
 
     def _attempt_renewing(
         self, name: str, arguments: dict[str, Any], timeout: float
-    ) -> tuple[str, dict[str, Any] | None, BaseException | None]:
+    ) -> tuple[str, dict[str, Any] | None, BaseException | None, str | None]:
         """Call once; if Granola refuses the token, renew once and call once more."""
-        from coworker.connectors.token_renewal import RenewalError
+        from coworker.connectors.token_renewal import RenewalError, credential_fingerprint
 
-        used = str(self._tokens().get("access_token") or "")
-        outcome, result, error = self._attempt(name, arguments, timeout)
+        tokens = self._tokens()
+        used = str(tokens.get("access_token") or "")
+        fingerprint = credential_fingerprint(tokens.get("access_token"), tokens.get("refresh_token"))
+        outcome, result, error = self._attempt(name, arguments, timeout, tokens=tokens)
         if outcome != "error" or _http_status(error) != 401 or self.oauth is None:
-            return outcome, result, error
+            return outcome, result, error, fingerprint
         try:
             self.oauth.renew("granola", rejected=used)
         except RenewalError as renewal:
-            return "error", None, renewal
-        return self._attempt(name, arguments, timeout)
+            return "error", None, renewal, fingerprint
+        tokens = self._tokens()
+        fingerprint = credential_fingerprint(tokens.get("access_token"), tokens.get("refresh_token"))
+        return (*self._attempt(name, arguments, timeout, tokens=tokens), fingerprint)
 
     def _call_live(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        outcome, result, error = self._attempt_renewing(name, arguments, 30)
+        outcome, result, error, _fingerprint = self._attempt_renewing(name, arguments, 30)
         if outcome == "timeout":
             return {"error": "Granola timed out"}
         if outcome == "error":
@@ -228,33 +232,37 @@ class LiveMcp:
 
         if not (self._tokens().get("access_token") or self._tokens().get("refresh_token")):
             return ProbeResult("unreachable", "Granola is not connected.")
-        outcome, result, error = self._attempt_renewing(
+        outcome, result, error, fingerprint = self._attempt_renewing(
             "mcp__granola__list_meetings", {}, timeout
         )
         if outcome == "timeout":
-            return ProbeResult("unreachable", "Granola did not respond in time.")
+            return ProbeResult("unreachable", "Granola did not respond in time.", fingerprint)
         if outcome == "ok":
             # A missing SDK comes back as an error payload, not an exception.
             if isinstance(result, dict) and not result.get("error"):
-                return ProbeResult("ok", "This connection is ready to use.")
-            return ProbeResult("unreachable", "Sourcecado could not reach Granola.")
+                return ProbeResult("ok", "This connection is ready to use.", fingerprint)
+            return ProbeResult("unreachable", "Sourcecado could not reach Granola.", fingerprint)
         if isinstance(error, CredentialRejected) or _http_status(error) in (401, 403):
             return ProbeResult(
                 "rejected",
                 "Granola no longer accepts the saved sign-in. Reconnect to restore access.",
+                fingerprint,
             )
         if isinstance(error, RenewalUnavailable):
-            return ProbeResult("unreachable", str(error))
-        return ProbeResult("unreachable", "Sourcecado could not reach Granola.")
+            return ProbeResult("unreachable", str(error), fingerprint)
+        return ProbeResult("unreachable", "Sourcecado could not reach Granola.", fingerprint)
 
-    async def _async_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _async_call(
+        self, name: str, arguments: dict[str, Any], *, tokens: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         tool = name.rsplit("__", 1)[-1]
         try:
             ClientSession, streamable_http_client = _import_mcp_sdk()
         except Exception:
             return {"error": "mcp SDK is not installed"}
         # Official SDK path. Token adapter is the secrets profile.
-        token = str(self._tokens().get("access_token") or "")
+        profile = tokens if tokens is not None else self._tokens()
+        token = str(profile.get("access_token") or "")
         headers = {"Authorization": f"Bearer {token}"} if token else None
         from mcp.shared._httpx_utils import create_mcp_http_client
 
@@ -267,6 +275,9 @@ class LiveMcp:
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     out = await session.call_tool(tool, arguments)
+                    if getattr(out, "isError", False):
+                        # The server's error content may echo credentials.
+                        return {"error": "Granola could not complete the request."}
                     return {"ok": True, **tool_result_payload(out)}
 
 

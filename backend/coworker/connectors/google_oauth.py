@@ -15,6 +15,7 @@ from coworker.connectors.token_renewal import (
     RenewalUnavailable,
     access_from,
     classify_token_error,
+    credential_fingerprint,
 )
 from coworker.secrets import SecretStore
 
@@ -154,10 +155,13 @@ class GoogleTokens:
         self.http = http
         self.client_id = client_id
         self.client_secret = client_secret
+        self.credential_fingerprint: str | None = None
 
     def renew(self, *, rejected: str | None = None) -> str:
         with _RENEW_LOCK:
-            profile = load_google(self.secrets)
+            expected = {key: self.secrets.get(key) for key in (GOOGLE_KEY, GMAIL_KEY)}
+            profile = expected[GOOGLE_KEY] or expected[GMAIL_KEY] or {}
+            self.credential_fingerprint = credential_fingerprint(profile.get("refresh_token"))
             current = str(profile.get("access_token") or "")
             if rejected is not None and current and current != rejected:
                 return current
@@ -182,5 +186,12 @@ class GoogleTokens:
             profile["access_token"] = access
             if rotated:
                 profile["refresh_token"] = rotated
-            save_google(self.secrets, profile)
+            if not self.secrets.replace_if_unchanged(
+                expected, {GOOGLE_KEY: profile, GMAIL_KEY: profile}
+            ):
+                raise RenewalUnavailable(
+                    "Google sign-in changed during renewal. Check the connection again.",
+                    kind="unreachable",
+                )
+            self.credential_fingerprint = credential_fingerprint(profile.get("refresh_token"))
             return access
