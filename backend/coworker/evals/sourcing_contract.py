@@ -34,15 +34,10 @@ def sourcing_system_prompt() -> AssembledSystemPrompt:
 def sourcing_tool_catalog(
     availability: ToolAvailability | None = None,
 ) -> EffectiveToolCatalog:
-    """The catalog the sourcing persona actually gets for a given availability.
-
-    ``workspace_runtime=None`` mirrors a session with no granted directory, so
-    the catalog holds connector and person-file tools only.
-    """
+    """The catalog the sourcing persona actually gets for a given availability."""
     return effective_tool_catalog(
         persona=load_persona("sourcing"),
         registered_schemas=OPENAI_TOOLS,
-        workspace_runtime=None,
         availability=availability or ToolAvailability(),
     )
 

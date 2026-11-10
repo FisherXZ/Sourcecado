@@ -73,15 +73,9 @@ process and fails if the model or connector modules appear in `sys.modules`, and
 | `meeting_evidence` | `meeting_evidence.db` | SQLite | `PRAGMA user_version` |
 | `conversation_transcripts` | `conversations/` | JSONL directory | `state_versions.json` |
 | `presentation_events` | `events/` | JSONL directory | `state_versions.json` |
-| `workspace_receipts` | `workspace_receipts.jsonl` | JSONL log | `state_versions.json` |
-| `workspace_grants` | `workspace_grants.json` | JSON document | `version` key |
-| `shell_tasks` | `shell_tasks.json` | JSON document | `version` key |
-| `host_command_approvals` | `host_command_approvals.json` | JSON document | `version` key |
-| `directory_requests` | `directory_requests.json` | JSON document | `version` key |
 | `secrets` | `secrets.json` | Opaque file | `state_versions.json` |
 | `mcp_config` | `mcp.json` | JSON document | `state_versions.json` |
 | `memory_notes` | `memory/` | Directory | not versioned |
-| `workspace_trash` | `workspace_trash/` | Directory | not versioned |
 | `dotenv` | `.env` | Opaque file | not versioned |
 
 The Agent Run store is registered at schema version 2, including adoption from
@@ -92,12 +86,16 @@ between schema migration and runtime recovery.
 
 The version lives with the data wherever the format can carry it. SQLite has
 `PRAGMA user_version`, which needs no table of ours and commits inside the same
-transaction as the migration. The workspace JSON documents already write a
-top-level `version` key, so the registry reuses it. An append-only JSONL log and
-an opaque secret file cannot carry a document header without changing their
-write path, so their version is recorded in `state_versions.json` beside them.
+transaction as the migration. A JSONL directory and an opaque secret file
+cannot carry a document header without changing their write path, so their
+version is recorded in `state_versions.json` beside them.
 
-`memory_notes` and `workspace_trash` are derived or disposable, and `.env` is
+Migration slice S23 removed the workspace stores (`workspace_receipts`,
+`workspace_grants`, `shell_tasks`, `host_command_approvals`,
+`directory_requests`, `workspace_trash`). Doctor no longer checks them. An old
+state directory can still hold those files; Doctor ignores them.
+
+`memory_notes` is derived, and `.env` is
 plain configuration. They are checked for permissions but never migrated.
 
 ## Version numbers
@@ -231,11 +229,9 @@ produced a finding *for each of those stores* before asserting no canary appears
 in the report or its JSON. Without that first assertion the test would pass for
 a store Doctor never mentioned, which proves nothing.
 
-Five stores — `secrets.json`, `.env`, `mcp.json`, `workspace_grants.json`, the
-memory notes, and the three remaining JSON documents — have no content check of
-their own. Their only route into the report is a permissions finding, whose
-detail list is capped at 8 lines. Eight carriers against a cap of 8 leaves no
-headroom, so `test_no_planted_secret_survives_from_a_drift_only_store` proves
+Four carriers — `secrets.json`, `.env`, `mcp.json`, and the memory notes —
+have no content check of their own. Their only route into the report is a
+permissions finding, whose detail list is capped at 8 lines, so `test_no_planted_secret_survives_from_a_drift_only_store` proves
 coverage in batches that fit under the cap and asserts every carrier was named
 in some batch, rather than assuming they all fit at once.
 

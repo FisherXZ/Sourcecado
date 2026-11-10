@@ -14,7 +14,6 @@ describe("the read-only tool list for Retry", () => {
   const auto = names("AUTO");
   const ask = names("ASK");
   const retrySafe = names("RETRY_SAFE");
-  const workspaceAuto = names("_WORKSPACE_AUTO");
 
   it("keeps every tool the backend retries as safe", () => {
     for (const name of retrySafe) expect(READ_ONLY_TOOLS.has(name), name).toBe(true);
@@ -22,7 +21,7 @@ describe("the read-only tool list for Retry", () => {
 
   it("names only tools the backend runs without approval", () => {
     for (const name of READ_ONLY_TOOLS) {
-      expect(auto.has(name) || workspaceAuto.has(name), name).toBe(true);
+      expect(auto.has(name), name).toBe(true);
       expect(ask.has(name), name).toBe(false);
     }
   });
@@ -36,9 +35,6 @@ describe("the read-only tool list for Retry", () => {
       "people_keep",
       "board_upsert",
       "board_mutate",
-      "request_directory",
-      "shell_poll",
-      "shell_kill",
     ];
     for (const name of writes) expect(READ_ONLY_TOOLS.has(name), name).toBe(false);
   });

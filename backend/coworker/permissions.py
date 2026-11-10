@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES
 from coworker.crm_tools import CRM_READ_TOOLS, CRM_TOOL_NAMES
 from coworker.consequential_policy import supported_mcp_read
 
@@ -76,30 +75,12 @@ RETRY_SAFE = frozenset(
 )
 _MCP_WRITE = re.compile(r"write|create|delete|update", re.I)
 
-_WORKSPACE_AUTO = frozenset(
-    {
-        "fs_stat",
-        "fs_list",
-        "fs_find",
-        "fs_search",
-        "fs_read",
-        "request_directory",
-        "shell_poll",
-        "shell_kill",
-    }
-)
-_WORKSPACE_APPROVAL = frozenset({"fs_trash", "shell_write_stdin"})
-_WORKSPACE_CONDITIONAL = WORKSPACE_TOOL_NAMES - _WORKSPACE_AUTO - _WORKSPACE_APPROVAL
-
 
 @dataclass
 class Decision:
     allowed: bool
     needs_user: bool = False
     reason: str = ""
-    risk_class: str | None = None
-    execution_target: str | None = None
-    command_fingerprint: str | None = None
 
 
 def model_approval_class(name: str) -> str | None:
@@ -112,12 +93,6 @@ def model_approval_class(name: str) -> str | None:
         return "auto"
     if name in ASK:
         return "approval_required"
-    if name in _WORKSPACE_AUTO:
-        return "auto"
-    if name in _WORKSPACE_APPROVAL:
-        return "approval_required"
-    if name in _WORKSPACE_CONDITIONAL:
-        return "conditional"
     if name.startswith("mcp__"):
         decision = decide(name)
         if decision.allowed:
@@ -132,29 +107,10 @@ def decide(
     name: str,
     arguments: dict[str, Any] | None = None,
     *,
-    workspace_runtime: Any = None,
     actor: str | None = None,
     session_id: str | None = None,
     run_id: str | None = None,
 ) -> Decision:
-    if name in WORKSPACE_TOOL_NAMES:
-        if workspace_runtime is None:
-            return Decision(False, False, "workspace runtime is unavailable")
-        outcome = workspace_runtime.decide_tool(
-            name,
-            arguments,
-            actor=actor,
-            session_id=session_id,
-            run_id=run_id,
-        )
-        return Decision(
-            outcome.allowed,
-            outcome.needs_approval,
-            outcome.reason,
-            outcome.risk_class.value,
-            outcome.execution_target,
-            outcome.command_fingerprint,
-        )
     if name.startswith("mcp__"):
         last = name.rsplit("__", 1)[-1]
         if _MCP_WRITE.search(last):

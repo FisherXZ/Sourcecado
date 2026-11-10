@@ -40,96 +40,12 @@ function approvalPart(
 }
 
 describe("ApprovalCard", () => {
-  it("shows the exact safe command and offers permanent approval only for that fingerprint", () => {
-    const onDecision = vi.fn();
-    const part = {
-      ...approvalPart(),
-      toolName: "shell_exec",
-      args: {
-        grant_id: "grant-1",
-        command: "bash scripts/inspect.sh",
-        cwd: ".",
-        environment: { TOKEN: "secret-environment" },
-      },
-      approval: {
-        id: "approval-shell",
-        reason: "Docker is unavailable. This command is not sandboxed and requires approval.",
-      },
-      providerMetadata: {
-        sourcecado: {
-          approvalState: "pending",
-          actor: null,
-          requestedAt: "2026-08-26T12:00:00Z",
-          resolvedAt: null,
-          scope: "once",
-          executionStatus: "pending",
-          executionError: null,
-          resource: {
-            kind: "shell_command",
-            execution_target: "host",
-            command_summary: "bash · 1 argument",
-            command_display: "bash scripts/inspect.sh",
-            environment_keys: [],
-            cwd: "/Users/operator/Workspace",
-            fingerprint: "abcdef1234567890",
-            unsandboxed: true,
-            permanent_eligible: true,
-          },
-        },
-      },
-    } as ToolCallMessagePartProps;
+  it("offers only Allow once and Deny, never a standing approval", () => {
+    render(<ApprovalCard part={approvalPart()} onDecision={vi.fn()} />);
 
-    const { container } = render(
-      <ApprovalCard part={part} onDecision={onDecision} />,
-    );
-
-    expect(
-      screen.getByRole("heading", { name: "Run workspace command" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Not sandboxed")).toBeInTheDocument();
-    expect(screen.getByText("bash scripts/inspect.sh")).toBeInTheDocument();
-    expect(screen.getByText("No additional environment values.")).toBeInTheDocument();
-    expect(screen.getByText("/Users/operator/Workspace")).toBeInTheDocument();
-    expect(container).not.toHaveTextContent("secret-environment");
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Always allow this exact command" }),
-    );
-    expect(onDecision).toHaveBeenCalledWith(true, "always");
-  });
-
-  it("redacts inline shell secrets and withholds permanent approval", () => {
-    const part = {
-      ...approvalPart(),
-      toolName: "shell_exec",
-      args: { command: "curl --token actual-secret https://example.com" },
-      providerMetadata: {
-        sourcecado: {
-          approvalState: "pending",
-          resource: {
-            kind: "shell_command",
-            execution_target: "host",
-            command_summary: "curl · 3 arguments",
-            command_display: "curl --token '[REDACTED]' https://example.com",
-            environment_keys: [],
-            cwd: "/Users/operator/Workspace",
-            fingerprint: "fingerprint",
-            unsandboxed: true,
-            permanent_eligible: false,
-          },
-        },
-      },
-    } as ToolCallMessagePartProps;
-
-    const { container } = render(
-      <ApprovalCard part={part} onDecision={vi.fn()} />,
-    );
-
-    expect(container).toHaveTextContent("[REDACTED]");
-    expect(container).not.toHaveTextContent("actual-secret");
-    expect(
-      screen.queryByRole("button", { name: "Always allow this exact command" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow once" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Always allow/ })).toBeNull();
   });
 
   it("shows Calendar create fields, timezone, and account before approval", () => {

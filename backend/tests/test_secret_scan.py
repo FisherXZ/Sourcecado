@@ -74,7 +74,7 @@ def test_finds_a_planted_registered_secret_in_several_stores_without_printing_it
 
     # Non-vacuous: prove real stores actually matched before checking output.
     found_ids = {item.store_id for item in report.findings}
-    expected = {"conversation_db", "memory_notes", "workspace_grants", "host_command_approvals"}
+    expected = {"conversation_db", "memory_notes"}
     assert expected <= found_ids, found_ids
     assert not report.clean
 
@@ -297,23 +297,23 @@ def test_a_value_surviving_only_in_a_backup_is_found_and_never_printed(tmp_path)
         "doctor-20260101T000000000000Z",
         [
             {
-                "store_id": "workspace_grants",
-                "kind": "json_document",
-                "relative_path": "workspace_grants.json",
+                "store_id": "memory_notes",
+                "kind": "directory",
+                "relative_path": "memory",
                 "content_backed_up": True,
                 "mode": "0o600",
             }
         ],
     )
-    (backup_dir / "workspace_grants.json").write_text(
-        json.dumps({"grants": [{"id": "g1", "label": f"pre-rotation note {probe}"}]}),
-        encoding="utf-8",
+    (backup_dir / "memory").mkdir()
+    (backup_dir / "memory" / "1.md").write_text(
+        f"# 1\n\npre-rotation note {probe}\n", encoding="utf-8"
     )
 
     report = scan_state(root, secret_key="probe")
 
     # Non-vacuous: the backup finding actually exists before checking output.
-    label = "backup:doctor-20260101T000000000000Z:workspace_grants"
+    label = "backup:doctor-20260101T000000000000Z:memory_notes"
     finding = next(item for item in report.findings if item.store_id == label)
     assert finding.count == 1
     assert "doctor-20260101T000000000000Z" in report.backups_scanned
@@ -407,16 +407,17 @@ def test_an_unreadable_backup_copy_is_not_reported_clean(tmp_path, capsys):
         backup_id,
         [
             {
-                "store_id": "workspace_grants",
-                "kind": "json_document",
-                "relative_path": "workspace_grants.json",
+                "store_id": "memory_notes",
+                "kind": "directory",
+                "relative_path": "memory",
                 "content_backed_up": True,
                 "mode": "0o600",
             }
         ],
     )
-    planted = backup_dir / "workspace_grants.json"
-    planted.write_text(json.dumps({"grants": []}), encoding="utf-8")
+    (backup_dir / "memory").mkdir()
+    planted = backup_dir / "memory" / "1.md"
+    planted.write_text("# 1\n", encoding="utf-8")
     planted.chmod(0o000)
     try:
         report = scan_state(root, secret_key="probe")
@@ -424,7 +425,7 @@ def test_an_unreadable_backup_copy_is_not_reported_clean(tmp_path, capsys):
     finally:
         planted.chmod(0o600)
 
-    label = f"backup:{backup_id}:workspace_grants"
+    label = f"backup:{backup_id}:memory_notes"
     assert label in report.unreadable
     assert report.clean is False
     assert "clean -- no match found" not in report.render()
