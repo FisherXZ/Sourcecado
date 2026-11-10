@@ -1,6 +1,8 @@
 # Package the desktop shell as a reproducible macOS preview artifact
 
-Status: Accepted — 2026-08-27 (CI `macos-preview` job, packaging how-to, and Sourcecado productName are in tree)
+Status: Superseded by [ADR 0007](0007-hosted-web-service.md) — 2026-11-09. The code stays until migration slice S38 removes it.
+
+Original status: Accepted — 2026-08-27 (CI `macos-preview` job, packaging how-to, and Sourcecado productName are in tree)
 
 ## Context
 
