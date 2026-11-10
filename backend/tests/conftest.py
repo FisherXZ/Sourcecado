@@ -2,6 +2,14 @@ import subprocess
 
 import pytest
 
+from tests.pg_fixtures import (  # noqa: F401  (fixtures)
+    _session_database,
+    db,
+    make_user,
+    pg_database,
+    stores_use_the_test_database,
+)
+
 
 @pytest.fixture(autouse=True)
 def forbid_host_browser_launches(monkeypatch):

@@ -9,12 +9,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
+from coworker.db import Database, set_resolver
 from coworker.evals.compare import ComparisonReport, compare_runs
 from coworker.evals.environment import private_artifact_root, write_private_text
 from coworker.evals.models import EvalRunResult, EvalVariant
 from coworker.evals.runner import ARTIFACT_WARNING, EvalRunner
 from coworker.evals.scenarios import baseline_scenarios
 from coworker.evals.sourcing_scenarios import sourcing_scenarios, sourcing_variant_for
+from coworker.pg_scratch import admin_url, scratch_database, state_dir_resolver
 from coworker.provider import provider_from_env
 
 
@@ -160,6 +162,19 @@ def _run_sourcing_suite(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Each scenario opens its stores at a new state directory. The resolver
+    # gives each directory its own user in one scratch database.
+    with scratch_database(admin_url()) as url:
+        database = Database(url)
+        set_resolver(state_dir_resolver(database, url))
+        try:
+            return _main(argv)
+        finally:
+            set_resolver(None)
+            database.close()
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.repetitions < 1:
         print("--repetitions must be positive", file=sys.stderr)
