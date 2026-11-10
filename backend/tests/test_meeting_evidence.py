@@ -327,3 +327,46 @@ def test_unknown_provider_and_malformed_records_fail_without_writing(tmp_path):
     with pytest.raises(ValueError, match="provider id"):
         store.ingest("calendar", [{"summary": "missing id"}])
     assert people.list_people() == []
+
+
+def test_two_users_keep_separate_rows_and_cannot_reach_each_other_by_id(tmp_path):
+    from coworker.meeting_evidence import MeetingEvidenceStore, _evidence_id
+    from coworker.people import PersonStore
+
+    # Two state directories resolve to two users in one database.
+    alice_people = PersonStore(tmp_path / "alice")
+    bob_people = PersonStore(tmp_path / "bob")
+    alice_ada = _person(
+        alice_people, apollo_id="ada", first="Ada", last="Lovelace", email="ada@example.test"
+    )
+    bob_ada = _person(bob_people, apollo_id="ada", first="Ada", last="Lovelace")
+    alice = MeetingEvidenceStore(tmp_path / "alice", people=alice_people)
+    bob = MeetingEvidenceStore(tmp_path / "bob", people=bob_people)
+    shared = _calendar_event(
+        attendees=[{"email": "ada@example.test", "displayName": "Ada Lovelace"}]
+    )
+    alice.ingest("calendar", [shared, _calendar_event(event_id="cal-alice-only")])
+    # The same provider event gives Bob the same evidence id as Alice.
+    bob.ingest("calendar", [shared])
+
+    alice_view = alice.for_person(alice_ada["person_id"])
+    shared_id = alice_view["attached"][0]["evidence_id"]
+    assert [row["match_reason"] for row in alice_view["attached"]] == ["exact_email"]
+    bob_view = bob.for_person(bob_ada["person_id"])
+    assert bob_view["attached"] == []
+    assert [row["evidence_id"] for row in bob_view["proposed"]] == [shared_id]
+
+    # Bob cannot read or change a row that only Alice has.
+    alice_only_id = _evidence_id("calendar", "cal-alice-only")
+    with pytest.raises(ValueError, match="unknown meeting evidence"):
+        bob.attach(alice_only_id, bob_ada["person_id"])
+    with pytest.raises(ValueError, match="not proposed"):
+        bob.reject(alice_only_id, bob_ada["person_id"])
+
+    # Bob's actions on his copy of the shared meeting leave Alice's copy alone.
+    bob.attach(shared_id, bob_ada["person_id"])
+    assert bob.for_person(bob_ada["person_id"])["attached"][0]["match_reason"] == (
+        "director_attached"
+    )
+    alice_after = alice.for_person(alice_ada["person_id"])
+    assert alice_after == alice_view

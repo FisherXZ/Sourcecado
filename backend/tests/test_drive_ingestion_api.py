@@ -711,7 +711,8 @@ def test_active_backend_mounts_ingestion_under_local_auth_and_state(tmp_path):
         )
         assert started.status_code == 202
 
-    assert (tmp_path / "drive_ingestion.db").is_file()
+    # The job belongs to the app's state directory.
+    assert len(DriveIngestionStore(tmp_path).list_jobs()) == 1
 
 
 def test_api_lists_durable_jobs_after_store_reopens(tmp_path):

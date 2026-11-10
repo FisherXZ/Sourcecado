@@ -900,36 +900,6 @@ def _add_approval_identity_revision(context: MigrationContext) -> int:
     return conn.execute("SELECT count(*) FROM people").fetchone()[0]
 
 
-# DriveIngestionStore grew `work_revision` onto jobs after the first ship. The
-# constructor still adds it with a column-existence probe; version 1 is that
-# column being present and recorded.
-_DRIVE_INGESTION_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
-    ("drive_ingestion_jobs", "work_revision", "INTEGER NOT NULL DEFAULT 1"),
-)
-
-
-def _adopt_drive_ingestion_db(context: MigrationContext) -> int:
-    conn = context.connection
-    assert conn is not None
-    touched = _sqlite_adoption_count(context, _DRIVE_INGESTION_ADDED_COLUMNS, {})
-    _sqlite_add_columns_and_tables(conn, _DRIVE_INGESTION_ADDED_COLUMNS, {})
-    return touched
-
-
-def _count_drive_ingestion_db(context: MigrationContext) -> int:
-    return _sqlite_adoption_count(context, _DRIVE_INGESTION_ADDED_COLUMNS, {})
-
-
-def _count_meeting_evidence_db(context: MigrationContext) -> int:
-    conn = context.connection
-    assert conn is not None
-    return _row_count(conn, "meeting_evidence") + _row_count(conn, "meeting_candidates")
-
-
-def _adopt_meeting_evidence_db(context: MigrationContext) -> int:
-    return _count_meeting_evidence_db(context)
-
-
 def count_jsonl_records(path: Path) -> int:
     if not path.is_file():
         return 0
@@ -1192,43 +1162,6 @@ REGISTRY: tuple[StoreSpec, ...] = (
             ("crm_analysis_attempts", "proposal_ids"),
             ("crm_proposals", "source_refs"),
             ("crm_proposals", "resolution_receipt_json"),
-        ),
-    ),
-    StoreSpec(
-        store_id="drive_ingestion",
-        kind=StoreKind.SQLITE,
-        relative_path="drive_ingestion.db",
-        current_version=1,
-        version_channel=VersionChannel.SQLITE_USER_VERSION,
-        description="Drive folder ingestion jobs, indexed sources, and person-file proposals.",
-        migrations=_adopt(
-            "Adopt the Drive ingestion schema shipped before the registry existed.",
-            _count_drive_ingestion_db,
-            _adopt_drive_ingestion_db,
-        ),
-        json_columns=(
-            ("drive_ingestion_sources", "citations_json"),
-            ("drive_ingestion_sources", "source_safety_json"),
-            ("drive_ingestion_proposals", "fields_json"),
-            ("drive_ingestion_proposals", "diff_json"),
-            ("drive_ingestion_proposals", "source_refs_json"),
-        ),
-    ),
-    StoreSpec(
-        store_id="meeting_evidence",
-        kind=StoreKind.SQLITE,
-        relative_path="meeting_evidence.db",
-        current_version=1,
-        version_channel=VersionChannel.SQLITE_USER_VERSION,
-        description="Calendar and Granola meeting evidence attached to person files.",
-        migrations=_adopt(
-            "Adopt the meeting evidence schema shipped before the registry existed.",
-            _count_meeting_evidence_db,
-            _adopt_meeting_evidence_db,
-        ),
-        json_columns=(
-            ("meeting_evidence", "participants_json"),
-            ("meeting_evidence", "source_ref_json"),
         ),
     ),
     StoreSpec(
