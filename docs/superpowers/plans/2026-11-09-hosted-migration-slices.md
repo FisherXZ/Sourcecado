@@ -3,7 +3,7 @@
 Date: 2026-11-09. Reviewer of record: Fisher.
 Plan: `docs/superpowers/plans/2026-11-09-hosted-migration-plan.md`. Spec: `docs/superpowers/specs/2026-11-09-hosted-migration-spec.md`.
 
-A slice is one pull request. It has one concern, its own tests, and its own QA script. This file cuts the plan's tasks into 51 slices. The plan stays the source for what each task means. This file says how each piece is tested and checked.
+A slice is one pull request. It has one concern, its own tests, and its own QA script. This file cuts the plan's tasks into 44 slices. The plan stays the source for what each task means. This file says how each piece is tested and checked.
 
 ## Terms
 
