@@ -161,3 +161,18 @@ create table public.recovery_commands (
     created_at text collate "C" not null,
     primary key (user_id, session_id, command_id)
 );
+
+-- On hosted Supabase a public table with row-level security off is readable
+-- and writable through the public API key. Turn it on with no policy. The
+-- backend connects as the table owner, so the store is not affected. Slice
+-- S18 adds the policies.
+alter table public.sessions enable row level security;
+alter table public.memories enable row level security;
+alter table public.jobs enable row level security;
+alter table public.runs enable row level security;
+alter table public.settings enable row level security;
+alter table public.inbox enable row level security;
+alter table public.chat_queue enable row level security;
+alter table public.queue_commands enable row level security;
+alter table public.queue_sessions enable row level security;
+alter table public.recovery_commands enable row level security;
