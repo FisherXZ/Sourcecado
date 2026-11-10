@@ -6,7 +6,6 @@ import httpx
 import pytest
 
 from coworker import provider as provider_module
-from coworker.workspace_runtime import WORKSPACE_TOOL_SCHEMAS
 
 
 def _sse(*payloads):
@@ -1709,16 +1708,35 @@ def test_generic_openai_rejects_arguments_that_violate_tool_schema(monkeypatch):
     assert not [event for event in emitted if event.tool_calls]
 
 
+# A nullable argument: the schema allows a string or JSON null.
+_NULLABLE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "note_save",
+        "description": "Save a note, optionally version-checked.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+                "expected_before_hash": {"type": ["string", "null"]},
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
 @pytest.mark.parametrize(
     "expected_before_hash",
     ["abc123", None],
     ids=["string-hash", "json-null"],
 )
-def test_deepseek_releases_workspace_write_with_expected_before_hash(
+def test_deepseek_releases_a_nullable_argument_with_either_type(
     expected_before_hash, monkeypatch
 ):
     arguments = {
-        "grant_id": "grant-1",
         "path": "notes.md",
         "content": "hello",
         "expected_before_hash": expected_before_hash,
@@ -1739,7 +1757,7 @@ def test_deepseek_releases_workspace_write_with_expected_before_hash(
                                         "id": "call_write",
                                         "type": "function",
                                         "function": {
-                                            "name": "fs_write",
+                                            "name": "note_save",
                                             "arguments": json.dumps(arguments),
                                         },
                                     }
@@ -1766,9 +1784,9 @@ def test_deepseek_releases_workspace_write_with_expected_before_hash(
         return [
             event
             async for event in provider.astream(
-                context_id="workspace-write",
+                context_id="nullable-argument",
                 messages=[{"role": "user", "content": "write notes.md"}],
-                tools=WORKSPACE_TOOL_SCHEMAS,
+                tools=[_NULLABLE_SCHEMA],
             )
         ]
 
@@ -1778,9 +1796,8 @@ def test_deepseek_releases_workspace_write_with_expected_before_hash(
     assert calls == [
         provider_module.ToolCall(
             id="call_write",
-            name="fs_write",
+            name="note_save",
             arguments={
-                "grant_id": "grant-1",
                 "path": "notes.md",
                 "content": "hello",
                 "expected_before_hash": expected_before_hash,

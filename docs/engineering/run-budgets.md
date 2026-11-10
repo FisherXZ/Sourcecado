@@ -162,11 +162,6 @@ needed an exact approval before the stop needs the same exact approval after
 Continue. The meter is constructed fresh in `run_turn`, the approval claim is
 scoped to one run id, and a parked approval's scope is `once`.
 
-The one thing that does span runs is a workspace shell grant the director
-issued deliberately, through the workspace grant system. That grant applied
-before the stop and applies after it, unchanged. Continuation neither creates
-it nor widens it.
-
 Declining costs nothing. The director who does not click Continue keeps every
 completed result, every receipt, and the partial text, because all of it was
 persisted as it happened.

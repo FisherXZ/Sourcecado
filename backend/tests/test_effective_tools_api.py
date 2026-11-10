@@ -32,7 +32,7 @@ def _names(catalog):
     return tuple(item.name for item in catalog.capabilities)
 
 
-def test_composition_root_uses_fresh_connector_and_workspace_availability(
+def test_composition_root_uses_fresh_connector_availability(
     tmp_path, monkeypatch
 ):
     monkeypatch.delenv("APOLLO_API_KEY", raising=False)
@@ -45,22 +45,8 @@ def test_composition_root_uses_fresh_connector_and_workspace_availability(
     assert "calendar_list" not in initial
     assert "apollo_search_people" not in initial
     assert "web_search" not in initial
-    assert "fs_read" not in initial
-    assert "shell_exec" not in initial
-    assert "request_directory" in initial
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    app.state.workspace_runtime.add_grant(
-        workspace,
-        label="Workspace",
-        access="read_write",
-        allow_shell=False,
-    )
-    with_workspace = _names(app.state.effective_tool_catalog())
-    assert "fs_read" in with_workspace
-    assert "fs_write" in with_workspace
-    assert "shell_exec" not in with_workspace
+    assert not [name for name in initial if name.startswith(("fs_", "shell_"))]
+    assert "request_directory" not in initial
 
 
 def test_prompt_diagnostics_report_only_effective_names_and_classes(

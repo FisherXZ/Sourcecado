@@ -280,15 +280,6 @@ def test_a_file_that_is_not_a_database_blocks_every_repair(tmp_path):
     assert _outside_backups(_tree_digest(root)) == _outside_backups(before)
 
 
-def test_an_unreadable_json_document_is_reported(tmp_path):
-    root = build_current_state(tmp_path / "state")
-    (root / "shell_tasks.json").write_text("{{{", encoding="utf-8")
-
-    report = doctor.diagnose(root)
-    assert "store.unreadable" in _checks(report)
-    assert report.blocked is True
-
-
 def test_an_event_record_at_an_unsupported_version_is_reported(tmp_path):
     root = build_current_state(tmp_path / "state")
     migrations.apply_migrations(root)
@@ -531,7 +522,6 @@ def test_repair_is_idempotent(tmp_path):
 def test_state_is_usable_after_repair_and_a_restart(tmp_path):
     from coworker.people import PersonStore
     from coworker.store import ConversationStore
-    from coworker.workspace import WorkspaceGrantStore
     from tests.state_fixtures import LEGACY_PERSON_ID
 
     root = build_legacy_state(tmp_path / "state")
@@ -544,7 +534,6 @@ def test_state_is_usable_after_repair_and_a_restart(tmp_path):
     store = ConversationStore(root)
     assert len(store.load("main")) == 2
     assert PersonStore(root).get(LEGACY_PERSON_ID)["first_name"] == "Dana"
-    assert len(WorkspaceGrantStore(root).list_all()) == 1
     assert doctor.diagnose(root).healthy is True
 
 
@@ -588,10 +577,6 @@ _DRIFT_ONLY_CARRIERS = (
     ".env",
     "memory/99.md",
     "mcp.json",
-    "workspace_grants.json",
-    "shell_tasks.json",
-    "host_command_approvals.json",
-    "directory_requests.json",
 )
 
 # Stores that produce a finding naming themselves.
@@ -599,20 +584,15 @@ _SELF_REPORTING_CARRIERS = {
     "people_db": "sqlite.corrupt_row",
     "conversation_transcripts": "jsonl.torn_tail",
     "presentation_events": "jsonl.record_version",
-    "workspace_receipts": "jsonl.torn_tail",
 }
 
 
-def _provoke_findings_in_every_store(root: Path, *, include_blocking: bool = True) -> None:
+def _provoke_findings_in_every_store(root: Path) -> None:
     """Give Doctor a reason to say something about each kind of store.
 
     A store Doctor stays silent about never puts its bytes near the output, so
     asserting "no secret leaked" from a silent store proves nothing. Each defect
     below drives a real finding on a store that is carrying a planted credential.
-
-    `include_blocking` adds an unreadable JSON document. That is a fail-closed
-    condition, so it stops every repair — callers testing the repair path must
-    leave it out or they will be testing a no-op.
     """
     people = _connect(root, "people.db")
     # Add a corrupt row rather than overwriting the planted one, so people.db
@@ -625,20 +605,12 @@ def _provoke_findings_in_every_store(root: Path, *, include_blocking: bool = Tru
     )
     people.commit()
     people.close()
-    # JSONL directory and JSONL log: a crash-torn tail holding a credential.
+    # JSONL directory: a crash-torn tail holding a credential.
     with (root / "conversations" / "main.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"role": "user", "content": PLANTED_API_KEY})[:40])
-    with (root / "workspace_receipts.jsonl").open("a", encoding="utf-8") as handle:
-        handle.write('{"summary": "api_key=' + PLANTED_API_KEY + '", "tru')
     # JSONL directory again, on the record-version path.
     with (root / "events" / "main.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"version": 1, "type": "error", "message": PLANTED_BEARER}) + "\n")
-    if include_blocking:
-        # JSON document: unreadable, so the parse error itself must stay clean.
-        (root / "shell_tasks.json").write_text(
-            '{"version": 1, "tasks": [{"command_summary": "' + PLANTED_BEARER + '"',
-            encoding="utf-8",
-        )
     for name in _DRIFT_ONLY_CARRIERS:
         os.chmod(root / name, 0o644)
 
@@ -657,14 +629,7 @@ def test_every_store_kind_holds_a_planted_secret(tmp_path):
     carriers = {
         migrations.StoreKind.SQLITE: ["people.db"],
         migrations.StoreKind.JSONL_DIR: ["conversations/main.jsonl", "events/main.jsonl"],
-        migrations.StoreKind.JSONL_LOG: ["workspace_receipts.jsonl"],
-        migrations.StoreKind.JSON_DOCUMENT: [
-            "workspace_grants.json",
-            "shell_tasks.json",
-            "host_command_approvals.json",
-            "directory_requests.json",
-            "mcp.json",
-        ],
+        migrations.StoreKind.JSON_DOCUMENT: ["mcp.json"],
         migrations.StoreKind.OPAQUE_FILE: ["secrets.json", ".env"],
         migrations.StoreKind.DIRECTORY: ["memory/99.md"],
     }
@@ -690,7 +655,6 @@ def test_no_planted_secret_survives_into_doctor_output(tmp_path):
         assert any(
             item.store_id == store_id and item.check == check for item in report.findings
         ), (store_id, check, sorted((i.store_id, i.check) for i in report.findings))
-    assert any(item.store_id == "shell_tasks" for item in report.findings)
 
     _assert_no_canary([rendered, serialized], "diagnose")
 
@@ -698,9 +662,9 @@ def test_no_planted_secret_survives_into_doctor_output(tmp_path):
 def test_no_planted_secret_survives_from_a_drift_only_store(tmp_path):
     """The stores with no content check of their own reach the report only
     through a permissions finding, whose detail list is capped. Prove coverage
-    in batches that fit under the cap, rather than assuming all eight fit."""
+    in batches that fit under the cap, rather than assuming they all fit."""
     root = build_current_state(tmp_path / "state", plant_secrets=True)
-    _provoke_findings_in_every_store(root, include_blocking=False)
+    _provoke_findings_in_every_store(root)
 
     batch = doctor.MAX_DETAIL_ROWS - 2
     covered = set()
@@ -727,9 +691,7 @@ def test_no_planted_secret_survives_from_a_drift_only_store(tmp_path):
 def test_no_planted_secret_survives_a_repair_or_its_report(tmp_path):
     """The repair path renders a second report and writes a manifest and backups."""
     root = build_current_state(tmp_path / "state", plant_secrets=True)
-    # No blocking defect: a fail-closed report makes repair a no-op, and this
-    # test would then prove nothing about the repair path.
-    _provoke_findings_in_every_store(root, include_blocking=False)
+    _provoke_findings_in_every_store(root)
 
     report = doctor.repair(root)
 

@@ -227,27 +227,6 @@ export function formatElapsed(ms: number, live = false): string {
   return `${Math.floor(seconds / 60)}m ${rest}s`;
 }
 
-const WORKSPACE_RECEIPT_LABELS: Readonly<Record<string, string>> = {
-  created: "Created workspace file",
-  updated: "Updated workspace file",
-  moved: "Moved workspace item",
-  trashed: "Trashed workspace item",
-  shell_approved: "Ran approved workspace command",
-  shell_auto_read: "Ran read-only workspace command",
-  denied: "Workspace action denied",
-  interrupted: "Workspace action interrupted",
-  stale: "Workspace write was stale",
-  read: "Read workspace data",
-  directory_requested: "Requested workspace access",
-};
-
-function workspaceReceiptLabel(tool: ToolCallMessagePart): string | null {
-  const receiptType = record(tool.result)?.receipt_type;
-  return typeof receiptType === "string"
-    ? WORKSPACE_RECEIPT_LABELS[receiptType] ?? null
-    : null;
-}
-
 /**
  * The verb and object for a step row. Past tense only when the step
  * finished: "Searched Drive" with a failure mark would claim a search that
@@ -256,7 +235,7 @@ function workspaceReceiptLabel(tool: ToolCallMessagePart): string | null {
 export function stepLabel(tool: ToolCallMessagePart, state: StepState): string {
   const presentation = toolPresentation(tool.toolName);
   if (state === "done" || state === "partial") {
-    return workspaceReceiptLabel(tool) ?? presentation.label;
+    return presentation.label;
   }
   return presentation.activeLabel;
 }

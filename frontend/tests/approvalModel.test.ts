@@ -1,25 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  canOfferAlways,
   cleanApolloText,
   executionText,
   receiptOf,
   visibleReason,
   type ApprovalAudit,
-  type ShellCommandResource,
 } from "../src/chat/approvalModel";
-
-const ELIGIBLE_SHELL: ShellCommandResource = {
-  executionTarget: "host",
-  commandSummary: "bash · 1 argument",
-  commandDisplay: "bash scripts/inspect.sh",
-  environmentKeys: [],
-  cwd: "/Users/operator/Workspace",
-  fingerprint: "abcdef1234567890",
-  unsandboxed: true,
-  permanentEligible: true,
-};
 
 function audit(overrides: Partial<ApprovalAudit>): ApprovalAudit {
   return {
@@ -33,28 +20,6 @@ function audit(overrides: Partial<ApprovalAudit>): ApprovalAudit {
     ...overrides,
   };
 }
-
-describe("standing permission", () => {
-  it("is offered only for one eligible, fingerprinted, unsandboxed shell command", () => {
-    expect(canOfferAlways("shell_exec", ELIGIBLE_SHELL)).toBe(true);
-    expect(canOfferAlways("shell_exec", { ...ELIGIBLE_SHELL, permanentEligible: false })).toBe(false);
-    expect(canOfferAlways("shell_exec", { ...ELIGIBLE_SHELL, fingerprint: null })).toBe(false);
-    expect(canOfferAlways("shell_exec", { ...ELIGIBLE_SHELL, unsandboxed: false })).toBe(false);
-    expect(canOfferAlways("shell_exec", null)).toBe(false);
-  });
-
-  it.each([
-    "gmail_send",
-    "apollo_enrich_contact",
-    "gmail_draft",
-    "calendar_create",
-    "board_delete",
-    "fs_trash",
-    "some_new_tool",
-  ])("is never offered for %s, even with an eligible shell resource", (toolName) => {
-    expect(canOfferAlways(toolName, ELIGIBLE_SHELL)).toBe(false);
-  });
-});
 
 describe("visible reason", () => {
   it("hides the backend policy sentence", () => {

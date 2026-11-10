@@ -2045,7 +2045,6 @@ export type Settings = {
   gmail: GmailStatus;
   apollo: { configured: boolean };
   providers: ProviderVerification[];
-  workspace?: WorkspaceDiagnostics;
 };
 
 export type ProviderVerification = {
@@ -2163,11 +2162,6 @@ export async function getSettings(): Promise<Settings> {
     },
     apollo: { configured: apollo.configured === true },
     providers,
-    ...(
-      typeof raw.workspace === "object" && raw.workspace !== null
-        ? { workspace: raw.workspace as WorkspaceDiagnostics }
-        : {}
-    ),
   };
 }
 
@@ -2209,141 +2203,6 @@ export async function resolveInbox(
     body: JSON.stringify({ decision, scope }),
   });
   if (!res.ok) throw new Error(`inbox ${res.status}`);
-}
-
-export type WorkspaceGrant = {
-  id: string;
-  path: string;
-  label: string;
-  access: "read_only" | "read_write";
-  allow_shell: boolean;
-  filesystem_identity: { device: number; inode: number };
-  created_at: string;
-  updated_at: string;
-  revoked_at: string | null;
-  stopped_task_ids?: string[];
-};
-
-export type DirectoryRequest = {
-  id: string;
-  label: string;
-  access: "read_only" | "read_write";
-  allow_shell: boolean;
-  session_id: string | null;
-  run_id: string | null;
-  created_at: string;
-  resolved_at: string | null;
-  grant_id: string | null;
-};
-
-export type HostCommandApproval = {
-  id: string;
-  fingerprint: string;
-  command_summary: string;
-  command_display?: string;
-  executable?: { path: string; sha256: string } | null;
-  scripts?: Array<{ path: string; sha256: string }>;
-  cwd: string;
-  created_at: string;
-  revoked_at: string | null;
-};
-
-export type ShellTask = {
-  task_id: string;
-  grant_id: string;
-  status: string;
-  execution_target: "docker" | "host";
-  command_summary: string;
-  started_at: string;
-  finished_at?: string | null;
-  exit_code?: number | null;
-  error?: string;
-};
-
-export type WorkspaceDiagnostics = {
-  docker: {
-    cli_available: boolean;
-    daemon_available: boolean;
-    image_available: boolean;
-    available: boolean;
-    image: string;
-    network: "unrestricted";
-    server_version?: string | null;
-  };
-  execution_target: "docker" | "host_fallback";
-  host_fallback_enabled: boolean;
-  grants: WorkspaceGrant[];
-  directory_requests: DirectoryRequest[];
-  host_approvals: HostCommandApproval[];
-  tasks: ShellTask[];
-};
-
-export type WorkspaceGrantInput = {
-  path: string;
-  label: string;
-  access: "read_only" | "read_write";
-  allow_shell: boolean;
-  request_id?: string;
-};
-
-async function workspaceMutation<T>(path: string, method: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${httpBase()}${path}`, {
-    method,
-    headers: {
-      "X-Club-Token": apiToken(),
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  const payload = await res.json();
-  if (!res.ok) throw new Error(payload.error || `workspace ${res.status}`);
-  return payload as T;
-}
-
-export async function createWorkspaceGrant(
-  input: WorkspaceGrantInput,
-): Promise<{ grant: WorkspaceGrant }> {
-  return workspaceMutation("/v1/workspaces", "POST", input);
-}
-
-export async function updateWorkspaceGrant(
-  id: string,
-  changes: Partial<Pick<WorkspaceGrantInput, "path" | "label" | "access" | "allow_shell">>,
-): Promise<{ grant: WorkspaceGrant }> {
-  return workspaceMutation(`/v1/workspaces/${encodeURIComponent(id)}`, "PATCH", changes);
-}
-
-export async function revokeWorkspaceGrant(
-  id: string,
-): Promise<{ grant: WorkspaceGrant }> {
-  return workspaceMutation(`/v1/workspaces/${encodeURIComponent(id)}`, "DELETE");
-}
-
-export async function revokeHostApproval(
-  id: string,
-): Promise<{ approval: HostCommandApproval }> {
-  return workspaceMutation(
-    `/v1/workspaces/host-approvals/${encodeURIComponent(id)}`,
-    "DELETE",
-  );
-}
-
-export async function cancelShellTask(id: string): Promise<{ task: ShellTask }> {
-  return workspaceMutation(
-    `/v1/workspaces/tasks/${encodeURIComponent(id)}/cancel`,
-    "POST",
-  );
-}
-
-export async function pickDirectory(): Promise<string | null> {
-  const tauri = (window as unknown as {
-    __TAURI__?: { dialog?: { open?: (options: unknown) => Promise<unknown> } };
-  }).__TAURI__;
-  if (!tauri?.dialog?.open) {
-    throw new Error("The native folder picker is unavailable.");
-  }
-  const selected = await tauri.dialog.open({ directory: true, multiple: false });
-  return typeof selected === "string" ? selected : null;
 }
 
 export type ConnectorId = "gmail" | "drive" | "calendar" | "apollo" | "granola";

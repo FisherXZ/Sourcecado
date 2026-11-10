@@ -18,8 +18,6 @@ from coworker.mcp import FakeMcp
 from coworker.people import PersonStore
 from coworker.skills import BUILTIN_SKILLS, SkillLoader
 from coworker.store import ConversationStore
-from coworker.workspace import GrantAccess
-from coworker.workspace_runtime import WorkspaceRuntime
 
 
 def private_directory(path: str | Path, *, description: str = "private directory") -> Path:
@@ -207,13 +205,10 @@ def sensitive_environment_keys() -> list[str]:
 class EvalEnvironment:
     root: Path
     state_dir: Path
-    workspace_dir: Path
     home_dir: Path
     store: ConversationStore
     people: PersonStore
     inbox: Inbox
-    workspace_runtime: WorkspaceRuntime
-    workspace_grant: dict[str, Any]
     connectors: ConnectorFakes
     credential_environment: dict[str, str]
     skills: SkillLoader
@@ -234,9 +229,8 @@ class EvalEnvironment:
         runs_dir = private_directory(artifact_root / "runs")
         root = runs_dir / f"{safe_label}-{uuid.uuid4().hex[:12]}"
         state_dir = root / "state"
-        workspace_dir = root / "workspace"
         home_dir = root / "home"
-        for path in (root, state_dir, workspace_dir, home_dir):
+        for path in (root, state_dir, home_dir):
             private_directory(path)
         credential_environment = {
             "CLUB_STATE_DIR": str(state_dir),
@@ -249,24 +243,14 @@ class EvalEnvironment:
             os.environ.update(credential_environment)
         store = ConversationStore(state_dir)
         people = PersonStore(state_dir)
-        workspace_runtime = WorkspaceRuntime(state_dir)
-        workspace_grant = workspace_runtime.add_grant(
-            workspace_dir,
-            label="Evaluation workspace",
-            access=GrantAccess.READ_WRITE,
-            allow_shell=False,
-        )
         fixtures = fixtures or ConnectorFixtures()
         return cls(
             root=root,
             state_dir=state_dir,
-            workspace_dir=workspace_dir,
             home_dir=home_dir,
             store=store,
             people=people,
             inbox=Inbox(store),
-            workspace_runtime=workspace_runtime,
-            workspace_grant=workspace_grant,
             connectors=ConnectorFakes.create(fixtures),
             credential_environment=credential_environment,
             skills=SkillLoader([BUILTIN_SKILLS]),
@@ -275,5 +259,4 @@ class EvalEnvironment:
         )
 
     def close(self) -> None:
-        self.workspace_runtime.close()
         self.people._conn.close()
