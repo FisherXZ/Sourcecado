@@ -953,15 +953,67 @@ def test_cancel_between_precheck_and_run_start_is_not_erased(tmp_path):
     assert paused["progress"]["remaining"] == 1
 
 
-def test_ingestion_store_keeps_database_and_sidecars_private(tmp_path):
-    state = tmp_path / "state"
-    DriveIngestionStore(state).create_job(
-        folder_id="root",
-        resolved_path="Sourcing/Fall 2026",
+def test_two_users_keep_separate_jobs_and_cannot_reach_each_other_by_id(tmp_path):
+    # Two state directories resolve to two users in one database.
+    alice = DriveIngestionStore(tmp_path / "alice")
+    bob = DriveIngestionStore(tmp_path / "bob")
+    drive = FakeDrive(
+        {("root", None): {"files": [_file("doc", "Notes.txt", "root")]}},
+        {"doc": {"status": "read", "content": "Alice private notes"}},
     )
+    job = alice.create_job(folder_id="root", resolved_path="Sourcing")
+    DriveIngestionRunner(alice, drive).run(job["id"])
+    proposal = alice.propose_board_attachment(
+        job["id"],
+        source_drive_id="doc",
+        person_id="per_alice",
+        record_type="artifact",
+        fields={"title": "Notes"},
+    )
+    bob_job = bob.create_job(folder_id="root", resolved_path="Sourcing")
 
-    assert state.stat().st_mode & 0o777 == 0o700
-    for path in state.iterdir():
-        if path.is_file():
-            assert path.stat().st_mode & 0o077 == 0
-    assert not any(path.name.endswith(("-wal", "-shm")) for path in state.iterdir())
+    assert [item["id"] for item in alice.list_jobs()] == [job["id"]]
+    assert [item["id"] for item in bob.list_jobs()] == [bob_job["id"]]
+
+    # Bob cannot read Alice's rows by id.
+    assert bob.get_job(job["id"]) is None
+    assert bob.list_sources(job["id"]) == []
+    assert bob.get_board_proposal(proposal["id"]) is None
+    assert bob.list_board_proposals(job["id"]) == []
+    with pytest.raises(ValueError, match="unknown Drive ingestion job"):
+        bob.query(job["id"], "private")
+
+    # Bob cannot change Alice's rows by id.
+    with pytest.raises(ValueError, match="unknown Drive ingestion job"):
+        bob.request_cancel(job["id"])
+    with pytest.raises(ValueError, match="unknown Drive ingestion job"):
+        bob.prepare_rerun(job["id"])
+    with pytest.raises(ValueError, match="unknown Drive ingestion job"):
+        bob.prepare_resume(job["id"])
+    assert bob._begin_run(job["id"]) is False
+    bob._set_status(job["id"], "paused")
+    bob._record_source(job["id"], "doc", {"status": "failed"})
+    bob._mark_missing_deleted(job["id"], 99)
+
+    after = alice.get_job(job["id"])
+    assert after["status"] == "completed"
+    assert after["work_revision"] == job["work_revision"]
+    assert [source["last_action"] for source in alice.list_sources(job["id"])] == ["read"]
+    assert alice.query(job["id"], "private")["matches"][0]["drive_id"] == "doc"
+    assert alice.get_board_proposal(proposal["id"])["status"] == "pending_review"
+
+
+def test_query_folds_case_like_sqlite_for_non_ascii_text(tmp_path):
+    # SQLite lower() folds ASCII only. The exact text must still find itself.
+    store = DriveIngestionStore(tmp_path)
+    drive = FakeDrive(
+        {("root", None): {"files": [_file("doc", "Notes.txt", "root")]}},
+        {"doc": {"status": "read", "content": "Visit to the ÉCOLE Polytechnique"}},
+    )
+    job = store.create_job(folder_id="root", resolved_path="Sourcing")
+    DriveIngestionRunner(store, drive).run(job["id"])
+
+    assert len(store.query(job["id"], "ÉCOLE")["matches"]) == 1
+    assert len(store.query(job["id"], "École")["matches"]) == 1
+    assert len(store.query(job["id"], "polytechnique")["matches"]) == 1
+    assert store.query(job["id"], "école")["matches"] == []
