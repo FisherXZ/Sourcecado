@@ -29,6 +29,7 @@ from coworker.agent_run_resume import (
     quarantine_unreported_effect,
     restart,
 )
+from tests.agent_run_db import CHILD_PREAMBLE, child_env
 
 DESKTOP = str(Path(__file__).resolve().parents[1])
 NOW = datetime(2026, 8, 27, 10, 0, 0, tzinfo=UTC)
@@ -38,6 +39,7 @@ NOW = datetime(2026, 8, 27, 10, 0, 0, tzinfo=UTC)
 CHILD = """
 import json, sys, time
 sys.path.insert(0, sys.argv[1])
+""" + CHILD_PREAMBLE + """
 from coworker.agent_run_repository import AgentRunRepository
 
 store, cut = sys.argv[2], sys.argv[3]
@@ -129,6 +131,7 @@ def _cut(tmp_path, cut):
         [sys.executable, "-c", CHILD, DESKTOP, str(tmp_path), cut],
         stdout=subprocess.PIPE,
         text=True,
+        env=child_env(tmp_path),
     )
     line = proc.stdout.readline()
     assert line, f"the child never reached the {cut} cut point"
@@ -144,6 +147,7 @@ def _hold(tmp_path, cut):
         [sys.executable, "-c", CHILD, DESKTOP, str(tmp_path), cut],
         stdout=subprocess.PIPE,
         text=True,
+        env=child_env(tmp_path),
     )
     line = proc.stdout.readline()
     assert line, f"the child never reached the {cut} cut point"

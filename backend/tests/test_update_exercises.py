@@ -25,6 +25,7 @@ from coworker import doctor, migrations  # noqa: E402
 from coworker.agent_run_repository import AgentRunRepository  # noqa: E402
 from coworker.people import PersonStore  # noqa: E402
 from coworker.update_channel import UpdateStage, UpdateStatus, apply_update, rollback  # noqa: E402
+from coworker.update_channel.apply import has_run_store  # noqa: E402
 from state_fixtures import build_legacy_state  # noqa: E402
 
 PERSON_COLUMNS = (
@@ -81,7 +82,7 @@ def _versions(root: Path) -> dict[str, int | None]:
 def _update(install, artifact, seed, public, **kwargs):
     kwargs.setdefault("health_check", lambda _i: True)
     opened = None
-    if "runs" not in kwargs and (install.state_root / "agent_runs.db").exists():
+    if "runs" not in kwargs and has_run_store(install.state_root):
         opened = AgentRunRepository(install.state_root)
         kwargs["runs"] = opened
     kwargs.setdefault("runs", None)

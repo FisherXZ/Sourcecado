@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-import sqlite3
 import subprocess
 import sys
 import time
@@ -60,6 +59,7 @@ from coworker.server import TOKEN_HEADER, create_app
 from coworker.store import ConversationStore
 from coworker.tools import OPENAI_TOOLS
 from coworker.turn import run_turn
+from tests.agent_run_db import CHILD_PREAMBLE, child_env, raw
 
 TOKEN = "test-token-agent-run-integration"
 HEADERS = {TOKEN_HEADER: TOKEN}
@@ -241,23 +241,26 @@ class WatchingGmail(FakeGmail):
     committed is what a process dying right here would have left behind.
     """
 
-    def __init__(self, db_path) -> None:
+    def __init__(self, repository) -> None:
         super().__init__()
-        self.db_path = db_path
+        self.repository = repository
         self.seen: list[tuple[str, str]] = []
 
     def send(self, *, draft_id: str):
-        connection = sqlite3.connect(self.db_path)
-        try:
-            self.seen = [
-                (str(row[0]), str(row[1]))
-                for row in connection.execute(
-                    "SELECT tool_name, status FROM agent_run_effects"
-                ).fetchall()
-            ]
-        finally:
-            connection.close()
+        self.seen = _committed_effects(self.repository)
         return super().send(draft_id=draft_id)
+
+
+def _committed_effects(repository) -> list[tuple[str, str]]:
+    """What another connection can see: only committed rows."""
+    with raw(repository) as connection:
+        return [
+            (str(row[0]), str(row[1]))
+            for row in connection.execute(
+                "SELECT tool_name, status FROM agent_run_effects WHERE user_id = %s",
+                (repository._user_id,),
+            ).fetchall()
+        ]
 
 
 def test_the_dispatch_is_committed_before_the_send_and_the_outcome_after(tmp_path):
@@ -268,7 +271,7 @@ def test_the_dispatch_is_committed_before_the_send_and_the_outcome_after(tmp_pat
     visible and this fails. It is the one property the whole slice rests on.
     """
     app = _app(tmp_path)
-    gmail = WatchingGmail(app.state.agent_runs.path)
+    gmail = WatchingGmail(app.state.agent_runs)
     gmail.account_email = ACCOUNT
     app.state.gmail = gmail
     client = TestClient(app)
@@ -312,18 +315,7 @@ def test_the_turn_loop_also_commits_its_dispatch_before_the_call(tmp_path, monke
     seen: list[list[tuple[str, str]]] = []
 
     def _execute(name, arguments, **kwargs):
-        connection = sqlite3.connect(repository.path)
-        try:
-            seen.append(
-                [
-                    (str(row[0]), str(row[1]))
-                    for row in connection.execute(
-                        "SELECT tool_name, status FROM agent_run_effects"
-                    ).fetchall()
-                ]
-            )
-        finally:
-            connection.close()
+        seen.append(_committed_effects(repository))
         return True, {"ok": True}
 
     monkeypatch.setattr(turn_module, "execute", _execute)
@@ -625,6 +617,7 @@ def test_startup_registers_an_owner_and_runs_one_reconciliation_pass(tmp_path):
 # `unknown`, and unknown never authorises a reclaim.
 _DYING_OWNER = """
 import sys
+""" + CHILD_PREAMBLE + """
 from coworker.agent_run_owner import OwnerRegistry
 from coworker.agent_run_repository import AgentRunRepository
 
@@ -656,6 +649,7 @@ def test_a_process_that_died_mid_send_leaves_an_effect_a_person_must_settle(
         capture_output=True,
         text=True,
         cwd=str(pathlib.Path(__file__).resolve().parents[1]),
+        env=child_env(base),
     )
     assert dead.returncode == 0, dead.stderr
     run_id, effect_id = dead.stdout.split()

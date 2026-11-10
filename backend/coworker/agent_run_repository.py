@@ -6,8 +6,8 @@ durable write is a compare-and-swap against `(run_id, version, lease_owner)`:
 the version is the fencing token, so a superseded or duplicated owner writes
 nothing instead of writing second.
 
-The store is its own SQLite database with its own `SCHEMA_VERSION`, stamped in
-`PRAGMA user_version` for the migration registry to read.
+The tables live in Postgres. `supabase/migrations/20261110000200_agent_runs.sql`
+defines them. Every row belongs to one user, and every query names that user.
 """
 
 from __future__ import annotations
@@ -15,8 +15,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sqlite3
-import threading
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -24,8 +22,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+import psycopg
+from psycopg.rows import dict_row
+
+from coworker import db
 from coworker.agent_run_approval import (
-    EFFECT_SCHEMA,
     AgentRunEffectFenced,
     EffectStatus,
     bounded_actor,
@@ -58,11 +59,10 @@ from coworker.agent_runs import (
     project_terminal_result,
 )
 
-# 2 adds `agent_run_effects`: the external-effect fence. The table is created
-# by the same idempotent script that creates the run tables, so a version 1
-# store gains it on open and nothing has to be migrated.
-SCHEMA_VERSION = 2
-DB_NAME = "agent_runs.db"
+# The class half of the two-key advisory lock that `_write` takes. The other
+# half is a hash of the user id. The value only has to differ from the classes
+# that other stores use.
+_WRITE_LOCK_CLASS = 0x5302
 # Long enough for a slow provider call, short enough that crashed work is not
 # stranded for an operator's whole afternoon.
 DEFAULT_LEASE_SECONDS = 120
@@ -122,23 +122,11 @@ class AgentRunRepository:
         self.base = Path(base_dir).expanduser()
         self.base.mkdir(parents=True, exist_ok=True)
         os.chmod(self.base, 0o700)
-        self.path = self.base / DB_NAME
         self.registry = registry or OwnerRegistry(self.base)
-        self._lock = threading.RLock()
-        self._conn = sqlite3.connect(
-            self.path, check_same_thread=False, isolation_level=None, timeout=10.0
-        )
-        self._conn.row_factory = sqlite3.Row
-        os.chmod(self.path, 0o600)
-        self._conn.execute("PRAGMA journal_mode = WAL")
-        self._conn.execute("PRAGMA synchronous = FULL")
-        self._conn.execute("PRAGMA busy_timeout = 10000")
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._initialize_schema()
+        self._db, self._user_id = db.resolve(self.base)
 
     def close(self) -> None:
-        with self._lock:
-            self._conn.close()
+        """Nothing to close. The connection pool belongs to `coworker.db`."""
 
     # --- run identity ----------------------------------------------------
 
@@ -169,17 +157,21 @@ class AgentRunRepository:
         identity = _bounded_id(run_id or f"run-{uuid.uuid4().hex}", "run_id")
         stamp = _stamp(now)
         expires_at = _stamp(_parse(stamp) + timedelta(seconds=seconds))
-        with self._write():
-            self._conn.execute(
+        with self._write() as cur:
+            cur.execute(
                 """
                 INSERT INTO agent_runs (
-                    run_id, session_id, person_id, parent_run_id, trigger,
+                    user_id, run_id, session_id, person_id, parent_run_id, trigger,
                     goal_fingerprint, provider_model_id, current_state, version,
                     checkpoint_sequence, lease_owner, lease_owner_host,
                     lease_owner_pid, lease_expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', 1, 1, ?, ?, ?, ?, ?, ?)
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, 'running', 1, 1,
+                    %s, %s, %s, %s, %s, %s
+                )
                 """,
                 (
+                    self._user_id,
                     identity,
                     str(session_id),
                     _optional_id(person_id),
@@ -195,16 +187,18 @@ class AgentRunRepository:
                     stamp,
                 ),
             )
-            self._append_checkpoint(identity, 1, "run_started", "running", {}, stamp)
-            run = _run_row(self._row(identity))
+            self._append_checkpoint(
+                cur, identity, 1, "run_started", "running", {}, stamp
+            )
+            run = _run_row(self._row(cur, identity))
         return StartedRun(
             run=run,
             lease=AgentRunLease(identity, owner.owner_id, 1, expires_at),
         )
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._row(run_id)
+        with self._read() as cur:
+            row = self._row(cur, run_id)
         return None if row is None else _run_row(row)
 
     def list_runs(
@@ -218,43 +212,42 @@ class AgentRunRepository:
         created_before: datetime | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
-        clauses: list[str] = []
-        params: list[Any] = []
+        clauses: list[str] = ["user_id = %s"]
+        params: list[Any] = [self._user_id]
         if session_id is not None:
-            clauses.append("session_id = ?")
+            clauses.append("session_id = %s")
             params.append(str(session_id))
         if person_id is not None:
-            clauses.append("person_id = ?")
+            clauses.append("person_id = %s")
             params.append(str(person_id))
         if trigger is not None:
-            clauses.append("trigger = ?")
+            clauses.append("trigger = %s")
             params.append(str(trigger))
         if created_after is not None:
-            clauses.append("created_at >= ?")
+            clauses.append("created_at >= %s")
             params.append(_stamp(created_after))
         if created_before is not None:
-            clauses.append("created_at <= ?")
+            clauses.append("created_at <= %s")
             params.append(_stamp(created_before))
-        wanted = tuple(states or ())
+        wanted = [str(state) for state in states or ()]
         if wanted:
-            clauses.append(f"current_state IN ({','.join('?' * len(wanted))})")
-            params.extend(wanted)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            clauses.append("current_state = ANY(%s)")
+            params.append(wanted)
         params.append(max(1, int(limit)))
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT * FROM agent_runs {where} "
-                "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        with self._read() as cur:
+            rows = cur.execute(
+                f"SELECT * FROM agent_runs WHERE {' AND '.join(clauses)} "
+                "ORDER BY created_at DESC, insert_order DESC LIMIT %s",
                 params,
             ).fetchall()
         return [_run_row(row) for row in rows]
 
     def list_checkpoints(self, run_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM agent_run_checkpoints WHERE run_id = ? "
-                "ORDER BY sequence",
-                (str(run_id),),
+        with self._read() as cur:
+            rows = cur.execute(
+                "SELECT * FROM agent_run_checkpoints "
+                "WHERE user_id = %s AND run_id = %s ORDER BY sequence",
+                (self._user_id, str(run_id)),
             ).fetchall()
         return [_checkpoint_row(row) for row in rows]
 
@@ -271,8 +264,8 @@ class AgentRunRepository:
         seconds = _lease_seconds(lease_seconds)
         stamp = _stamp(now)
         expires_at = _stamp(_parse(stamp) + timedelta(seconds=seconds))
-        with self._write():
-            row = self._row(run_id)
+        with self._write() as cur:
+            row = self._row(cur, run_id)
             if row is None:
                 raise KeyError(run_id)
             if not is_leasable(str(row["current_state"])):
@@ -286,12 +279,12 @@ class AgentRunRepository:
             if held_by_other:
                 return None
             version = int(row["version"])
-            changed = self._conn.execute(
+            changed = cur.execute(
                 """
                 UPDATE agent_runs SET
-                    lease_owner = ?, lease_owner_host = ?, lease_owner_pid = ?,
-                    lease_expires_at = ?, version = version + 1, updated_at = ?
-                WHERE run_id = ? AND version = ?
+                    lease_owner = %s, lease_owner_host = %s, lease_owner_pid = %s,
+                    lease_expires_at = %s, version = version + 1, updated_at = %s
+                WHERE user_id = %s AND run_id = %s AND version = %s
                 """,
                 (
                     owner.owner_id,
@@ -299,6 +292,7 @@ class AgentRunRepository:
                     int(owner.pid),
                     expires_at,
                     stamp,
+                    self._user_id,
                     str(run_id),
                     version,
                 ),
@@ -316,37 +310,46 @@ class AgentRunRepository:
         seconds = _lease_seconds(lease_seconds)
         stamp = _stamp(now)
         expires_at = _stamp(_parse(stamp) + timedelta(seconds=seconds))
-        with self._write():
-            changed = self._conn.execute(
+        with self._write() as cur:
+            changed = cur.execute(
                 """
                 UPDATE agent_runs SET
-                    lease_expires_at = ?, version = version + 1, updated_at = ?
-                WHERE run_id = ? AND version = ? AND lease_owner = ?
-                  AND lease_expires_at > ?
+                    lease_expires_at = %s, version = version + 1, updated_at = %s
+                WHERE user_id = %s AND run_id = %s AND version = %s
+                  AND lease_owner = %s AND lease_expires_at > %s
                 """,
-                (expires_at, stamp, lease.run_id, lease.version, lease.owner_id, stamp),
+                (
+                    expires_at,
+                    stamp,
+                    self._user_id,
+                    lease.run_id,
+                    lease.version,
+                    lease.owner_id,
+                    stamp,
+                ),
             ).rowcount
             if changed != 1:
-                self._raise_fence_failure(lease, stamp)
+                self._raise_fence_failure(cur, lease, stamp)
         return AgentRunLease(
             lease.run_id, lease.owner_id, lease.version + 1, expires_at
         )
 
     def release_lease(self, lease: AgentRunLease, now: datetime | None = None) -> None:
         stamp = _stamp(now)
-        with self._write():
-            changed = self._conn.execute(
+        with self._write() as cur:
+            changed = cur.execute(
                 """
                 UPDATE agent_runs SET
                     lease_owner = NULL, lease_owner_host = NULL,
                     lease_owner_pid = NULL, lease_expires_at = NULL,
-                    version = version + 1, updated_at = ?
-                WHERE run_id = ? AND version = ? AND lease_owner = ?
+                    version = version + 1, updated_at = %s
+                WHERE user_id = %s AND run_id = %s AND version = %s
+                  AND lease_owner = %s
                 """,
-                (stamp, lease.run_id, lease.version, lease.owner_id),
+                (stamp, self._user_id, lease.run_id, lease.version, lease.owner_id),
             ).rowcount
             if changed != 1:
-                self._raise_fence_failure(lease, stamp)
+                self._raise_fence_failure(cur, lease, stamp)
 
     # --- checkpoints -----------------------------------------------------
 
@@ -368,11 +371,11 @@ class AgentRunRepository:
     ) -> CheckpointCommit:
         """Commit one unit of semantic progress against this lease, or nothing."""
         stamp = _stamp(now)
-        with self._write():
-            row = self._row(lease.run_id)
+        with self._write() as cur:
+            row = self._row(cur, lease.run_id)
             if row is None:
                 raise KeyError(lease.run_id)
-            self._check_fence(row, lease, stamp)
+            self._check_fence(cur, row, lease, stamp)
             current = str(row["current_state"])
             target = str(state or current)
             validate_transition(kind, current, target)
@@ -396,19 +399,21 @@ class AgentRunRepository:
                 if terminal_result is not None
                 else row["terminal_result"]
             )
-            changed = self._conn.execute(
+            changed = cur.execute(
                 """
                 UPDATE agent_runs SET
-                    current_state = ?, checkpoint_sequence = ?, version = version + 1,
-                    usage = ?, source_refs = ?, artifact_refs = ?, approval_ids = ?,
-                    terminal_result = ?, person_id = COALESCE(?, person_id),
-                    provider_model_id = COALESCE(?, provider_model_id),
-                    updated_at = ?, finished_at = ?,
-                    lease_owner = CASE WHEN ? THEN NULL ELSE lease_owner END,
-                    lease_owner_host = CASE WHEN ? THEN NULL ELSE lease_owner_host END,
-                    lease_owner_pid = CASE WHEN ? THEN NULL ELSE lease_owner_pid END,
-                    lease_expires_at = CASE WHEN ? THEN NULL ELSE lease_expires_at END
-                WHERE run_id = ? AND version = ? AND lease_owner = ?
+                    current_state = %s, checkpoint_sequence = %s,
+                    version = version + 1, usage = %s, source_refs = %s,
+                    artifact_refs = %s, approval_ids = %s, terminal_result = %s,
+                    person_id = COALESCE(%s, person_id),
+                    provider_model_id = COALESCE(%s, provider_model_id),
+                    updated_at = %s, finished_at = %s,
+                    lease_owner = CASE WHEN %s THEN NULL ELSE lease_owner END,
+                    lease_owner_host = CASE WHEN %s THEN NULL ELSE lease_owner_host END,
+                    lease_owner_pid = CASE WHEN %s THEN NULL ELSE lease_owner_pid END,
+                    lease_expires_at = CASE WHEN %s THEN NULL ELSE lease_expires_at END
+                WHERE user_id = %s AND run_id = %s AND version = %s
+                  AND lease_owner = %s
                 """,
                 (
                     target,
@@ -426,17 +431,18 @@ class AgentRunRepository:
                     parks,
                     parks,
                     parks,
+                    self._user_id,
                     lease.run_id,
                     lease.version,
                     lease.owner_id,
                 ),
             ).rowcount
             if changed != 1:
-                self._raise_fence_failure(lease, stamp)
+                self._raise_fence_failure(cur, lease, stamp)
             checkpoint = self._append_checkpoint(
-                lease.run_id, sequence, kind, target, payload, stamp
+                cur, lease.run_id, sequence, kind, target, payload, stamp
             )
-            run = _run_row(self._row(lease.run_id))
+            run = _run_row(self._row(cur, lease.run_id))
         return CheckpointCommit(
             run=run,
             checkpoint=checkpoint,
@@ -481,8 +487,8 @@ class AgentRunRepository:
         seconds = _lease_seconds(lease_seconds)
         stamp = _stamp(now)
         expires_at = _stamp(_parse(stamp) + timedelta(seconds=seconds))
-        with self._write():
-            row = self._row(run_id)
+        with self._write() as cur:
+            row = self._row(cur, run_id)
             if row is None:
                 raise KeyError(run_id)
             state = str(row["current_state"])
@@ -498,14 +504,15 @@ class AgentRunRepository:
             version = int(row["version"])
             sequence = int(row["checkpoint_sequence"]) + 1
             validate_transition("approval_resolved", state, "running")
-            changed = self._conn.execute(
+            changed = cur.execute(
                 """
                 UPDATE agent_runs SET
-                    current_state = 'running', checkpoint_sequence = ?,
-                    version = version + 1, updated_at = ?,
-                    lease_owner = ?, lease_owner_host = ?, lease_owner_pid = ?,
-                    lease_expires_at = ?
-                WHERE run_id = ? AND version = ? AND lease_owner IS NULL
+                    current_state = 'running', checkpoint_sequence = %s,
+                    version = version + 1, updated_at = %s,
+                    lease_owner = %s, lease_owner_host = %s, lease_owner_pid = %s,
+                    lease_expires_at = %s
+                WHERE user_id = %s AND run_id = %s AND version = %s
+                  AND lease_owner IS NULL
                 """,
                 (
                     sequence,
@@ -514,6 +521,7 @@ class AgentRunRepository:
                     owner.host,
                     int(owner.pid),
                     expires_at,
+                    self._user_id,
                     str(run_id),
                     version,
                 ),
@@ -521,6 +529,7 @@ class AgentRunRepository:
             if changed != 1:
                 return None
             checkpoint = self._append_checkpoint(
+                cur,
                 str(run_id),
                 sequence,
                 "approval_resolved",
@@ -528,7 +537,7 @@ class AgentRunRepository:
                 {"approval_id": named, "status": decision},
                 stamp,
             )
-            run = _run_row(self._row(run_id))
+            run = _run_row(self._row(cur, run_id))
         return CheckpointCommit(
             run=run,
             checkpoint=checkpoint,
@@ -578,20 +587,21 @@ class AgentRunRepository:
             "step": step,
             "status": str(EffectStatus.DISPATCHED),
         }
-        with self._write():
+        with self._write() as cur:
             row = self._effect_checkpoint(
-                lease, "tool_pending", "running", payload, stamp, release=False
+                cur, lease, "tool_pending", "running", payload, stamp, release=False
             )
             try:
-                self._conn.execute(
+                cur.execute(
                     """
                     INSERT INTO agent_run_effects (
-                        effect_id, run_id, tool_name, tool_call_id, approval_id,
-                        replay_class, arguments_fingerprint, status,
+                        user_id, effect_id, run_id, tool_name, tool_call_id,
+                        approval_id, replay_class, arguments_fingerprint, status,
                         dispatched_by, dispatched_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
+                        self._user_id,
                         identity,
                         lease.run_id,
                         name,
@@ -604,11 +614,11 @@ class AgentRunRepository:
                         stamp,
                     ),
                 )
-            except sqlite3.IntegrityError as exc:
+            except psycopg.IntegrityError as exc:
                 raise AgentRunEffectFenced(
                     f"effect {identity} is already on record"
                 ) from exc
-            effect = self._effect_row(identity)
+            effect = self._effect_row(cur, identity)
         return EffectCommit(
             run=row["run"],
             checkpoint=row["checkpoint"],
@@ -646,13 +656,13 @@ class AgentRunRepository:
             "error_summary": error_summary,
             "duration_ms": duration_ms,
         }
-        with self._write():
+        with self._write() as cur:
             # The effect fence is checked before the run's own state machine so
             # that "this effect is already quarantined" is what the caller hears,
             # whatever shape the run happens to be in. Both layers refuse; this
             # one has the answer an operator needs.
             existing = self._require_dispatched(
-                effect_id, lease.run_id, owner_id=lease.owner_id
+                cur, effect_id, lease.run_id, owner_id=lease.owner_id
             )
             payload["tool_name"] = existing["tool_name"]
             # Carried so a receipt pairs this checkpoint with the `tool_pending`
@@ -662,20 +672,22 @@ class AgentRunRepository:
             payload["tool_call_id"] = existing["tool_call_id"]
             payload["approval_id"] = existing["approval_id"]
             row = self._effect_checkpoint(
-                lease, "tool_completed", "running", payload, stamp, release=False,
+                cur, lease, "tool_completed", "running", payload, stamp, release=False,
                 person_id=person_id, source_refs=source_refs, artifact_refs=artifact_refs,
             )
-            changed = self._conn.execute(
+            changed = cur.execute(
                 """
                 UPDATE agent_run_effects SET
-                    status = ?, settled_at = ?, outcome_ref = COALESCE(?, outcome_ref)
-                WHERE effect_id = ? AND run_id = ? AND status = ?
-                  AND dispatched_by = ?
+                    status = %s, settled_at = %s,
+                    outcome_ref = COALESCE(%s, outcome_ref)
+                WHERE user_id = %s AND effect_id = %s AND run_id = %s
+                  AND status = %s AND dispatched_by = %s
                 """,
                 (
                     str(status),
                     stamp,
                     _optional_id(outcome_ref),
+                    self._user_id,
                     str(effect_id),
                     lease.run_id,
                     str(EffectStatus.DISPATCHED),
@@ -687,7 +699,7 @@ class AgentRunRepository:
                     f"effect {effect_id} is {existing['status']}, and only its "
                     "dispatching owner may report an outcome, and only once"
                 )
-            effect = self._effect_row(effect_id)
+            effect = self._effect_row(cur, effect_id)
         return EffectCommit(
             run=row["run"],
             checkpoint=row["checkpoint"],
@@ -724,8 +736,8 @@ class AgentRunRepository:
                 f"a quarantine leaves a run in {sorted(kinds)}, not {state!r}"
             )
         stamp = _stamp(now)
-        with self._write():
-            existing = self._require_dispatched(effect_id, lease.run_id)
+        with self._write() as cur:
+            existing = self._require_dispatched(cur, effect_id, lease.run_id)
             payload = {
                 "attempt_id": str(effect_id),
                 "tool_name": existing["tool_name"],
@@ -735,18 +747,20 @@ class AgentRunRepository:
                 "reason": reason,
             }
             row = self._effect_checkpoint(
-                lease, kinds[state], state, payload, stamp, release=True
+                cur, lease, kinds[state], state, payload, stamp, release=True
             )
-            changed = self._conn.execute(
+            changed = cur.execute(
                 """
                 UPDATE agent_run_effects SET
-                    status = ?, settled_at = ?, reason = ?
-                WHERE effect_id = ? AND run_id = ? AND status = ?
+                    status = %s, settled_at = %s, reason = %s
+                WHERE user_id = %s AND effect_id = %s AND run_id = %s
+                  AND status = %s
                 """,
                 (
                     str(EffectStatus.AMBIGUOUS),
                     stamp,
                     bounded_note(reason),
+                    self._user_id,
                     str(effect_id),
                     lease.run_id,
                     str(EffectStatus.DISPATCHED),
@@ -757,7 +771,7 @@ class AgentRunRepository:
                     f"effect {effect_id} is {existing['status']}, which is already "
                     "settled or already quarantined"
                 )
-            effect = self._effect_row(effect_id)
+            effect = self._effect_row(cur, effect_id)
         return EffectCommit(
             run=row["run"],
             checkpoint=row["checkpoint"],
@@ -790,14 +804,14 @@ class AgentRunRepository:
         status = operator_decision(decision)
         actor = bounded_actor(operator)
         stamp = _stamp(now)
-        with self._write():
-            existing = self._effect_row(effect_id)
-            changed = self._conn.execute(
+        with self._write() as cur:
+            existing = self._effect_row(cur, effect_id)
+            changed = cur.execute(
                 """
                 UPDATE agent_run_effects SET
-                    status = ?, resolved_by = ?, resolved_note = ?,
-                    resolved_at = ?, outcome_ref = COALESCE(?, outcome_ref)
-                WHERE effect_id = ? AND status = ?
+                    status = %s, resolved_by = %s, resolved_note = %s,
+                    resolved_at = %s, outcome_ref = COALESCE(%s, outcome_ref)
+                WHERE user_id = %s AND effect_id = %s AND status = %s
                 """,
                 (
                     str(status),
@@ -805,6 +819,7 @@ class AgentRunRepository:
                     bounded_note(note),
                     stamp,
                     _optional_id(outcome_ref),
+                    self._user_id,
                     str(effect_id),
                     str(EffectStatus.AMBIGUOUS),
                 ),
@@ -814,15 +829,15 @@ class AgentRunRepository:
                     f"effect {effect_id} is {existing['status']}; only a "
                     "quarantined effect is a person's to settle"
                 )
-            resolved = self._effect_row(effect_id)
+            resolved = self._effect_row(cur, effect_id)
         return resolved
 
     def list_effects(self, run_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM agent_run_effects WHERE run_id = ? "
-                "ORDER BY dispatched_at, rowid",
-                (str(run_id),),
+        with self._read() as cur:
+            rows = cur.execute(
+                "SELECT * FROM agent_run_effects WHERE user_id = %s AND run_id = %s "
+                "ORDER BY dispatched_at, insert_order",
+                (self._user_id, str(run_id)),
             ).fetchall()
         return [_effect_row(row) for row in rows]
 
@@ -835,21 +850,22 @@ class AgentRunRepository:
         `approval_id`: adding one is a schema change, and this table holds one
         row per consequential call, read only when a person opens a receipt.
         """
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM agent_run_effects WHERE approval_id = ? "
-                "ORDER BY dispatched_at, rowid",
-                (str(approval_id),),
+        with self._read() as cur:
+            rows = cur.execute(
+                "SELECT * FROM agent_run_effects "
+                "WHERE user_id = %s AND approval_id = %s "
+                "ORDER BY dispatched_at, insert_order",
+                (self._user_id, str(approval_id)),
             ).fetchall()
         return [_effect_row(row) for row in rows]
 
     def list_quarantined_effects(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """The review queue: every effect nobody knows the outcome of."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT * FROM agent_run_effects WHERE status = ? "
-                "ORDER BY dispatched_at, rowid LIMIT ?",
-                (str(EffectStatus.AMBIGUOUS), max(1, int(limit))),
+        with self._read() as cur:
+            rows = cur.execute(
+                "SELECT * FROM agent_run_effects WHERE user_id = %s AND status = %s "
+                "ORDER BY dispatched_at, insert_order LIMIT %s",
+                (self._user_id, str(EffectStatus.AMBIGUOUS), max(1, int(limit))),
             ).fetchall()
         return [_effect_row(row) for row in rows]
 
@@ -870,26 +886,30 @@ class AgentRunRepository:
         that evidence is missing.
         """
         cutoff = _stamp(finished_before)
-        readable = tuple(sorted(CHECKPOINT_KINDS - INCOMPLETE_RECORD_KINDS))
+        readable = sorted(CHECKPOINT_KINDS - INCOMPLETE_RECORD_KINDS)
         pruned: list[str] = []
-        with self._write():
-            rows = self._conn.execute(
-                f"""
+        with self._write() as cur:
+            rows = cur.execute(
+                """
                 SELECT run_id FROM agent_runs
-                WHERE finished_at IS NOT NULL AND finished_at < ?
+                WHERE user_id = %s
+                  AND finished_at IS NOT NULL AND finished_at < %s
                   AND NOT EXISTS (
                       SELECT 1 FROM agent_run_checkpoints c
-                      WHERE c.run_id = agent_runs.run_id
-                        AND c.kind NOT IN ({','.join('?' * len(readable))})
+                      WHERE c.user_id = agent_runs.user_id
+                        AND c.run_id = agent_runs.run_id
+                        AND NOT (c.kind = ANY(%s))
                   )
                 ORDER BY finished_at
                 """,
-                (cutoff, *readable),
+                (self._user_id, cutoff, readable),
             ).fetchall()
             for row in rows:
                 run_id = str(row["run_id"])
-                removed = self._conn.execute(
-                    "DELETE FROM agent_run_checkpoints WHERE run_id = ?", (run_id,)
+                removed = cur.execute(
+                    "DELETE FROM agent_run_checkpoints "
+                    "WHERE user_id = %s AND run_id = %s",
+                    (self._user_id, run_id),
                 ).rowcount
                 if removed:
                     pruned.append(run_id)
@@ -917,11 +937,12 @@ class AgentRunRepository:
     def _reconcile(self, stamp: str, *, prove_dead: bool) -> list[dict[str, Any]]:
         recovered: list[dict[str, Any]] = []
         verdicts: dict[str, Liveness] = {}
-        with self._write():
-            rows = self._conn.execute(
-                "SELECT * FROM agent_runs "
-                "WHERE lease_owner IS NOT NULL OR current_state = 'running' "
-                "ORDER BY created_at, rowid"
+        with self._write() as cur:
+            rows = cur.execute(
+                "SELECT * FROM agent_runs WHERE user_id = %s "
+                "AND (lease_owner IS NOT NULL OR current_state = 'running') "
+                "ORDER BY created_at, insert_order",
+                (self._user_id,),
             ).fetchall()
             for row in rows:
                 reason = self._reclaim_reason(row, stamp, prove_dead, verdicts)
@@ -932,19 +953,20 @@ class AgentRunRepository:
                 state = str(row["current_state"])
                 interrupts = state == "running"
                 sequence = int(row["checkpoint_sequence"]) + (1 if interrupts else 0)
-                changed = self._conn.execute(
+                changed = cur.execute(
                     """
                     UPDATE agent_runs SET
-                        current_state = ?, checkpoint_sequence = ?,
+                        current_state = %s, checkpoint_sequence = %s,
                         lease_owner = NULL, lease_owner_host = NULL,
                         lease_owner_pid = NULL, lease_expires_at = NULL,
-                        version = version + 1, updated_at = ?
-                    WHERE run_id = ? AND version = ?
+                        version = version + 1, updated_at = %s
+                    WHERE user_id = %s AND run_id = %s AND version = %s
                     """,
                     (
                         "interrupted" if interrupts else state,
                         sequence,
                         stamp,
+                        self._user_id,
                         run_id,
                         version,
                     ),
@@ -953,6 +975,7 @@ class AgentRunRepository:
                     continue
                 if interrupts:
                     self._append_checkpoint(
+                        cur,
                         run_id,
                         sequence,
                         "process_interrupted",
@@ -960,7 +983,7 @@ class AgentRunRepository:
                         {"reason": reason},
                         stamp,
                     )
-                recovered.append(_run_row(self._row(run_id)))
+                recovered.append(_run_row(self._row(cur, run_id)))
         for owner_id, verdict in verdicts.items():
             if verdict is Liveness.DEAD:
                 self.registry.forget(owner_id)
@@ -968,7 +991,7 @@ class AgentRunRepository:
 
     def _reclaim_reason(
         self,
-        row: sqlite3.Row,
+        row: dict[str, Any],
         stamp: str,
         prove_dead: bool,
         verdicts: dict[str, Liveness],
@@ -994,23 +1017,39 @@ class AgentRunRepository:
     # --- internals -------------------------------------------------------
 
     @contextmanager
-    def _write(self) -> Iterator[None]:
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                yield
-            except BaseException:
-                self._conn.rollback()
-                raise
-            self._conn.commit()
+    def _read(self) -> Iterator[psycopg.Cursor]:
+        with self._db.tx(self._user_id) as conn:
+            yield conn.cursor(row_factory=dict_row)
 
-    def _row(self, run_id: str) -> sqlite3.Row | None:
-        return self._conn.execute(
-            "SELECT * FROM agent_runs WHERE run_id = ?", (str(run_id),)
+    @contextmanager
+    def _write(self) -> Iterator[psycopg.Cursor]:
+        """One transaction that is the only writer of this user's runs.
+
+        SQLite took the store's write lock with `BEGIN IMMEDIATE`, and the store
+        was one file for one user. The same scope here is a transaction-level
+        advisory lock on the user id: writers of one user's runs queue, writers
+        of other users do not wait, readers never wait, and the lock goes away
+        at commit or rollback. The compare-and-swap on
+        `(run_id, version, lease_owner)` stays the fence in every write; the
+        lock only keeps each read-then-write as one step, as it was before.
+        """
+        with self._db.tx(self._user_id) as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                (_WRITE_LOCK_CLASS, str(self._user_id)),
+            )
+            yield cur
+
+    def _row(self, cur: psycopg.Cursor, run_id: str) -> dict[str, Any] | None:
+        return cur.execute(
+            "SELECT * FROM agent_runs WHERE user_id = %s AND run_id = %s",
+            (self._user_id, str(run_id)),
         ).fetchone()
 
     def _append_checkpoint(
         self,
+        cur: psycopg.Cursor,
         run_id: str,
         sequence: int,
         kind: str,
@@ -1019,11 +1058,11 @@ class AgentRunRepository:
         stamp: str,
     ) -> dict[str, Any]:
         projected = checkpoint_payload(payload)
-        self._conn.execute(
+        cur.execute(
             "INSERT INTO agent_run_checkpoints "
-            "(run_id, sequence, kind, state, payload, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (run_id, sequence, kind, state, _dump(projected), stamp),
+            "(user_id, run_id, sequence, kind, state, payload, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (self._user_id, run_id, sequence, kind, state, _dump(projected), stamp),
         )
         return {
             "run_id": run_id,
@@ -1036,6 +1075,7 @@ class AgentRunRepository:
 
     def _effect_checkpoint(
         self,
+        cur: psycopg.Cursor,
         lease: AgentRunLease,
         kind: str,
         state: str,
@@ -1051,12 +1091,12 @@ class AgentRunRepository:
 
         Completion references merge in this transaction, beside the effect's
         settled outcome. Calling the public checkpoint writer here would open
-        a nested SQLite transaction. Usage and terminal results stay separate.
+        a second transaction. Usage and terminal results stay separate.
         """
-        row = self._row(lease.run_id)
+        row = self._row(cur, lease.run_id)
         if row is None:
             raise KeyError(lease.run_id)
-        self._check_fence(row, lease, stamp)
+        self._check_fence(cur, row, lease, stamp)
         current = str(row["current_state"])
         validate_transition(kind, current, state)
         sequence = int(row["checkpoint_sequence"]) + 1
@@ -1066,17 +1106,19 @@ class AgentRunRepository:
             payload["source_ref_ids"] = [ref["id"] for ref in sources]
         if artifacts:
             payload["artifact_ref_ids"] = [ref["id"] for ref in artifacts]
-        changed = self._conn.execute(
+        changed = cur.execute(
             """
             UPDATE agent_runs SET
-                current_state = ?, checkpoint_sequence = ?, version = version + 1,
-                updated_at = ?, person_id = COALESCE(?, person_id),
-                source_refs = ?, artifact_refs = ?,
-                lease_owner = CASE WHEN ? THEN NULL ELSE lease_owner END,
-                lease_owner_host = CASE WHEN ? THEN NULL ELSE lease_owner_host END,
-                lease_owner_pid = CASE WHEN ? THEN NULL ELSE lease_owner_pid END,
-                lease_expires_at = CASE WHEN ? THEN NULL ELSE lease_expires_at END
-            WHERE run_id = ? AND version = ? AND lease_owner = ?
+                current_state = %s, checkpoint_sequence = %s,
+                version = version + 1, updated_at = %s,
+                person_id = COALESCE(%s, person_id),
+                source_refs = %s, artifact_refs = %s,
+                lease_owner = CASE WHEN %s THEN NULL ELSE lease_owner END,
+                lease_owner_host = CASE WHEN %s THEN NULL ELSE lease_owner_host END,
+                lease_owner_pid = CASE WHEN %s THEN NULL ELSE lease_owner_pid END,
+                lease_expires_at = CASE WHEN %s THEN NULL ELSE lease_expires_at END
+            WHERE user_id = %s AND run_id = %s AND version = %s
+              AND lease_owner = %s
             """,
             (
                 state,
@@ -1089,18 +1131,19 @@ class AgentRunRepository:
                 release,
                 release,
                 release,
+                self._user_id,
                 lease.run_id,
                 lease.version,
                 lease.owner_id,
             ),
         ).rowcount
         if changed != 1:
-            self._raise_fence_failure(lease, stamp)
+            self._raise_fence_failure(cur, lease, stamp)
         checkpoint = self._append_checkpoint(
-            lease.run_id, sequence, kind, state, payload, stamp
+            cur, lease.run_id, sequence, kind, state, payload, stamp
         )
         return {
-            "run": _run_row(self._row(lease.run_id)),
+            "run": _run_row(self._row(cur, lease.run_id)),
             "checkpoint": checkpoint,
             "lease": (
                 None
@@ -1112,7 +1155,12 @@ class AgentRunRepository:
         }
 
     def _require_dispatched(
-        self, effect_id: str, run_id: str, *, owner_id: str | None = None
+        self,
+        cur: psycopg.Cursor,
+        effect_id: str,
+        run_id: str,
+        *,
+        owner_id: str | None = None,
     ) -> dict[str, Any]:
         """Refuse anything but an open effect, and say why. Caller is in `_write`.
 
@@ -1120,7 +1168,7 @@ class AgentRunRepository:
         that follows and the triggers under it. This is the sentence an operator
         reads when the guarantee fires.
         """
-        effect = self._effect_row(effect_id, run_id=run_id)
+        effect = self._effect_row(cur, effect_id, run_id=run_id)
         status = effect["status"]
         if status != str(EffectStatus.DISPATCHED):
             raise AgentRunEffectFenced(
@@ -1140,17 +1188,22 @@ class AgentRunRepository:
         return effect
 
     def _effect_row(
-        self, effect_id: str, run_id: str | None = None
+        self, cur: psycopg.Cursor, effect_id: str, run_id: str | None = None
     ) -> dict[str, Any]:
-        row = self._conn.execute(
-            "SELECT * FROM agent_run_effects WHERE effect_id = ?", (str(effect_id),)
+        row = cur.execute(
+            "SELECT * FROM agent_run_effects WHERE user_id = %s AND effect_id = %s",
+            (self._user_id, str(effect_id)),
         ).fetchone()
         if row is None or (run_id is not None and str(row["run_id"]) != str(run_id)):
             raise KeyError(effect_id)
         return _effect_row(row)
 
     def _check_fence(
-        self, row: sqlite3.Row, lease: AgentRunLease, stamp: str
+        self,
+        cur: psycopg.Cursor,
+        row: dict[str, Any],
+        lease: AgentRunLease,
+        stamp: str,
     ) -> None:
         if (
             row["lease_owner"] is not None
@@ -1160,11 +1213,13 @@ class AgentRunRepository:
             and int(row["version"]) == lease.version
         ):
             return
-        self._raise_fence_failure(lease, stamp)
+        self._raise_fence_failure(cur, lease, stamp)
 
-    def _raise_fence_failure(self, lease: AgentRunLease, stamp: str) -> None:
+    def _raise_fence_failure(
+        self, cur: psycopg.Cursor, lease: AgentRunLease, stamp: str
+    ) -> None:
         """Say which half of the compare-and-swap failed, without guessing."""
-        row = self._row(lease.run_id)
+        row = self._row(cur, lease.run_id)
         if row is None:
             raise KeyError(lease.run_id)
         if row["lease_owner"] is None or str(row["lease_owner"]) != lease.owner_id:
@@ -1174,77 +1229,6 @@ class AgentRunRepository:
         if int(row["version"]) != lease.version:
             raise AgentRunVersionConflict(lease.run_id)
         raise AgentRunLeaseLost(lease.run_id)
-
-    def _initialize_schema(self) -> None:
-        """Create what is missing. Record a version only for a new database.
-
-        Creating a database at the current version is not a migration. Changing
-        an existing database's version is, and that belongs to
-        `coworker/migrations.py`, which is the only other writer of
-        `PRAGMA user_version` anywhere in the codebase. Every registered store
-        works this way: the store owns its DDL, the registry owns its version.
-
-        So an existing store keeps whatever version the registry last recorded,
-        and starting the application never silently upgrades one. Doctor reports
-        it as behind and migrates it deliberately, with a backup first.
-        """
-        with self._lock:
-            version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
-            if version > SCHEMA_VERSION:
-                self._conn.close()
-                raise RuntimeError(
-                    f"{DB_NAME} is at schema {version}, newer than this build's "
-                    f"{SCHEMA_VERSION}"
-                )
-            fresh = version == 0 and not self._conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                "AND name = 'agent_runs'"
-            ).fetchone()
-            self._conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS agent_runs (
-                    run_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    person_id TEXT,
-                    parent_run_id TEXT,
-                    trigger TEXT NOT NULL,
-                    goal_fingerprint TEXT NOT NULL,
-                    provider_model_id TEXT,
-                    current_state TEXT NOT NULL,
-                    version INTEGER NOT NULL DEFAULT 0,
-                    checkpoint_sequence INTEGER NOT NULL DEFAULT 0,
-                    approval_ids TEXT NOT NULL DEFAULT '[]',
-                    source_refs TEXT NOT NULL DEFAULT '[]',
-                    artifact_refs TEXT NOT NULL DEFAULT '[]',
-                    usage TEXT NOT NULL DEFAULT '{}',
-                    terminal_result TEXT,
-                    lease_owner TEXT,
-                    lease_owner_host TEXT,
-                    lease_owner_pid INTEGER,
-                    lease_expires_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    finished_at TEXT
-                );
-                CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
-                    run_id TEXT NOT NULL,
-                    sequence INTEGER NOT NULL,
-                    kind TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (run_id, sequence),
-                    FOREIGN KEY (run_id) REFERENCES agent_runs(run_id)
-                );
-                CREATE INDEX IF NOT EXISTS agent_runs_session_created
-                    ON agent_runs(session_id, created_at);
-                CREATE INDEX IF NOT EXISTS agent_runs_live_lease
-                    ON agent_runs(lease_expires_at) WHERE lease_owner IS NOT NULL;
-                """
-                + EFFECT_SCHEMA
-            )
-            if fresh:
-                self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _stamp(value: datetime | None = None) -> str:
@@ -1279,7 +1263,7 @@ def _dump(value: Any) -> str | None:
     return None if value is None else json.dumps(value, separators=(",", ":"))
 
 
-def _run_row(row: sqlite3.Row) -> dict[str, Any]:
+def _run_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "run_id": str(row["run_id"]),
         "session_id": str(row["session_id"]),
@@ -1306,7 +1290,7 @@ def _run_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _effect_row(row: sqlite3.Row) -> dict[str, Any]:
+def _effect_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "effect_id": str(row["effect_id"]),
         "run_id": str(row["run_id"]),
@@ -1327,7 +1311,7 @@ def _effect_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _checkpoint_row(row: sqlite3.Row) -> dict[str, Any]:
+def _checkpoint_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "run_id": str(row["run_id"]),
         "sequence": int(row["sequence"]),

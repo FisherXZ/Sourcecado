@@ -43,6 +43,7 @@ from tests.test_agent_run_integration import (
     SID,
     WatchingGmail,
     _app,
+    _committed_effects,
     _bound_person,
     _effects,
     _park_send,
@@ -57,7 +58,7 @@ from tests.test_agent_run_integration import (
 def _watched_send(tmp_path) -> tuple[Any, WatchingGmail]:
     """One approved send, with a Gmail that reads the run store mid-call."""
     app = _app(tmp_path)
-    gmail = WatchingGmail(app.state.agent_runs.path)
+    gmail = WatchingGmail(app.state.agent_runs)
     gmail.account_email = ACCOUNT
     app.state.gmail = gmail
     client = TestClient(app)
@@ -133,19 +134,11 @@ def test_the_same_reversal_in_the_turn_loop_is_caught_the_same_way(
     is not a second guard -- it is the second call site, held to the contract
     by the same observation.
     """
-    import sqlite3
-
     repository, owner = _runs(tmp_path / "honest")
 
     def _watcher(store):
         def _execute(name, arguments, **kwargs):
-            connection = sqlite3.connect(store.path)
-            try:
-                store.seen = connection.execute(
-                    "SELECT tool_name, status FROM agent_run_effects"
-                ).fetchall()
-            finally:
-                connection.close()
+            store.seen = _committed_effects(store)
             return True, {"ok": True}
 
         return _execute

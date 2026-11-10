@@ -36,8 +36,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from coworker.agent_run_approval import EFFECT_STATEMENTS
-from coworker.agent_run_repository import SCHEMA_VERSION as AGENT_RUNS_DB_VERSION
 from coworker.crm_tasks import (
     CRM_CHANGES_COLUMNS,
     CRM_CHANGES_V5_COLUMNS,
@@ -815,8 +813,8 @@ def _add_person_tasks(context: MigrationContext) -> int:
 
     Existing people, timelines, handoffs and source restrictions are not
     touched, and no task is invented for anyone. Executed one statement at a
-    time so a failure rolls back with the step's transaction (see
-    `_add_agent_run_effects`).
+    time, never through `executescript`, which issues a COMMIT before it runs,
+    so a failure rolls back with the step's transaction.
     """
     conn = context.connection
     assert conn is not None
@@ -986,45 +984,6 @@ _RECORDED_COUNTERS: dict[str, Callable[[MigrationContext], int]] = {
 }
 
 
-# The Agent Run store shipped in its own slice and recorded its own version
-# before the registry knew it existed. Adoption creates nothing: the repository
-# builds its tables on open, exactly as ConversationStore and PeopleStore do.
-# What was missing was a registered version and a path forward, which is what
-# these two steps add.
-
-
-def _count_agent_runs_db(context: MigrationContext) -> int:
-    conn = context.connection
-    assert conn is not None
-    return _row_count(conn, "agent_runs")
-
-
-def _adopt_agent_runs_db(context: MigrationContext) -> int:
-    return _count_agent_runs_db(context)
-
-
-def _count_agent_run_effects(context: MigrationContext) -> int:
-    """No row is read or written. The step adds an empty table and its rules."""
-    return 0
-
-
-def _add_agent_run_effects(context: MigrationContext) -> int:
-    """Add the external-effect fence to a version 1 Agent Run store.
-
-    Executed one statement at a time, never through `executescript`, which
-    issues a COMMIT before it runs. Inside the transaction `_apply_store` opens,
-    that COMMIT would end the transaction and leave the rollback below with
-    nothing to undo -- and it would do it silently. SQLite rolls DDL back like
-    any other statement, so this way a failed step really does leave the store
-    as it was.
-    """
-    conn = context.connection
-    assert conn is not None
-    for statement in EFFECT_STATEMENTS:
-        conn.execute(statement)
-    return 0
-
-
 def _adopt(description: str, count: Callable, apply: Callable) -> tuple[Migration, ...]:
     return (
         Migration(
@@ -1040,46 +999,6 @@ def _adopt(description: str, count: Callable, apply: Callable) -> tuple[Migratio
 # --- the registry --------------------------------------------------------
 
 REGISTRY: tuple[StoreSpec, ...] = (
-    StoreSpec(
-        store_id="agent_runs_db",
-        kind=StoreKind.SQLITE,
-        relative_path="agent_runs.db",
-        current_version=AGENT_RUNS_DB_VERSION,
-        version_channel=VersionChannel.SQLITE_USER_VERSION,
-        description=(
-            "Durable Agent Run identity, leases, checkpoints, and the external-"
-            "effect fence."
-        ),
-        migrations=(
-            Migration(
-                from_version=0,
-                to_version=1,
-                description=(
-                    "Adopt the Agent Run store shipped before the registry knew it."
-                ),
-                count=_count_agent_runs_db,
-                apply=_adopt_agent_runs_db,
-            ),
-            Migration(
-                from_version=1,
-                to_version=2,
-                description=(
-                    "Add the external-effect fence, so a send whose outcome "
-                    "nobody knows is quarantined instead of retried."
-                ),
-                count=_count_agent_run_effects,
-                apply=_add_agent_run_effects,
-            ),
-        ),
-        json_columns=(
-            ("agent_runs", "approval_ids"),
-            ("agent_runs", "source_refs"),
-            ("agent_runs", "artifact_refs"),
-            ("agent_runs", "usage"),
-            ("agent_runs", "terminal_result"),
-            ("agent_run_checkpoints", "payload"),
-        ),
-    ),
     StoreSpec(
         store_id="conversation_db",
         kind=StoreKind.SQLITE,

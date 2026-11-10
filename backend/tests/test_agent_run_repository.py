@@ -1,18 +1,13 @@
 """Slice 1: the durable Agent Run store — identity, correlation, redaction."""
 
-import os
-import sqlite3
-import stat
-
 import pytest
 
 from coworker.agent_run_repository import (
-    DB_NAME,
-    SCHEMA_VERSION,
     AgentRunLeaseLost,
     AgentRunRepository,
 )
 from coworker.agent_run_state import AgentRunTransitionError
+from tests.agent_run_db import stored_text
 
 GOAL = "Find three Codeology leads at Ramp"
 
@@ -30,42 +25,6 @@ def _start(repo, owner, **kwargs):
         owner=owner,
         **kwargs,
     )
-
-
-def _stored_bytes(tmp_path) -> bytes:
-    blob = b""
-    for suffix in ("", "-wal", "-shm"):
-        path = tmp_path / f"{DB_NAME}{suffix}"
-        if path.exists():
-            blob += path.read_bytes()
-    return blob
-
-
-def test_schema_is_versioned_private_and_idempotent(tmp_path):
-    repo = AgentRunRepository(tmp_path)
-    path = tmp_path / DB_NAME
-    with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-        tables = {
-            row[0]
-            for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-    assert {"agent_runs", "agent_run_checkpoints"} <= tables
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
-    repo.close()
-
-    reopened = AgentRunRepository(tmp_path)
-    with sqlite3.connect(path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-    reopened.close()
-
-
-def test_a_newer_schema_is_refused_rather_than_written_to(tmp_path):
-    AgentRunRepository(tmp_path).close()
-    with sqlite3.connect(tmp_path / DB_NAME) as db:
-        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
-    with pytest.raises(RuntimeError, match="newer"):
-        AgentRunRepository(tmp_path)
 
 
 def test_a_run_is_one_identity_shared_by_every_trigger(tmp_path):
@@ -110,7 +69,7 @@ def test_a_created_run_carries_its_correlation_and_never_the_goal_text(tmp_path)
     assert "goal" not in run
     checkpoints = repo.list_checkpoints(run["run_id"])
     assert [item["kind"] for item in checkpoints] == ["run_started"]
-    assert GOAL.encode() not in _stored_bytes(tmp_path)
+    assert GOAL.encode() not in stored_text(repo)
 
 
 def test_checkpoints_accumulate_correlation_and_bump_the_sequence(tmp_path):
@@ -251,8 +210,8 @@ def test_planted_secrets_never_reach_the_persisted_checkpoint(tmp_path):
     assert stored["payload"]["error_summary"].startswith("denied with ")
     assert commit.run["source_refs"][0]["url"] == "https://a.test/p"
 
-    blob = _stored_bytes(tmp_path)
-    assert b"gmail_send" in blob, "the checkpoint must really be on disk"
+    blob = stored_text(repo)
+    assert b"gmail_send" in blob, "the checkpoint must really be stored"
     for secret in (
         planted["api_key"],
         "Bearer ZZZZZZZZZZZZZZZZZZZZZZ",
@@ -262,3 +221,74 @@ def test_planted_secrets_never_reach_the_persisted_checkpoint(tmp_path):
         "access_token",
     ):
         assert secret.encode() not in blob, secret
+
+
+def test_two_users_have_separate_runs_and_cannot_touch_each_other(tmp_path):
+    """Two state directories are two users. Neither reaches the other by id."""
+    from datetime import UTC, datetime, timedelta
+
+    from coworker.agent_run_approval import AgentRunEffectFenced
+    from coworker.agent_run_repository import AgentRunLease
+
+    now = datetime(2026, 8, 27, 10, 0, 0, tzinfo=UTC)
+    alice, alice_owner = _repo(tmp_path / "alice")
+    bob, bob_owner = _repo(tmp_path / "bob")
+    assert alice._user_id != bob._user_id
+
+    started = _start(alice, alice_owner, now=now, lease_seconds=60)
+    run_id = started.run["run_id"]
+    dispatch = alice.dispatch_effect(
+        started.lease,
+        tool_name="gmail_send",
+        arguments={"to": "dana@ramp.test"},
+        approval_id="appr-1",
+        now=now,
+    )
+    effect_id = dispatch.effect["effect_id"]
+    alice.quarantine_effect(dispatch.lease, effect_id, reason="cut", now=now)
+    before = alice.get_run(run_id)
+    checkpoints = alice.list_checkpoints(run_id)
+    effects = alice.list_effects(run_id)
+
+    # Bob reads nothing of Alice's, by id or by listing.
+    assert bob.get_run(run_id) is None
+    assert bob.list_runs() == []
+    assert bob.list_checkpoints(run_id) == []
+    assert bob.list_effects(run_id) == []
+    assert bob.effects_for_approval("appr-1") == []
+    assert bob.list_quarantined_effects() == []
+
+    # Bob changes nothing of Alice's, with or without a forged lease.
+    forged = AgentRunLease(run_id, bob_owner.owner_id, before["version"], "9999")
+    with pytest.raises(KeyError):
+        bob.acquire_lease(run_id, bob_owner, 600, now=now)
+    with pytest.raises(KeyError):
+        bob.checkpoint(forged, kind="model_completed", now=now)
+    with pytest.raises(KeyError):
+        bob.renew_lease(forged, now=now)
+    with pytest.raises(KeyError):
+        bob.release_lease(forged, now=now)
+    with pytest.raises(KeyError):
+        bob.resume_from_approval(
+            run_id, bob_owner, approval_id="appr-1", decision="allow", now=now
+        )
+    with pytest.raises(KeyError):
+        bob.dispatch_effect(forged, tool_name="gmail_send", now=now)
+    with pytest.raises((KeyError, AgentRunEffectFenced)):
+        bob.resolve_quarantined_effect(
+            effect_id, decision="abandoned", operator="bob"
+        )
+    later = now + timedelta(days=30)
+    assert bob.reconcile_expired_leases(now=later) == []
+    assert bob.reclaim_dead_owner_leases(now=later) == []
+    assert bob.prune_checkpoints(finished_before=later) == []
+
+    # The same run id is free for Bob, and stays two runs.
+    twin = _start(bob, bob_owner, run_id=run_id, now=now)
+    assert twin.run["run_id"] == run_id
+    assert [run["session_id"] for run in bob.list_runs()] == ["sess-1"]
+    assert len(alice.list_runs()) == 1
+
+    assert alice.get_run(run_id) == before
+    assert alice.list_checkpoints(run_id) == checkpoints
+    assert alice.list_effects(run_id) == effects
