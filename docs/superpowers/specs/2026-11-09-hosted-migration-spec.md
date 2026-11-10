@@ -191,7 +191,7 @@ Three operations start with no user id, so they cannot pass a `user_id` policy:
 | Scheduler tick | The due jobs of all users |
 | `crm_refresh` loop | The users who have a connected Google account |
 
-Each one is a SQL function that the migration role owns. It is `security definer` with a fixed `search_path`. It returns ids only: a user id and a row id, never content. The backend then opens `tx(user_id)` and does the work under RLS. The RLS coverage check holds the list of these functions by name, and a test asserts that each one returns no content column. Ordinary queries have no such path.
+Each one is a SQL function that the migration role owns. It is `security definer` with a fixed `search_path`. It returns ids only: a user id and a row id, never content. Postgres lets every role execute a new function by default, so each migration revokes `EXECUTE` from `PUBLIC` and grants it to the backend role only. The functions are in a schema that the Supabase API does not expose. The backend then opens `tx(user_id)` and does the work under RLS. The RLS coverage check holds the list of these functions by name, and tests assert that each one returns no content column and that the Supabase `anon` and `authenticated` roles cannot execute it. Ordinary queries have no such path.
 
 ### New tables
 

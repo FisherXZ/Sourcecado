@@ -44,6 +44,21 @@ Run this on a local stack with the mock provider. Slice S01a adds the documented
 
 From slice S21 on, add step 7 in the browser: sign in as a second user. Expected: the second user sees none of the data from steps 2 to 5. Slice S13 has no sign-in screen yet, so it does its two-user check through the API with two tokens.
 
+## Deployed smoke
+
+Slices S27, S37, and S39 run on a deployed URL. They use this script, not the local one. It never resets a database.
+
+| Step | Action | Expected |
+| --- | --- | --- |
+| 1 | Open the deployed app URL and sign in. On staging, use the test account. | The app loads with no error. |
+| 2 | Send one chat message. | The reply streams and completes. |
+| 3 | Open Contacts. | The people table loads. |
+| 4 | Keep one person with a name that starts with "Smoke". Open the person file. Add one task. | The person and the task show after a page reload. |
+| 5 | Open Scheduled. Use "Run now" on the weekly job. | The run completes and shows in the list. |
+| 6 | On staging, restart the backend service, then reload the page. On production, reload the page only. | The session, the person, and the task are still there. |
+| 7 | Sign in as a second user. On staging this is Fisher's own account. On production, skip this step until a second user is invited. | The second user sees none of the data from steps 2 to 5. |
+| 8 | Delete the "Smoke" person. | Contacts no longer shows it. |
+
 ## Status
 
 | Slice | State |
@@ -142,7 +157,7 @@ Slices with no arrow between them can run at the same time. Two writers must not
 | S24 | Public-bind hardening: bind address, CORS from `ALLOWED_ORIGINS`, `PUBLIC_URL`, OAuth URL returned to the frontend, request limits | 3.2, 3.3, 3.4 | S23 | An origin that is not listed is refused. An oversized JSON body gets 413. An oversized frame closes the socket. A third concurrent run is refused. No `subprocess` call opens a browser. | Start on `0.0.0.0` locally. Call the API from a page on a different origin. It is refused. | `run.py` has no loopback refusal. |
 | S25 | `Dockerfile`, health route, and the four platform findings | 3.5, 3.6 | S24 | CI builds the image and calls the health route in the container. A check lists the image files and fails on a workspace or shell module. | `docker run` the image against local Postgres. Run the smoke against it. | The findings are in the PR text. |
 | S26 | Attachments to Supabase Storage | 3.8 | S24 | User B gets 404 for user A's attachment id on read, on text, and on delete. | Upload a PDF as A. It reads back. The object key in Storage starts with A's user id. | No file is written under `attachments/`. |
-| S27 | Staging: Supabase project, Railway, Vercel, domain, Google client, deploy pipeline. Fisher creates the accounts and enters the secret values. | 3.7, 3.9 to 3.13 | S25, S26 | The deploy workflow runs tests, then migrations, then the deploy. | Full smoke on the staging URL, first with the mock provider and then with a real provider. Step 7 uses the one test account that Fisher added to the staging allowlist. Start the 8-day refresh-token check. | A merge to main deploys staging with no manual step. |
+| S27 | Staging: Supabase project, Railway, Vercel, domain, Google client, deploy pipeline. Fisher creates the accounts and enters the secret values. | 3.7, 3.9 to 3.13 | S25, S26 | The deploy workflow runs tests, then migrations, then the deploy. | The deployed smoke on the staging URL, first with the mock provider and then with a real provider. Start the 8-day refresh-token check. | A merge to main deploys staging with no manual step. |
 
 ## Phase 4: Detached runs, lease, scheduler
 
@@ -162,14 +177,14 @@ Slices with no arrow between them can run at the same time. Two writers must not
 | S34 | Import script | 5.2 | S27 | Import a fixture state directory: the counts match. A second run adds zero rows. Dry-run writes nothing. An imported message opens its attachment. | Import Fisher's local data to staging. Compare five person files by eye with the desktop app. | The count report is in the PR. |
 | S35 | Delete-account and data notice | 5.3, 5.4 | S27 | After deletion: zero rows for that user over all tables, an empty Storage prefix, and 403 at sign-in. The notice shows one time. | On staging, delete a test account. Check the Google account's third-party access page: the grant is gone. | — |
 | S36 | Sentry with scrubber, backend and frontend | 5.5 | S27 | An error with a fake token and a fake mail body is captured with neither. | Raise a test error on staging. Read the event in Sentry. | — |
-| S37 | Production: Supabase project, Railway environment, Google project, promote workflow | 5.6 | S33 to S36 | The promote workflow runs on manual start only. | Sign in on production. Run the smoke with a real provider. | All launch gates in the spec are checked, except the parity run. |
+| S37 | Production: Supabase project, Railway environment, Google project, promote workflow | 5.6 | S33 to S36 | The promote workflow runs on manual start only. | Sign in on production. Run the deployed smoke with a real provider. | All launch gates in the spec are checked, except the parity run. |
 
 ## Phase 6: Cleanup and launch
 
 | ID | Slice | Plan tasks | Depends on | Automated tests | QA | Done when |
 | --- | --- | --- | --- | --- | --- | --- |
 | S38 | Delete desktop code; update contributor docs | 6.1, 6.2 | S37 | CI is green. `grep -rn "tauri" frontend/src` returns nothing. | A person who did not write the docs follows `CONTRIBUTING.md` from a clean clone and reaches a running stack. | — |
-| S39 | Parity run and rollout | 6.3 to 6.6 | S38 | None. | The parity list in the spec, on production, with a run-ledger entry for each step. Then import Fisher's data to production and check the count report. Then one week of solo use, then the director, then the officers. | Each invited user completes one run. |
+| S39 | Production import, parity run, and rollout | 6.2a to 6.6 | S38 | None. | First import Fisher's data to production and check the count report. Then the parity list in the spec, on production, with a run-ledger entry for each step. Then one week of solo use, then the director, then the officers. | Each invited user completes one run. |
 
 ## Slices that need Fisher's hands
 
