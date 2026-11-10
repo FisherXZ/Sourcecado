@@ -62,7 +62,6 @@ from coworker.update_channel.redaction import registered_secrets, safe_text
 
 STAGING_DIR_NAME = ".sourcecado-update"
 PREVIOUS_SUFFIX = ".previous"
-RUN_STORE_NAME = "agent_runs.db"
 VERSIONS_SNAPSHOT = "pre-update-state-versions.json"
 BACKEND_RELATIVE = Path(
     "Contents/Resources/resources/sourcecado-backend/sourcecado-backend"
@@ -608,7 +607,7 @@ def _drain_gate(
     same thing, and it refuses rather than assuming.
     """
     if runs is None:
-        if (state_root / RUN_STORE_NAME).exists():
+        if has_run_store(state_root):
             return (
                 _outcome(
                     UpdateStatus.REFUSED,
@@ -845,3 +844,17 @@ __all__ = [
     "backend_health_check",
     "stage_artifact",
 ]
+
+
+def has_run_store(state_root: Path) -> bool:
+    """Whether this installation has Agent Runs to inspect.
+
+    The run store was the file `agent_runs.db`, and its presence was the
+    answer. The runs are in Postgres now, so the answer is whether the user of
+    this state directory has at least one run.
+    """
+    if not state_root.is_dir():
+        return False
+    from coworker.agent_run_repository import AgentRunRepository
+
+    return bool(AgentRunRepository(state_root).list_runs(limit=1))

@@ -36,6 +36,7 @@ from coworker.update_channel import (  # noqa: E402
     manifest as m,
     rollback,
 )
+from coworker.update_channel.apply import has_run_store  # noqa: E402
 from state_fixtures import build_legacy_state  # noqa: E402
 
 NOW = datetime(2026, 8, 27, 10, 0, 0, tzinfo=UTC)
@@ -58,7 +59,7 @@ def _apply(document, install, artifact, public, **kwargs):
     # An installation with existing state has a run store, and a real caller
     # opens it. Only a test that is about the missing-store refusal passes None.
     opened = None
-    if "runs" not in kwargs and (install.state_root / "agent_runs.db").exists():
+    if "runs" not in kwargs and has_run_store(install.state_root):
         opened = AgentRunRepository(install.state_root)
         kwargs["runs"] = opened
     try:
@@ -208,7 +209,14 @@ def test_an_update_with_a_run_store_it_was_not_given_refuses(tmp_path):
     """Fail closed. An uninspected run store is not an empty one."""
     seed, public, artifact, install = _prepare(tmp_path)
     install.state_root.mkdir(parents=True, exist_ok=True)
-    AgentRunRepository(install.state_root).close()
+    repo = AgentRunRepository(install.state_root)
+    repo.create_run(
+        session_id="sess-1",
+        trigger="chat",
+        goal="reach out to Dana",
+        owner=repo.registry.register(),
+        now=NOW,
+    )
 
     outcome = _apply(fx.document(artifact, seed), install, artifact, public, runs=None)
 

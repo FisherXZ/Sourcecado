@@ -7,14 +7,15 @@ person moves it from there.
 """
 
 import re
-import sqlite3
 import threading
+from pathlib import Path
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+import psycopg
+
 from coworker.agent_run_approval import (
-    EFFECT_SCHEMA,
     EFFECT_STATUSES,
     MACHINE_OUTCOMES,
     OPERATOR_OUTCOMES,
@@ -27,14 +28,13 @@ from coworker.agent_run_approval import (
 )
 from coworker.agent_run_owner import OwnerRegistry
 from coworker.agent_run_repository import (
-    DB_NAME,
-    SCHEMA_VERSION,
     AgentRunLeaseLost,
     AgentRunRepository,
 )
 from coworker.agent_run_state import AgentRunTransitionError
 from coworker.permissions import ASK, AUTO, RETRY_SAFE
 from coworker.run_evidence import Evidence
+from tests.agent_run_db import raw, stored_text
 
 NOW = datetime(2026, 8, 27, 10, 0, 0, tzinfo=UTC)
 SEND_ARGS = {"to": "dana@ramp.test", "subject": "Intro", "body": "Hello Dana."}
@@ -56,20 +56,12 @@ def _start(repo, owner, **kwargs):
     )
 
 
-def _stored_bytes(tmp_path) -> bytes:
-    blob = b""
-    for suffix in ("", "-wal", "-shm"):
-        path = tmp_path / f"{DB_NAME}{suffix}"
-        if path.exists():
-            blob += path.read_bytes()
-    return blob
-
-
-def _raw(tmp_path):
-    """A connection that knows nothing about the repository's method contracts."""
-    conn = sqlite3.connect(tmp_path / DB_NAME)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+MIGRATION = (
+    Path(__file__).resolve().parents[2]
+    / "supabase"
+    / "migrations"
+    / "20261110000200_agent_runs.sql"
+)
 
 
 # --- the fence agrees with permissions rather than restating it ----------
@@ -162,15 +154,25 @@ def test_effect_completion_and_bounded_outcome_references_commit_together(tmp_pa
     started = _start(repo, owner)
     dispatch = repo.dispatch_effect(started.lease, tool_name="crm_create_task", arguments={}, tool_call_id="call-crm", now=NOW)
     if fail_after_checkpoint:
-        repo._conn.execute("""CREATE TRIGGER refuse_settlement BEFORE UPDATE OF status ON agent_run_effects
-                              WHEN NEW.status = 'succeeded' BEGIN SELECT RAISE(ABORT, 'refuse outcome'); END""")
-        repo._conn.commit()
+        # A test-only trigger that fails the effect update after the run row and
+        # the checkpoint are written. It is dropped at the end of the test.
+        with raw(repo) as conn:
+            conn.execute(
+                "CREATE TRIGGER refuse_settlement BEFORE UPDATE OF status "
+                "ON agent_run_effects FOR EACH ROW "
+                "WHEN (NEW.status = 'succeeded') "
+                "EXECUTE FUNCTION agent_run_effects_refuse('refuse outcome')"
+            )
     kwargs = dict(ok=True, outcome_ref="chg-one", person_id="person-one",
         source_refs=[{"id": "source-one", "title": "CRM source reference", "body": "PRIVATE BODY"}],
         artifact_refs=[{"id": "chg-one", "artifact_type": "crm_change", "title": "CRM change", "text": "PRIVATE TEXT"}], now=NOW)
     if fail_after_checkpoint:
-        with pytest.raises(sqlite3.IntegrityError):
-            repo.record_effect_outcome(dispatch.lease, dispatch.effect["effect_id"], **kwargs)
+        try:
+            with pytest.raises(psycopg.IntegrityError):
+                repo.record_effect_outcome(dispatch.lease, dispatch.effect["effect_id"], **kwargs)
+        finally:
+            with raw(repo) as conn:
+                conn.execute("DROP TRIGGER refuse_settlement ON agent_run_effects")
     else:
         settled = repo.record_effect_outcome(dispatch.lease, dispatch.effect["effect_id"], **kwargs)
         assert settled.effect["outcome_ref"] == "chg-one"
@@ -350,38 +352,39 @@ def test_raw_sql_cannot_launder_a_quarantined_effect_into_a_success(tmp_path):
     effect_id = dispatch.effect["effect_id"]
     repo.quarantine_effect(dispatch.lease, effect_id, reason="cut", now=NOW)
 
-    conn = _raw(tmp_path)
-    try:
+    user = repo._user_id
+    # Each refused statement runs in its own savepoint, so one refusal does
+    # not abort the transaction for the statements after it.
+    with raw(repo) as conn:
         for target in ("succeeded", "failed", "dispatched"):
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(psycopg.IntegrityError), conn.transaction():
                 conn.execute(
-                    "UPDATE agent_run_effects SET status = ? WHERE effect_id = ?",
-                    (target, effect_id),
+                    "UPDATE agent_run_effects SET status = %s "
+                    "WHERE user_id = %s AND effect_id = %s",
+                    (target, user, effect_id),
                 )
         # Nor by deleting the evidence and writing a clean row in its place.
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
             conn.execute(
-                "DELETE FROM agent_run_effects WHERE effect_id = ?", (effect_id,)
+                "DELETE FROM agent_run_effects WHERE user_id = %s AND effect_id = %s",
+                (user, effect_id),
             )
         # Nor by opening a fresh record already claiming success.
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
             conn.execute(
-                "INSERT INTO agent_run_effects (effect_id, run_id, tool_name, "
-                "replay_class, arguments_fingerprint, status, dispatched_by, "
-                "dispatched_at) VALUES ('e2', ?, 'gmail_send', 'consequential', "
-                "'f', 'succeeded', 'o', ?)",
-                (started.run["run_id"], NOW.isoformat()),
+                "INSERT INTO agent_run_effects (user_id, effect_id, run_id, "
+                "tool_name, replay_class, arguments_fingerprint, status, "
+                "dispatched_by, dispatched_at) VALUES (%s, 'e2', %s, "
+                "'gmail_send', 'consequential', 'f', 'succeeded', 'o', %s)",
+                (user, started.run["run_id"], NOW.isoformat()),
             )
         # Nor by claiming a person settled it without naming one.
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
             conn.execute(
                 "UPDATE agent_run_effects SET status = 'resolved_succeeded' "
-                "WHERE effect_id = ?",
-                (effect_id,),
+                "WHERE user_id = %s AND effect_id = %s",
+                (user, effect_id),
             )
-        conn.commit()
-    finally:
-        conn.close()
     assert repo.list_effects(started.run["run_id"])[0]["status"] == (
         EffectStatus.AMBIGUOUS
     )
@@ -406,15 +409,13 @@ def test_a_settled_effect_never_changes_its_outcome(tmp_path):
         repo.resolve_quarantined_effect(
             effect_id, decision="abandoned", operator="fisher"
         )
-    conn = _raw(tmp_path)
-    try:
-        with pytest.raises(sqlite3.IntegrityError):
+    with raw(repo) as conn:
+        with pytest.raises(psycopg.IntegrityError), conn.transaction():
             conn.execute(
-                "UPDATE agent_run_effects SET status = 'failed' WHERE effect_id = ?",
-                (effect_id,),
+                "UPDATE agent_run_effects SET status = 'failed' "
+                "WHERE user_id = %s AND effect_id = %s",
+                (repo._user_id, effect_id),
             )
-    finally:
-        conn.close()
     assert repo.list_effects(started.run["run_id"])[0]["status"] == (
         EffectStatus.SUCCEEDED
     )
@@ -545,7 +546,7 @@ def test_planted_secrets_never_reach_the_persisted_effect_record(tmp_path):
     assert quarantined.checkpoint["payload"], "the checkpoint must not be empty"
     assert quarantined.checkpoint["payload"]["tool_name"] == "gmail_send"
 
-    blob = _stored_bytes(tmp_path)
+    blob = stored_text(repo)
     assert b"gmail_send" in blob, "the effect record must really be on disk"
     assert stored["arguments_fingerprint"].encode() in blob
     for secret in (
@@ -627,15 +628,11 @@ def test_a_quarantined_run_is_never_pruned_because_its_hole_is_marked(tmp_path):
     assert quarantine.run["current_state"] == "interrupted"
 
     # Force a finish time so retention would otherwise consider it.
-    conn = _raw(tmp_path)
-    try:
+    with raw(repo) as conn:
         conn.execute(
-            "UPDATE agent_runs SET finished_at = ? WHERE run_id = ?",
-            (NOW.isoformat(), started.run["run_id"]),
+            "UPDATE agent_runs SET finished_at = %s WHERE user_id = %s AND run_id = %s",
+            (NOW.isoformat(), repo._user_id, started.run["run_id"]),
         )
-        conn.commit()
-    finally:
-        conn.close()
 
     assert repo.prune_checkpoints(finished_before=NOW + timedelta(days=1)) == []
     kinds = [item["kind"] for item in repo.list_checkpoints(started.run["run_id"])]
@@ -744,15 +741,12 @@ def test_the_lease_and_the_unparking_commit_together(tmp_path):
     assert commit.lease.version == commit.run["version"]
     assert commit.run["current_state"] == "running"
     assert commit.run["lease_owner"] == owner.owner_id
-    conn = _raw(tmp_path)
-    try:
+    with raw(repo) as conn:
         row = conn.execute(
             "SELECT current_state, lease_owner, version FROM agent_runs "
-            "WHERE run_id = ?",
-            (run_id,),
+            "WHERE user_id = %s AND run_id = %s",
+            (repo._user_id, run_id),
         ).fetchone()
-    finally:
-        conn.close()
     assert row == ("running", owner.owner_id, before["version"] + 1)
 
 
@@ -829,224 +823,37 @@ def test_an_approval_never_unparks_a_run_whose_effect_is_quarantined(tmp_path):
     assert repo.list_effects(run["run_id"])[0]["status"] == EffectStatus.AMBIGUOUS
 
 
-# --- what the store looks like to a reader that did not write it ---------
+# --- the schema agrees with the vocabulary --------------------------------
 
 
-def _version_one_store(tmp_path):
-    """A production-shaped version 1 store: real rows in both v1 tables.
+def _quoted_list(sql: str, before: str) -> set[str]:
+    """The quoted values of the first `in (...)` list after `before`."""
+    tail = sql[sql.index(before) :]
+    values = tail[tail.index("(", tail.index(" in ")) + 1 : tail.index(")")]
+    return set(re.findall(r"'([a-z_]+)'", values))
 
-    Built by the real repository, then wound back to exactly what a build
-    without the effect fence would have left on disk.
-    """
-    repo, owner = _repo(tmp_path)
-    first = _start(repo, owner, session_id="sess-old-a")
-    repo.checkpoint(first.lease, kind="model_pending", payload={"step": 1}, now=NOW)
-    second = _start(repo, owner, session_id="sess-old-b")
-    repo.checkpoint(
-        second.lease,
-        kind="terminal",
-        state="complete",
-        terminal_result={"status": "ok", "text_length": 12},
-        source_refs=[{"id": "src-1", "title": "Ramp"}],
-        now=NOW,
+
+def test_the_migration_names_exactly_the_python_vocabulary():
+    """The SQL file spells out the statuses. It must not drift from the enums."""
+    from coworker.agent_run_approval import SETTLED_EFFECT_STATUSES
+
+    sql = MIGRATION.read_text(encoding="utf-8")
+    names = lambda values: {str(value) for value in values}  # noqa: E731
+    assert _quoted_list(sql, "constraint agent_run_effects_status") == names(
+        EFFECT_STATUSES
     )
-    parked = _start(repo, owner, session_id="sess-old-c")
-    repo.checkpoint(
-        parked.lease,
-        kind="waiting_approval",
-        state="waiting_approval",
-        approval_ids=["inbox-1"],
-        now=NOW,
+    assert _quoted_list(sql, "constraint agent_run_effects_replay_class") == names(
+        ReplayClass
     )
-    before = {
-        run["run_id"]: run
-        for run in (
-            repo.get_run(first.run["run_id"]),
-            repo.get_run(second.run["run_id"]),
-            repo.get_run(parked.run["run_id"]),
-        )
-    }
-    checkpoints = {
-        run_id: repo.list_checkpoints(run_id) for run_id in before
-    }
-    repo.close()
-    conn = _raw(tmp_path)
-    try:
-        conn.executescript(
-            "DROP TRIGGER IF EXISTS agent_run_effects_open_as_dispatched;"
-            "DROP TRIGGER IF EXISTS agent_run_effects_quarantine_is_operator_only;"
-            "DROP TRIGGER IF EXISTS agent_run_effects_settled_is_final;"
-            "DROP TRIGGER IF EXISTS agent_run_effects_are_never_deleted;"
-            "DROP TABLE IF EXISTS agent_run_effects;"
-            "PRAGMA user_version = 1;"
-        )
-        conn.commit()
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
-    finally:
-        conn.close()
-    return before, checkpoints
-
-
-def _objects(tmp_path):
-    conn = _raw(tmp_path)
-    try:
-        return {
-            (row[0], row[1])
-            for row in conn.execute("SELECT type, name FROM sqlite_master")
-        }
-    finally:
-        conn.close()
-
-
-def test_the_effect_schema_only_creates_objects_that_did_not_exist(tmp_path):
-    """The whole reason create-if-missing is enough here, asserted.
-
-    `CREATE TABLE IF NOT EXISTS` silently does nothing on a table that already
-    exists. That is safe only while the schema adds no column to an existing
-    table. If someone later adds one to `agent_runs`, this fails and says so,
-    rather than leaving a version 1 database stamped 2 with a missing column.
-    """
-    assert not re.search(r"\bALTER\s+TABLE\b", EFFECT_SCHEMA, re.I)
-    # Every object it creates is new. It never names a version 1 table.
-    created = set(
-        re.findall(
-            r"CREATE\s+(?:TABLE|INDEX|TRIGGER)\s+IF\s+NOT\s+EXISTS\s+(\w+)",
-            EFFECT_SCHEMA,
-            re.I,
-        )
+    assert _quoted_list(sql, "constraint agent_run_effects_operator_named") == names(
+        OPERATOR_OUTCOMES
     )
-    assert created, "the effect schema must create something"
-    assert all(name.startswith("agent_run_effects") for name in created), created
-    for legacy in ("agent_runs", "agent_run_checkpoints"):
-        assert not re.search(
-            rf"\b(?:ALTER|DROP)\b[^;]*\b{legacy}\b(?!_)", EFFECT_SCHEMA, re.I
-        )
-    # And the trigger bodies only ever touch the new table.
-    assert "ON agent_run_effects" in EFFECT_SCHEMA
-    assert " ON agent_runs " not in EFFECT_SCHEMA
-
-
-def test_a_version_one_store_gains_the_fence_on_open_but_not_a_new_version(tmp_path):
-    """Opening a store creates what is missing. It does not migrate it.
-
-    The version belongs to `coworker/migrations.py`, which is the only other
-    writer of `PRAGMA user_version` in the codebase. Every registered store
-    works this way: the store owns its DDL, the registry owns its version. So
-    starting the application never silently upgrades an existing database, and
-    a rollback to an older build still finds a version it can open.
-
-    The upgrade itself -- with a backup, a rollback, and a rerun -- is the
-    registry's, and is tested in `tests/test_migrations.py`.
-    """
-    before, checkpoints = _version_one_store(tmp_path)
-    objects_before = _objects(tmp_path)
-
-    reopened = AgentRunRepository(tmp_path)
-
-    conn = _raw(tmp_path)
-    try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
-        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    finally:
-        conn.close()
-    # Exactly the fence appeared. Nothing existing was removed or replaced.
-    added = _objects(tmp_path) - objects_before
-    assert objects_before - _objects(tmp_path) == set()
-    assert {name for _, name in added} == {
-        "agent_run_effects",
-        # SQLite's own index for the TEXT PRIMARY KEY.
-        "sqlite_autoindex_agent_run_effects_1",
-        "agent_run_effects_by_run",
-        "agent_run_effects_open",
-        "agent_run_effects_open_as_dispatched",
-        "agent_run_effects_quarantine_is_operator_only",
-        "agent_run_effects_settled_is_final",
-        "agent_run_effects_are_never_deleted",
-    }
-    # Every version 1 row survives, including its lease and its version.
-    for run_id, run in before.items():
-        assert reopened.get_run(run_id) == run
-        assert reopened.list_checkpoints(run_id) == checkpoints[run_id]
-        assert reopened.list_effects(run_id) == []
-    # The fence works immediately, so a store waiting to be migrated is fenced
-    # rather than unprotected.
-    live = next(
-        run_id for run_id, run in before.items() if run["current_state"] == "running"
-    )
-    later = NOW + timedelta(seconds=601)
-    lease = reopened.acquire_lease(live, reopened.registry.register(), 600, now=later)
-    assert lease is not None
-    assert reopened.dispatch_effect(
-        lease, tool_name="gmail_send", arguments=SEND_ARGS, now=later
-    ).effect["status"] == EffectStatus.DISPATCHED
-
-
-def test_a_brand_new_database_is_born_at_the_current_version(tmp_path):
-    """Creating a database at the current version is not a migration."""
-    repo = AgentRunRepository(tmp_path)
-    conn = _raw(tmp_path)
-    try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
-    finally:
-        conn.close()
-    repo.close()
-
-
-def test_opening_an_unmigrated_store_repeatedly_changes_nothing_further(tmp_path):
-    before, checkpoints = _version_one_store(tmp_path)
-
-    first = AgentRunRepository(tmp_path)
-    settled = _objects(tmp_path)
-    first.close()
-    # Rerun: opening again must change nothing at all.
-    second = AgentRunRepository(tmp_path)
-    second.close()
-    # Post-restart: a third process, no shared connection or in-memory state.
-    third = AgentRunRepository(tmp_path)
-
-    assert _objects(tmp_path) == settled
-    conn = _raw(tmp_path)
-    try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
-    finally:
-        conn.close()
-    for run_id, run in before.items():
-        assert third.get_run(run_id) == run
-        assert third.list_checkpoints(run_id) == checkpoints[run_id]
-
-
-def test_a_store_from_a_newer_build_fails_closed_without_touching_it(tmp_path):
-    """Unknown future versions refuse to open and modify nothing."""
-    before, checkpoints = _version_one_store(tmp_path)
-    AgentRunRepository(tmp_path).close()
-    conn = _raw(tmp_path)
-    try:
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
-        conn.commit()
-    finally:
-        conn.close()
-    objects_before = _objects(tmp_path)
-
-    with pytest.raises(RuntimeError, match="newer than this build"):
-        AgentRunRepository(tmp_path)
-
-    conn = _raw(tmp_path)
-    try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
-    finally:
-        conn.close()
-    assert _objects(tmp_path) == objects_before
-    # Reading it back with a build that does know the version finds it intact.
-    conn = _raw(tmp_path)
-    try:
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        conn.commit()
-    finally:
-        conn.close()
-    recovered = AgentRunRepository(tmp_path)
-    for run_id, run in before.items():
-        assert recovered.get_run(run_id) == run
-        assert recovered.list_checkpoints(run_id) == checkpoints[run_id]
+    assert _quoted_list(
+        sql, "create trigger agent_run_effects_quarantine_is_operator_only"
+    ) == names({EffectStatus.AMBIGUOUS, *OPERATOR_OUTCOMES})
+    assert _quoted_list(
+        sql, "create trigger agent_run_effects_settled_is_final"
+    ) == names(SETTLED_EFFECT_STATUSES)
 
 
 def test_the_record_a_fenced_run_leaves_behind_passes_doctors_history_rules(tmp_path):

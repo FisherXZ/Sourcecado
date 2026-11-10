@@ -20,12 +20,11 @@ from coworker import migrations
 from coworker.update_channel.apply import (
     Installation,
     UpdateStatus,
+    has_run_store,
     rollback,
     running_identity,
 )
 from coworker.update_channel.drain import DrainStatus, assess_drain
-
-RUN_STORE_NAME = "agent_runs.db"
 
 
 def _installation(args: argparse.Namespace) -> Installation:
@@ -40,7 +39,7 @@ def status(args: argparse.Namespace) -> int:
     root = Path(args.state_root).expanduser()
     print(f"channel   {args.channel}")
     print(f"version   {args.version}")
-    if not (root / RUN_STORE_NAME).exists():
+    if not has_run_store(root):
         print("runs      no run store on this machine")
         print("update    safe to update")
         return 0

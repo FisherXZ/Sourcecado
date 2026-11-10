@@ -5,7 +5,6 @@ that a process which is still alive is never stolen from.
 """
 
 import json
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -16,12 +15,12 @@ import pytest
 
 from coworker.agent_run_owner import Liveness, OwnerRegistry
 from coworker.agent_run_repository import (
-    DB_NAME,
     MAX_LEASE_SECONDS,
     AgentRunLeaseLost,
     AgentRunRepository,
     AgentRunVersionConflict,
 )
+from tests.agent_run_db import CHILD_PREAMBLE, child_env, raw
 
 DESKTOP = str(Path(__file__).resolve().parents[1])
 NOW = datetime(2026, 8, 27, 10, 0, 0, tzinfo=UTC)
@@ -29,6 +28,7 @@ NOW = datetime(2026, 8, 27, 10, 0, 0, tzinfo=UTC)
 CHILD = """
 import json, os, sys, time
 sys.path.insert(0, sys.argv[1])
+""" + CHILD_PREAMBLE + """
 from coworker.agent_run_repository import AgentRunRepository
 
 repo = AgentRunRepository(sys.argv[2])
@@ -67,6 +67,7 @@ def _spawn_child(tmp_path, mode):
         [sys.executable, "-c", CHILD, DESKTOP, str(tmp_path), mode],
         stdout=subprocess.PIPE,
         text=True,
+        env=child_env(tmp_path),
     )
     line = proc.stdout.readline()
     assert line, "child never reported a lease"
@@ -128,6 +129,69 @@ def test_eight_racing_owners_produce_exactly_one_lease(tmp_path):
     run = seed_repo.get_run(run_id)
     assert run["lease_owner"] == leases[0].owner_id
     assert run["version"] == leases[0].version
+
+
+def test_two_connections_racing_for_one_lease_produce_exactly_one_winner(
+    tmp_path, monkeypatch
+):
+    """A forced interleaving, not a hopeful one.
+
+    The first owner reads the free run and stops inside its transaction. The
+    second owner then tries to take the same lease on its own connection. The
+    second must wait for the first to finish, as it did behind SQLite's
+    `BEGIN IMMEDIATE`, and only one of them may come out holding the lease.
+    """
+    seed, seed_owner = _repo(tmp_path)
+    started = _start(seed, seed_owner, now=None)
+    run_id = started.run["run_id"]
+    seed.release_lease(started.lease)
+
+    first = AgentRunRepository(tmp_path)
+    second = AgentRunRepository(tmp_path)
+    first_owner = first.registry.register()
+    second_owner = second.registry.register()
+
+    first_has_read = threading.Event()
+    let_first_write = threading.Event()
+    real_row = AgentRunRepository._row
+
+    def row_then_pause(self, cur, wanted):
+        row = real_row(self, cur, wanted)
+        if self is first and not first_has_read.is_set():
+            first_has_read.set()
+            let_first_write.wait(timeout=30)
+        return row
+
+    monkeypatch.setattr(AgentRunRepository, "_row", row_then_pause)
+    results: dict[str, object] = {}
+
+    def contend(name, repo, owner):
+        try:
+            results[name] = repo.acquire_lease(run_id, owner, 600)
+        except Exception as exc:  # recorded, then asserted away below
+            results[name] = exc
+
+    first_thread = threading.Thread(target=contend, args=("first", first, first_owner))
+    second_thread = threading.Thread(
+        target=contend, args=("second", second, second_owner)
+    )
+    first_thread.start()
+    assert first_has_read.wait(timeout=30), "the first owner never read the run"
+    second_thread.start()
+    second_thread.join(timeout=1.0)
+    second_waited = second_thread.is_alive()
+    let_first_write.set()
+    first_thread.join(timeout=30)
+    second_thread.join(timeout=30)
+
+    assert not [item for item in results.values() if isinstance(item, Exception)]
+    winners = [item for item in results.values() if item is not None]
+    assert len(winners) == 1, results
+    run = seed.get_run(run_id)
+    assert run["lease_owner"] == winners[0].owner_id
+    assert run["version"] == winners[0].version == started.lease.version + 2
+    # The translation of `BEGIN IMMEDIATE`: one writer of a user's runs at a time.
+    assert second_waited, "a second writer of one user's runs must wait its turn"
 
 
 def test_releasing_a_lease_lets_the_next_owner_in(tmp_path):
@@ -260,11 +324,19 @@ def test_a_waiting_run_keeps_its_state_when_a_stale_lease_is_cleared(tmp_path):
     )
     assert commit.lease is None
     run_id = started.run["run_id"]
-    with sqlite3.connect(tmp_path / DB_NAME) as db:
+    with raw(repo) as db:
         db.execute(
-            "UPDATE agent_runs SET lease_owner = ?, lease_owner_host = ?, "
-            "lease_owner_pid = ?, lease_expires_at = ? WHERE run_id = ?",
-            (owner.owner_id, owner.host, owner.pid, "2026-08-27T09:00:00.000000+00:00", run_id),
+            "UPDATE agent_runs SET lease_owner = %s, lease_owner_host = %s, "
+            "lease_owner_pid = %s, lease_expires_at = %s "
+            "WHERE user_id = %s AND run_id = %s",
+            (
+                owner.owner_id,
+                owner.host,
+                owner.pid,
+                "2026-08-27T09:00:00.000000+00:00",
+                repo._user_id,
+                run_id,
+            ),
         )
 
     recovered = repo.reconcile_expired_leases(now=NOW + timedelta(seconds=61))
@@ -343,11 +415,11 @@ def test_startup_leaves_a_lease_owned_by_another_host_alone(tmp_path):
     repo, owner = _repo(tmp_path)
     started = _start(repo, owner, lease_seconds=3600)
     run_id = started.run["run_id"]
-    with sqlite3.connect(tmp_path / DB_NAME) as db:
+    with raw(repo) as db:
         db.execute(
             "UPDATE agent_runs SET lease_owner_host = 'someone-elses-mac' "
-            "WHERE run_id = ?",
-            (run_id,),
+            "WHERE user_id = %s AND run_id = %s",
+            (repo._user_id, run_id),
         )
 
     assert repo.reclaim_dead_owner_leases(now=NOW) == []
@@ -363,11 +435,12 @@ def test_startup_reclaims_running_work_that_never_recorded_an_owner(tmp_path):
     repo, owner = _repo(tmp_path)
     started = _start(repo, owner)
     run_id = started.run["run_id"]
-    with sqlite3.connect(tmp_path / DB_NAME) as db:
+    with raw(repo) as db:
         db.execute(
             "UPDATE agent_runs SET lease_owner = NULL, lease_owner_host = NULL, "
-            "lease_owner_pid = NULL, lease_expires_at = NULL WHERE run_id = ?",
-            (run_id,),
+            "lease_owner_pid = NULL, lease_expires_at = NULL "
+            "WHERE user_id = %s AND run_id = %s",
+            (repo._user_id, run_id),
         )
 
     assert [run["run_id"] for run in repo.reclaim_dead_owner_leases(now=NOW)] == [run_id]

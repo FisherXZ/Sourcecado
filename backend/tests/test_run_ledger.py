@@ -1,7 +1,6 @@
 """S5: one unified run receipt — operational evidence, never a second transcript."""
 
 import json
-import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -15,6 +14,7 @@ from coworker.run_ledger import (
 from coworker.run_evidence import Evidence
 from coworker.run_receipt import RECEIPT_SECTIONS
 from coworker.store import ConversationStore
+from tests.agent_run_db import raw
 
 GOAL = "Find three Codeology leads at Ramp"
 EPOCH = datetime(2026, 8, 1, 9, 0, tzinfo=UTC)
@@ -323,16 +323,16 @@ def test_the_receipt_projection_is_its_own_allowlist(tmp_path):
             "stdout": PLANTED["command_output"],
         }
     )
-    with sqlite3.connect(repo.path) as db:
+    with raw(repo) as db:
         db.execute(
-            "UPDATE agent_run_checkpoints SET payload = ? "
-            "WHERE run_id = ? AND sequence = 2",
-            (smuggled, started.run["run_id"]),
+            "UPDATE agent_run_checkpoints SET payload = %s "
+            "WHERE user_id = %s AND run_id = %s AND sequence = 2",
+            (smuggled, repo._user_id, started.run["run_id"]),
         )
         db.execute(
-            "UPDATE agent_runs SET usage = ? WHERE run_id = ?",
+            "UPDATE agent_runs SET usage = %s WHERE user_id = %s AND run_id = %s",
             (json.dumps({"input_tokens": 12, "note": PLANTED["message"]}),
-             started.run["run_id"]),
+             repo._user_id, started.run["run_id"]),
         )
 
     receipt = ledger.receipt(started.run["run_id"])
@@ -454,15 +454,17 @@ def test_a_kind_this_build_cannot_read_is_unsupported_not_ignored(tmp_path):
     commit = repo.checkpoint(first.lease, kind="terminal", state="complete")
     run_id = started.run["run_id"]
     # A newer build wrote a checkpoint kind this build has never heard of.
-    with sqlite3.connect(repo.path) as db:
+    with raw(repo) as db:
         db.execute(
-            "UPDATE agent_runs SET checkpoint_sequence = 4 WHERE run_id = ?", (run_id,)
+            "UPDATE agent_runs SET checkpoint_sequence = 4 "
+            "WHERE user_id = %s AND run_id = %s",
+            (repo._user_id, run_id),
         )
         db.execute(
             "INSERT INTO agent_run_checkpoints "
-            "(run_id, sequence, kind, state, payload, created_at) "
-            "VALUES (?, 4, 'quantum_leap', 'complete', '{}', ?)",
-            (run_id, commit.run["updated_at"]),
+            "(user_id, run_id, sequence, kind, state, payload, created_at) "
+            "VALUES (%s, %s, 4, 'quantum_leap', 'complete', '{}', %s)",
+            (repo._user_id, run_id, commit.run["updated_at"]),
         )
 
     receipt = ledger.receipt(run_id)
@@ -559,11 +561,11 @@ def test_retention_never_deletes_the_marker_that_evidence_is_missing(tmp_path):
     repo.checkpoint(
         foreign.lease, kind="terminal", state="complete", now=stale + timedelta(seconds=1)
     )
-    with sqlite3.connect(repo.path) as db:
+    with raw(repo) as db:
         db.execute(
             "UPDATE agent_run_checkpoints SET kind = 'quantum_leap' "
-            "WHERE run_id = ? AND sequence = 2",
-            (foreign.run["run_id"],),
+            "WHERE user_id = %s AND run_id = %s AND sequence = 2",
+            (repo._user_id, foreign.run["run_id"]),
         )
 
     assert ledger.enforce_retention(now=EPOCH)["pruned_runs"] == 0
