@@ -417,12 +417,14 @@ def _seed_people(
 EVAL_DATABASE_URL_ENV = "SOURCECADO_EVAL_DATABASE_URL"
 
 
-def _use_eval_database(database_url: str | None) -> None:
-    if database_url:
-        from coworker.pg_scratch import state_dir_resolver
+def _use_eval_database(database_url: str | None) -> db.Database | None:
+    if not database_url:
+        return None
+    from coworker.pg_scratch import state_dir_resolver
 
-        database = db.Database(database_url, max_size=2)
-        db.set_resolver(state_dir_resolver(database, database_url))
+    database = db.Database(database_url, max_size=2)
+    db.set_resolver(state_dir_resolver(database, database_url))
+    return database
 
 
 def _spawned_run(
@@ -437,8 +439,9 @@ def _spawned_run(
     nondeterministic: bool,
     judge: JudgeObservation | None,
 ) -> None:
+    database = None
     try:
-        _use_eval_database(database_url)
+        database = _use_eval_database(database_url)
         result = EvalRunner(Path(artifact_root))._run_local(
             scenario,
             variant,
@@ -457,6 +460,11 @@ def _spawned_run(
                 f"{type(exc).__name__}: eval child failed",
             )
         )
+    finally:
+        # Close the pool before the child exits, or its worker threads are
+        # torn down during interpreter shutdown and print an error.
+        if database is not None:
+            database.close()
 
 
 class EvalRunner:
