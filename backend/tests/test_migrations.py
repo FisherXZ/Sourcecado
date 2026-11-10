@@ -109,7 +109,6 @@ def test_registry_names_every_active_durable_store():
     registered = {spec.store_id for spec in migrations.REGISTRY}
     assert registered == {
         "agent_runs_db",
-        "conversation_db",
         "people_db",
         "drive_ingestion",
         "meeting_evidence",
@@ -131,7 +130,6 @@ def test_registry_names_every_active_durable_store():
 def test_registry_reuses_the_version_constant_owned_by_each_store_module():
     from coworker.people import SCHEMA_VERSION as people_version
     from coworker.secrets import SCHEMA_VERSION as secrets_version
-    from coworker.store import SCHEMA_VERSION as conversation_version
     from coworker.workspace import WorkspaceGrantStore
     from coworker.workspace_audit import SCHEMA_VERSION as receipts_version
     from coworker.workspace_policy import HostApprovalStore
@@ -139,7 +137,6 @@ def test_registry_reuses_the_version_constant_owned_by_each_store_module():
     from coworker.workspace_shell import ShellTaskStore
 
     expected = {
-        "conversation_db": conversation_version,
         "people_db": people_version,
         "secrets": secrets_version,
         "workspace_receipts": receipts_version,
@@ -191,60 +188,6 @@ def test_an_absent_store_reports_no_version_and_needs_no_migration(tmp_path):
 
 
 # --- upgrades from the supported prior version ---------------------------
-
-
-def test_legacy_conversation_db_upgrades_from_the_pre_registry_shape(tmp_path):
-    root = build_legacy_state(tmp_path / "state")
-    db = root / "club.db"
-    assert _user_version(db) == 0
-
-    plan = migrations.plan_migrations(root)
-    store_plan = _plan_for(plan, "conversation_db")
-    assert store_plan.status is StoreStatus.PENDING
-    assert store_plan.from_version == 0
-    assert store_plan.to_version == 2
-    assert store_plan.record_count > 0
-
-    outcome = migrations.apply_migrations(root)
-    assert outcome.error is None
-    assert _user_version(db) == 2
-
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
-    try:
-        job = conn.execute("SELECT * FROM jobs WHERE id = 1").fetchone()
-        assert job["name"] == "weekly sourcing check-in"
-        assert job["template_id"] == "legacy"
-        assert job["cadence"] == "0 9 * * 1"
-        runs = conn.execute("SELECT * FROM runs ORDER BY id").fetchall()
-        assert [row["status"] for row in runs] == ["success", "failed"]
-        assert all(row["artifacts"] == "[]" for row in runs)
-        assert all(row["session_id"] == "sched-1" for row in runs)
-        session = conn.execute(
-            "SELECT * FROM sessions WHERE session_id = 'main'"
-        ).fetchone()
-        assert session["pinned"] == 0
-        assert session["opened_at"] == session["updated_at"]
-        inbox = conn.execute(
-            "SELECT * FROM inbox WHERE id = 'call_apollo_enrich_1'"
-        ).fetchone()
-        assert inbox["scope"] == "once"
-        assert inbox["execution_status"] == "pending"
-        assert inbox["requested_at"] == inbox["created_at"]
-        tables = {
-            str(row[0])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
-        assert {
-            "chat_queue",
-            "queue_commands",
-            "queue_sessions",
-            "recovery_commands",
-        } <= tables
-    finally:
-        conn.close()
 
 
 def test_legacy_people_db_upgrades_from_the_pre_registry_shape(tmp_path):
@@ -538,23 +481,17 @@ def test_legacy_jsonl_and_opaque_stores_adopt_a_version_in_the_manifest(tmp_path
 
 def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
     from coworker.people import PersonStore
-    from coworker.store import ConversationStore
     from coworker.workspace import WorkspaceGrantStore
 
     root = build_legacy_state(tmp_path / "state")
     assert migrations.apply_migrations(root).error is None
 
-    store = ConversationStore(root)
-    assert store.load("main")[0]["content"] == "find leads at Rippling"
-    assert len(store.list_schedule()["jobs"]) == 1
-    assert store.get_setting("persona") == "sourcing"
     people = PersonStore(root)
     assert people.get(LEGACY_PERSON_ID)["first_name"] == "Dana"
     assert people.person_for_session("main") == LEGACY_PERSON_ID
     assert len(WorkspaceGrantStore(root).list_all()) == 1
 
     # Constructing the stores must not knock the recorded version off current.
-    assert _user_version(root / "club.db") == 2
     assert _user_version(root / "people.db") == PEOPLE_DB_VERSION
 
 
@@ -883,7 +820,7 @@ def test_a_failed_crm_changes_rebuild_restores_the_previous_database(tmp_path, m
 
 def test_unknown_future_sqlite_version_fails_closed_without_modifying_state(tmp_path):
     root = build_current_state(tmp_path / "state")
-    conn = sqlite3.connect(root / "club.db")
+    conn = sqlite3.connect(root / "people.db")
     conn.execute("PRAGMA user_version = 99")
     conn.commit()
     conn.close()
@@ -891,7 +828,7 @@ def test_unknown_future_sqlite_version_fails_closed_without_modifying_state(tmp_
 
     plan = migrations.plan_migrations(root)
     assert plan.blocked is True
-    assert _plan_for(plan, "conversation_db").status is StoreStatus.UNSUPPORTED_FUTURE
+    assert _plan_for(plan, "people_db").status is StoreStatus.UNSUPPORTED_FUTURE
 
     outcome = migrations.apply_migrations(root)
     assert outcome.blocked is True
@@ -961,8 +898,8 @@ def test_migration_takes_a_timestamped_backup_before_changing_state(tmp_path):
     manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["reason"] == "migration"
     backed_up = {entry["store_id"] for entry in manifest["entries"]}
-    assert {"conversation_db", "people_db", "workspace_grants"} <= backed_up
-    assert _user_version(backup_dir / "club.db") == 0
+    assert {"people_db", "workspace_grants"} <= backed_up
+    assert _user_version(backup_dir / "people.db") == 0
 
 
 def test_backups_can_be_listed_and_restored(tmp_path):
@@ -1009,7 +946,7 @@ def test_secret_bearing_stores_are_never_copied_into_a_backup(tmp_path):
     entries = {entry["store_id"]: entry for entry in backup.manifest["entries"]}
     assert entries["secrets"]["content_backed_up"] is False
     assert entries["dotenv"]["content_backed_up"] is False
-    assert entries["conversation_db"]["content_backed_up"] is True
+    assert entries["people_db"]["content_backed_up"] is True
 
 
 def test_backup_manifest_carries_no_secret_and_no_absolute_path(tmp_path):
@@ -1032,12 +969,12 @@ def test_a_failed_backup_aborts_the_migration_and_leaves_state_untouched(tmp_pat
     blocker.write_text("not a directory", encoding="utf-8")
 
     with pytest.raises(BackupFailed):
-        migrations.create_backup(root, ["conversation_db"], reason="manual")
+        migrations.create_backup(root, ["people_db"], reason="manual")
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is not None
     assert outcome.applied == ()
-    assert _user_version(root / "club.db") == 0
+    assert _user_version(root / "people.db") == 0
     blocker.unlink()
     assert _tree_digest(root) == before
 
@@ -1072,43 +1009,6 @@ def _break_step(store_id, monkeypatch, apply):
             for item in migrations.REGISTRY
         ),
     )
-
-
-def test_a_sqlite_migration_that_fails_halfway_leaves_the_database_as_it_was(
-    tmp_path, monkeypatch
-):
-    """Two mechanisms cover a SQLite store: the step runs inside BEGIN IMMEDIATE
-    and is rolled back, and the store is then restored from the backup. They are
-    deliberately redundant, so this asserts the outcome rather than crediting one
-    of them. Disabling either alone still passes; disabling both fails here. The
-    JSON test below is the one that isolates the backup restore, because a JSON
-    document has no transaction to fall back on.
-    """
-    root = build_legacy_state(tmp_path / "state")
-    before = _dump_database(root / "club.db")
-    assert before["integrity"] == ["ok"]
-    assert len(before["rows"]["runs"]) == 2
-
-    def mutate_then_explode(context):
-        # Real work lands first, so the test can tell an undo from a no-op.
-        context.connection.execute("ALTER TABLE jobs ADD COLUMN next_run_at TEXT")
-        context.connection.execute("DELETE FROM runs")
-        raise RuntimeError("migration step failed halfway")
-
-    _break_step("conversation_db", monkeypatch, mutate_then_explode)
-
-    outcome = migrations.apply_migrations(root)
-    assert outcome.error is not None
-    assert outcome.rolled_back == ("conversation_db",)
-
-    # Sound, at the old version, at the old schema, every original row present.
-    after = _dump_database(root / "club.db")
-    assert after["integrity"] == ["ok"]
-    assert after["user_version"] == 0
-    assert after["schema"] == before["schema"]
-    assert after["rows"] == before["rows"]
-    jobs_ddl = next(sql for kind, name, sql in after["schema"] if name == "jobs")
-    assert "next_run_at" not in jobs_ddl
 
 
 def test_a_json_migration_that_fails_halfway_is_restored_from_the_backup(
@@ -1220,28 +1120,28 @@ def test_the_manifest_is_written_with_owner_only_permissions(tmp_path):
 
 def test_sqlite_backups_are_taken_through_the_online_backup_api(tmp_path):
     root = build_current_state(tmp_path / "state")
-    backup = migrations.create_backup(root, ["conversation_db"], reason="manual")
-    copied = backup.path / "club.db"
+    backup = migrations.create_backup(root, ["people_db"], reason="manual")
+    copied = backup.path / "people.db"
 
     conn = sqlite3.connect(copied)
     try:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] >= 1
+        assert conn.execute("SELECT COUNT(*) FROM people").fetchone()[0] >= 1
     finally:
         conn.close()
     entry = next(
-        item for item in backup.manifest["entries"] if item["store_id"] == "conversation_db"
+        item for item in backup.manifest["entries"] if item["store_id"] == "people_db"
     )
     assert entry["kind"] == StoreKind.SQLITE.value
-    assert entry["relative_path"] == "club.db"
+    assert entry["relative_path"] == "people.db"
     assert entry["sha256"] == _digest(copied)
 
 
 def test_backup_files_keep_owner_only_permissions(tmp_path):
     root = build_current_state(tmp_path / "state")
-    backup = migrations.create_backup(root, ["conversation_db"], reason="manual")
+    backup = migrations.create_backup(root, ["people_db"], reason="manual")
 
-    assert oct((backup.path / "club.db").stat().st_mode & 0o777) == "0o600"
+    assert oct((backup.path / "people.db").stat().st_mode & 0o777) == "0o600"
     assert oct((backup.path / "manifest.json").stat().st_mode & 0o777) == "0o600"
     assert oct(os.stat(root / migrations.BACKUPS_DIR_NAME).st_mode & 0o777) == "0o700"
 

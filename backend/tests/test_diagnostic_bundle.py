@@ -384,8 +384,8 @@ def test_a_bundle_from_a_failed_run_carries_every_declared_evidence_category(tmp
 
     state = document["state.json"]
     assert state["stores"]
-    assert {item["store_id"] for item in state["stores"]} >= {"conversation_db"}
-    assert state["migration"]["target_versions"]["conversation_db"] >= 1
+    assert {item["store_id"] for item in state["stores"]} >= {"people_db"}
+    assert state["migration"]["target_versions"]["people_db"] >= 1
 
     connectors = document["connectors.json"]
     assert {item["id"] for item in connectors["connectors"]} == {"gmail", "apollo"}

@@ -11,6 +11,14 @@ from tests.pg_fixtures import (  # noqa: F401  (fixtures)
 )
 
 
+@pytest.fixture
+def eval_children_use_the_test_database(pg_database, monkeypatch):
+    """Spawned eval children open their stores in the test database too."""
+    from coworker.evals.runner import EVAL_DATABASE_URL_ENV
+
+    monkeypatch.setenv(EVAL_DATABASE_URL_ENV, pg_database)
+
+
 @pytest.fixture(autouse=True)
 def forbid_host_browser_launches(monkeypatch):
     real_popen = subprocess.Popen

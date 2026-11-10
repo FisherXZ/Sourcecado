@@ -69,12 +69,6 @@ STATE_LABEL = "<state>"
 REQUIRED_DEPENDENCIES = ("fastapi", "uvicorn", "httpx", "sqlite3")
 OPTIONAL_DEPENDENCIES = ("mcp", "pypdf")
 
-# Run statuses the schedule contract allows. Restated here so Doctor can read
-# the runs table without importing the scheduler, which pulls in the agent loop.
-KNOWN_RUN_STATUSES = frozenset(
-    {"running", "success", "failed", "waiting_approval", "partial", "interrupted"}
-)
-
 # The Agent Run store is a registry entry now, so its version, integrity, JSON
 # columns, permissions, and upgrade path are handled by the same machinery as
 # every other store. What stays here is the part only this file knows how to
@@ -627,100 +621,6 @@ def _check_dependencies(collector: _Collector) -> tuple[Dependency, ...]:
     return tuple(found)
 
 
-def _is_timestamp(value: object) -> bool:
-    if not isinstance(value, str) or not value.strip():
-        return False
-    try:
-        datetime.fromisoformat(value)
-    except ValueError:
-        return False
-    return True
-
-
-def _check_schedule(collector: _Collector, root: Path, spec) -> None:
-    """Read-only consistency checks over jobs and runs.
-
-    These are the scheduler's own jobs and runs in `club.db`, which are not
-    Agent Runs. The durable Agent Run store is checked in `_check_run_ownership`.
-    """
-    conn = open_readonly(store_path(root, spec))
-    try:
-        tables = migrations.table_names(conn)
-        if not {"jobs", "runs"} <= tables:
-            return
-        run_columns = migrations.column_names(conn, "runs")
-        orphans = [
-            f"run {row['id']} points at job {row['job_id']}"
-            for row in conn.execute(
-                "SELECT id, job_id FROM runs WHERE job_id NOT IN (SELECT id FROM jobs)"
-            )
-        ]
-        if orphans:
-            collector.add(
-                "schedule.orphaned_run",
-                spec.store_id,
-                Severity.WARN,
-                Repair.REVIEW_REQUIRED,
-                "Runs reference a job that no longer exists. A run is a record "
-                "of work that happened, so Doctor never deletes one.",
-                count=len(orphans),
-                detail=orphans,
-            )
-        if "next_run_at" in migrations.column_names(conn, "jobs"):
-            unparsable = [
-                f"job {row['id']}"
-                for row in conn.execute(
-                    "SELECT id, next_run_at FROM jobs WHERE next_run_at IS NOT NULL"
-                )
-                if not _is_timestamp(row["next_run_at"])
-            ]
-            if unparsable:
-                collector.add(
-                    "schedule.unparsable_next_run",
-                    spec.store_id,
-                    Severity.WARN,
-                    Repair.REVIEW_REQUIRED,
-                    "Jobs carry a next run time that will not parse, so they "
-                    "will never come due. Choosing a new time is an operator call.",
-                    count=len(unparsable),
-                    detail=unparsable,
-                )
-        unknown = [
-            f"run {row['id']} status {str(row['status'])[:24]!r}"
-            for row in conn.execute("SELECT id, status FROM runs")
-            if str(row["status"]) not in KNOWN_RUN_STATUSES
-        ]
-        if unknown:
-            collector.add(
-                "schedule.unknown_run_status",
-                spec.store_id,
-                Severity.WARN,
-                Repair.REVIEW_REQUIRED,
-                "Runs carry a status outside the schedule contract.",
-                count=len(unknown),
-                detail=unknown,
-            )
-        if "finished_at" in run_columns:
-            unfinished = [
-                f"run {row['id']}"
-                for row in conn.execute(
-                    "SELECT id FROM runs WHERE status != 'running' AND finished_at IS NULL"
-                )
-            ]
-            if unfinished:
-                collector.add(
-                    "schedule.unfinished_terminal_run",
-                    spec.store_id,
-                    Severity.WARN,
-                    Repair.REVIEW_REQUIRED,
-                    "Runs are in a final status but never recorded a finish time.",
-                    count=len(unfinished),
-                    detail=unfinished,
-                )
-    finally:
-        conn.close()
-
-
 def _check_run_ownership(collector: _Collector, root: Path, *, cross_store: bool) -> None:
     """The Agent Run store: who owns a run, how it got here, and what it names.
 
@@ -1113,12 +1013,12 @@ def _check_run_links(
     only queue link a run has is the session it belongs to, which is checked.
     """
     known_runs = {str(run.get("run_id")) for run in runs}
-    sessions = _known_keys(root, "conversation_db", "SELECT session_id FROM sessions")
-    if sessions is not None:
-        transcripts = root / "conversations"
-        if transcripts.is_dir():
-            sessions |= {path.stem for path in transcripts.glob("*.jsonl")}
-    approvals = _known_keys(root, "conversation_db", "SELECT id FROM inbox")
+    # The sessions and approvals tables are in Postgres now (slice S06), which
+    # Doctor does not read. A transcript file is not proof either way: a
+    # session row can exist with no transcript. No answer is not the same as
+    # "the target is gone", so these two checks stay quiet.
+    sessions: set[str] | None = None
+    approvals: set[str] | None = None
     people = _known_keys(root, "people_db", "SELECT person_id FROM people")
 
     dangling_parents: list[str] = []
@@ -1175,138 +1075,14 @@ def _check_run_links(
 
 
 def _check_links(collector: _Collector, root: Path) -> None:
-    conversation = migrations.spec_for("conversation_db")
+    # The sessions table is in Postgres now (slice S06), which Doctor does not
+    # read, so person-to-session bindings are not checked here.
     people = migrations.spec_for("people_db")
-    if not store_present(root, conversation):
-        return
-    conn = open_readonly(store_path(root, conversation))
-    try:
-        tables = migrations.table_names(conn)
-        sessions = {str(row["session_id"]) for row in conn.execute("SELECT session_id FROM sessions")}
-        transcripts = {
-            path.stem
-            for path in (root / "conversations").glob("*.jsonl")
-            if (root / "conversations").is_dir()
-        }
-        known = sessions | transcripts
-        if "chat_queue" in tables:
-            stranded = [
-                f"session {str(row['session_id'])[:48]} has {row['n']} queued items"
-                for row in conn.execute(
-                    "SELECT session_id, COUNT(*) AS n FROM chat_queue GROUP BY session_id"
-                )
-                if str(row["session_id"]) not in known
-            ]
-            if stranded:
-                collector.add(
-                    "queue.orphaned_session",
-                    conversation.store_id,
-                    Severity.WARN,
-                    Repair.REVIEW_REQUIRED,
-                    "Queued messages belong to a session that no longer exists. "
-                    "They hold text a person wrote, so Doctor never drops them.",
-                    count=len(stranded),
-                    detail=stranded,
-                )
-        inbox_columns = migrations.column_names(conn, "inbox") if "inbox" in tables else set()
-        if "session_id" in inbox_columns:
-            stranded = [
-                f"approval {str(row['id'])[:48]}"
-                for row in conn.execute(
-                    "SELECT id, session_id FROM inbox WHERE session_id IS NOT NULL"
-                )
-                if str(row["session_id"]) not in known
-            ]
-            if stranded:
-                collector.add(
-                    "approval.orphaned_session",
-                    conversation.store_id,
-                    Severity.WARN,
-                    Repair.REVIEW_REQUIRED,
-                    "Approvals point at a session that no longer exists.",
-                    count=len(stranded),
-                    detail=stranded,
-                )
-        if "original_call_id" in inbox_columns:
-            broken = [
-                f"approval {str(row['id'])[:48]}"
-                for row in conn.execute(
-                    "SELECT id FROM inbox WHERE original_call_id IS NOT NULL "
-                    "AND original_call_id NOT IN (SELECT id FROM inbox)"
-                )
-            ]
-            if broken:
-                collector.add(
-                    "approval.orphaned_chain",
-                    conversation.store_id,
-                    Severity.WARN,
-                    Repair.REVIEW_REQUIRED,
-                    "Retried approvals point at an original approval that is gone.",
-                    count=len(broken),
-                    detail=broken,
-                )
-        if "execution_status" in inbox_columns:
-            unresolved = [
-                f"approval {str(row['id'])[:48]} is {str(row['execution_status'])}"
-                for row in conn.execute(
-                    "SELECT id, execution_status FROM inbox WHERE execution_status IN "
-                    "('interrupted', 'expired')"
-                )
-            ]
-            if unresolved:
-                collector.add(
-                    "approval.interrupted",
-                    conversation.store_id,
-                    Severity.WARN,
-                    Repair.REVIEW_REQUIRED,
-                    "Approvals were authorised but never reported an outcome. "
-                    "Whether the external action happened is unknown, so this "
-                    "must be verified by hand.",
-                    count=len(unresolved),
-                    detail=unresolved,
-                )
-        if "chat_queue" in tables:
-            interrupted = [
-                f"session {str(row['session_id'])[:48]} has {row['n']} interrupted items"
-                for row in conn.execute(
-                    "SELECT session_id, COUNT(*) AS n FROM chat_queue "
-                    "WHERE state = 'interrupted' GROUP BY session_id"
-                )
-            ]
-            if interrupted:
-                collector.add(
-                    "queue.interrupted",
-                    conversation.store_id,
-                    Severity.WARN,
-                    Repair.REVIEW_REQUIRED,
-                    "Queued runs were cut off by a restart and are paused for review.",
-                    count=len(interrupted),
-                    detail=interrupted,
-                )
-    finally:
-        conn.close()
-
     if not store_present(root, people):
         return
     conn = open_readonly(store_path(root, people))
     try:
         tables = migrations.table_names(conn)
-        if "session_people" in tables:
-            stranded = [
-                f"binding for session {str(row['session_id'])[:48]}"
-                for row in conn.execute("SELECT session_id FROM session_people")
-                if str(row["session_id"]) not in known
-            ]
-            if stranded:
-                collector.add(
-                    "person.orphaned_session_binding",
-                    people.store_id,
-                    Severity.WARN,
-                    Repair.REVIEW_REQUIRED,
-                    "Person bindings point at a session that no longer exists.",
-                    count=len(stranded),
-                    detail=stranded,
-                )
         if {"events", "people"} <= tables:
             orphans = [
                 f"event {str(row['event_id'])[:48]}"
@@ -1359,8 +1135,6 @@ def _scan(root: Path) -> _Scan:
         if spec.kind is StoreKind.SQLITE:
             if _check_sqlite_integrity(collector, root, spec):
                 _check_json_columns(collector, root, spec)
-                if spec.store_id == "conversation_db":
-                    _check_schedule(collector, root, spec)
         elif spec.kind in (StoreKind.JSONL_DIR, StoreKind.JSONL_LOG):
             torn_tails.extend(_check_jsonl(collector, root, spec))
     if not unreadable:

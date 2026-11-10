@@ -276,5 +276,4 @@ class EvalEnvironment:
 
     def close(self) -> None:
         self.workspace_runtime.close()
-        self.store._conn.close()
         self.people._conn.close()

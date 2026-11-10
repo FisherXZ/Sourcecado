@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -13,7 +14,7 @@ from coworker.db import Database, set_resolver
 from coworker.evals.compare import ComparisonReport, compare_runs
 from coworker.evals.environment import private_artifact_root, write_private_text
 from coworker.evals.models import EvalRunResult, EvalVariant
-from coworker.evals.runner import ARTIFACT_WARNING, EvalRunner
+from coworker.evals.runner import ARTIFACT_WARNING, EVAL_DATABASE_URL_ENV, EvalRunner
 from coworker.evals.scenarios import baseline_scenarios
 from coworker.evals.sourcing_scenarios import sourcing_scenarios, sourcing_variant_for
 from coworker.pg_scratch import admin_url, scratch_database, state_dir_resolver
@@ -167,9 +168,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     with scratch_database(admin_url()) as url:
         database = Database(url)
         set_resolver(state_dir_resolver(database, url))
+        os.environ[EVAL_DATABASE_URL_ENV] = url
         try:
             return _main(argv)
         finally:
+            os.environ.pop(EVAL_DATABASE_URL_ENV, None)
             set_resolver(None)
             database.close()
 

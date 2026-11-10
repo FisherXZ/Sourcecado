@@ -15,6 +15,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from coworker import db
 from coworker.events import TurnIdentity
 from coworker.consequential_actions import ConsequentialActions
 from coworker.evals.environment import (
@@ -410,8 +411,23 @@ def _seed_people(
             environment.people.bind_session(session_id, person_id)
 
 
+# The database that eval children use. A spawned child does not inherit the
+# parent's `db` resolver, so the parent passes this URL and the child sets
+# the same kind of resolver: one new user for each state directory.
+EVAL_DATABASE_URL_ENV = "SOURCECADO_EVAL_DATABASE_URL"
+
+
+def _use_eval_database(database_url: str | None) -> None:
+    if database_url:
+        from coworker.pg_scratch import state_dir_resolver
+
+        database = db.Database(database_url, max_size=2)
+        db.set_resolver(state_dir_resolver(database, database_url))
+
+
 def _spawned_run(
     output: Any,
+    database_url: str | None,
     artifact_root: str,
     scenario: EvalScenario,
     variant: EvalVariant,
@@ -422,6 +438,7 @@ def _spawned_run(
     judge: JudgeObservation | None,
 ) -> None:
     try:
+        _use_eval_database(database_url)
         result = EvalRunner(Path(artifact_root))._run_local(
             scenario,
             variant,
@@ -509,6 +526,7 @@ class EvalRunner:
             target=_spawned_run,
             args=(
                 output,
+                os.environ.get(EVAL_DATABASE_URL_ENV),
                 str(self.artifact_root),
                 scenario,
                 variant,

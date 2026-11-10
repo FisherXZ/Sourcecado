@@ -1534,7 +1534,7 @@ def test_ws_persists_messages_to_disk(tmp_path):
     open_id = client.app.state.store.open_session_id()
     jsonl = tmp_path / "conversations" / f"{open_id}.jsonl"
     assert jsonl.is_file()
-    assert (tmp_path / "club.db").is_file()
+    assert client.app.state.store.index(open_id)["title"] == "hi"
 
 
 def test_new_backend_reloads_history(tmp_path):
