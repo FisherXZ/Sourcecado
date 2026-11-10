@@ -2,7 +2,13 @@ import subprocess
 
 import pytest
 
-from tests.pg_fixtures import db, make_user, pg_database  # noqa: F401  (fixtures)
+from tests.pg_fixtures import (  # noqa: F401  (fixtures)
+    _session_database,
+    db,
+    make_user,
+    pg_database,
+    stores_use_the_test_database,
+)
 
 
 @pytest.fixture(autouse=True)

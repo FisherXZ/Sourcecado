@@ -48,9 +48,14 @@ make db-reset   # apply supabase/migrations and supabase/seed.sql
 The ports are in `supabase/config.toml`. They are not the Supabase defaults, so
 this project does not collide with another local Supabase project.
 
-Tests create and drop their own `sourcecado_test_<pid>` database, so they do not
-change your development data. If the database is not running, those tests fail.
-They do not skip. Set `TEST_DATABASE_URL` to use a different Postgres 17 server.
+Tests and evals create and drop their own `sourcecado_scratch_*` database, so
+they do not change your development data. If the database is not running, the
+evals and the tests that open a store fail. They do not skip. Set
+`TEST_DATABASE_URL` to use a different Postgres 17 server. `make backend` sets
+`DATABASE_URL` to the local database unless you set it yourself.
+
+Before you move a store to Postgres, read the
+[Postgres port rules](docs/engineering/postgres-port.md).
 
 ### Use separate development state
 

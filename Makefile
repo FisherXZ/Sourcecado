@@ -1,6 +1,8 @@
 PYTHON ?= python3.14
 VENV := backend/.venv
 GUI := frontend
+# The local Supabase database from `make db-up` (port in supabase/config.toml).
+DATABASE_URL ?= postgresql://postgres:postgres@127.0.0.1:53322/postgres
 
 .PHONY: setup backend gui native db-up db-reset test test-python test-gui eval eval-sourcing build doctor doctor-repair secret-scan build-backend smoke-test test-update update-status update-rollback update-manifest update-verify
 
@@ -10,7 +12,7 @@ setup:
 	npm --prefix $(GUI) ci
 
 backend:
-	cd backend && .venv/bin/python -m coworker.run
+	cd backend && DATABASE_URL="$(DATABASE_URL)" .venv/bin/python -m coworker.run
 
 gui:
 	npm --prefix $(GUI) run dev

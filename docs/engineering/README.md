@@ -51,6 +51,7 @@ an explicit director command and goes through the app's own writer and change hi
 
 ## Operating and packaging
 
+- [Postgres port rules](postgres-port.md) — for the slices that move a store from SQLite to Postgres
 - [Doctor and migrations](doctor.md)
 - [Secret scan](secret-scan.md) and [diagnostic bundles](diagnostic-bundle.md)
 - [macOS packaging](packaging.md)

@@ -7,8 +7,10 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from coworker.db import DEV_USER_ID, Database
-from tests.pg_fixtures import REPO_ROOT, apply_sql_dir, connect_admin
+from coworker import db as db_module
+from coworker.db import DEV_USER_ID, Database, resolve
+from coworker.pg_scratch import REPO_ROOT, apply_sql_dir
+from tests.pg_fixtures import open_scratch_database
 
 SETTING = "select current_setting('app.user_id', true)"
 
@@ -140,7 +142,7 @@ def test_sql_files_run_in_name_order(pg_database, tmp_path: Path):
 
 def test_a_missing_database_fails_the_run_and_does_not_skip_it():
     with pytest.raises(pytest.fail.Exception, match="make db-up"):
-        connect_admin("postgresql://postgres:unused@127.0.0.1:1/postgres")
+        open_scratch_database("postgresql://postgres:unused@127.0.0.1:1/postgres")
 
 
 def test_the_seed_creates_the_development_user_one_time(pg_database, db):
@@ -151,3 +153,51 @@ def test_the_seed_creates_the_development_user_one_time(pg_database, db):
         rows = conn.execute("select id from auth.users").fetchall()
     assert rows == [(DEV_USER_ID,)]
 
+
+
+# --- The phase 1 seam: a state directory means a user -----------------------
+
+
+def test_one_state_directory_is_one_user_each_time_it_is_opened(tmp_path):
+    first_db, first_user = resolve(tmp_path)
+    again_db, again_user = resolve(tmp_path)
+    assert (again_db, again_user) == (first_db, first_user)
+    # A different spelling of the same directory is the same store.
+    assert resolve(tmp_path / "x" / "..")[1] == first_user
+
+
+def test_two_state_directories_are_two_isolated_users(tmp_path, pg_database, scratch_table):
+    database, honest = resolve(tmp_path / "honest")
+    _, broken = resolve(tmp_path / "broken")
+    assert honest != broken
+    for user, value in ((honest, "a"), (broken, "b")):
+        with database.tx(user) as conn:
+            conn.execute(
+                "insert into public.scratch_kv values (%s, 'same', %s)", (user, value)
+            )
+    assert sorted(_rows(pg_database)) == sorted(
+        [(honest, "same", "a"), (broken, "same", "b")]
+    )
+
+
+def test_a_test_that_opens_no_store_does_not_touch_postgres(request):
+    # The autouse fixture has run. It must not have asked for the database.
+    assert "pg_database" not in request.fixturenames
+
+
+def test_the_service_uses_the_development_user_and_needs_a_database_url(
+    monkeypatch, pg_database
+):
+    monkeypatch.setattr(db_module, "_resolver", None)
+    monkeypatch.setattr(db_module, "_default", None)
+    monkeypatch.delenv(db_module.DATABASE_URL_ENV, raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL is not set"):
+        resolve("/any/state/dir")
+
+    monkeypatch.setenv(db_module.DATABASE_URL_ENV, pg_database)
+    database, user = resolve("/any/state/dir")
+    try:
+        assert user == DEV_USER_ID
+        assert resolve("/another/state/dir") == (database, DEV_USER_ID)
+    finally:
+        database.close()

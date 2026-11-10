@@ -1,113 +1,97 @@
 """Postgres test fixtures.
 
 One scratch database for each test session. It is emptied after each test.
-Inside one test, the unit of isolation is a user: call `make_user()` two times
-to get two separate owners.
+The unit of isolation is a user. A store that is opened at a state directory
+gets the user of that directory, so two directories are two isolated stores.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterator
-from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import psycopg
 import pytest
-from psycopg import sql
-from psycopg.conninfo import make_conninfo
 
+from coworker import db as db_module
 from coworker.db import Database
-
-TEST_DATABASE_URL_ENV = "TEST_DATABASE_URL"
-# The local Supabase database that `make db-up` starts. The port is set in
-# supabase/config.toml. These are the public defaults of the Supabase CLI.
-DEFAULT_ADMIN_URL = "postgresql://postgres:postgres@127.0.0.1:53322/postgres"
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS_DIR = REPO_ROOT / "supabase" / "migrations"
-AUTH_STUB = Path(__file__).with_name("auth_stub.sql")
-
-
-def admin_url() -> str:
-    return os.environ.get(TEST_DATABASE_URL_ENV) or DEFAULT_ADMIN_URL
+from coworker.pg_scratch import (
+    ADMIN_URL_ENV,
+    admin_url,
+    create_user,
+    empty,
+    scratch_database,
+    state_dir_resolver,
+)
 
 
-def connect_admin(url: str) -> psycopg.Connection:
-    """Connect, or fail the run. A missing database must never skip tests."""
+def open_scratch_database(url: str):
+    """Enter a scratch database, or fail the run. A missing database must never skip tests."""
+    scratch = scratch_database(url)
     try:
-        return psycopg.connect(url, autocommit=True, connect_timeout=5)
+        return scratch, scratch.__enter__()
     except psycopg.OperationalError:
         pytest.fail(
-            "Postgres is not reachable. Run `make db-up`, or set "
-            f"{TEST_DATABASE_URL_ENV}.",
+            f"Postgres is not reachable. Run `make db-up`, or set {ADMIN_URL_ENV}.",
             pytrace=False,
-        )
-
-
-def apply_sql_dir(conn: psycopg.Connection, directory: Path) -> list[str]:
-    """Run each .sql file in name order. Return the names that ran."""
-    ran: list[str] = []
-    for path in sorted(directory.glob("*.sql")):
-        conn.execute(path.read_text(encoding="utf-8"))
-        ran.append(path.name)
-    return ran
-
-
-def _empty(url: str) -> None:
-    with psycopg.connect(url, autocommit=True) as conn:
-        rows = conn.execute(
-            "select schemaname, tablename from pg_tables where schemaname = 'public'"
-        ).fetchall()
-        targets = [sql.Identifier(schema, table) for schema, table in rows]
-        targets.append(sql.Identifier("auth", "users"))
-        conn.execute(
-            sql.SQL("truncate {} restart identity cascade").format(
-                sql.SQL(", ").join(targets)
-            )
         )
 
 
 @pytest.fixture(scope="session")
 def pg_database() -> Iterator[str]:
-    """Connection string of a new database with the auth stub and all migrations."""
-    admin = connect_admin(admin_url())
-    dbname = f"sourcecado_test_{os.getpid()}"
-    name = sql.Identifier(dbname)
-    admin.execute(sql.SQL("drop database if exists {} with (force)").format(name))
-    admin.execute(sql.SQL("create database {} template template0").format(name))
-    url = make_conninfo(admin_url(), dbname=dbname)
+    """Connection string of a new database with all migrations applied."""
+    scratch, url = open_scratch_database(admin_url())
     try:
-        with psycopg.connect(url, autocommit=True) as conn:
-            conn.execute(AUTH_STUB.read_text(encoding="utf-8"))
-            apply_sql_dir(conn, MIGRATIONS_DIR)
         yield url
     finally:
-        admin.execute(sql.SQL("drop database if exists {} with (force)").format(name))
-        admin.close()
+        scratch.__exit__(None, None, None)
 
 
-@pytest.fixture
-def db(pg_database: str) -> Iterator[Database]:
-    database = Database(pg_database, max_size=2)
+@pytest.fixture(scope="session")
+def _session_database(pg_database: str) -> Iterator[Database]:
+    # One pool for the whole run. A new pool for each test costs about half a
+    # second to close, which is too slow for a suite of this size.
+    database = Database(pg_database, max_size=8)
     try:
         yield database
     finally:
         database.close()
-        _empty(pg_database)
+
+
+@pytest.fixture
+def db(pg_database: str, _session_database: Database) -> Iterator[Database]:
+    try:
+        yield _session_database
+    finally:
+        empty(pg_database)
 
 
 @pytest.fixture
 def make_user(pg_database: str, db: Database) -> Callable[[], UUID]:
     """Return a function that inserts one auth.users row and returns its id."""
+    return lambda: create_user(pg_database)
 
-    def create() -> UUID:
-        user_id = uuid4()
-        with psycopg.connect(pg_database, autocommit=True) as conn:
-            conn.execute(
-                "insert into auth.users (id, email) values (%s, %s)",
-                (user_id, f"{user_id}@example.test"),
-            )
-        return user_id
 
-    return create
+@pytest.fixture(autouse=True)
+def stores_use_the_test_database(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Point `coworker.db.resolve` at the scratch database for this test.
+
+    Nothing connects until a store asks. A test that opens no store does not
+    need Postgres.
+    """
+    bound: dict = {}
+
+    def resolver(base_dir):
+        if not bound:
+            url = request.getfixturevalue("pg_database")
+            database = request.getfixturevalue("_session_database")
+            bound.update(url=url, resolve=state_dir_resolver(database, url))
+        return bound["resolve"](base_dir)
+
+    db_module.set_resolver(resolver)
+    try:
+        yield
+    finally:
+        db_module.set_resolver(None)
+        if bound:
+            empty(bound["url"])
