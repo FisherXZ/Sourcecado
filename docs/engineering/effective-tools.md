@@ -7,13 +7,12 @@ The schemas sent to a model for a Sourcecado run are the sole capability surface
 1. the registered Sourcecado and connected MCP schemas;
 2. the runtime-owned sourcing or buddy narrowing policy;
 3. any validated persona declaration, which may narrow but never broaden that policy;
-4. current connector availability;
-5. active Sourcecado workspace grants, including read/write and shell authority; and
-6. the schema-level approval class derived from the runtime permission policy.
+4. current connector availability; and
+5. the schema-level approval class derived from the runtime permission policy.
 
 Persona prose and frontmatter do not grant tools. The built-in personas declare no tools. A custom declaration is treated only as an additional allowlist restriction, and an unknown or misspelled name fails composition clearly.
 
-Filesystem tools require an active workspace grant. Write tools additionally require a read-write grant. Shell tools require a read-write grant with shell authority. `request_directory` remains available so the operator can deliberately create the contract; it grants no filesystem or shell authority by itself.
+There are no local file tools and no shell tools. Migration slice S23 removed them, and `tests/test_no_local_tools.py` fails if one is registered again.
 
 Each effective schema keeps its registered shape and receives a content-free approval annotation: `auto`, `approval_required`, or `conditional`. Provider calls outside the supplied catalog are persisted as failed tool results and never execute.
 

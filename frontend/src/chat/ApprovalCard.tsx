@@ -12,7 +12,6 @@ import { ApprovalIcon } from "./approvalIcons";
 import {
   approvalView,
   auditOf,
-  canOfferAlways,
   executionText,
   formatDecisionTime,
   rawRequestText,
@@ -133,7 +132,6 @@ export function ApprovalCard({
   readonly part: ToolCallMessagePartProps;
   readonly onDecision: (
     approved: boolean,
-    scope?: "once" | "always",
   ) => Promise<"queued" | void> | "queued" | void;
 }) {
   const audit = auditOf(part);
@@ -152,7 +150,6 @@ export function ApprovalCard({
   const previousState = useRef<ApprovalState>(audit.approvalState);
   const detailsId = useId();
   const pending = audit.approvalState === "pending";
-  const alwaysOffered = canOfferAlways(part.toolName, view.shell);
   const reason = visibleReason(part.approval?.reason, part.toolName);
 
   // The thread's live region announces that an approval is needed. Take focus
@@ -197,20 +194,13 @@ export function ApprovalCard({
     return () => window.clearTimeout(timer);
   }, [submitting]);
 
-  async function decide(approved: boolean, scope: "once" | "always" = "once") {
-    // A standing grant exists only for the one shell command the model
-    // allows. Refuse here as well as hiding the button, so no keyboard or
-    // overflow path can request it for an email send or paid enrichment.
-    if (scope === "always" && !(approved && alwaysOffered)) return;
+  async function decide(approved: boolean) {
     setSubmitting(true);
     setSubmitFailed(false);
     setSubmitOutcomeUnknown(false);
     setSubmitQueued(false);
     try {
-      const outcome =
-        scope === "once"
-          ? await onDecision(approved)
-          : await onDecision(approved, scope);
+      const outcome = await onDecision(approved);
       if (outcome === "queued") setSubmitQueued(true);
     } catch {
       setSubmitting(false);
@@ -338,14 +328,7 @@ export function ApprovalCard({
       {reason ? <p className="sourcecado-approval-reason">{reason}</p> : null}
       {showDetails ? (
         <div id={detailsId} className="sourcecado-approval-details">
-          {view.shell || part.toolName === "shell_exec" ? (
-            <p>
-              Exact fingerprint:{" "}
-              {view.shell?.fingerprint?.slice(0, 16) ?? "unavailable"}
-            </p>
-          ) : (
-            <pre>{rawRequestText(part)}</pre>
-          )}
+          <pre>{rawRequestText(part)}</pre>
           <p>{scopeStatement(part.toolName)}</p>
         </div>
       ) : null}
@@ -401,18 +384,6 @@ export function ApprovalCard({
             <span>Allow once</span>
             <kbd aria-hidden="true">⌘⏎</kbd>
           </button>
-          {alwaysOffered ? (
-            <button
-              type="button"
-              data-decision="always"
-              aria-label="Always allow this exact command"
-              disabled={submitting}
-              onClick={() => void decide(true, "always")}
-            >
-              <ApprovalIcon name="shield" />
-              <span>Always allow this exact command</span>
-            </button>
-          ) : null}
         </div>
       </div>
     </section>

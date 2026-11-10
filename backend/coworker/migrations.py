@@ -53,11 +53,6 @@ from coworker.person_identity import (
 from coworker.secrets import SCHEMA_VERSION as SECRETS_VERSION
 from coworker.store import SCHEMA_VERSION as CONVERSATION_DB_VERSION
 from coworker.store import TRANSCRIPT_VERSION
-from coworker.workspace import WorkspaceGrantStore
-from coworker.workspace_audit import SCHEMA_VERSION as RECEIPTS_VERSION
-from coworker.workspace_policy import HostApprovalStore
-from coworker.workspace_runtime import DirectoryRequestStore
-from coworker.workspace_shell import ShellTaskStore
 
 MANIFEST_NAME = "state_versions.json"
 MANIFEST_VERSION = 1
@@ -933,28 +928,11 @@ def _adopt_meeting_evidence_db(context: MigrationContext) -> int:
     return _count_meeting_evidence_db(context)
 
 
-def _count_json_records(context: MigrationContext) -> int:
-    spec = context.spec
-    if spec.container_key is None:
-        return 0
-    document = read_json_document(context.root, spec)
-    return len(document.get(spec.container_key) or [])
-
-
-def _adopt_json_document(context: MigrationContext) -> int:
-    """Validate the shape, then let the engine stamp the version key."""
-    return _count_json_records(context)
-
-
 def count_jsonl_records(path: Path) -> int:
     if not path.is_file():
         return 0
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         return sum(1 for line in handle if line.strip())
-
-
-def _count_log_records(context: MigrationContext) -> int:
-    return count_jsonl_records(context.path)
 
 
 def _count_dir_records(context: MigrationContext) -> int:
@@ -978,7 +956,6 @@ def _adopt_recorded_store(context: MigrationContext) -> int:
 _RECORDED_COUNTERS: dict[str, Callable[[MigrationContext], int]] = {
     "conversation_transcripts": _count_dir_records,
     "presentation_events": _count_dir_records,
-    "workspace_receipts": _count_log_records,
     "secrets": _count_opaque_records,
     "mcp_config": _count_opaque_records,
 }
@@ -1207,83 +1184,6 @@ REGISTRY: tuple[StoreSpec, ...] = (
         current_version=0,
         version_channel=VersionChannel.NONE,
         description="Markdown mirror of the memories table. Checked, never migrated.",
-    ),
-    StoreSpec(
-        store_id="workspace_receipts",
-        kind=StoreKind.JSONL_LOG,
-        relative_path="workspace_receipts.jsonl",
-        current_version=RECEIPTS_VERSION,
-        version_channel=VersionChannel.MANIFEST,
-        description="Immutable receipts for workspace authority and execution.",
-        migrations=_adopt(
-            "Record the receipt log version alongside the store.",
-            _count_log_records,
-            _adopt_recorded_store,
-        ),
-    ),
-    StoreSpec(
-        store_id="workspace_grants",
-        kind=StoreKind.JSON_DOCUMENT,
-        relative_path="workspace_grants.json",
-        current_version=WorkspaceGrantStore.VERSION,
-        version_channel=VersionChannel.JSON_VERSION_KEY,
-        description="Operator grants over local directories.",
-        container_key="grants",
-        migrations=_adopt(
-            "Stamp the grant document with its version.",
-            _count_json_records,
-            _adopt_json_document,
-        ),
-    ),
-    StoreSpec(
-        store_id="shell_tasks",
-        kind=StoreKind.JSON_DOCUMENT,
-        relative_path="shell_tasks.json",
-        current_version=ShellTaskStore.VERSION,
-        version_channel=VersionChannel.JSON_VERSION_KEY,
-        description="Workspace shell tasks and their last known status.",
-        container_key="tasks",
-        migrations=_adopt(
-            "Stamp the shell task document with its version.",
-            _count_json_records,
-            _adopt_json_document,
-        ),
-    ),
-    StoreSpec(
-        store_id="host_command_approvals",
-        kind=StoreKind.JSON_DOCUMENT,
-        relative_path="host_command_approvals.json",
-        current_version=HostApprovalStore.VERSION,
-        version_channel=VersionChannel.JSON_VERSION_KEY,
-        description="Persistent allow-always decisions for direct host commands.",
-        container_key="approvals",
-        migrations=_adopt(
-            "Stamp the host approval document with its version.",
-            _count_json_records,
-            _adopt_json_document,
-        ),
-    ),
-    StoreSpec(
-        store_id="directory_requests",
-        kind=StoreKind.JSON_DOCUMENT,
-        relative_path="directory_requests.json",
-        current_version=DirectoryRequestStore.VERSION,
-        version_channel=VersionChannel.JSON_VERSION_KEY,
-        description="Pending and resolved requests for workspace authority.",
-        container_key="requests",
-        migrations=_adopt(
-            "Stamp the directory request document with its version.",
-            _count_json_records,
-            _adopt_json_document,
-        ),
-    ),
-    StoreSpec(
-        store_id="workspace_trash",
-        kind=StoreKind.DIRECTORY,
-        relative_path="workspace_trash",
-        current_version=0,
-        version_channel=VersionChannel.NONE,
-        description="Reversible workspace deletes. Checked, never migrated.",
     ),
     StoreSpec(
         store_id="secrets",

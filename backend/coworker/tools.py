@@ -41,8 +41,6 @@ from coworker.consequential_policy import ACTION_TOOLS, supported_mcp_read
 from coworker.drive_ingestion import DRIVE_INDEX_QUERY_SCHEMA, DriveIngestionStore
 from coworker.people import PersonStore
 from coworker.store import ConversationStore
-from coworker.workspace_runtime import WORKSPACE_TOOL_NAMES, WORKSPACE_TOOL_SCHEMAS
-from coworker.workspace_shell import shell_evidence, workspace_file_evidence
 
 TZ = ZoneInfo("America/Los_Angeles")
 
@@ -444,7 +442,6 @@ OPENAI_TOOLS = [
     *BOARD_TOOL_SCHEMAS,
     *CRM_TOOL_SCHEMAS,
     *MONID_TOOL_SCHEMAS,
-    *WORKSPACE_TOOL_SCHEMAS,
 ]
 
 
@@ -468,16 +465,6 @@ SOURCECADO_OWNED = frozenset(
         "board_upsert",
         "board_mutate",
         "board_delete",
-        "request_directory",
-        "fs_stat",
-        "fs_list",
-        "fs_find",
-        "fs_write",
-        "fs_edit",
-        "fs_move",
-        "fs_trash",
-        "shell_kill",
-        "shell_write_stdin",
     }
 )
 
@@ -489,9 +476,12 @@ _FAILURE_CONNECTORS = {
     "calendar": "calendar",
     "apollo": "apollo",
     "web": "web",
-    "fs": "workspace",
-    "shell": "shell",
 }
+
+def _drive_index_evidence(tool_name: str, payload: dict[str, Any]) -> EvidenceParts:
+    """Fence a Drive index result whole: indexed text is somebody else's."""
+    return opaque("drive", tool_name, payload)
+
 
 _EVIDENCE_ADAPTERS = {
     "gmail_read": gmail_evidence,
@@ -505,11 +495,7 @@ _EVIDENCE_ADAPTERS = {
     "apollo_search_people": apollo_evidence,
     "apollo_enrich_contact": apollo_evidence,
     "web_search": web_evidence,
-    "shell_exec": shell_evidence,
-    "shell_poll": shell_evidence,
-    "fs_read": workspace_file_evidence,
-    "fs_search": workspace_file_evidence,
-    "drive_index_query": workspace_file_evidence,
+    "drive_index_query": _drive_index_evidence,
     # Sourcecado-owned Person File fields; mail subjects and research sources fenced.
     "crm_get_person": person_file_evidence,
 }
@@ -619,7 +605,6 @@ def execute(
     actor: str = "assistant",
     run_id: str | None = None,
     allowed_source_ids: set[str] | None = None,
-    workspace_runtime: Any = None,
     approval_granted: bool = False,
     approval_scope: str = "once",
     approval_fingerprint: str | None = None,
@@ -647,19 +632,6 @@ def execute(
             session_id=session_id, run_id=run_id, allowed_source_ids=allowed_source_ids,
             directive=crm_directive, mutation_budget=crm_mutation_budget,
             gmail=gmail, apollo_configured=bool(apollo_key))
-    if name in WORKSPACE_TOOL_NAMES:
-        if workspace_runtime is None:
-            return False, {"status": "failed", "error": "workspace runtime missing"}
-        return workspace_runtime.execute_tool(
-            name,
-            args,
-            approval_granted=approval_granted,
-            approval_scope=approval_scope,
-            approval_fingerprint=approval_fingerprint,
-            actor=actor,
-            session_id=session_id,
-            run_id=run_id,
-        )
     if name in BOARD_TOOL_NAMES:
         if people is None:
             return False, {"status": "failed", "error": "people store missing"}

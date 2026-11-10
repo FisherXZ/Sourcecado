@@ -410,8 +410,6 @@ describe("failed turn rules", () => {
       "board_upsert",
       "board_delete",
       "calendar_create",
-      "shell_exec",
-      "fs_trash",
       "remember",
       "mcp__granola__create_note",
       "a_tool_nobody_has_heard_of",

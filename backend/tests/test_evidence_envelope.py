@@ -40,7 +40,6 @@ from tests.malicious_evidence import (
     gmail_message,
     granola_note,
     mcp_result,
-    shell_output,
     web_snippet,
 )
 
@@ -473,13 +472,3 @@ def test_a_drive_file_with_redacted_credentials_reads_as_restricted():
         {**drive_document(), "sensitive_content_redacted": True},
     )
     assert parts.envelopes[0].sensitivity == "restricted"
-
-
-def test_shell_output_that_never_reported_back_is_ambiguous_not_absent():
-    interrupted = evidence_for(
-        "shell_exec", {"task_id": "t1", "status": "interrupted", "output": ""}
-    )
-    assert interrupted.envelopes[0].content is Evidence.AMBIGUOUS
-
-    finished = evidence_for("shell_exec", shell_output())
-    assert finished.envelopes[0].content is Evidence.PRESENT

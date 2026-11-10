@@ -223,12 +223,10 @@ class TurnEventStream:
         identity: TurnIdentity,
         store: Any,
         emit: Callable[[dict[str, Any]], Awaitable[None]] | None,
-        persist_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         self.identity = identity
         self._store = store
         self._emit = emit
-        self._persist_transform = persist_transform
 
     async def send(self, event: dict[str, Any]) -> dict[str, Any]:
         payload = dict(event)
@@ -239,12 +237,7 @@ class TurnEventStream:
             event_id=f"event_{uuid.uuid4().hex}",
             **payload,
         )
-        persisted = (
-            self._persist_transform(envelope)
-            if self._persist_transform is not None
-            else envelope
-        )
-        self._store.append_event(self.identity.session_id, persisted)
+        self._store.append_event(self.identity.session_id, envelope)
         if self._emit is not None:
             await self._emit(envelope)
         return envelope

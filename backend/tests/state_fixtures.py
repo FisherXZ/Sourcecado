@@ -42,11 +42,6 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
     """Write a full state directory using the real store classes."""
     from coworker.people import PersonStore
     from coworker.store import ConversationStore
-    from coworker.workspace import GrantAccess, WorkspaceGrantStore
-    from coworker.workspace_audit import WorkspaceAuditStore
-    from coworker.workspace_policy import HostApprovalStore
-    from coworker.workspace_runtime import DirectoryRequestStore
-    from coworker.workspace_shell import ShellTaskStore
 
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -146,64 +141,6 @@ def build_current_state(root: Path, *, plant_secrets: bool = False) -> Path:
         session_id="main",
     )
     people.set_sequence(person_id, "open", actor="director")
-
-    grants = WorkspaceGrantStore(root)
-    grant_root = root.parent / "granted-workspace"
-    grant_root.mkdir(parents=True, exist_ok=True)
-    # A credential pasted into a label or a command summary is the realistic way
-    # a secret reaches a store that is not itself secret-bearing.
-    label = f"Sourcing notes {PLANTED_API_KEY}" if plant_secrets else "Sourcing notes"
-    grants.add(grant_root, label=label, access=GrantAccess.READ_ONLY)
-
-    ShellTaskStore(root).put(
-        {
-            "task_id": "task_1",
-            "status": "succeeded",
-            "execution_target": "docker",
-            "command_summary": (
-                f"curl -H 'authorization: Bearer {PLANTED_BEARER}' api.example.com"
-                if plant_secrets
-                else "ls -la"
-            ),
-            "exit_code": 0,
-        }
-    )
-    DirectoryRequestStore(root).create(
-        {"label": label, "access": "read_only"},
-        session_id="main",
-        run_id="run_a1",
-    )
-    HostApprovalStore(root)._save(
-        {
-            "version": HostApprovalStore.VERSION,
-            "approvals": [
-                {
-                    "id": "host_approval_1",
-                    "fingerprint": "b" * 64,
-                    "command_summary": (
-                        f"npm test --token={PLANTED_API_KEY}"
-                        if plant_secrets
-                        else "npm test"
-                    ),
-                    "cwd": "/tmp/granted-workspace",
-                    "environment_fingerprint": "c" * 64,
-                    "actor": "director",
-                    "created_at": _now(),
-                    "revoked_at": None,
-                }
-            ],
-        }
-    )
-    WorkspaceAuditStore(root).record(
-        receipt_type="shell",
-        tool="shell_run",
-        risk_class="reversible",
-        decision="allow",
-        execution_target="docker",
-        status="succeeded",
-        summary="ran npm test",
-        grant_id="grant_1",
-    )
 
     _write_json(
         root / "mcp.json",
@@ -651,57 +588,15 @@ def build_legacy_state(root: Path, *, plant_secrets: bool = False) -> Path:
         "# 1\n\nCodeology sources design-adjacent engineers first.\n",
     )
 
-    # Pre-registry JSON documents: shaped correctly but carrying no version key.
-    _write_json(
-        root / "workspace_grants.json",
-        {
-            "grants": [
-                {
-                    "id": "grant_legacy_1",
-                    "path": str(root.parent / "granted-workspace"),
-                    "label": "Sourcing notes",
-                    "access": "read_only",
-                    "allow_shell": False,
-                    "filesystem_identity": {"device": 1, "inode": 2},
-                    "created_at": "2026-07-14T18:02:00+00:00",
-                    "updated_at": "2026-07-14T18:02:00+00:00",
-                    "revoked_at": None,
-                }
-            ]
-        },
-    )
-    _write_json(root / "shell_tasks.json", {"tasks": []})
-    _write_json(root / "host_command_approvals.json", {"approvals": []})
-    _write_json(root / "directory_requests.json", {"requests": []})
     _write_json(root / "mcp.json", {"mcpServers": {}})
     _write_json(
         root / "secrets.json",
         {"apollo": {"api_key": PLANTED_API_KEY}} if plant_secrets else {"google": {}},
     )
-    _write_jsonl(
-        root / "workspace_receipts.jsonl",
-        [
-            {
-                "id": "receipt_legacy_1",
-                "receipt_type": "file",
-                "tool": "fs_write",
-                "risk_class": "reversible",
-                "decision": "allow",
-                "execution_target": "host",
-                "status": "succeeded",
-                "summary": "wrote notes.md",
-                "created_at": "2026-07-14T18:04:00+00:00",
-            }
-        ],
-    )
     return root
 
 
 # --- helpers -------------------------------------------------------------
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def hours_ago(hours: int) -> str:

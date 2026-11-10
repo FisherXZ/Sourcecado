@@ -9,9 +9,7 @@ shell live in `frontend/`. `archive/hosted-web/` preserves the retired applicati
 
 Use macOS for native development. Install Git, Python **3.14**, Node **24**,
 and npm. Native development also needs Rust via rustup and Apple's command-line
-developer tools (`xcode-select --install` if absent). Docker is optional; see
-[workspace authority](docs/engineering/adr/0002-sourcecado-workspace-runtime.md)
-before working on shell execution.
+developer tools (`xcode-select --install` if absent).
 
 ```bash
 git clone https://github.com/FisherXZ/Sourcecado.git
@@ -178,7 +176,6 @@ not exhaustive coverage.
 | People, sequences and evidence | `backend/coworker/people.py`, `brief.py`, `reply_filing.py` | `test_reply_filing.py`; [living brief](docs/engineering/living-brief.md) |
 | Durable runs and restart | `backend/coworker/agent_run_repository.py`, `agent_run_resume.py`, `agent_run_reconcile.py` | `test_agent_run_restart.py`; [agent runs](docs/engineering/agent-runs.md) |
 | Scheduling | `backend/coworker/automation/scheduler.py`, GUI `src/routes/ScheduledPage.tsx` | `test_schedule.py`, GUI `scheduledPage.test.tsx` |
-| Workspace files and commands | `backend/coworker/workspace_runtime.py`, `workspace_files.py`, `workspace_shell.py` | `test_workspace_runtime.py`; [workspace ADR](docs/engineering/adr/0002-sourcecado-workspace-runtime.md) |
 | Storage evolution | `backend/coworker/migrations.py`, `doctor.py`, each owning store | `test_migrations.py`, `test_doctor.py` |
 
 The [documentation map](docs/README.md) links the other subsystem guides. The dated

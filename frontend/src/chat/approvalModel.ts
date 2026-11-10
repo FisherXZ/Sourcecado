@@ -84,17 +84,6 @@ export function auditOf(part: ToolCallMessagePartProps): ApprovalAudit {
   };
 }
 
-export type ShellCommandResource = {
-  readonly executionTarget: "docker" | "host" | "unknown";
-  readonly commandSummary: string;
-  readonly commandDisplay: string;
-  readonly environmentKeys: readonly string[];
-  readonly cwd: string | null;
-  readonly fingerprint: string | null;
-  readonly unsandboxed: boolean;
-  readonly permanentEligible: boolean;
-};
-
 type ResourceRecord = Record<string, unknown>;
 
 function resourceRecord(part: ToolCallMessagePartProps): ResourceRecord | null {
@@ -106,36 +95,6 @@ function resourceRecord(part: ToolCallMessagePartProps): ResourceRecord | null {
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function shellCommandResourceOf(
-  part: ToolCallMessagePartProps,
-): ShellCommandResource | null {
-  const record = resourceRecord(part);
-  if (
-    !record ||
-    record.kind !== "shell_command" ||
-    !["docker", "host", "unknown"].includes(String(record.execution_target)) ||
-    typeof record.command_summary !== "string" ||
-    typeof record.command_display !== "string" ||
-    !Array.isArray(record.environment_keys) ||
-    !record.environment_keys.every((key) => typeof key === "string") ||
-    typeof record.unsandboxed !== "boolean" ||
-    typeof record.permanent_eligible !== "boolean"
-  ) {
-    return null;
-  }
-  return {
-    executionTarget: record.execution_target as "docker" | "host" | "unknown",
-    commandSummary: record.command_summary,
-    commandDisplay: record.command_display,
-    environmentKeys: record.environment_keys as string[],
-    cwd: typeof record.cwd === "string" ? record.cwd : null,
-    fingerprint:
-      typeof record.fingerprint === "string" ? record.fingerprint : null,
-    unsandboxed: record.unsandboxed,
-    permanentEligible: record.permanent_eligible === true,
-  };
 }
 
 type SendFacts = {
@@ -239,7 +198,6 @@ export type ApprovalView = {
   readonly rows: readonly ApprovalRow[];
   readonly spendsCredits: boolean;
   readonly calendarWrite: boolean;
-  readonly shell: ShellCommandResource | null;
   /** Shown above the buttons when the payload cannot support the decision. */
   readonly caveat: string | null;
   /** Shown as a warning above the buttons. */
@@ -285,18 +243,6 @@ function genericRows(args: Args): ApprovalRow[] {
     });
 }
 
-const WORKSPACE_TITLES: Readonly<Record<string, string>> = {
-  fs_mkdir: "Create workspace directory",
-  fs_write: "Write workspace file",
-  fs_patch: "Update workspace file",
-  fs_copy: "Copy workspace file",
-  fs_move: "Move workspace file",
-  fs_trash: "Trash workspace item",
-  request_directory: "Request workspace access",
-  shell_write_stdin: "Send input to workspace command",
-  shell_kill: "Cancel workspace command",
-};
-
 function creditsLabel(credits: number): string {
   return `${credits} Apollo ${credits === 1 ? "credit" : "credits"}`;
 }
@@ -307,7 +253,6 @@ export function approvalView(part: ToolCallMessagePartProps): ApprovalView {
   const base = {
     spendsCredits: false,
     calendarWrite: false,
-    shell: null as ShellCommandResource | null,
     caveat: null as string | null,
     warning: null as string | null,
   };
@@ -430,77 +375,12 @@ export function approvalView(part: ToolCallMessagePartProps): ApprovalView {
     };
   }
 
-  if (toolName === "shell_exec") {
-    const shell = shellCommandResourceOf(part);
-    return {
-      ...base,
-      title: "Run workspace command",
-      icon: "terminal",
-      shell,
-      warning: shell
-        ? shell.unsandboxed
-          ? "This runs directly under your macOS account and can access everything that account can access."
-          : "The real workspace is mounted read-write and container networking is unrestricted."
-        : null,
-      rows: [
-        row(
-          "sandbox",
-          "Sandbox",
-          "shield",
-          shell ? (shell.unsandboxed ? "Not sandboxed" : "Docker sandbox") : null,
-        ),
-        row(
-          "command",
-          "Command",
-          "terminal",
-          shell?.commandDisplay ?? null,
-          "Command details unavailable",
-          "code",
-        ),
-        row("cwd", "Working folder", "folder", shell?.cwd ?? null, "Could not be resolved"),
-        row(
-          "env",
-          "Environment",
-          "list",
-          shell
-            ? shell.environmentKeys.length
-              ? shell.environmentKeys.join(", ")
-              : "No additional environment values."
-            : null,
-        ),
-      ],
-    };
-  }
-
-  const workspaceTitle = WORKSPACE_TITLES[toolName];
   return {
     ...base,
-    title: workspaceTitle ?? "Run Sourcecado action",
-    icon: toolName.startsWith("fs_") || toolName === "request_directory" ? "folder" : "bolt",
+    title: "Run Sourcecado action",
+    icon: "bolt",
     rows: genericRows(args),
   };
-}
-
-/**
- * Never offered for email sends or paid enrichment, whatever the payload says.
- * The explicit deny list is deliberate: the shell grant is the only standing
- * permission that exists, and it must not become reachable for these tools by a
- * change to the allow rule below.
- */
-const NEVER_STANDING = new Set(["gmail_send", "apollo_enrich_contact", "monid_research"]);
-
-export function canOfferAlways(
-  toolName: string,
-  shell: ShellCommandResource | null,
-): boolean {
-  if (NEVER_STANDING.has(toolName)) return false;
-  return (
-    toolName === "shell_exec" &&
-    shell !== null &&
-    shell.unsandboxed &&
-    shell.fingerprint !== null &&
-    shell.permanentEligible
-  );
 }
 
 /** The backend's generic policy text is not something the operator decides on. */
@@ -518,11 +398,11 @@ export function displayedArguments(toolName: string, args: Args): Args {
   return sanitizeApolloNameMasks(args) as Args;
 }
 
-/** The raw request the Details toggle shows. Never the shell command. */
+/** The raw request the Details toggle shows. */
 export function rawRequestText(part: ToolCallMessagePartProps): string {
   const record = resourceRecord(part);
   const resource =
-    record && record.kind !== "shell_command"
+    record
       ? Object.fromEntries(
           Object.entries(record)
             .filter(([key]) => key !== "body")
@@ -554,9 +434,6 @@ export function scopeStatement(toolName: string): string {
   }
   if (toolName === "calendar_create" || toolName === "calendar_update") {
     return "Scope: allow once. This changes Google Calendar and will not send email.";
-  }
-  if (toolName === "shell_exec") {
-    return "Scope: allow once. Only this exact command request will run.";
   }
   if (toolName === "apollo_enrich_contact") {
     return "Scope: allow once. This spends credits for this one request only.";

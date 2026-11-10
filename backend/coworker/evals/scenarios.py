@@ -35,12 +35,6 @@ class PersonExpectation:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkspaceExpectation:
-    path: str
-    content: str
-
-
-@dataclass(frozen=True, slots=True)
 class GmailDraftExpectation:
     to: str
     subject: str
@@ -105,7 +99,6 @@ class EvalScenario:
     expected_tool_sequence: tuple[str, ...]
     expected_terminal_state: str
     expected_people: tuple[PersonExpectation, ...] = ()
-    expected_workspace_files: tuple[WorkspaceExpectation, ...] = ()
     forbidden_tools: tuple[str, ...] = ()
     initial_messages: tuple[dict[str, Any], ...] = ()
     seed_people: tuple[SeedPerson, ...] = ()
@@ -203,34 +196,3 @@ def environment_probe_scenario() -> EvalScenario:
         expected_terminal_state="complete",
     )
 
-
-def workspace_write_scenario() -> EvalScenario:
-    return EvalScenario(
-        scenario_id="workspace-write-confined",
-        prompt="Write the evaluation note inside the granted workspace.",
-        provider_steps=(
-            ProviderStep(
-                tool_calls=(
-                    ToolCall(
-                        id="eval-workspace-1",
-                        name="fs_write",
-                        arguments={
-                            "grant_id": "$EVAL_WORKSPACE_GRANT",
-                            "path": "notes/eval.txt",
-                            "content": "isolated workspace effect",
-                            "create_parents": True,
-                        },
-                    ),
-                ),
-                usage=_usage(6, 2),
-            ),
-            ProviderStep(text_deltas=("Wrote the isolated note.",), usage=_usage(10, 3)),
-        ),
-        expected_tool_sequence=("fs_write",),
-        expected_terminal_state="complete",
-        expected_workspace_files=(
-            WorkspaceExpectation(
-                path="notes/eval.txt", content="isolated workspace effect"
-            ),
-        ),
-    )
