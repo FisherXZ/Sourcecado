@@ -3,28 +3,20 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import sqlite3
-import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from functools import wraps
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
+import psycopg
+from psycopg.rows import dict_row
+
+from coworker import db
 from coworker.people import PersonStore
 
 PROVIDERS = frozenset({"calendar", "granola"})
-
-
-def _synchronized(method):
-    @wraps(method)
-    def wrapped(self, *args, **kwargs):
-        with self._lock:
-            return method(self, *args, **kwargs)
-
-    return wrapped
 
 
 def _now() -> str:
@@ -126,46 +118,16 @@ def _normalize(provider: str, raw: dict[str, Any]) -> dict[str, Any]:
 class MeetingEvidenceStore:
     def __init__(self, base_dir: str | Path, *, people: PersonStore) -> None:
         self.base = Path(base_dir).expanduser()
-        self.base.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.base, 0o700)
         self.people = people
-        self._lock = threading.RLock()
-        self.db_path = self.base / "meeting_evidence.db"
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        os.chmod(self.db_path, 0o600)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS meeting_evidence (
-                evidence_id TEXT PRIMARY KEY,
-                provider TEXT NOT NULL,
-                provider_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                starts_at TEXT,
-                ends_at TEXT,
-                participants_json TEXT NOT NULL,
-                source_ref_json TEXT NOT NULL,
-                notes TEXT,
-                status TEXT NOT NULL,
-                person_id TEXT,
-                match_reason TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(provider, provider_id)
-            );
-            CREATE TABLE IF NOT EXISTS meeting_candidates (
-                evidence_id TEXT NOT NULL,
-                person_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                match_reason TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY(evidence_id, person_id)
-            );
-            """
-        )
-        self._conn.commit()
+        self._db, self._user_id = db.resolve(self.base)
 
-    def _row(self, row: sqlite3.Row, *, status: str | None = None, reason: str | None = None) -> dict[str, Any]:
+    @contextmanager
+    def _tx(self) -> Iterator[psycopg.Cursor[dict[str, Any]]]:
+        """One transaction for this store's user. Rows come back as dicts."""
+        with self._db.tx(self._user_id) as conn:
+            yield conn.cursor(row_factory=dict_row)
+
+    def _row(self, row: dict[str, Any], *, status: str | None = None, reason: str | None = None) -> dict[str, Any]:
         return {
             "evidence_id": str(row["evidence_id"]),
             "provider": str(row["provider"]),
@@ -182,33 +144,41 @@ class MeetingEvidenceStore:
             "updated_at": str(row["updated_at"]),
         }
 
-    def _get_row(self, evidence_id: str) -> sqlite3.Row:
-        row = self._conn.execute(
-            "SELECT * FROM meeting_evidence WHERE evidence_id = ?", (evidence_id,)
+    def _get_row(
+        self, cur: psycopg.Cursor[dict[str, Any]], evidence_id: str, *, lock: bool = False
+    ) -> dict[str, Any]:
+        row = cur.execute(
+            "SELECT * FROM meeting_evidence WHERE user_id = %s AND evidence_id = %s"
+            + (" FOR UPDATE" if lock else ""),
+            (self._user_id, evidence_id),
         ).fetchone()
         if row is None:
             raise ValueError("unknown meeting evidence")
         return row
 
-    def _upsert(self, meeting: dict[str, Any]) -> sqlite3.Row:
+    def _upsert(self, meeting: dict[str, Any]) -> dict[str, Any]:
         stamp = _now()
-        existing = self._conn.execute(
-            """
-            SELECT * FROM meeting_evidence
-            WHERE provider = ? AND provider_id = ?
-            """,
-            (meeting["provider"], meeting["provider_id"]),
-        ).fetchone()
-        if existing is None:
-            self._conn.execute(
+        with self._tx() as cur:
+            return cur.execute(
                 """
                 INSERT INTO meeting_evidence (
-                    evidence_id, provider, provider_id, title, starts_at, ends_at,
-                    participants_json, source_ref_json, notes, status, person_id,
-                    match_reason, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unmatched', NULL, NULL, ?, ?)
+                    user_id, evidence_id, provider, provider_id, title, starts_at,
+                    ends_at, participants_json, source_ref_json, notes, status,
+                    person_id, match_reason, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'unmatched',
+                          NULL, NULL, %s, %s)
+                ON CONFLICT (user_id, provider, provider_id) DO UPDATE SET
+                    title = excluded.title,
+                    starts_at = excluded.starts_at,
+                    ends_at = excluded.ends_at,
+                    participants_json = excluded.participants_json,
+                    source_ref_json = excluded.source_ref_json,
+                    notes = excluded.notes,
+                    updated_at = excluded.updated_at
+                RETURNING *
                 """,
                 (
+                    self._user_id,
                     meeting["evidence_id"],
                     meeting["provider"],
                     meeting["provider_id"],
@@ -221,30 +191,8 @@ class MeetingEvidenceStore:
                     stamp,
                     stamp,
                 ),
-            )
-        else:
-            self._conn.execute(
-                """
-                UPDATE meeting_evidence SET
-                    title = ?, starts_at = ?, ends_at = ?, participants_json = ?,
-                    source_ref_json = ?, notes = ?, updated_at = ?
-                WHERE evidence_id = ?
-                """,
-                (
-                    meeting["title"],
-                    meeting["starts_at"],
-                    meeting["ends_at"],
-                    json.dumps(meeting["participants"]),
-                    json.dumps(meeting["source_ref"]),
-                    meeting["notes"],
-                    stamp,
-                    str(existing["evidence_id"]),
-                ),
-            )
-        self._conn.commit()
-        return self._get_row(meeting["evidence_id"])
-
-    def _candidate_matches(self, row: sqlite3.Row) -> dict[str, str]:
+            ).fetchone()
+    def _candidate_matches(self, row: dict[str, Any]) -> dict[str, str]:
         participants = json.loads(str(row["participants_json"]))
         participant_emails = {
             _email(item.get("email"))
@@ -273,7 +221,7 @@ class MeetingEvidenceStore:
                 matches[person_id] = "name_only"
         return matches
 
-    def _sync_person_event(self, row: sqlite3.Row) -> None:
+    def _sync_person_event(self, row: dict[str, Any]) -> None:
         if row["status"] != "attached" or not row["person_id"]:
             return
         meeting = self._row(row)
@@ -305,56 +253,81 @@ class MeetingEvidenceStore:
             ),
         )
 
-    def _match(self, row: sqlite3.Row) -> None:
+    def _match(self, row: dict[str, Any]) -> None:
         if row["status"] == "attached":
             self._sync_person_event(row)
             return
+        # Read the people store before the transaction opens, so no row lock
+        # is held while another store works.
         matches = self._candidate_matches(row)
-        self._conn.execute(
-            "DELETE FROM meeting_candidates WHERE evidence_id = ? AND status = 'proposed'",
-            (row["evidence_id"],),
-        )
         email_matches = {
             person_id for person_id, reason in matches.items() if reason == "exact_email"
         }
-        if len(matches) == 1 and len(email_matches) == 1:
-            person_id = next(iter(email_matches))
-            self._conn.execute(
-                """
-                UPDATE meeting_evidence SET
-                    status = 'attached', person_id = ?, match_reason = 'exact_email',
-                    updated_at = ?
-                WHERE evidence_id = ?
-                """,
-                (person_id, _now(), row["evidence_id"]),
-            )
-            self._conn.commit()
-            self._sync_person_event(self._get_row(str(row["evidence_id"])))
-            return
-        for person_id, reason in matches.items():
-            self._conn.execute(
-                """
-                INSERT INTO meeting_candidates (
-                    evidence_id, person_id, status, match_reason, updated_at
-                ) VALUES (?, ?, 'proposed', ?, ?)
-                ON CONFLICT(evidence_id, person_id) DO UPDATE SET
-                    match_reason = excluded.match_reason,
-                    updated_at = excluded.updated_at
-                WHERE meeting_candidates.status != 'rejected'
-                """,
-                (row["evidence_id"], person_id, reason, _now()),
-            )
-        self._conn.execute(
-            """
-            UPDATE meeting_evidence SET status = ?, person_id = NULL,
-                match_reason = NULL, updated_at = ?
-            WHERE evidence_id = ?
-            """,
-            ("proposed" if matches else "unmatched", _now(), row["evidence_id"]),
-        )
-        self._conn.commit()
+        evidence_id = str(row["evidence_id"])
+        with self._tx() as cur:
+            # The row lock stands in for the SQLite store's process lock: an
+            # attach cannot land between this check and the writes below.
+            current = self._get_row(cur, evidence_id, lock=True)
+            if current["status"] == "attached":
+                attached = current
+            elif len(matches) == 1 and len(email_matches) == 1:
+                cur.execute(
+                    """
+                    DELETE FROM meeting_candidates
+                    WHERE user_id = %s AND evidence_id = %s AND status = 'proposed'
+                    """,
+                    (self._user_id, evidence_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE meeting_evidence SET
+                        status = 'attached', person_id = %s,
+                        match_reason = 'exact_email', updated_at = %s
+                    WHERE user_id = %s AND evidence_id = %s
+                    """,
+                    (next(iter(email_matches)), _now(), self._user_id, evidence_id),
+                )
+                attached = self._get_row(cur, evidence_id)
+            else:
+                attached = None
+                cur.execute(
+                    """
+                    DELETE FROM meeting_candidates
+                    WHERE user_id = %s AND evidence_id = %s AND status = 'proposed'
+                    """,
+                    (self._user_id, evidence_id),
+                )
+                for person_id, reason in matches.items():
+                    cur.execute(
+                        """
+                        INSERT INTO meeting_candidates (
+                            user_id, evidence_id, person_id, status, match_reason,
+                            updated_at
+                        ) VALUES (%s, %s, %s, 'proposed', %s, %s)
+                        ON CONFLICT (user_id, evidence_id, person_id) DO UPDATE SET
+                            match_reason = excluded.match_reason,
+                            updated_at = excluded.updated_at
+                        WHERE meeting_candidates.status != 'rejected'
+                        """,
+                        (self._user_id, evidence_id, person_id, reason, _now()),
+                    )
+                cur.execute(
+                    """
+                    UPDATE meeting_evidence SET status = %s, person_id = NULL,
+                        match_reason = NULL, updated_at = %s
+                    WHERE user_id = %s AND evidence_id = %s
+                    """,
+                    (
+                        "proposed" if matches else "unmatched",
+                        _now(),
+                        self._user_id,
+                        evidence_id,
+                    ),
+                )
+        # The person event is written after this store's commit, as before.
+        if attached is not None:
+            self._sync_person_event(attached)
 
-    @_synchronized
     def ingest(self, provider: str, records: Iterable[dict[str, Any]]) -> int:
         if provider not in PROVIDERS:
             raise ValueError(f"unsupported meeting provider: {provider}")
@@ -389,29 +362,31 @@ class MeetingEvidenceStore:
                 sources[provider] = {"status": "ok", "records": count}
         return {"sources": sources}
 
-    @_synchronized
     def for_person(self, person_id: str) -> dict[str, list[dict[str, Any]]]:
         if self.people.get(person_id) is None:
             raise ValueError("unknown person")
-        attached_rows = self._conn.execute(
-            """
-            SELECT * FROM meeting_evidence
-            WHERE status = 'attached' AND person_id = ?
-            ORDER BY starts_at, evidence_id
-            """,
-            (person_id,),
-        ).fetchall()
-        candidate_rows = self._conn.execute(
-            """
-            SELECT e.*, c.status AS candidate_status,
-                   c.match_reason AS candidate_reason
-            FROM meeting_candidates c
-            JOIN meeting_evidence e ON e.evidence_id = c.evidence_id
-            WHERE c.person_id = ?
-            ORDER BY e.starts_at, e.evidence_id
-            """,
-            (person_id,),
-        ).fetchall()
+        with self._tx() as cur:
+            attached_rows = cur.execute(
+                """
+                SELECT * FROM meeting_evidence
+                WHERE user_id = %s AND status = 'attached' AND person_id = %s
+                ORDER BY starts_at COLLATE "C" NULLS FIRST, evidence_id COLLATE "C"
+                """,
+                (self._user_id, person_id),
+            ).fetchall()
+            candidate_rows = cur.execute(
+                """
+                SELECT e.*, c.status AS candidate_status,
+                       c.match_reason AS candidate_reason
+                FROM meeting_candidates c
+                JOIN meeting_evidence e
+                  ON e.user_id = c.user_id AND e.evidence_id = c.evidence_id
+                WHERE c.user_id = %s AND c.person_id = %s
+                ORDER BY e.starts_at COLLATE "C" NULLS FIRST,
+                         e.evidence_id COLLATE "C"
+                """,
+                (self._user_id, person_id),
+            ).fetchall()
         return {
             "attached": [self._row(row) for row in attached_rows],
             "proposed": [
@@ -434,65 +409,70 @@ class MeetingEvidenceStore:
             ],
         }
 
-    @_synchronized
     def attach(self, evidence_id: str, person_id: str) -> dict[str, Any]:
         if self.people.get(person_id) is None:
             raise ValueError("unknown person")
-        row = self._get_row(evidence_id)
-        candidate = self._conn.execute(
-            """
-            SELECT 1 FROM meeting_candidates
-            WHERE evidence_id = ? AND person_id = ?
-            """,
-            (evidence_id, person_id),
-        ).fetchone()
-        if candidate is None and not (
-            row["status"] == "attached" and row["person_id"] == person_id
-        ):
-            raise ValueError("meeting was not proposed for this person")
-        self._conn.execute(
-            """
-            UPDATE meeting_evidence SET status = 'attached', person_id = ?,
-                match_reason = 'director_attached', updated_at = ?
-            WHERE evidence_id = ?
-            """,
-            (person_id, _now(), evidence_id),
-        )
-        self._conn.execute(
-            """
-            UPDATE meeting_candidates SET
-                status = CASE WHEN person_id = ? THEN 'attached' ELSE 'rejected' END,
-                updated_at = ?
-            WHERE evidence_id = ?
-            """,
-            (person_id, _now(), evidence_id),
-        )
-        self._conn.commit()
-        attached = self._get_row(evidence_id)
+        with self._tx() as cur:
+            # The row lock makes the proposal check and the attach one step.
+            row = self._get_row(cur, evidence_id, lock=True)
+            candidate = cur.execute(
+                """
+                SELECT 1 FROM meeting_candidates
+                WHERE user_id = %s AND evidence_id = %s AND person_id = %s
+                """,
+                (self._user_id, evidence_id, person_id),
+            ).fetchone()
+            if candidate is None and not (
+                row["status"] == "attached" and row["person_id"] == person_id
+            ):
+                raise ValueError("meeting was not proposed for this person")
+            cur.execute(
+                """
+                UPDATE meeting_evidence SET status = 'attached', person_id = %s,
+                    match_reason = 'director_attached', updated_at = %s
+                WHERE user_id = %s AND evidence_id = %s
+                """,
+                (person_id, _now(), self._user_id, evidence_id),
+            )
+            cur.execute(
+                """
+                UPDATE meeting_candidates SET
+                    status = CASE WHEN person_id = %s THEN 'attached' ELSE 'rejected' END,
+                    updated_at = %s
+                WHERE user_id = %s AND evidence_id = %s
+                """,
+                (person_id, _now(), self._user_id, evidence_id),
+            )
+            attached = self._get_row(cur, evidence_id)
+        # The person event is written after this store's commit, as before.
         self._sync_person_event(attached)
         return self._row(attached)
 
-    @_synchronized
     def reject(self, evidence_id: str, person_id: str) -> dict[str, Any]:
-        candidate = self._conn.execute(
-            """
-            SELECT match_reason FROM meeting_candidates
-            WHERE evidence_id = ? AND person_id = ?
-            """,
-            (evidence_id, person_id),
-        ).fetchone()
-        if candidate is None:
-            raise ValueError("meeting was not proposed for this person")
-        self._conn.execute(
-            """
-            UPDATE meeting_candidates SET status = 'rejected', updated_at = ?
-            WHERE evidence_id = ? AND person_id = ?
-            """,
-            (_now(), evidence_id, person_id),
-        )
-        self._conn.commit()
+        with self._tx() as cur:
+            candidate = cur.execute(
+                """
+                SELECT match_reason FROM meeting_candidates
+                WHERE user_id = %s AND evidence_id = %s AND person_id = %s
+                FOR UPDATE
+                """,
+                (self._user_id, evidence_id, person_id),
+            ).fetchone()
+            if candidate is None:
+                raise ValueError("meeting was not proposed for this person")
+            cur.execute(
+                """
+                UPDATE meeting_candidates SET status = 'rejected', updated_at = %s
+                WHERE user_id = %s AND evidence_id = %s AND person_id = %s
+                """,
+                (_now(), self._user_id, evidence_id, person_id),
+            )
+        # Read after the commit, as before: an unknown evidence id raises here
+        # and leaves the rejection in place.
+        with self._tx() as cur:
+            row = self._get_row(cur, evidence_id)
         return self._row(
-            self._get_row(evidence_id),
+            row,
             status="rejected",
             reason=str(candidate["match_reason"]),
         )

@@ -111,7 +111,6 @@ def test_registry_names_every_active_durable_store():
         "agent_runs_db",
         "conversation_db",
         "people_db",
-        "meeting_evidence",
         "conversation_transcripts",
         "presentation_events",
         "memory_notes",
@@ -445,34 +444,6 @@ def test_people_v3_adds_the_description_table_to_an_existing_v2_database(tmp_pat
     reopened = PersonStore(root)
     assert reopened.descriptions(person["person_id"])["general"]["version"] == 0
     assert _user_version(db) == migrations.spec_for("people_db").current_version
-
-
-def test_legacy_meeting_evidence_db_upgrades_from_the_pre_registry_shape(tmp_path):
-    root = build_legacy_state(tmp_path / "state")
-    db = root / "meeting_evidence.db"
-    assert _user_version(db) == 0
-
-    store_plan = _plan_for(migrations.plan_migrations(root), "meeting_evidence")
-    assert store_plan.status is StoreStatus.PENDING
-    assert store_plan.from_version == 0
-    assert store_plan.to_version == 1
-    assert store_plan.record_count == 1
-
-    assert migrations.apply_migrations(root).error is None
-    assert _user_version(db) == 1
-
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
-    try:
-        meeting = conn.execute(
-            "SELECT * FROM meeting_evidence WHERE evidence_id = 'meeting_abc123abc123abc123abcd'"
-        ).fetchone()
-        assert meeting["provider"] == "calendar"
-        assert meeting["provider_id"] == "evt_1"
-        assert meeting["title"] == "Rippling intro"
-        assert meeting["status"] == "unmatched"
-    finally:
-        conn.close()
 
 
 def test_legacy_json_documents_are_stamped_without_losing_records(tmp_path):
