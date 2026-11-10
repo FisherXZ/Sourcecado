@@ -102,6 +102,12 @@ sourcing evals. An empty Contacts table is expected. Model responses require a
 configured provider; an API key warning is expected if you submit chat without
 one. The UI is not a simulated live assistant.
 
+To check the interface around the model with no key, start the backend with
+`make backend-mock` in place of `make backend`. Every chat then gets one fixed
+reply, and no model is called. Use it for QA of chat streaming, Contacts,
+person files, and Scheduled. It does not call tools, so it cannot show a
+sourcing run.
+
 For an offline example of the complete sourcing job, run `make eval-sourcing`.
 Its fake model and connectors exercise drafting, approval and person-file
 effects without calling live services. Read
