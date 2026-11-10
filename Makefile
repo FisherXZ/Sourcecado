@@ -2,7 +2,7 @@ PYTHON ?= python3.14
 VENV := backend/.venv
 GUI := frontend
 
-.PHONY: setup backend gui native test test-python test-gui eval eval-sourcing build doctor doctor-repair secret-scan build-backend smoke-test test-update update-status update-rollback update-manifest update-verify
+.PHONY: setup backend gui native db-up db-reset test test-python test-gui eval eval-sourcing build doctor doctor-repair secret-scan build-backend smoke-test test-update update-status update-rollback update-manifest update-verify
 
 setup:
 	$(PYTHON) -m venv $(VENV)
@@ -17,6 +17,12 @@ gui:
 
 native:
 	npm --prefix $(GUI) run tauri:dev
+
+db-up:
+	supabase db start
+
+db-reset:
+	supabase db reset
 
 test: test-python test-gui
 

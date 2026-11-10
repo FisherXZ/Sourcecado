@@ -33,6 +33,25 @@ Setup installs the hash-locked Python dependencies and runs `npm ci`. It does
 not configure credentials, migrate your normal installation, or create a
 packaged app.
 
+### Start the local database
+
+Sourcecado is moving its data from SQLite to Postgres
+([ADR 0007](docs/engineering/adr/0007-hosted-web-service.md)). Backend tests
+that use Postgres need a local database. This needs Docker and the
+[Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started).
+
+```bash
+make db-up      # start Postgres on 127.0.0.1:53322
+make db-reset   # apply supabase/migrations and supabase/seed.sql
+```
+
+The ports are in `supabase/config.toml`. They are not the Supabase defaults, so
+this project does not collide with another local Supabase project.
+
+Tests create and drop their own `sourcecado_test_<pid>` database, so they do not
+change your development data. If the database is not running, those tests fail.
+They do not skip. Set `TEST_DATABASE_URL` to use a different Postgres 17 server.
+
 ### Use separate development state
 
 Keep development data outside the checkout and apart from your normal

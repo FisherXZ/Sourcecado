@@ -5,3 +5,4 @@ certifi>=2026.10.19
 pytest>=8
 mcp>=1.30.0,<2
 pypdf>=6.21.4,<7
+psycopg[binary,pool]>=3.2,<4
