@@ -1001,3 +1001,19 @@ def test_two_users_keep_separate_jobs_and_cannot_reach_each_other_by_id(tmp_path
     assert [source["last_action"] for source in alice.list_sources(job["id"])] == ["read"]
     assert alice.query(job["id"], "private")["matches"][0]["drive_id"] == "doc"
     assert alice.get_board_proposal(proposal["id"])["status"] == "pending_review"
+
+
+def test_query_folds_case_like_sqlite_for_non_ascii_text(tmp_path):
+    # SQLite lower() folds ASCII only. The exact text must still find itself.
+    store = DriveIngestionStore(tmp_path)
+    drive = FakeDrive(
+        {("root", None): {"files": [_file("doc", "Notes.txt", "root")]}},
+        {"doc": {"status": "read", "content": "Visit to the ÉCOLE Polytechnique"}},
+    )
+    job = store.create_job(folder_id="root", resolved_path="Sourcing")
+    DriveIngestionRunner(store, drive).run(job["id"])
+
+    assert len(store.query(job["id"], "ÉCOLE")["matches"]) == 1
+    assert len(store.query(job["id"], "École")["matches"]) == 1
+    assert len(store.query(job["id"], "polytechnique")["matches"]) == 1
+    assert store.query(job["id"], "école")["matches"] == []

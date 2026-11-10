@@ -370,7 +370,7 @@ class MeetingEvidenceStore:
                 """
                 SELECT * FROM meeting_evidence
                 WHERE user_id = %s AND status = 'attached' AND person_id = %s
-                ORDER BY starts_at COLLATE "C" NULLS FIRST, evidence_id COLLATE "C"
+                ORDER BY starts_at NULLS FIRST, evidence_id
                 """,
                 (self._user_id, person_id),
             ).fetchall()
@@ -382,8 +382,8 @@ class MeetingEvidenceStore:
                 JOIN meeting_evidence e
                   ON e.user_id = c.user_id AND e.evidence_id = c.evidence_id
                 WHERE c.user_id = %s AND c.person_id = %s
-                ORDER BY e.starts_at COLLATE "C" NULLS FIRST,
-                         e.evidence_id COLLATE "C"
+                ORDER BY e.starts_at NULLS FIRST,
+                         e.evidence_id
                 """,
                 (self._user_id, person_id),
             ).fetchall()

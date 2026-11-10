@@ -162,7 +162,7 @@ class DriveIngestionStore:
                 """
                 SELECT id FROM drive_ingestion_jobs
                 WHERE user_id = %s
-                ORDER BY created_at COLLATE "C" DESC, id COLLATE "C" DESC
+                ORDER BY created_at DESC, id DESC
                 """,
                 (self._user_id,),
             ).fetchall()
@@ -381,7 +381,7 @@ class DriveIngestionStore:
                 """
                 SELECT id FROM drive_ingestion_proposals
                 WHERE user_id = %s AND job_id = %s
-                ORDER BY created_at COLLATE "C", id COLLATE "C"
+                ORDER BY created_at, id
                 """,
                 (self._user_id, job_id),
             ).fetchall()
@@ -440,7 +440,7 @@ class DriveIngestionStore:
                 """
                 SELECT * FROM drive_ingestion_sources
                 WHERE user_id = %s AND job_id = %s
-                ORDER BY path COLLATE "C", drive_id COLLATE "C"
+                ORDER BY path, drive_id
                 """,
                 (self._user_id, job_id),
             ).fetchall()
@@ -476,7 +476,9 @@ class DriveIngestionStore:
             raise ValueError("query is required")
         scope_clause = "" if include_external else "AND scope = 'tree'"
         # ESCAPE '' keeps SQLite's LIKE: a backslash in the query is a plain
-        # character, not an escape.
+        # character, not an escape. The parameter is collate "C" like the
+        # columns, so lower() folds both sides the same way (ASCII only, as
+        # in SQLite).
         with self._tx() as cur:
             rows = cur.execute(
                 f"""
@@ -485,8 +487,8 @@ class DriveIngestionStore:
                   AND sensitivity != 'restricted'
                   {scope_clause}
                   AND lower(path || ' ' || name || ' ' || COALESCE(content, ''))
-                      LIKE lower(%s) ESCAPE ''
-                ORDER BY path COLLATE "C", drive_id COLLATE "C" LIMIT %s
+                      LIKE lower(%s COLLATE "C") ESCAPE ''
+                ORDER BY path, drive_id LIMIT %s
                 """,
                 (
                     self._user_id,
@@ -610,7 +612,7 @@ class DriveIngestionStore:
                 """
                 SELECT * FROM drive_ingestion_folders
                 WHERE user_id = %s AND job_id = %s AND status = 'pending'
-                ORDER BY path COLLATE "C", drive_id COLLATE "C" LIMIT 1
+                ORDER BY path, drive_id LIMIT 1
                 """,
                 (self._user_id, job_id),
             ).fetchone()
@@ -769,7 +771,7 @@ class DriveIngestionStore:
                 """
                 SELECT * FROM drive_ingestion_sources
                 WHERE user_id = %s AND job_id = %s AND needs_read = 1
-                ORDER BY path COLLATE "C", drive_id COLLATE "C" LIMIT 1
+                ORDER BY path, drive_id LIMIT 1
                 """,
                 (self._user_id, job_id),
             ).fetchone()
