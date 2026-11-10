@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
-import threading
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
+
+import psycopg
+from psycopg.rows import dict_row
+
+from coworker import db
 
 
 def _now() -> str:
@@ -41,100 +45,24 @@ DRIVE_INDEX_QUERY_SCHEMA: dict[str, Any] = {
 
 class DriveIngestionStore:
     def __init__(self, state_dir: str | Path) -> None:
-        root = Path(state_dir).expanduser()
-        root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        root.chmod(0o700)
-        self.db_path = root / "drive_ingestion.db"
-        self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(
-            """
-            PRAGMA journal_mode=DELETE;
-            CREATE TABLE IF NOT EXISTS drive_ingestion_jobs (
-                id TEXT PRIMARY KEY,
-                folder_id TEXT NOT NULL,
-                resolved_path TEXT NOT NULL,
-                status TEXT NOT NULL,
-                generation INTEGER NOT NULL,
-                work_revision INTEGER NOT NULL DEFAULT 1,
-                cancel_requested INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS drive_ingestion_folders (
-                job_id TEXT NOT NULL,
-                drive_id TEXT NOT NULL,
-                parent_id TEXT,
-                path TEXT NOT NULL,
-                status TEXT NOT NULL,
-                page_token TEXT,
-                generation INTEGER NOT NULL,
-                error_kind TEXT,
-                PRIMARY KEY (job_id, drive_id)
-            );
-            CREATE TABLE IF NOT EXISTS drive_ingestion_sources (
-                job_id TEXT NOT NULL,
-                drive_id TEXT NOT NULL,
-                scope TEXT NOT NULL DEFAULT 'tree',
-                parent_id TEXT,
-                path TEXT NOT NULL,
-                name TEXT NOT NULL,
-                mime_type TEXT NOT NULL,
-                modified_time TEXT,
-                web_view_link TEXT,
-                sensitivity TEXT NOT NULL DEFAULT 'standard',
-                extraction_status TEXT NOT NULL DEFAULT 'pending',
-                content TEXT,
-                citations_json TEXT NOT NULL DEFAULT '[]',
-                redaction_count INTEGER NOT NULL DEFAULT 0,
-                source_safety_json TEXT,
-                generation INTEGER NOT NULL,
-                last_action TEXT NOT NULL DEFAULT 'pending',
-                error_kind TEXT,
-                deleted INTEGER NOT NULL DEFAULT 0,
-                needs_read INTEGER NOT NULL DEFAULT 1,
-                PRIMARY KEY (job_id, drive_id)
-            );
-            CREATE TABLE IF NOT EXISTS drive_ingestion_proposals (
-                id TEXT PRIMARY KEY,
-                job_id TEXT NOT NULL,
-                source_drive_id TEXT NOT NULL,
-                person_id TEXT NOT NULL,
-                record_type TEXT NOT NULL,
-                fields_json TEXT NOT NULL,
-                diff_json TEXT NOT NULL,
-                source_refs_json TEXT NOT NULL,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                reviewed_at TEXT,
-                reviewer TEXT
-            );
-            """
-        )
-        job_columns = {
-            str(row["name"])
-            for row in self._conn.execute(
-                "PRAGMA table_info(drive_ingestion_jobs)"
-            ).fetchall()
-        }
-        if "work_revision" not in job_columns:
-            self._conn.execute(
+        self.base = Path(state_dir).expanduser()
+        self._db, self._user_id = db.resolve(self.base)
+        # A job that was running when the process stopped has no worker now.
+        with self._tx() as cur:
+            cur.execute(
                 """
-                ALTER TABLE drive_ingestion_jobs
-                ADD COLUMN work_revision INTEGER NOT NULL DEFAULT 1
-                """
+                UPDATE drive_ingestion_jobs
+                SET status = 'paused', cancel_requested = 0, updated_at = %s
+                WHERE user_id = %s AND status IN ('running', 'cancel_requested')
+                """,
+                (_now(), self._user_id),
             )
-        self._conn.execute(
-            """
-            UPDATE drive_ingestion_jobs
-            SET status = 'paused', cancel_requested = 0, updated_at = ?
-            WHERE status IN ('running', 'cancel_requested')
-            """,
-            (_now(),),
-        )
-        self._conn.commit()
-        self.db_path.chmod(0o600)
+
+    @contextmanager
+    def _tx(self) -> Iterator[psycopg.Cursor[dict[str, Any]]]:
+        """One transaction for this store's user. Rows come back as dicts."""
+        with self._db.tx(self._user_id) as conn:
+            yield conn.cursor(row_factory=dict_row)
 
     def create_job(self, *, folder_id: str, resolved_path: str) -> dict[str, Any]:
         folder_id = folder_id.strip()
@@ -147,64 +75,50 @@ class DriveIngestionStore:
             raise ValueError("resolved_path must be a resolved Drive path")
         job_id = f"drive_ingest_{uuid.uuid4().hex}"
         now = _now()
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 INSERT INTO drive_ingestion_jobs
-                    (id, folder_id, resolved_path, status, generation, created_at, updated_at)
-                VALUES (?, ?, ?, 'pending', 1, ?, ?)
+                    (user_id, id, folder_id, resolved_path, status, generation,
+                     created_at, updated_at)
+                VALUES (%s, %s, %s, %s, 'pending', 1, %s, %s)
                 """,
-                (job_id, folder_id, resolved_path, now, now),
+                (self._user_id, job_id, folder_id, resolved_path, now, now),
             )
-            self._conn.execute(
+            cur.execute(
                 """
                 INSERT INTO drive_ingestion_folders
-                    (job_id, drive_id, parent_id, path, status, generation)
-                VALUES (?, ?, NULL, ?, 'pending', 1)
+                    (user_id, job_id, drive_id, parent_id, path, status, generation)
+                VALUES (%s, %s, %s, NULL, %s, 'pending', 1)
                 """,
-                (job_id, folder_id, resolved_path),
+                (self._user_id, job_id, folder_id, resolved_path),
             )
-            self._conn.commit()
         job = self.get_job(job_id)
         assert job is not None
         return job
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM drive_ingestion_jobs WHERE id = ?",
-                (job_id,),
+        with self._tx() as cur:
+            row = cur.execute(
+                "SELECT * FROM drive_ingestion_jobs WHERE user_id = %s AND id = %s",
+                (self._user_id, job_id),
             ).fetchone()
             if row is None:
                 return None
-            folder_count = int(
-                self._conn.execute(
-                    """
-                    SELECT COUNT(*) FROM drive_ingestion_folders
-                    WHERE job_id = ? AND generation = ?
-                    """,
-                    (job_id, int(row["generation"])),
-                ).fetchone()[0]
-            )
-            folder_failed = int(
-                self._conn.execute(
-                    """
-                    SELECT COUNT(*) FROM drive_ingestion_folders
-                    WHERE job_id = ? AND generation = ? AND status = 'failed'
-                    """,
-                    (job_id, int(row["generation"])),
-                ).fetchone()[0]
-            )
-            remaining = int(
-                self._conn.execute(
-                    """
-                    SELECT COUNT(*) FROM drive_ingestion_folders
-                    WHERE job_id = ? AND status = 'pending'
-                    """,
-                    (job_id,),
-                ).fetchone()[0]
-            )
-            source_counts = self._conn.execute(
+            folder_counts = cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE generation = %s) AS discovered,
+                    COUNT(*) FILTER (
+                        WHERE generation = %s AND status = 'failed'
+                    ) AS failed,
+                    COUNT(*) FILTER (WHERE status = 'pending') AS remaining
+                FROM drive_ingestion_folders
+                WHERE user_id = %s AND job_id = %s
+                """,
+                (int(row["generation"]), int(row["generation"]), self._user_id, job_id),
+            ).fetchone()
+            source_counts = cur.execute(
                 """
                 SELECT
                     SUM(CASE WHEN deleted = 0 AND scope = 'tree' THEN 1 ELSE 0 END) AS discovered,
@@ -215,11 +129,14 @@ class DriveIngestionStore:
                     SUM(CASE WHEN deleted = 1 AND scope = 'tree' THEN 1 ELSE 0 END) AS deleted_count,
                     SUM(CASE WHEN needs_read = 1 THEN 1 ELSE 0 END) AS remaining_count
                 FROM drive_ingestion_sources
-                WHERE job_id = ? AND generation = ?
+                WHERE user_id = %s AND job_id = %s AND generation = %s
                 """,
-                (job_id, int(row["generation"])),
+                (self._user_id, job_id, int(row["generation"])),
             ).fetchone()
-            remaining += int(source_counts["remaining_count"] or 0)
+        folder_failed = int(folder_counts["failed"])
+        remaining = int(folder_counts["remaining"]) + int(
+            source_counts["remaining_count"] or 0
+        )
         return {
             "id": row["id"],
             "folder_id": row["folder_id"],
@@ -228,7 +145,7 @@ class DriveIngestionStore:
             "generation": int(row["generation"]),
             "work_revision": int(row["work_revision"]),
             "progress": {
-                "folders_discovered": folder_count,
+                "folders_discovered": int(folder_counts["discovered"]),
                 "files_discovered": int(source_counts["discovered"] or 0),
                 "read": int(source_counts["read_count"] or 0),
                 "metadata_only": int(source_counts["metadata_count"] or 0),
@@ -240,12 +157,14 @@ class DriveIngestionStore:
         }
 
     def list_jobs(self) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
+        with self._tx() as cur:
+            rows = cur.execute(
                 """
                 SELECT id FROM drive_ingestion_jobs
-                ORDER BY created_at DESC, id DESC
-                """
+                WHERE user_id = %s
+                ORDER BY created_at COLLATE "C" DESC, id COLLATE "C" DESC
+                """,
+                (self._user_id,),
             ).fetchall()
         jobs: list[dict[str, Any]] = []
         for row in rows:
@@ -255,58 +174,62 @@ class DriveIngestionStore:
         return jobs
 
     def prepare_rerun(self, job_id: str) -> dict[str, Any]:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM drive_ingestion_jobs WHERE id = ?",
-                (job_id,),
+        with self._tx() as cur:
+            # The row lock makes the status check and the reset one step, as
+            # the SQLite store's process lock did.
+            row = cur.execute(
+                """
+                SELECT * FROM drive_ingestion_jobs
+                WHERE user_id = %s AND id = %s
+                FOR UPDATE
+                """,
+                (self._user_id, job_id),
             ).fetchone()
             if row is None:
                 raise ValueError("unknown Drive ingestion job")
             if row["status"] not in {"completed", "completed_with_errors", "paused"}:
                 raise ValueError("Drive ingestion job is not ready to rerun")
             generation = int(row["generation"]) + 1
-            self._conn.execute(
+            cur.execute(
                 """
                 DELETE FROM drive_ingestion_folders
-                WHERE job_id = ? AND drive_id != ?
+                WHERE user_id = %s AND job_id = %s AND drive_id != %s
                 """,
-                (job_id, row["folder_id"]),
+                (self._user_id, job_id, row["folder_id"]),
             )
-            self._conn.execute(
+            cur.execute(
                 """
                 UPDATE drive_ingestion_folders
-                SET parent_id = NULL, path = ?, status = 'pending', page_token = NULL,
-                    generation = ?, error_kind = NULL
-                WHERE job_id = ? AND drive_id = ?
+                SET parent_id = NULL, path = %s, status = 'pending', page_token = NULL,
+                    generation = %s, error_kind = NULL
+                WHERE user_id = %s AND job_id = %s AND drive_id = %s
                 """,
-                (row["resolved_path"], generation, job_id, row["folder_id"]),
+                (row["resolved_path"], generation, self._user_id, job_id, row["folder_id"]),
             )
-            self._conn.execute(
+            cur.execute(
                 """
                 UPDATE drive_ingestion_jobs
-                SET status = 'pending', generation = ?, cancel_requested = 0,
-                    work_revision = work_revision + 1, updated_at = ?
-                WHERE id = ?
+                SET status = 'pending', generation = %s, cancel_requested = 0,
+                    work_revision = work_revision + 1, updated_at = %s
+                WHERE user_id = %s AND id = %s
                 """,
-                (generation, _now(), job_id),
+                (generation, _now(), self._user_id, job_id),
             )
-            self._conn.commit()
         job = self.get_job(job_id)
         assert job is not None
         return job
 
     def prepare_resume(self, job_id: str) -> dict[str, Any]:
-        with self._lock:
-            changed = self._conn.execute(
+        with self._tx() as cur:
+            changed = cur.execute(
                 """
                 UPDATE drive_ingestion_jobs
                 SET status = 'pending', cancel_requested = 0,
-                    work_revision = work_revision + 1, updated_at = ?
-                WHERE id = ? AND status = 'paused'
+                    work_revision = work_revision + 1, updated_at = %s
+                WHERE user_id = %s AND id = %s AND status = 'paused'
                 """,
-                (_now(), job_id),
+                (_now(), self._user_id, job_id),
             ).rowcount
-            self._conn.commit()
         if not changed:
             job = self.get_job(job_id)
             if job is None:
@@ -345,17 +268,16 @@ class DriveIngestionStore:
             generation=int(job["generation"]),
             scope="explicit_global",
         )
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 UPDATE drive_ingestion_jobs
                 SET status = 'pending', cancel_requested = 0,
-                    work_revision = work_revision + 1, updated_at = ?
-                WHERE id = ?
+                    work_revision = work_revision + 1, updated_at = %s
+                WHERE user_id = %s AND id = %s
                 """,
-                (_now(), job_id),
+                (_now(), self._user_id, job_id),
             )
-            self._conn.commit()
         source = next(
             row for row in self.list_sources(job_id) if row["drive_id"] == drive_id
         )
@@ -375,13 +297,13 @@ class DriveIngestionStore:
         job = self.get_job(job_id)
         if job is None or job["status"] not in {"completed", "completed_with_errors"}:
             raise ValueError("Drive ingestion index is not complete")
-        with self._lock:
-            row = self._conn.execute(
+        with self._tx() as cur:
+            row = cur.execute(
                 """
                 SELECT * FROM drive_ingestion_sources
-                WHERE job_id = ? AND drive_id = ? AND deleted = 0
+                WHERE user_id = %s AND job_id = %s AND drive_id = %s AND deleted = 0
                 """,
-                (job_id, source_drive_id),
+                (self._user_id, job_id, source_drive_id),
             ).fetchone()
         if row is None:
             raise ValueError("Drive ingestion source is unavailable")
@@ -403,15 +325,16 @@ class DriveIngestionStore:
             "before": None,
             "after": attached_fields,
         }
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 INSERT INTO drive_ingestion_proposals
-                    (id, job_id, source_drive_id, person_id, record_type,
+                    (user_id, id, job_id, source_drive_id, person_id, record_type,
                      fields_json, diff_json, source_refs_json, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending_review', %s)
                 """,
                 (
+                    self._user_id,
                     proposal_id,
                     job_id,
                     source_drive_id,
@@ -423,16 +346,18 @@ class DriveIngestionStore:
                     _now(),
                 ),
             )
-            self._conn.commit()
         proposal = self.get_board_proposal(proposal_id)
         assert proposal is not None
         return proposal
 
     def get_board_proposal(self, proposal_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM drive_ingestion_proposals WHERE id = ?",
-                (proposal_id,),
+        with self._tx() as cur:
+            row = cur.execute(
+                """
+                SELECT * FROM drive_ingestion_proposals
+                WHERE user_id = %s AND id = %s
+                """,
+                (self._user_id, proposal_id),
             ).fetchone()
         if row is None:
             return None
@@ -451,13 +376,14 @@ class DriveIngestionStore:
         }
 
     def list_board_proposals(self, job_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
+        with self._tx() as cur:
+            rows = cur.execute(
                 """
                 SELECT id FROM drive_ingestion_proposals
-                WHERE job_id = ? ORDER BY created_at, id
+                WHERE user_id = %s AND job_id = %s
+                ORDER BY created_at COLLATE "C", id COLLATE "C"
                 """,
-                (job_id,),
+                (self._user_id, job_id),
             ).fetchall()
         proposals: list[dict[str, Any]] = []
         for row in rows:
@@ -495,28 +421,28 @@ class DriveIngestionStore:
         )
         if not ok:
             raise ValueError("Board proposal could not be applied")
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 UPDATE drive_ingestion_proposals
-                SET status = 'applied', reviewed_at = ?, reviewer = ?
-                WHERE id = ?
+                SET status = 'applied', reviewed_at = %s, reviewer = %s
+                WHERE user_id = %s AND id = %s
                 """,
-                (_now(), actor, proposal_id),
+                (_now(), actor, self._user_id, proposal_id),
             )
-            self._conn.commit()
         applied = self.get_board_proposal(proposal_id)
         assert applied is not None
         return applied
 
     def list_sources(self, job_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
+        with self._tx() as cur:
+            rows = cur.execute(
                 """
                 SELECT * FROM drive_ingestion_sources
-                WHERE job_id = ? ORDER BY path, drive_id
+                WHERE user_id = %s AND job_id = %s
+                ORDER BY path COLLATE "C", drive_id COLLATE "C"
                 """,
-                (job_id,),
+                (self._user_id, job_id),
             ).fetchall()
         return [self._source_dict(row) for row in rows]
 
@@ -549,17 +475,25 @@ class DriveIngestionStore:
         if not needle:
             raise ValueError("query is required")
         scope_clause = "" if include_external else "AND scope = 'tree'"
-        with self._lock:
-            rows = self._conn.execute(
+        # ESCAPE '' keeps SQLite's LIKE: a backslash in the query is a plain
+        # character, not an escape.
+        with self._tx() as cur:
+            rows = cur.execute(
                 f"""
                 SELECT * FROM drive_ingestion_sources
-                WHERE job_id = ? AND deleted = 0 AND sensitivity != 'restricted'
+                WHERE user_id = %s AND job_id = %s AND deleted = 0
+                  AND sensitivity != 'restricted'
                   {scope_clause}
                   AND lower(path || ' ' || name || ' ' || COALESCE(content, ''))
-                      LIKE lower(?)
-                ORDER BY path, drive_id LIMIT ?
+                      LIKE lower(%s) ESCAPE ''
+                ORDER BY path COLLATE "C", drive_id COLLATE "C" LIMIT %s
                 """,
-                (job_id, f"%{needle}%", max(1, min(int(limit), 100))),
+                (
+                    self._user_id,
+                    job_id,
+                    f"%{needle}%",
+                    max(1, min(int(limit), 100)),
+                ),
             ).fetchall()
         matches: list[dict[str, Any]] = []
         for row in rows:
@@ -580,7 +514,7 @@ class DriveIngestionStore:
             )
         return {"job_id": job_id, "query": needle, "matches": matches}
 
-    def _source_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+    def _source_dict(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "drive_id": row["drive_id"],
             "scope": row["scope"],
@@ -605,37 +539,37 @@ class DriveIngestionStore:
         }
 
     def _set_status(self, job_id: str, status: str) -> None:
-        with self._lock:
-            self._conn.execute(
-                "UPDATE drive_ingestion_jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (status, _now(), job_id),
+        with self._tx() as cur:
+            cur.execute(
+                """
+                UPDATE drive_ingestion_jobs SET status = %s, updated_at = %s
+                WHERE user_id = %s AND id = %s
+                """,
+                (status, _now(), self._user_id, job_id),
             )
-            self._conn.commit()
 
     def _begin_run(self, job_id: str) -> bool:
-        with self._lock:
-            changed = self._conn.execute(
+        with self._tx() as cur:
+            changed = cur.execute(
                 """
                 UPDATE drive_ingestion_jobs
-                SET status = 'running', updated_at = ?
-                WHERE id = ? AND cancel_requested = 0
+                SET status = 'running', updated_at = %s
+                WHERE user_id = %s AND id = %s AND cancel_requested = 0
                 """,
-                (_now(), job_id),
+                (_now(), self._user_id, job_id),
             ).rowcount
-            self._conn.commit()
         return changed == 1
 
     def request_cancel(self, job_id: str) -> dict[str, Any]:
-        with self._lock:
-            changed = self._conn.execute(
+        with self._tx() as cur:
+            changed = cur.execute(
                 """
                 UPDATE drive_ingestion_jobs
-                SET status = 'cancel_requested', cancel_requested = 1, updated_at = ?
-                WHERE id = ? AND status IN ('pending', 'running')
+                SET status = 'cancel_requested', cancel_requested = 1, updated_at = %s
+                WHERE user_id = %s AND id = %s AND status IN ('pending', 'running')
                 """,
-                (_now(), job_id),
+                (_now(), self._user_id, job_id),
             ).rowcount
-            self._conn.commit()
         if not changed:
             job = self.get_job(job_id)
             if job is None:
@@ -646,37 +580,39 @@ class DriveIngestionStore:
         return job
 
     def _cancel_was_requested(self, job_id: str) -> bool:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT cancel_requested FROM drive_ingestion_jobs WHERE id = ?",
-                (job_id,),
+        with self._tx() as cur:
+            row = cur.execute(
+                """
+                SELECT cancel_requested FROM drive_ingestion_jobs
+                WHERE user_id = %s AND id = %s
+                """,
+                (self._user_id, job_id),
             ).fetchone()
         return bool(row and row["cancel_requested"])
 
     def _pause(self, job_id: str) -> dict[str, Any]:
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 UPDATE drive_ingestion_jobs
-                SET status = 'paused', cancel_requested = 0, updated_at = ?
-                WHERE id = ?
+                SET status = 'paused', cancel_requested = 0, updated_at = %s
+                WHERE user_id = %s AND id = %s
                 """,
-                (_now(), job_id),
+                (_now(), self._user_id, job_id),
             )
-            self._conn.commit()
         job = self.get_job(job_id)
         assert job is not None
         return job
 
-    def _next_folder(self, job_id: str) -> sqlite3.Row | None:
-        with self._lock:
-            return self._conn.execute(
+    def _next_folder(self, job_id: str) -> dict[str, Any] | None:
+        with self._tx() as cur:
+            return cur.execute(
                 """
                 SELECT * FROM drive_ingestion_folders
-                WHERE job_id = ? AND status = 'pending'
-                ORDER BY path, drive_id LIMIT 1
+                WHERE user_id = %s AND job_id = %s AND status = 'pending'
+                ORDER BY path COLLATE "C", drive_id COLLATE "C" LIMIT 1
                 """,
-                (job_id,),
+                (self._user_id, job_id),
             ).fetchone()
 
     def _discover_folder(
@@ -688,61 +624,60 @@ class DriveIngestionStore:
         path: str,
         generation: int,
     ) -> None:
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 INSERT INTO drive_ingestion_folders
-                    (job_id, drive_id, parent_id, path, status, generation)
-                VALUES (?, ?, ?, ?, 'pending', ?)
-                ON CONFLICT(job_id, drive_id) DO UPDATE SET
+                    (user_id, job_id, drive_id, parent_id, path, status, generation)
+                VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+                ON CONFLICT (user_id, job_id, drive_id) DO UPDATE SET
                     parent_id = excluded.parent_id,
                     path = excluded.path,
                     generation = excluded.generation
                 """,
-                (job_id, drive_id, parent_id, path, generation),
+                (self._user_id, job_id, drive_id, parent_id, path, generation),
             )
-            self._conn.commit()
 
     def _checkpoint_folder(
         self, job_id: str, drive_id: str, next_page_token: str | None
     ) -> None:
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 UPDATE drive_ingestion_folders
-                SET status = ?, page_token = ?, error_kind = NULL
-                WHERE job_id = ? AND drive_id = ?
+                SET status = %s, page_token = %s, error_kind = NULL
+                WHERE user_id = %s AND job_id = %s AND drive_id = %s
                 """,
                 (
                     "pending" if next_page_token else "listed",
                     next_page_token,
+                    self._user_id,
                     job_id,
                     drive_id,
                 ),
             )
-            self._conn.commit()
 
     def _fail_folder(self, job_id: str, drive_id: str) -> None:
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 UPDATE drive_ingestion_folders
                 SET status = 'failed', error_kind = 'folder_list_failed'
-                WHERE job_id = ? AND drive_id = ?
+                WHERE user_id = %s AND job_id = %s AND drive_id = %s
                 """,
-                (job_id, drive_id),
+                (self._user_id, job_id, drive_id),
             )
-            self._conn.commit()
 
     def _has_folder_failures(self, job_id: str, generation: int) -> bool:
-        with self._lock:
-            row = self._conn.execute(
+        with self._tx() as cur:
+            row = cur.execute(
                 """
                 SELECT 1 FROM drive_ingestion_folders
-                WHERE job_id = ? AND generation = ? AND status = 'failed'
+                WHERE user_id = %s AND job_id = %s AND generation = %s
+                  AND status = 'failed'
                 LIMIT 1
                 """,
-                (job_id, generation),
+                (self._user_id, job_id, generation),
             ).fetchone()
         return row is not None
 
@@ -760,13 +695,17 @@ class DriveIngestionStore:
         generation: int,
         scope: str = "tree",
     ) -> None:
-        with self._lock:
-            existing = self._conn.execute(
+        with self._tx() as cur:
+            # FOR UPDATE holds the existing row until the upsert below, so the
+            # "unchanged" decision is made on the row that the upsert changes.
+            existing = cur.execute(
                 """
                 SELECT modified_time, extraction_status, deleted
-                FROM drive_ingestion_sources WHERE job_id = ? AND drive_id = ?
+                FROM drive_ingestion_sources
+                WHERE user_id = %s AND job_id = %s AND drive_id = %s
+                FOR UPDATE
                 """,
-                (job_id, drive_id),
+                (self._user_id, job_id, drive_id),
             ).fetchone()
             unchanged = bool(
                 existing is not None
@@ -774,13 +713,13 @@ class DriveIngestionStore:
                 and existing["extraction_status"] not in {"failed", "pending", "deleted"}
                 and not existing["deleted"]
             )
-            self._conn.execute(
+            cur.execute(
                 """
                 INSERT INTO drive_ingestion_sources
-                    (job_id, drive_id, scope, parent_id, path, name, mime_type,
+                    (user_id, job_id, drive_id, scope, parent_id, path, name, mime_type,
                      modified_time, web_view_link, generation, last_action, needs_read)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1)
-                ON CONFLICT(job_id, drive_id) DO UPDATE SET
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', 1)
+                ON CONFLICT (user_id, job_id, drive_id) DO UPDATE SET
                     scope = CASE
                         WHEN drive_ingestion_sources.scope = 'tree' THEN 'tree'
                         ELSE excluded.scope
@@ -804,10 +743,11 @@ class DriveIngestionStore:
                     generation = excluded.generation,
                     deleted = 0,
                     error_kind = NULL,
-                    last_action = ?,
-                    needs_read = ?
+                    last_action = %s,
+                    needs_read = %s
                 """,
                 (
+                    self._user_id,
                     job_id,
                     drive_id,
                     scope,
@@ -822,17 +762,16 @@ class DriveIngestionStore:
                     0 if unchanged else 1,
                 ),
             )
-            self._conn.commit()
 
-    def _next_source(self, job_id: str) -> sqlite3.Row | None:
-        with self._lock:
-            return self._conn.execute(
+    def _next_source(self, job_id: str) -> dict[str, Any] | None:
+        with self._tx() as cur:
+            return cur.execute(
                 """
                 SELECT * FROM drive_ingestion_sources
-                WHERE job_id = ? AND needs_read = 1
-                ORDER BY path, drive_id LIMIT 1
+                WHERE user_id = %s AND job_id = %s AND needs_read = 1
+                ORDER BY path COLLATE "C", drive_id COLLATE "C" LIMIT 1
                 """,
-                (job_id,),
+                (self._user_id, job_id),
             ).fetchone()
 
     def _record_source(self, job_id: str, drive_id: str, result: dict[str, Any]) -> None:
@@ -850,13 +789,14 @@ class DriveIngestionStore:
             sensitivity = "restricted"
         elif result.get("source_safety"):
             sensitivity = "sensitive"
-        with self._lock:
-            row = self._conn.execute(
+        with self._tx() as cur:
+            row = cur.execute(
                 """
                 SELECT path, name, web_view_link FROM drive_ingestion_sources
-                WHERE job_id = ? AND drive_id = ?
+                WHERE user_id = %s AND job_id = %s AND drive_id = %s
+                FOR UPDATE
                 """,
-                (job_id, drive_id),
+                (self._user_id, job_id, drive_id),
             ).fetchone()
             path = str(row["path"] if row is not None else "")
             citations = []
@@ -875,13 +815,13 @@ class DriveIngestionStore:
                         "path": path,
                     }
                 )
-            self._conn.execute(
+            cur.execute(
                 """
                 UPDATE drive_ingestion_sources SET
-                    sensitivity = ?, extraction_status = ?, content = ?,
-                    citations_json = ?, redaction_count = ?, source_safety_json = ?,
-                    last_action = ?, error_kind = ?, needs_read = 0
-                WHERE job_id = ? AND drive_id = ?
+                    sensitivity = %s, extraction_status = %s, content = %s,
+                    citations_json = %s, redaction_count = %s, source_safety_json = %s,
+                    last_action = %s, error_kind = %s, needs_read = 0
+                WHERE user_id = %s AND job_id = %s AND drive_id = %s
                 """,
                 (
                     sensitivity,
@@ -896,25 +836,25 @@ class DriveIngestionStore:
                     ),
                     action,
                     "source_read_failed" if action == "failed" else None,
+                    self._user_id,
                     job_id,
                     drive_id,
                 ),
             )
-            self._conn.commit()
 
     def _mark_missing_deleted(self, job_id: str, generation: int) -> None:
-        with self._lock:
-            self._conn.execute(
+        with self._tx() as cur:
+            cur.execute(
                 """
                 UPDATE drive_ingestion_sources SET
-                    generation = ?, deleted = 1, extraction_status = 'deleted',
+                    generation = %s, deleted = 1, extraction_status = 'deleted',
                     content = NULL, last_action = 'deleted', needs_read = 0,
                     error_kind = NULL
-                WHERE job_id = ? AND scope = 'tree' AND generation < ?
+                WHERE user_id = %s AND job_id = %s AND scope = 'tree'
+                  AND generation < %s
                 """,
-                (generation, job_id, generation),
+                (generation, self._user_id, job_id, generation),
             )
-            self._conn.commit()
 
 
 class DriveIngestionRunner:
