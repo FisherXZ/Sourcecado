@@ -1412,6 +1412,17 @@
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+@keyframes preview-enter {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 .contact-preview {
   position: sticky;
   top: 16px;
@@ -1422,6 +1433,15 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
+  /* Inspector slide-in (docs/design.md: enter ease-out, short). The panel
+     remounts per selection via its React key, so this replays on each click. */
+  animation: preview-enter 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contact-preview {
+    animation: none;
+  }
 }
 
 .preview-topbar {
