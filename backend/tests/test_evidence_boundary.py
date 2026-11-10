@@ -40,7 +40,6 @@ from coworker.turn import close_open_tool_calls, run_turn
 from tests.malicious_evidence import (
     drive_document,
     gmail_message,
-    shell_output,
     web_snippet,
 )
 
@@ -245,7 +244,6 @@ def test_no_hostile_source_changes_a_permission_class(tmp_path):
         ("gmail_read", gmail_message()),
         ("drive_read", drive_document()),
         ("web_search", web_snippet()),
-        ("shell_exec", shell_output()),
     ]
     for tool_name, payload in hostile:
         parts = evidence_for(tool_name, payload)

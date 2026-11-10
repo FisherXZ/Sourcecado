@@ -144,7 +144,6 @@ def main(argv: list[str] | None = None) -> None:
         _exit_when_orphaned()
         uvicorn.run(app, host=args.host, port=args.port)
     finally:
-        app.state.workspace_runtime.close()
         if token_path is not None:
             token_path.unlink(missing_ok=True)
             os.environ.pop(TOKEN_ENV, None)

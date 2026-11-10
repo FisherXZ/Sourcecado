@@ -75,11 +75,6 @@ function forQuery(args: unknown): string | null {
   return query ? `for “${clip(query)}”` : null;
 }
 
-function pathOf(args: unknown): string | null {
-  const path = text(record(args)?.path);
-  return path ? clip(path) : null;
-}
-
 function apolloSearchSummary(args: unknown): string | null {
   const fields = record(args);
   const titles = Array.isArray(fields?.personTitles)
@@ -311,113 +306,6 @@ const KNOWN_TOOLS: Readonly<Record<string, ToolPresentation>> = {
     activeLabel: "Deleting person file",
     category: "action",
     icon: "person",
-  },
-  fs_stat: {
-    label: "Inspected workspace path",
-    activeLabel: "Inspecting workspace path",
-    category: "source",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  fs_list: {
-    label: "Listed workspace directory",
-    activeLabel: "Listing workspace directory",
-    category: "source",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  fs_find: {
-    label: "Found workspace files",
-    activeLabel: "Finding workspace files",
-    category: "source",
-    icon: "file",
-  },
-  fs_search: {
-    label: "Searched workspace files",
-    activeLabel: "Searching workspace files",
-    category: "source",
-    icon: "file",
-    argsSummary: forQuery,
-  },
-  fs_read: {
-    label: "Read workspace file",
-    activeLabel: "Reading workspace file",
-    category: "source",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  fs_mkdir: {
-    label: "Created workspace directory",
-    activeLabel: "Creating workspace directory",
-    category: "action",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  fs_write: {
-    label: "Wrote workspace file",
-    activeLabel: "Writing workspace file",
-    category: "action",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  fs_patch: {
-    label: "Updated workspace file",
-    activeLabel: "Updating workspace file",
-    category: "action",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  fs_copy: {
-    label: "Copied workspace file",
-    activeLabel: "Copying workspace file",
-    category: "action",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  fs_move: {
-    label: "Moved workspace file",
-    activeLabel: "Moving workspace file",
-    category: "action",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  fs_trash: {
-    label: "Trashed workspace item",
-    activeLabel: "Trashing workspace item",
-    category: "action",
-    icon: "file",
-    argsSummary: pathOf,
-  },
-  request_directory: {
-    label: "Requested workspace access",
-    activeLabel: "Requesting workspace access",
-    category: "action",
-    icon: "file",
-  },
-  // No argument summary for shell tools: a command line can carry a secret.
-  shell_exec: {
-    label: "Run workspace command",
-    activeLabel: "Running workspace command",
-    category: "action",
-    icon: "terminal",
-  },
-  shell_poll: {
-    label: "Checked command output",
-    activeLabel: "Checking command output",
-    category: "source",
-    icon: "terminal",
-  },
-  shell_write_stdin: {
-    label: "Sent command input",
-    activeLabel: "Sending command input",
-    category: "action",
-    icon: "terminal",
-  },
-  shell_kill: {
-    label: "Cancelled workspace command",
-    activeLabel: "Cancelling workspace command",
-    category: "action",
-    icon: "terminal",
   },
   now: {
     label: "Checked current time",

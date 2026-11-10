@@ -389,7 +389,7 @@ describe("which recovery actions appear", () => {
   });
 
   it("offers no Retry when the failure carries no retry-safe flag, for any tool", () => {
-    for (const toolName of ["apollo_enrich_contact", "gmail_draft", "board_upsert", "shell_exec", "mcp__granola__create_note"]) {
+    for (const toolName of ["apollo_enrich_contact", "gmail_draft", "board_upsert", "mcp__granola__create_note"]) {
       const { unmount } = renderStep(
         failedStep({ ...failure(), retry_safe: undefined as unknown as boolean }, undefined, { toolName } as never),
       );

@@ -16,7 +16,7 @@ The turn delimits. `coworker.turn._evidence_message` is the only place external 
 
 - `director` - typed by Fisher into the chat, or decided by Fisher at an approval.
 - `sourcecado` - the clock, the skills catalog, a Board write receipt.
-- `external` - a connector, a document, a web page, a shell process.
+- `external` - a connector, a document, a web page.
 
 `Trust` and `Authority` are derived from origin by a total map and are never constructor arguments. `Envelope` is frozen and assigns both in `__post_init__`, so there is no keyword, no payload key, and no connector field that produces trusted external content. A Granola note that ships `"trust": "authoritative"` at the top level is bytes inside `body`.
 
@@ -60,11 +60,9 @@ Adapters live with their connector. `tools.py` holds the registry and the fail-c
 | `apollo.py` | `apollo_search_people`, `apollo_enrich_contact` | the vendor's claims about a person |
 | `web.py` | `web_search` | page title, URL, snippet |
 | `mcp.py` | `mcp__*` | the whole payload |
-| `workspace_shell.py` | `shell_exec`, `shell_poll`, `fs_read`, `fs_search` | command output, file content |
+| `tools.py` | `drive_index_query` | the whole payload |
 
 A tool this build does not model is fenced whole. `SOURCECADO_OWNED` in `tools.py` is the short list of results Sourcecado itself wrote, and only those render unchanged.
-
-`shell_exec` and `fs_read` keep the workspace runtime's two-tier redaction. `turn._persist_tool_result` applies `sanitize_result` before the block is built, so the model still sees the full text this turn and the disk still does not.
 
 ## What the boundary does not decide
 

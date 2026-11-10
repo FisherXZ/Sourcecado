@@ -9,16 +9,6 @@ describe("Settings route styles", () => {
     );
   });
 
-  it("keeps workspace grant controls bounded and touch sized", () => {
-    expect(styles).toMatch(/\.workspace-settings\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;/);
-    expect(styles).toMatch(
-      /\.workspace-add-form[^}]*[\s\S]*?\.workspace-settings button[^}]*min-height:\s*40px;/,
-    );
-    expect(styles).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*?\.workspace-settings button[^}]*min-height:\s*44px;/,
-    );
-  });
-
   it("renders provider verification as compact divided operational rows", () => {
     expect(styles).toMatch(
       /\.provider-verification-list\s*\{[^}]*display:\s*grid;[^}]*list-style:\s*none;/,

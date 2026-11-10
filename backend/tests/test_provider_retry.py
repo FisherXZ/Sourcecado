@@ -788,9 +788,9 @@ def test_run_turn_fails_over_after_active_provider_attempts_exhaust(tmp_path):
     [
         ("now", {}, {"time": "now"}),
         (
-            "fs_write",
-            {"grant_id": "grant-1", "path": "notes.txt", "content": "written"},
-            {"status": "written", "path": "notes.txt"},
+            "remember",
+            {"content": "written"},
+            {"status": "saved", "id": 1},
         ),
     ],
 )

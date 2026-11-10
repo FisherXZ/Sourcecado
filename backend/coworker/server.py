@@ -195,9 +195,6 @@ from coworker.telemetry import (
     TraceContext,
 )
 from coworker.tools import OPENAI_TOOLS, execute
-from coworker.workspace import GrantUnavailable
-from coworker.workspace_files import WorkspacePathError
-from coworker.workspace_runtime import WorkspaceRuntime
 from coworker.turn import (
     close_open_tool_calls,
     _tool_failure,
@@ -434,7 +431,6 @@ def create_app(
     public_url: str | None = None,
     mcp: Any = None,
     browser_opener: Callable[[str], bool] | None = None,
-    workspace_runtime: WorkspaceRuntime | None = None,
     telemetry_adapter: TelemetryAdapter | None = None,
     provider_failovers: tuple[Any, ...] | None = None,
 ) -> FastAPI:
@@ -474,7 +470,6 @@ def create_app(
     app.state.tasks = TaskService(app.state.people)
     app.state.crm = CrmService(app.state.people)
     app.state.meeting_evidence = MeetingEvidenceStore(root, people=app.state.people)
-    app.state.workspace_runtime = workspace_runtime or WorkspaceRuntime(root)
     app.state.secrets = SecretStore(Path(root) / "secrets.json")
     store = app.state.store
     if store.open_session_id() is None:
@@ -569,7 +564,6 @@ def create_app(
         return effective_tool_catalog(
             persona=persona or app.state.persona,
             registered_schemas=(*OPENAI_TOOLS, *app.state.mcp.schemas()),
-            workspace_runtime=app.state.workspace_runtime,
             availability=ToolAvailability(
                 gmail=not isinstance(app.state.gmail, MissingGmail),
                 drive=app.state.drive is not None,
@@ -614,7 +608,6 @@ def create_app(
                     "skills": app.state.skills,
                     "mcp": app.state.mcp,
                     "people": app.state.people,
-                    "workspace_runtime": app.state.workspace_runtime,
                 },
                 emit=None,
                 wait_permission=None,
@@ -671,23 +664,10 @@ def create_app(
             event,
             matching_fields=("type", "id", "resolved_at"),
         )
-        if created:
-            app.state.workspace_runtime.record_permission_decision(item)
-        if str(item.get("decision") or "") != "allow" or str(
-            item.get("execution_status") or ""
-        ) == "succeeded":
-            app.state.workspace_runtime.discard_parked_arguments(
-                str(item.get("id") or "")
-            )
         return persisted
 
     def _claimed_arguments(item: dict[str, Any]) -> dict[str, Any]:
-        arguments = dict(item.get("arguments") or {})
-        if app.state.workspace_runtime.owns_tool(str(item.get("name") or "")):
-            return app.state.workspace_runtime.restore_parked_arguments(
-                str(item.get("id") or ""), arguments
-            )
-        return arguments
+        return dict(item.get("arguments") or {})
 
     async def _publish_live_events(events: list[dict[str, Any]]) -> None:
         for event in events:
@@ -848,7 +828,6 @@ def create_app(
                 skills=app.state.skills,
                 mcp=app.state.mcp,
                 people=app.state.people,
-                workspace_runtime=app.state.workspace_runtime,
                 approval_granted=True,
                 approval_id=item["id"], approval_claimant=claimant,
                 approval_scope=str(item.get("scope") or "once"),
@@ -1150,7 +1129,6 @@ def create_app(
                     skills=app.state.skills,
                     mcp=app.state.mcp,
                     people=app.state.people,
-                    workspace_runtime=app.state.workspace_runtime,
                     approval_granted=True,
                     approval_scope=str(item.get("scope") or "once"),
                     approval_fingerprint=(
@@ -1437,7 +1415,6 @@ def create_app(
                 "email": profile.get("email"),
             },
             "apollo": {"configured": bool(app.state.apollo_key)},
-            "workspace": app.state.workspace_runtime.diagnostics(),
             "timezone": _operator_timezone(),
         }
 
@@ -1465,85 +1442,6 @@ def create_app(
         app.state.store.set_setting("persona", nxt.id)
         app.state.persona = nxt
         return {"persona": {"id": nxt.id, "name": nxt.name}}
-
-    @app.get("/v1/workspaces")
-    def workspace_list():
-        return app.state.workspace_runtime.diagnostics()
-
-    @app.post("/v1/workspaces", status_code=201)
-    async def workspace_create(request: Request):
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "invalid workspace request"}, status_code=400)
-        try:
-            grant = app.state.workspace_runtime.add_grant(
-                str(payload.get("path") or ""),
-                label=str(payload.get("label") or "Workspace"),
-                access=str(payload.get("access") or "read_only"),
-                allow_shell=bool(payload.get("allow_shell")),
-                request_id=(
-                    str(payload.get("request_id"))
-                    if payload.get("request_id")
-                    else None
-                ),
-            )
-        except (GrantUnavailable, WorkspacePathError, KeyError, ValueError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return {"grant": grant}
-
-    @app.get("/v1/workspaces/receipts")
-    def workspace_receipts(limit: int = 100):
-        return {"receipts": app.state.workspace_runtime.audit.list(limit=limit)}
-
-    @app.get("/v1/workspaces/host-approvals")
-    def workspace_host_approvals():
-        return {
-            "approvals": app.state.workspace_runtime.shell.approvals.list_all()
-        }
-
-    @app.delete("/v1/workspaces/host-approvals/{approval_id}")
-    def workspace_host_approval_revoke(approval_id: str):
-        try:
-            approval = app.state.workspace_runtime.shell.approvals.revoke(
-                approval_id
-            )
-        except KeyError:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        return {"approval": approval}
-
-    @app.patch("/v1/workspaces/{grant_id}")
-    async def workspace_update(grant_id: str, request: Request):
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            return JSONResponse({"error": "invalid workspace request"}, status_code=400)
-        changes = {
-            key: payload[key]
-            for key in ("label", "access", "allow_shell", "path")
-            if key in payload
-        }
-        try:
-            grant = app.state.workspace_runtime.update_grant(
-                grant_id, **changes
-            )
-        except (GrantUnavailable, WorkspacePathError, ValueError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return {"grant": grant}
-
-    @app.delete("/v1/workspaces/{grant_id}")
-    def workspace_revoke(grant_id: str):
-        try:
-            grant = app.state.workspace_runtime.revoke_grant(grant_id)
-        except (GrantUnavailable, WorkspacePathError, ValueError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=404)
-        return {"grant": grant}
-
-    @app.post("/v1/workspaces/tasks/{task_id}/cancel")
-    def workspace_task_cancel(task_id: str):
-        try:
-            task = app.state.workspace_runtime.shell.kill(task_id)
-        except KeyError:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        return {"task": task}
 
     async def _reap_and_publish_expired() -> None:
         """Persist and broadcast receipts for freshly reaped approvals."""
@@ -3760,37 +3658,10 @@ def create_app(
             arguments = dict(started["arguments"])
             if not failure.get("retry_safe"):
                 approval_id = f"recovery_{secrets.token_hex(8)}"
-                raw_arguments = arguments
-                if app.state.workspace_runtime.owns_tool(name):
-                    try:
-                        raw_arguments = (
-                            app.state.workspace_runtime.restore_parked_arguments(
-                                call_id, arguments
-                            )
-                        )
-                        arguments = app.state.workspace_runtime.park_arguments(
-                            approval_id, name, raw_arguments
-                        )
-                    except WorkspacePathError as exc:
-                        recovery = build_event(
-                            identity,
-                            "tool_recovery",
-                            event_id=f"event_{secrets.token_hex(16)}",
-                            command_id=command_id,
-                            call_id=call_id,
-                            name=name,
-                            action="retry",
-                            status="failed",
-                            outcome=str(exc),
-                            failure=failure,
-                        )
-                        await _persist_and_send(recovery)
-                        return
                 resource = turn_runtime.approval_resource(
                     name,
-                    raw_arguments,
+                    arguments,
                     app.state.gmail,
-                    app.state.workspace_runtime,
                 )
                 parked = app.state.inbox.park(
                     name,
@@ -3804,11 +3675,7 @@ def create_app(
                     kind="recovery_approval",
                     recovery_command_id=command_id,
                     original_call_id=call_id,
-                    resource=(
-                        app.state.workspace_runtime.sanitize_resource(resource)
-                        if app.state.workspace_runtime.owns_tool(name)
-                        else resource
-                    ),
+                    resource=resource,
                 )
                 permission = build_event(
                     identity,
@@ -3875,7 +3742,6 @@ def create_app(
                     skills=app.state.skills,
                     mcp=app.state.mcp,
                     people=app.state.people,
-                    workspace_runtime=app.state.workspace_runtime,
                     session_id=session_id,
                 )
             except asyncio.CancelledError:
@@ -4024,7 +3890,6 @@ def create_app(
                         "skills": app.state.skills,
                         "mcp": app.state.mcp,
                         "people": app.state.people,
-                        "workspace_runtime": app.state.workspace_runtime,
                     },
                     emit=_broadcast,
                     wait_permission=_wait,
