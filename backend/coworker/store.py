@@ -1,4 +1,4 @@
-"""Sourcecado conversation state: SQLite index plus append-only JSONL."""
+"""Sourcecado conversation state: Postgres index plus append-only JSONL."""
 
 from __future__ import annotations
 
@@ -7,13 +7,16 @@ from coworker.consequential_policy import requires_once
 import json
 import os
 import re
-import sqlite3
 import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import psycopg
+from psycopg.rows import dict_row
+
+from coworker import db
 from coworker.context_projection import (
     DEFAULT_PROJECTION_POLICY,
     ContextAuthority,
@@ -25,10 +28,9 @@ from coworker.context_projection import (
 )
 
 _SID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-# Declared schema version for club.db and the transcript log, read by the
-# migration registry in coworker.migrations. Reporting only: this module
-# does not stamp or check it.
-SCHEMA_VERSION = 2
+# Declared version of the transcript log, read by the migration registry in
+# coworker.migrations. Reporting only: this module does not stamp or check it.
+# The tables are defined by supabase/migrations/20261110000600_club.sql.
 TRANSCRIPT_VERSION = 1
 
 # context-projection-v1 (issue #58). A memory row is model context only after
@@ -42,26 +44,36 @@ MEMORY_NEEDS_REVIEW = "needs_review"
 MEMORY_CLASSIFIED = "classified"
 MEMORY_SENSITIVITY_STANDARD = "standard"
 
-# The columns that carry that contract. They are added to an existing database
-# without a default on purpose: the registry step in coworker/migrations.py is
-# what writes every existing row to legacy_unclassified/needs_review, with a
-# backup taken first. A default here would do that work silently on the first
-# open and leave the registered migration with nothing left to migrate.
-_MEMORY_CONTEXT_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("category", "TEXT"),
-    ("classification_status", "TEXT"),
-    ("person_id", "TEXT"),
-    ("session_id", "TEXT"),
-    ("source_ref", "TEXT"),
-    ("updated_at", "TEXT"),
-    ("fresh_until", "TEXT"),
-    ("sensitivity", "TEXT"),
-    ("claim_key", "TEXT"),
+_MEMORY_COLUMNS = (
+    "id, content, created_at, category, classification_status, person_id, "
+    "session_id, source_ref, updated_at, fresh_until, sensitivity, claim_key"
 )
+_JOB_COLUMNS = (
+    "id, cron, prompt, created_at, next_run_at, name, template_id, cadence"
+)
+# `event_offset` is read here and dropped by `_run_row`.
+_RUN_COLUMNS = (
+    "id, job_id, status, result, created_at, started_at, finished_at, "
+    "duration_ms, summary, artifacts, session_id, waiting_approval_count, "
+    "event_offset"
+)
+_INBOX_COLUMNS = (
+    "id, kind, name, arguments, state, decision, actor, requested_at, "
+    "resolved_at, scope, execution_status, execution_error, "
+    "execution_claimant, execution_result, expires_at, reason, session_id, "
+    "run_id, message_id, part_id, recovery_command_id, original_call_id, "
+    "resource, created_at"
+)
+_QUEUE_COLUMNS = (
+    "id, session_id, text, position, state, error, created_at, updated_at"
+)
+# The text SQLite's CURRENT_TIMESTAMP gave: `YYYY-MM-DD HH:MM:SS` in UTC.
+_SQL_NOW = "to_char(now() at time zone 'utc', 'YYYY-MM-DD HH24:MI:SS')"
 
-_MEMORY_COLUMNS = "id, content, created_at, " + ", ".join(
-    column for column, _definition in _MEMORY_CONTEXT_COLUMNS
-)
+
+def _query(conn: psycopg.Connection, sql: str, params: tuple[Any, ...]) -> psycopg.Cursor:
+    """Run one statement and return a cursor whose rows are dicts."""
+    return conn.cursor(row_factory=dict_row).execute(sql, params)
 
 # Read from the approved policy rather than restated, so the adapter clips to
 # exactly the cap the projector enforces and the two cannot drift apart.
@@ -85,7 +97,7 @@ def _memory_source_ref(memory_id: int) -> str:
     return f"sourcecado:memory/{memory_id}"
 
 
-def _memory_source_ref_record(row: sqlite3.Row) -> ContextSourceRef:
+def _memory_source_ref_record(row: dict[str, Any]) -> ContextSourceRef:
     return ContextSourceRef(
         id=_memory_source_ref(row["id"]),
         provider="sourcecado",
@@ -136,7 +148,7 @@ def _memory_in_use(row: dict[str, Any]) -> bool:
     )
 
 
-def _clip_memory_line(row: sqlite3.Row, state: ContextState) -> tuple[str, bool]:
+def _clip_memory_line(row: dict[str, Any], state: ContextState) -> tuple[str, bool]:
     """Render one preference, clipped at a word boundary to the per-item cap.
 
     The Source Reference and the evidence state are outside the clipped span,
@@ -232,228 +244,30 @@ class ConversationStore:
         self.memory_dir = self.base / "memory"
         self.memory_dir.mkdir(exist_ok=True)
         os.chmod(self.memory_dir, 0o700)
-        self.db_path = self.base / "club.db"
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        os.chmod(self.db_path, 0o600)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                title TEXT,
-                n_msgs INTEGER DEFAULT 0,
-                pinned INTEGER NOT NULL DEFAULT 0,
-                opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                category TEXT NOT NULL DEFAULT 'unclassified',
-                classification_status TEXT NOT NULL DEFAULT 'needs_review',
-                person_id TEXT,
-                session_id TEXT,
-                source_ref TEXT,
-                updated_at TEXT,
-                fresh_until TEXT,
-                sensitivity TEXT NOT NULL DEFAULT 'standard',
-                claim_key TEXT
-            );
-            CREATE TABLE IF NOT EXISTS jobs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                cron TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS runs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                result TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS inbox (
-                id TEXT PRIMARY KEY,
-                kind TEXT NOT NULL,
-                name TEXT NOT NULL,
-                arguments TEXT NOT NULL,
-                state TEXT NOT NULL,
-                decision TEXT,
-                actor TEXT,
-                requested_at TEXT,
-                resolved_at TEXT,
-                scope TEXT DEFAULT 'once',
-                execution_status TEXT DEFAULT 'pending',
-                execution_error TEXT,
-                execution_claimant TEXT,
-                execution_result TEXT,
-                expires_at TEXT,
-                reason TEXT,
-                session_id TEXT,
-                run_id TEXT,
-                message_id TEXT,
-                part_id TEXT,
-                recovery_command_id TEXT,
-                original_call_id TEXT,
-                resource TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS chat_queue (
-                session_id TEXT NOT NULL,
-                id TEXT NOT NULL,
-                text TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                state TEXT NOT NULL,
-                error TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (session_id, id)
-            );
-            CREATE TABLE IF NOT EXISTS queue_commands (
-                session_id TEXT NOT NULL,
-                command_id TEXT NOT NULL,
-                command_type TEXT NOT NULL,
-                item_id TEXT,
-                acknowledgement TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (session_id, command_id)
-            );
-            CREATE TABLE IF NOT EXISTS queue_sessions (
-                session_id TEXT PRIMARY KEY,
-                paused INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS recovery_commands (
-                session_id TEXT NOT NULL,
-                command_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (session_id, command_id)
-            );
-            CREATE INDEX IF NOT EXISTS chat_queue_session_position
-                ON chat_queue(session_id, position);
-            """
-        )
-        for column, definition in _MEMORY_CONTEXT_COLUMNS:
-            try:
-                self._conn.execute(
-                    f"ALTER TABLE memories ADD COLUMN {column} {definition}"
-                )
-            except sqlite3.OperationalError:
-                pass
-        try:
-            self._conn.execute("ALTER TABLE jobs ADD COLUMN next_run_at TEXT")
-        except sqlite3.OperationalError:
-            pass
-        for column in ("name", "template_id", "cadence"):
-            try:
-                self._conn.execute(f"ALTER TABLE jobs ADD COLUMN {column} TEXT")
-            except sqlite3.OperationalError:
-                pass
-        self._conn.execute(
-            """
-            UPDATE jobs SET
-                name = COALESCE(name, prompt),
-                template_id = COALESCE(template_id, 'legacy'),
-                cadence = COALESCE(cadence, cron)
-            """
-        )
-        run_migrations = {
-            "started_at": "TEXT",
-            "finished_at": "TEXT",
-            "duration_ms": "INTEGER",
-            "summary": "TEXT",
-            "artifacts": "TEXT",
-            "session_id": "TEXT",
-            "waiting_approval_count": "INTEGER DEFAULT 0",
-            # Count of events already in the reused sched-{job_id} file
-            # when this run started. The restart reconciler must ignore
-            # those; they belong to earlier attempts.
-            "event_offset": "INTEGER NOT NULL DEFAULT 0",
-        }
-        for column, definition in run_migrations.items():
-            try:
-                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {column} {definition}")
-            except sqlite3.OperationalError:
-                pass
-        self._conn.execute(
-            """
-            UPDATE runs SET
-                started_at = COALESCE(started_at, created_at),
-                finished_at = CASE
-                    WHEN status = 'running' THEN finished_at
-                    ELSE COALESCE(finished_at, created_at)
-                END,
-                duration_ms = COALESCE(duration_ms, 0),
-                summary = COALESCE(summary, result, ''),
-                artifacts = COALESCE(artifacts, '[]'),
-                session_id = COALESCE(session_id, 'sched-' || job_id),
-                waiting_approval_count = COALESCE(waiting_approval_count, 0)
-            """
-        )
-        # Pre-S4 scheduler writes stored run_turn's raw "ok" status directly;
-        # RECEIPT_STATUSES has mapped it to "success" ever since, but rows
-        # written before that mapping existed are still on disk with the old
-        # text. Normalize them once so every consumer -- API, UI, future
-        # exports -- agrees on the shared status contract.
-        self._conn.execute("UPDATE runs SET status = 'success' WHERE status = 'ok'")
-        try:
-            self._conn.execute(
-                "ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"
-            )
-        except sqlite3.OperationalError:
-            pass
-        try:
-            self._conn.execute("ALTER TABLE sessions ADD COLUMN opened_at TEXT")
-            self._conn.execute(
-                "UPDATE sessions SET opened_at = updated_at WHERE opened_at IS NULL"
-            )
-        except sqlite3.OperationalError:
-            pass
-        inbox_migrations = {
-            "actor": "TEXT",
-            "requested_at": "TEXT",
-            "resolved_at": "TEXT",
-            "scope": "TEXT DEFAULT 'once'",
-            "execution_status": "TEXT DEFAULT 'pending'",
-            "execution_error": "TEXT",
-            "execution_claimant": "TEXT",
-            "execution_result": "TEXT",
-            "expires_at": "TEXT",
-            "reason": "TEXT",
-            "session_id": "TEXT",
-            "run_id": "TEXT",
-            "message_id": "TEXT",
-            "part_id": "TEXT",
-            "recovery_command_id": "TEXT",
-            "original_call_id": "TEXT",
-            "resource": "TEXT",
-        }
-        for column, definition in inbox_migrations.items():
-            try:
-                self._conn.execute(
-                    f"ALTER TABLE inbox ADD COLUMN {column} {definition}"
-                )
-            except sqlite3.OperationalError:
-                pass
-        self._conn.execute(
-            """
-            UPDATE inbox SET
-                requested_at = COALESCE(requested_at, created_at),
-                scope = COALESCE(scope, 'once'),
-                execution_status = COALESCE(execution_status, 'pending')
-            """
-        )
-        self._conn.commit()
+        self._db, self._user_id = db.resolve(self.base)
         self._reconcile_orphaned_inbox_executions()
         self._reconcile_orphaned_queue_items()
         self._reconcile_orphaned_runs()
         self._reconcile_orphaned_recovery_commands()
+        self._normalize_legacy_run_status()
+
+    def _tx(self):
+        """One transaction as this store's user. See docs/engineering/postgres-port.md."""
+        return self._db.tx(self._user_id)
+
+    def _normalize_legacy_run_status(self) -> None:
+        """Store run_turn's raw "ok" as the shared status "success".
+
+        Scheduler writes from before RECEIPT_STATUSES stored "ok", and
+        `record_run` still accepts it. Every consumer (API, UI, exports)
+        reads the shared status contract, so the store heals it on open.
+        """
+        with self._lock, self._tx() as conn:
+            conn.execute(
+                "UPDATE runs SET status = 'success' WHERE user_id = %s AND status = 'ok'",
+                (self._user_id,),
+            )
 
     def _reconcile_orphaned_recovery_commands(self) -> None:
         """Drop in-flight recovery claims from the prior process.
@@ -463,33 +277,30 @@ class ConversationStore:
         claiming. A claim whose process died mid-work must not silence the
         command forever.
         """
-        with self._lock:
-            self._conn.execute("DELETE FROM recovery_commands")
-            self._conn.commit()
+        with self._lock, self._tx() as conn:
+            conn.execute(
+                "DELETE FROM recovery_commands WHERE user_id = %s", (self._user_id,)
+            )
 
     def _reconcile_orphaned_inbox_executions(self) -> None:
         """Close claims from the prior process without replaying external writes."""
         result = json.dumps(
             {"status": "interrupted", "error": _INTERRUPTED_APPROVAL_ERROR}
         )
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                self._conn.execute(
-                    """
-                    UPDATE inbox SET
-                        execution_status = 'interrupted',
-                        execution_error = ?,
-                        execution_claimant = NULL,
-                        execution_result = ?
-                    WHERE execution_status = 'executing'
-                    """,
-                    (_INTERRUPTED_APPROVAL_ERROR, result),
-                )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
+        # One UPDATE statement. It locks and changes each matching row in
+        # one step, so no read can fall between the check and the write.
+        with self._lock, self._tx() as conn:
+            conn.execute(
+                """
+                UPDATE inbox SET
+                    execution_status = 'interrupted',
+                    execution_error = %s,
+                    execution_claimant = NULL,
+                    execution_result = %s
+                WHERE user_id = %s AND execution_status = 'executing'
+                """,
+                (_INTERRUPTED_APPROVAL_ERROR, result, self._user_id),
+            )
 
     def _reconcile_orphaned_queue_items(self) -> None:
         """Make pre-start queue claims recoverable without replaying them."""
@@ -498,40 +309,30 @@ class ConversationStore:
             "Sourcecado restarted before this queued run reported completion. "
             "Review and retry explicitly."
         )
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                affected = self._conn.execute(
+        with self._lock, self._tx() as conn:
+            # RETURNING names exactly the rows this UPDATE changed, so the
+            # sessions paused below are the sessions whose items moved.
+            affected = _query(
+                conn,
+                """
+                UPDATE chat_queue
+                SET state = 'interrupted', error = %s, updated_at = %s
+                WHERE user_id = %s AND state = 'sending'
+                RETURNING session_id
+                """,
+                (reason, now, self._user_id),
+            ).fetchall()
+            for session_id in sorted({str(row["session_id"]) for row in affected}):
+                conn.execute(
                     """
-                    SELECT DISTINCT session_id
-                    FROM chat_queue
-                    WHERE state = 'sending'
-                    """
-                ).fetchall()
-                if affected:
-                    self._conn.execute(
-                        """
-                        UPDATE chat_queue
-                        SET state = 'interrupted', error = ?, updated_at = ?
-                        WHERE state = 'sending'
-                        """,
-                        (reason, now),
-                    )
-                    for row in affected:
-                        self._conn.execute(
-                            """
-                            INSERT INTO queue_sessions (session_id, paused, updated_at)
-                            VALUES (?, 1, ?)
-                            ON CONFLICT(session_id) DO UPDATE SET
-                                paused = 1,
-                                updated_at = excluded.updated_at
-                            """,
-                            (str(row["session_id"]), now),
-                        )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
+                    INSERT INTO queue_sessions (user_id, session_id, paused, updated_at)
+                    VALUES (%s, %s, 1, %s)
+                    ON CONFLICT (user_id, session_id) DO UPDATE SET
+                        paused = 1,
+                        updated_at = excluded.updated_at
+                    """,
+                    (self._user_id, session_id, now),
+                )
 
     def _reconcile_orphaned_runs(self) -> None:
         """Close runs the prior process left mid-flight without inventing an outcome.
@@ -542,36 +343,36 @@ class ConversationStore:
         terminal event is still in the file.
         """
         now = datetime.now(UTC).isoformat()
-        with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
-            try:
-                running = self._conn.execute(
+        with self._lock, self._tx() as conn:
+            # FOR UPDATE holds the running rows until commit, so no other
+            # writer can finish one between this read and the UPDATE below.
+            running = _query(
+                conn,
+                """
+                SELECT id, session_id, event_offset
+                FROM runs WHERE user_id = %s AND status = 'running'
+                ORDER BY id
+                FOR UPDATE
+                """,
+                (self._user_id,),
+            ).fetchall()
+            for row in running:
+                status, result, summary = self._terminal_transcript_outcome(
+                    str(row["session_id"]),
+                    int(row["event_offset"] or 0),
+                )
+                conn.execute(
                     """
-                    SELECT id, session_id, event_offset
-                    FROM runs WHERE status = 'running'
-                    """
-                ).fetchall()
-                for row in running:
-                    status, result, summary = self._terminal_transcript_outcome(
-                        str(row["session_id"]),
-                        int(row["event_offset"] or 0),
-                    )
-                    self._conn.execute(
-                        """
-                        UPDATE runs SET
-                            status = ?,
-                            result = ?,
-                            summary = ?,
-                            finished_at = ?,
-                            duration_ms = COALESCE(duration_ms, 0)
-                        WHERE id = ?
-                        """,
-                        (status, result, summary, now, row["id"]),
-                    )
-                self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
+                    UPDATE runs SET
+                        status = %s,
+                        result = %s,
+                        summary = %s,
+                        finished_at = %s,
+                        duration_ms = COALESCE(duration_ms, 0)
+                    WHERE user_id = %s AND id = %s
+                    """,
+                    (status, result, summary, now, self._user_id, row["id"]),
+                )
 
     # Mirrors scheduler.RECEIPT_STATUSES' run_turn -> receipt mapping, keyed
     # by the transcript's turn_end "state" instead of run_turn's return
@@ -691,37 +492,45 @@ class ConversationStore:
 
     def _reindex(self, sid: str, messages: list[dict[str, Any]]) -> None:
         title = title_from(messages)
-        self._conn.execute(
-            """
-            INSERT INTO sessions (session_id, title, n_msgs, opened_at, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT(session_id) DO UPDATE SET
-                title = COALESCE(sessions.title, excluded.title),
-                n_msgs = excluded.n_msgs,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (sid, title, len(messages)),
-        )
-        self._conn.commit()
+        with self._tx() as conn:
+            conn.execute(
+                f"""
+                INSERT INTO sessions
+                    (user_id, session_id, title, n_msgs, opened_at, updated_at)
+                VALUES (%s, %s, %s, %s, {_SQL_NOW}, {_SQL_NOW})
+                ON CONFLICT (user_id, session_id) DO UPDATE SET
+                    title = COALESCE(sessions.title, excluded.title),
+                    n_msgs = excluded.n_msgs,
+                    updated_at = {_SQL_NOW}
+                """,
+                (self._user_id, sid, title, len(messages)),
+            )
 
     def index(self, sid: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT session_id, title, n_msgs, pinned, opened_at, updated_at FROM sessions WHERE session_id = ?",
-                (sid,),
+        with self._lock, self._tx() as conn:
+            row = _query(
+                conn,
+                """
+                SELECT session_id, title, n_msgs, pinned, opened_at, updated_at
+                FROM sessions WHERE user_id = %s AND session_id = %s
+                """,
+                (self._user_id, sid),
             ).fetchone()
         if row is None:
             return None
         return _session_row(row)
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
+        with self._lock, self._tx() as conn:
+            # `seq` stands in for the SQLite rowid as the last tie-break.
+            rows = _query(
+                conn,
                 """
                 SELECT session_id, title, n_msgs, pinned, opened_at, updated_at FROM sessions
-                WHERE session_id NOT LIKE 'sched-%'
-                ORDER BY COALESCE(opened_at, updated_at) DESC, updated_at DESC, rowid DESC
-                """
+                WHERE user_id = %s AND session_id NOT LIKE 'sched-%%'
+                ORDER BY COALESCE(opened_at, updated_at) DESC, updated_at DESC, seq DESC
+                """,
+                (self._user_id,),
             ).fetchall()
         return [_session_row(row) for row in rows]
 
@@ -730,11 +539,16 @@ class ConversationStore:
         if not valid_session_id(sid):
             raise ValueError("invalid session id")
         with self._lock:
-            self._conn.execute(
-                "INSERT OR IGNORE INTO sessions (session_id, title, n_msgs, opened_at, updated_at) VALUES (?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                (sid,),
-            )
-            self._conn.commit()
+            with self._tx() as conn:
+                conn.execute(
+                    f"""
+                    INSERT INTO sessions
+                        (user_id, session_id, title, n_msgs, opened_at, updated_at)
+                    VALUES (%s, %s, NULL, 0, {_SQL_NOW}, {_SQL_NOW})
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (self._user_id, sid),
+                )
             self._file(sid).touch(mode=0o600)
             os.chmod(self._file(sid), 0o600)
         row = self.index(sid)
@@ -748,23 +562,21 @@ class ConversationStore:
         cleaned = title.strip()
         if not cleaned:
             return None
-        with self._lock:
-            cursor = self._conn.execute(
-                "UPDATE sessions SET title = ? WHERE session_id = ?",
-                (cleaned, sid),
+        with self._lock, self._tx() as conn:
+            cursor = conn.execute(
+                "UPDATE sessions SET title = %s WHERE user_id = %s AND session_id = %s",
+                (cleaned, self._user_id, sid),
             )
-            self._conn.commit()
             if cursor.rowcount == 0:
                 return None
         return self.index(sid)
 
     def set_session_pinned(self, sid: str, pinned: bool) -> dict[str, Any] | None:
-        with self._lock:
-            cursor = self._conn.execute(
-                "UPDATE sessions SET pinned = ? WHERE session_id = ?",
-                (int(pinned), sid),
+        with self._lock, self._tx() as conn:
+            cursor = conn.execute(
+                "UPDATE sessions SET pinned = %s WHERE user_id = %s AND session_id = %s",
+                (int(pinned), self._user_id, sid),
             )
-            self._conn.commit()
             if cursor.rowcount == 0:
                 return None
         return self.index(sid)
@@ -773,12 +585,11 @@ class ConversationStore:
         return self.get_setting("open_session_id")
 
     def set_open_session(self, sid: str) -> None:
-        with self._lock:
-            self._conn.execute(
-                "UPDATE sessions SET opened_at = ? WHERE session_id = ?",
-                (datetime.now(UTC).isoformat(), sid),
+        with self._lock, self._tx() as conn:
+            conn.execute(
+                "UPDATE sessions SET opened_at = %s WHERE user_id = %s AND session_id = %s",
+                (datetime.now(UTC).isoformat(), self._user_id, sid),
             )
-            self._conn.commit()
         self.set_setting("open_session_id", sid)
 
     def remember(
@@ -799,15 +610,18 @@ class ConversationStore:
         state, because the words alone cannot tell them apart.
         """
         now = datetime.now(UTC).isoformat()
-        with self._lock:
-            cursor = self._conn.execute(
+        with self._lock, self._tx() as conn:
+            memory_id = _query(
+                conn,
                 """
                 INSERT INTO memories
-                    (content, category, classification_status, person_id,
+                    (user_id, content, category, classification_status, person_id,
                      session_id, updated_at, fresh_until, sensitivity)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (
+                    self._user_id,
                     content,
                     MEMORY_CATEGORY_UNCLASSIFIED,
                     MEMORY_NEEDS_REVIEW,
@@ -817,16 +631,15 @@ class ConversationStore:
                     fresh_until,
                     sensitivity,
                 ),
-            )
-            memory_id = cursor.lastrowid
-            self._conn.execute(
-                "UPDATE memories SET source_ref = ? WHERE id = ?",
-                (_memory_source_ref(memory_id), memory_id),
-            )
-            self._conn.commit()
-            row = self._conn.execute(
-                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = ?",
-                (memory_id,),
+            ).fetchone()["id"]
+            row = _query(
+                conn,
+                f"""
+                UPDATE memories SET source_ref = %s
+                WHERE user_id = %s AND id = %s
+                RETURNING {_MEMORY_COLUMNS}
+                """,
+                (_memory_source_ref(memory_id), self._user_id, memory_id),
             ).fetchone()
         item = dict(row)
         self._write_memory_md(item)
@@ -834,9 +647,11 @@ class ConversationStore:
         return item
 
     def list_memories(self) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT {_MEMORY_COLUMNS} FROM memories ORDER BY id"
+        with self._lock, self._tx() as conn:
+            rows = _query(
+                conn,
+                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE user_id = %s ORDER BY id",
+                (self._user_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -847,30 +662,26 @@ class ConversationStore:
         classification would let a rewrite change model context without anyone
         approving what it now says.
         """
-        with self._lock:
-            cursor = self._conn.execute(
-                """
+        with self._lock, self._tx() as conn:
+            row = _query(
+                conn,
+                f"""
                 UPDATE memories SET
-                    content = ?,
-                    category = ?,
-                    classification_status = ?,
-                    updated_at = ?
-                WHERE id = ?
+                    content = %s,
+                    category = %s,
+                    classification_status = %s,
+                    updated_at = %s
+                WHERE user_id = %s AND id = %s
+                RETURNING {_MEMORY_COLUMNS}
                 """,
                 (
                     content,
                     MEMORY_CATEGORY_UNCLASSIFIED,
                     MEMORY_NEEDS_REVIEW,
                     datetime.now(UTC).isoformat(),
+                    self._user_id,
                     memory_id,
                 ),
-            )
-            self._conn.commit()
-            if cursor.rowcount == 0:
-                return None
-            row = self._conn.execute(
-                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = ?",
-                (memory_id,),
             ).fetchone()
         if row is None:
             return None
@@ -889,10 +700,11 @@ class ConversationStore:
         and promoting it here is exactly the silent widening the migration
         default exists to prevent.
         """
-        with self._lock:
-            row = self._conn.execute(
-                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = ?",
-                (memory_id,),
+        with self._lock, self._tx() as conn:
+            row = _query(
+                conn,
+                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE user_id = %s AND id = %s",
+                (self._user_id, memory_id),
             ).fetchone()
             if row is None:
                 return None
@@ -901,15 +713,17 @@ class ConversationStore:
                     "a Person- or session-scoped memory cannot become a global "
                     "operator preference; file it on the Person File instead"
                 )
-            self._conn.execute(
-                """
+            updated = _query(
+                conn,
+                f"""
                 UPDATE memories SET
-                    category = ?,
-                    classification_status = ?,
-                    claim_key = ?,
-                    source_ref = ?,
-                    updated_at = ?
-                WHERE id = ?
+                    category = %s,
+                    classification_status = %s,
+                    claim_key = %s,
+                    source_ref = %s,
+                    updated_at = %s
+                WHERE user_id = %s AND id = %s
+                RETURNING {_MEMORY_COLUMNS}
                 """,
                 (
                     MEMORY_CATEGORY_PREFERENCE,
@@ -917,22 +731,15 @@ class ConversationStore:
                     claim_key,
                     _memory_source_ref(memory_id),
                     datetime.now(UTC).isoformat(),
+                    self._user_id,
                     memory_id,
                 ),
-            )
-            self._conn.commit()
-            updated = self._conn.execute(
-                f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = ?",
-                (memory_id,),
             ).fetchone()
         return dict(updated)
 
     def memory_backlog(self) -> dict[str, Any]:
         """What the director still has to classify, and what is already live."""
-        with self._lock:
-            rows = self._conn.execute(
-                f"SELECT {_MEMORY_COLUMNS} FROM memories ORDER BY id"
-            ).fetchall()
+        rows = self.list_memories()
         waiting = [
             dict(row)
             for row in rows
@@ -967,25 +774,28 @@ class ConversationStore:
         method, so they cannot reach a prompt.
         """
         moment = now or datetime.now(UTC)
-        with self._lock:
-            rows = self._conn.execute(
+        with self._lock, self._tx() as conn:
+            rows = _query(
+                conn,
                 f"""
                 SELECT {_MEMORY_COLUMNS} FROM memories
-                WHERE classification_status = ?
-                  AND category = ?
+                WHERE user_id = %s
+                  AND classification_status = %s
+                  AND category = %s
                   AND person_id IS NULL
                   AND session_id IS NULL
-                  AND COALESCE(sensitivity, ?) = ?
+                  AND COALESCE(sensitivity, %s) = %s
                 ORDER BY id
                 """,
                 (
+                    self._user_id,
                     MEMORY_CLASSIFIED,
                     MEMORY_CATEGORY_PREFERENCE,
                     MEMORY_SENSITIVITY_STANDARD,
                     MEMORY_SENSITIVITY_STANDARD,
                 ),
             ).fetchall()
-        contested: dict[str, list[sqlite3.Row]] = {}
+        contested: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             if row["claim_key"]:
                 contested.setdefault(row["claim_key"], []).append(row)
@@ -1031,14 +841,17 @@ class ConversationStore:
         template_id: str = "legacy",
         cadence: str | None = None,
     ) -> dict[str, Any]:
-        with self._lock:
-            cursor = self._conn.execute(
-                """
+        with self._lock, self._tx() as conn:
+            row = _query(
+                conn,
+                f"""
                 INSERT INTO jobs
-                    (cron, prompt, next_run_at, name, template_id, cadence)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (user_id, cron, prompt, next_run_at, name, template_id, cadence)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING {_JOB_COLUMNS}
                 """,
                 (
+                    self._user_id,
                     cron,
                     prompt,
                     next_run_at,
@@ -1046,35 +859,32 @@ class ConversationStore:
                     template_id,
                     cadence or cron,
                 ),
-            )
-            self._conn.commit()
-            row = self._conn.execute(
-                """
-                SELECT id, cron, prompt, created_at, next_run_at, name,
-                       template_id, cadence
-                FROM jobs WHERE id = ?
-                """,
-                (cursor.lastrowid,),
             ).fetchone()
         return dict(row)
 
     def record_run(self, job_id: int, status: str, result: str = "") -> dict[str, Any]:
         stamp = datetime.now(UTC).isoformat()
-        with self._lock:
-            cursor = self._conn.execute(
-                """
+        with self._lock, self._tx() as conn:
+            row = _query(
+                conn,
+                f"""
                 INSERT INTO runs
-                    (job_id, status, result, started_at, finished_at,
+                    (user_id, job_id, status, result, started_at, finished_at,
                      duration_ms, summary, artifacts, session_id,
                      waiting_approval_count)
-                VALUES (?, ?, ?, ?, ?, 0, ?, '[]', ?, 0)
+                VALUES (%s, %s, %s, %s, %s, %s, 0, %s, '[]', %s, 0)
+                RETURNING {_RUN_COLUMNS}
                 """,
-                (job_id, status, result, stamp, stamp, result, f"sched-{job_id}"),
-            )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM runs WHERE id = ?",
-                (cursor.lastrowid,),
+                (
+                    self._user_id,
+                    job_id,
+                    status,
+                    result,
+                    stamp,
+                    stamp,
+                    result,
+                    f"sched-{job_id}",
+                ),
             ).fetchone()
         return _run_row(row)
 
@@ -1083,20 +893,19 @@ class ConversationStore:
     ) -> dict[str, Any]:
         with self._lock:
             event_offset = len(self.load_events(session_id))
-            cursor = self._conn.execute(
-                """
-                INSERT INTO runs
-                    (job_id, status, result, started_at, finished_at,
-                     duration_ms, summary, artifacts, session_id,
-                     waiting_approval_count, event_offset)
-                VALUES (?, 'running', NULL, ?, NULL, NULL, '', '[]', ?, 0, ?)
-                """,
-                (job_id, started_at, session_id, event_offset),
-            )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM runs WHERE id = ?", (cursor.lastrowid,)
-            ).fetchone()
+            with self._tx() as conn:
+                row = _query(
+                    conn,
+                    f"""
+                    INSERT INTO runs
+                        (user_id, job_id, status, result, started_at, finished_at,
+                         duration_ms, summary, artifacts, session_id,
+                         waiting_approval_count, event_offset)
+                    VALUES (%s, %s, 'running', NULL, %s, NULL, NULL, '', '[]', %s, 0, %s)
+                    RETURNING {_RUN_COLUMNS}
+                    """,
+                    (self._user_id, job_id, started_at, session_id, event_offset),
+                ).fetchone()
         return _run_row(row)
 
     def finish_run(
@@ -1111,14 +920,14 @@ class ConversationStore:
         finished_at: str,
         waiting_approval_count: int = 0,
     ) -> dict[str, Any]:
-        with self._lock:
-            self._conn.execute(
+        with self._lock, self._tx() as conn:
+            conn.execute(
                 """
                 UPDATE runs SET
-                    status = ?, result = ?, summary = ?, artifacts = ?,
-                    duration_ms = ?, finished_at = ?,
-                    waiting_approval_count = ?
-                WHERE id = ?
+                    status = %s, result = %s, summary = %s, artifacts = %s,
+                    duration_ms = %s, finished_at = %s,
+                    waiting_approval_count = %s
+                WHERE user_id = %s AND id = %s
                 """,
                 (
                     status,
@@ -1128,46 +937,54 @@ class ConversationStore:
                     max(0, duration_ms),
                     finished_at,
                     max(0, waiting_approval_count),
+                    self._user_id,
                     run_id,
                 ),
             )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM runs WHERE id = ?", (run_id,)
+            row = _query(
+                conn,
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE user_id = %s AND id = %s",
+                (self._user_id, run_id),
             ).fetchone()
         return _run_row(row)
 
     def list_schedule(self) -> dict[str, list[dict[str, Any]]]:
-        with self._lock:
-            jobs = self._conn.execute(
-                """
-                SELECT id, cron, prompt, created_at, next_run_at, name,
-                       template_id, cadence
-                FROM jobs ORDER BY id
-                """
+        with self._lock, self._tx() as conn:
+            jobs = _query(
+                conn,
+                f"SELECT {_JOB_COLUMNS} FROM jobs WHERE user_id = %s ORDER BY id",
+                (self._user_id,),
             ).fetchall()
-            runs = self._conn.execute("SELECT * FROM runs ORDER BY id").fetchall()
+            runs = _query(
+                conn,
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE user_id = %s ORDER BY id",
+                (self._user_id,),
+            ).fetchall()
         return {
             "jobs": [dict(row) for row in jobs],
             "runs": [_run_row(row) for row in runs],
         }
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT value FROM settings WHERE key = ?", (key,)
+        with self._lock, self._tx() as conn:
+            row = _query(
+                conn,
+                "SELECT value FROM settings WHERE user_id = %s AND key = %s",
+                (self._user_id, key),
             ).fetchone()
         if row is None:
             return default
         return str(row["value"])
 
     def set_setting(self, key: str, value: str) -> None:
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (key, value),
+        with self._lock, self._tx() as conn:
+            conn.execute(
+                """
+                INSERT INTO settings (user_id, key, value) VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value
+                """,
+                (self._user_id, key, value),
             )
-            self._conn.commit()
 
     def park_inbox(
         self,
@@ -1194,18 +1011,21 @@ class ConversationStore:
         expires_at = (
             requested + timedelta(seconds=self.approval_ttl_seconds)
         ).isoformat()
-        with self._lock:
-            self._conn.execute(
-                """
+        with self._lock, self._tx() as conn:
+            row = _query(
+                conn,
+                f"""
                 INSERT INTO inbox
-                    (id, kind, name, arguments, state, requested_at, scope,
+                    (user_id, id, kind, name, arguments, state, requested_at, scope,
                      execution_status, expires_at, reason, session_id, run_id,
                      message_id, part_id, recovery_command_id, original_call_id,
                      resource)
-                VALUES (?, ?, ?, ?, 'pending', ?, 'once', 'pending',
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, 'pending', %s, 'once', 'pending',
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING {_INBOX_COLUMNS}
                 """,
                 (
+                    self._user_id,
                     item_id,
                     kind,
                     name,
@@ -1221,12 +1041,19 @@ class ConversationStore:
                     original_call_id,
                     json.dumps(resource) if resource is not None else None,
                 ),
-            )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
             ).fetchone()
         return _inbox_row(row)
+
+    def _inbox_item(
+        self, conn: psycopg.Connection, item_id: str, *, lock: bool = False
+    ) -> dict[str, Any] | None:
+        """One inbox row of this user. `lock` holds the row until commit."""
+        return _query(
+            conn,
+            f"SELECT {_INBOX_COLUMNS} FROM inbox WHERE user_id = %s AND id = %s"
+            + (" FOR UPDATE" if lock else ""),
+            (self._user_id, item_id),
+        ).fetchone()
 
     def reap_overdue_inbox(self, now: str | None = None) -> list[dict[str, Any]]:
         """TTL reaper, two distinct sweeps.
@@ -1238,25 +1065,30 @@ class ConversationStore:
         restart reconciler uses, never 'expired'.
         """
         stamp = now or datetime.now(UTC).isoformat()
-        with self._lock:
-            overdue = self._conn.execute(
+        with self._lock, self._tx() as conn:
+            overdue = _query(
+                conn,
                 """
                 SELECT id FROM inbox
-                WHERE expires_at IS NOT NULL AND expires_at <= ?
+                WHERE user_id = %s
+                  AND expires_at IS NOT NULL AND expires_at <= %s
                   AND (state = 'pending' OR execution_status = 'executing')
                 """,
-                (stamp,),
+                (self._user_id, stamp),
             ).fetchall()
             if not overdue:
                 return []
-            self._conn.execute(
+            # Each UPDATE checks the state again on the row it locks, so a
+            # decision that commits first is never overwritten here.
+            conn.execute(
                 """
                 UPDATE inbox SET
                     execution_status = 'interrupted',
                     execution_claimant = NULL,
-                    execution_error = ?,
-                    execution_result = ?
-                WHERE expires_at IS NOT NULL AND expires_at <= ?
+                    execution_error = %s,
+                    execution_result = %s
+                WHERE user_id = %s
+                  AND expires_at IS NOT NULL AND expires_at <= %s
                   AND execution_status = 'executing'
                 """,
                 (
@@ -1264,54 +1096,55 @@ class ConversationStore:
                     json.dumps(
                         {"status": "interrupted", "error": _STALE_EXECUTION_ERROR}
                     ),
+                    self._user_id,
                     stamp,
                 ),
             )
-            self._conn.execute(
+            conn.execute(
                 """
                 UPDATE inbox SET
                     state = 'expired',
-                    resolved_at = ?,
+                    resolved_at = %s,
                     execution_status = 'expired',
                     execution_claimant = NULL,
-                    execution_error = ?,
-                    execution_result = ?
-                WHERE expires_at IS NOT NULL AND expires_at <= ?
+                    execution_error = %s,
+                    execution_result = %s
+                WHERE user_id = %s
+                  AND expires_at IS NOT NULL AND expires_at <= %s
                   AND state = 'pending'
                 """,
                 (
                     stamp,
                     _EXPIRED_PENDING_ERROR,
                     json.dumps({"status": "expired", "error": _EXPIRED_PENDING_ERROR}),
+                    self._user_id,
                     stamp,
                 ),
             )
-            self._conn.commit()
-            rows = [
-                self._conn.execute(
-                    "SELECT * FROM inbox WHERE id = ?", (str(row["id"]),)
-                ).fetchone()
-                for row in overdue
-            ]
+            rows = [self._inbox_item(conn, str(row["id"])) for row in overdue]
         return [_inbox_row(row) for row in rows if row is not None]
 
     def list_inbox(self, *, pending_only: bool = True) -> list[dict[str, Any]]:
         self.reap_overdue_inbox()
-        query = "SELECT * FROM inbox"
+        query = f"SELECT {_INBOX_COLUMNS} FROM inbox WHERE user_id = %s"
         if pending_only:
-            query += " WHERE state = 'pending'"
-        query += " ORDER BY created_at"
-        with self._lock:
-            rows = self._conn.execute(query).fetchall()
+            query += " AND state = 'pending'"
+        # `seq` stands in for the SQLite rowid as the tie-break.
+        query += " ORDER BY created_at, seq"
+        with self._lock, self._tx() as conn:
+            rows = _query(conn, query, (self._user_id,)).fetchall()
         return [_inbox_row(row) for row in rows]
 
     def get_inbox(self, item_id: str) -> dict[str, Any] | None:
         self.reap_overdue_inbox()
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+        with self._lock, self._tx() as conn:
+            row = self._inbox_item(conn, item_id)
         return None if row is None else _inbox_row(row)
+
+    # The four methods below decide an inbox item. Each reads the row with
+    # FOR UPDATE inside one transaction. A second caller on another
+    # connection waits on that row lock until the first commits, then reads
+    # the decided row. So the first resolution wins, and the second sees it.
 
     def resolve_inbox(
         self,
@@ -1321,35 +1154,32 @@ class ConversationStore:
         actor: str | None = None,
         scope: str = "once",
     ) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+        with self._lock, self._tx() as conn:
+            row = self._inbox_item(conn, item_id, lock=True)
             if row is None or row["state"] != "pending":
                 return None
             if requires_once(row["name"]) and scope != "once":
                 raise ValueError("Sending and paid enrichment require a once-only action decision.")
-            self._conn.execute(
-                """
+            row = _query(
+                conn,
+                f"""
                 UPDATE inbox SET
                     state = 'resolved',
-                    decision = ?,
-                    actor = ?,
-                    resolved_at = ?,
-                    scope = ?
-                WHERE id = ?
+                    decision = %s,
+                    actor = %s,
+                    resolved_at = %s,
+                    scope = %s
+                WHERE user_id = %s AND id = %s
+                RETURNING {_INBOX_COLUMNS}
                 """,
                 (
                     decision,
                     actor,
                     datetime.now(UTC).isoformat(),
                     scope or "once",
+                    self._user_id,
                     item_id,
                 ),
-            )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
             ).fetchone()
         return _inbox_row(row)
 
@@ -1365,31 +1195,30 @@ class ConversationStore:
         """Atomically record a decision and claim consequential execution."""
         if decision not in {"allow", "deny"} or not claimant:
             return None
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+        with self._lock, self._tx() as conn:
+            row = self._inbox_item(conn, item_id, lock=True)
             if row is None:
                 return None
             if requires_once(row["name"]) and scope != "once":
                 raise ValueError("Sending and paid enrichment require a once-only action decision.")
             decision_recorded = False
             if row["state"] == "pending":
-                self._conn.execute(
+                conn.execute(
                     """
                     UPDATE inbox SET
                         state = 'resolved',
-                        decision = ?,
-                        actor = ?,
-                        resolved_at = ?,
-                        scope = ?
-                    WHERE id = ? AND state = 'pending'
+                        decision = %s,
+                        actor = %s,
+                        resolved_at = %s,
+                        scope = %s
+                    WHERE user_id = %s AND id = %s AND state = 'pending'
                     """,
                     (
                         decision,
                         actor,
                         datetime.now(UTC).isoformat(),
                         scope or "once",
+                        self._user_id,
                         item_id,
                     ),
                 )
@@ -1397,40 +1226,35 @@ class ConversationStore:
             elif row["state"] != "resolved" or row["decision"] != decision:
                 return None
 
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+            row = self._inbox_item(conn, item_id)
             claimed = False
             execution_status = str(row["execution_status"] or "pending")
             if decision == "allow" and execution_status == "pending":
-                cursor = self._conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE inbox SET
                         execution_status = 'executing',
-                        execution_claimant = ?
-                    WHERE id = ?
+                        execution_claimant = %s
+                    WHERE user_id = %s AND id = %s
                       AND COALESCE(execution_status, 'pending') = 'pending'
                     """,
-                    (claimant, item_id),
+                    (claimant, self._user_id, item_id),
                 )
                 claimed = cursor.rowcount == 1
             elif decision == "deny" and execution_status == "pending":
-                self._conn.execute(
+                conn.execute(
                     """
                     UPDATE inbox SET
                         execution_status = 'not_run',
                         execution_error = NULL,
                         execution_claimant = NULL,
-                        execution_result = ?
-                    WHERE id = ?
+                        execution_result = %s
+                    WHERE user_id = %s AND id = %s
                       AND COALESCE(execution_status, 'pending') = 'pending'
                     """,
-                    (json.dumps({"error": "denied by user"}), item_id),
+                    (json.dumps({"error": "denied by user"}), self._user_id, item_id),
                 )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+            row = self._inbox_item(conn, item_id)
         item = _inbox_row(row)
         return {
             "item": item,
@@ -1451,10 +1275,8 @@ class ConversationStore:
         result: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Persist one claimant's terminal result without allowing overwrite."""
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+        with self._lock, self._tx() as conn:
+            row = self._inbox_item(conn, item_id, lock=True)
             if row is None:
                 return None
             status = str(row["execution_status"] or "pending")
@@ -1474,148 +1296,187 @@ class ConversationStore:
                 if not ok and result.get("error") is not None
                 else None
             )
-            self._conn.execute(
+            conn.execute(
                 """
                 UPDATE inbox SET
-                    execution_status = ?,
-                    execution_error = ?,
-                    execution_result = ?
-                WHERE id = ?
+                    execution_status = %s,
+                    execution_error = %s,
+                    execution_result = %s
+                WHERE user_id = %s AND id = %s
                   AND execution_status = 'executing'
-                  AND execution_claimant = ?
+                  AND execution_claimant = %s
                 """,
                 (
                     "succeeded" if ok else "failed",
                     error,
                     json.dumps(result, ensure_ascii=False),
+                    self._user_id,
                     item_id,
                     claimant,
                 ),
             )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+            row = self._inbox_item(conn, item_id)
         return None if row is None else _inbox_row(row)
 
     def cancel_inbox(self, item_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
-            ).fetchone()
+        with self._lock, self._tx() as conn:
+            row = self._inbox_item(conn, item_id, lock=True)
             if row is None or row["state"] != "pending":
                 return None
-            self._conn.execute(
-                """
+            row = _query(
+                conn,
+                f"""
                 UPDATE inbox SET
                     state = 'cancelled',
                     decision = NULL,
-                    resolved_at = ?,
+                    resolved_at = %s,
                     execution_status = 'cancelled'
-                WHERE id = ?
+                WHERE user_id = %s AND id = %s
+                RETURNING {_INBOX_COLUMNS}
                 """,
-                (datetime.now(UTC).isoformat(), item_id),
-            )
-            self._conn.commit()
-            row = self._conn.execute(
-                "SELECT * FROM inbox WHERE id = ?", (item_id,)
+                (datetime.now(UTC).isoformat(), self._user_id, item_id),
             ).fetchone()
         return _inbox_row(row)
 
-    def list_queue(self, session_id: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT id, session_id, text, position, state, error,
-                       created_at, updated_at
+    def _lock_queue(self, conn: psycopg.Connection, session_id: str) -> None:
+        """Serialize writers of one session's queue until this transaction ends.
+
+        SQLite ran these methods one at a time under `self._lock`. Postgres
+        gives each caller its own connection, so a transaction-scoped
+        advisory lock on (user, session) keeps the same order across
+        connections: one claim, one renumbering, one command at a time.
+        """
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"chat_queue:{self._user_id}:{session_id}",),
+        )
+
+    def _queue_items(
+        self, conn: psycopg.Connection, session_id: str
+    ) -> list[dict[str, Any]]:
+        return [
+            dict(row)
+            for row in _query(
+                conn,
+                f"""
+                SELECT {_QUEUE_COLUMNS}
                 FROM chat_queue
-                WHERE session_id = ?
+                WHERE user_id = %s AND session_id = %s
                 ORDER BY position, created_at, id
                 """,
-                (session_id,),
+                (self._user_id, session_id),
             ).fetchall()
-        return [dict(row) for row in rows]
+        ]
+
+    def _renumber_queue(
+        self, conn: psycopg.Connection, session_id: str, *, now: str | None
+    ) -> None:
+        """Give the session's items positions 0..n-1 in their current order."""
+        for position, item in enumerate(self._queue_items(conn, session_id)):
+            if now is None:
+                conn.execute(
+                    "UPDATE chat_queue SET position = %s "
+                    "WHERE user_id = %s AND session_id = %s AND id = %s",
+                    (position, self._user_id, session_id, str(item["id"])),
+                )
+            else:
+                conn.execute(
+                    "UPDATE chat_queue SET position = %s, updated_at = %s "
+                    "WHERE user_id = %s AND session_id = %s AND id = %s",
+                    (position, now, self._user_id, session_id, str(item["id"])),
+                )
+
+    def _queue_paused(self, conn: psycopg.Connection, session_id: str) -> bool:
+        row = _query(
+            conn,
+            "SELECT paused FROM queue_sessions WHERE user_id = %s AND session_id = %s",
+            (self._user_id, session_id),
+        ).fetchone()
+        return bool(row["paused"]) if row is not None else False
+
+    def list_queue(self, session_id: str) -> list[dict[str, Any]]:
+        with self._lock, self._tx() as conn:
+            return self._queue_items(conn, session_id)
 
     def queue_paused(self, session_id: str) -> bool:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT paused FROM queue_sessions WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
-        return bool(row["paused"]) if row is not None else False
+        with self._lock, self._tx() as conn:
+            return self._queue_paused(conn, session_id)
 
     def set_queue_paused(self, session_id: str, paused: bool) -> None:
         if not valid_session_id(session_id):
             raise ValueError("invalid session id")
         now = datetime.now(UTC).isoformat()
-        with self._lock:
-            self._conn.execute(
+        with self._lock, self._tx() as conn:
+            conn.execute(
                 """
-                INSERT INTO queue_sessions (session_id, paused, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
+                INSERT INTO queue_sessions (user_id, session_id, paused, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, session_id) DO UPDATE SET
                     paused = excluded.paused,
                     updated_at = excluded.updated_at
                 """,
-                (session_id, int(paused), now),
+                (self._user_id, session_id, int(paused), now),
             )
-            self._conn.commit()
 
     def sessions_with_queue(self) -> list[str]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT DISTINCT session_id FROM chat_queue ORDER BY session_id"
+        with self._lock, self._tx() as conn:
+            rows = _query(
+                conn,
+                "SELECT DISTINCT session_id FROM chat_queue WHERE user_id = %s "
+                "ORDER BY session_id",
+                (self._user_id,),
             ).fetchall()
         return [str(row["session_id"]) for row in rows]
 
     def mark_queue_offline(self, session_id: str) -> int:
         """Park undelivered items when the socket driving their drain is gone."""
         now = datetime.now(UTC).isoformat()
-        with self._lock:
-            cursor = self._conn.execute(
+        with self._lock, self._tx() as conn:
+            cursor = conn.execute(
                 """
-                UPDATE chat_queue SET state = 'offline', error = NULL, updated_at = ?
-                WHERE session_id = ? AND state IN ('waiting', 'retrying')
+                UPDATE chat_queue SET state = 'offline', error = NULL, updated_at = %s
+                WHERE user_id = %s AND session_id = %s
+                  AND state IN ('waiting', 'retrying')
                 """,
-                (now, session_id),
+                (now, self._user_id, session_id),
             )
-            self._conn.commit()
         return cursor.rowcount
 
     def claim_next_queue(self, session_id: str) -> dict[str, Any] | None:
-        with self._lock:
-            if self.queue_paused(session_id):
+        with self._lock, self._tx() as conn:
+            self._lock_queue(conn, session_id)
+            if self._queue_paused(conn, session_id):
                 return None
-            sending = self._conn.execute(
-                "SELECT 1 FROM chat_queue WHERE session_id = ? AND state = 'sending' LIMIT 1",
-                (session_id,),
+            sending = _query(
+                conn,
+                "SELECT 1 FROM chat_queue WHERE user_id = %s AND session_id = %s "
+                "AND state = 'sending' LIMIT 1",
+                (self._user_id, session_id),
             ).fetchone()
             if sending is not None:
                 return None
-            row = self._conn.execute(
+            row = _query(
+                conn,
                 """
                 SELECT id FROM chat_queue
-                WHERE session_id = ? AND state IN ('waiting', 'retrying', 'reconnecting')
+                WHERE user_id = %s AND session_id = %s
+                  AND state IN ('waiting', 'retrying', 'reconnecting')
                 ORDER BY position, created_at, id
                 LIMIT 1
                 """,
-                (session_id,),
+                (self._user_id, session_id),
             ).fetchone()
             if row is None:
                 return None
             now = datetime.now(UTC).isoformat()
-            self._conn.execute(
-                "UPDATE chat_queue SET state = 'sending', error = NULL, updated_at = ? WHERE session_id = ? AND id = ?",
-                (now, session_id, str(row["id"])),
-            )
-            self._conn.commit()
-            claimed = self._conn.execute(
-                """
-                SELECT id, session_id, text, position, state, error,
-                       created_at, updated_at
-                FROM chat_queue WHERE session_id = ? AND id = ?
+            claimed = _query(
+                conn,
+                f"""
+                UPDATE chat_queue SET state = 'sending', error = NULL, updated_at = %s
+                WHERE user_id = %s AND session_id = %s AND id = %s
+                RETURNING {_QUEUE_COLUMNS}
                 """,
-                (session_id, str(row["id"])),
+                (now, self._user_id, session_id, str(row["id"])),
             ).fetchone()
         return None if claimed is None else dict(claimed)
 
@@ -1628,30 +1489,22 @@ class ConversationStore:
         error: str | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
-        with self._lock:
+        with self._lock, self._tx() as conn:
+            self._lock_queue(conn, session_id)
             if state == "complete":
-                self._conn.execute(
-                    "DELETE FROM chat_queue WHERE session_id = ? AND id = ?",
-                    (session_id, item_id),
+                conn.execute(
+                    "DELETE FROM chat_queue WHERE user_id = %s AND session_id = %s AND id = %s",
+                    (self._user_id, session_id, item_id),
                 )
             else:
-                self._conn.execute(
+                conn.execute(
                     """
-                    UPDATE chat_queue SET state = ?, error = ?, updated_at = ?
-                    WHERE session_id = ? AND id = ?
+                    UPDATE chat_queue SET state = %s, error = %s, updated_at = %s
+                    WHERE user_id = %s AND session_id = %s AND id = %s
                     """,
-                    (state, error, now, session_id, item_id),
+                    (state, error, now, self._user_id, session_id, item_id),
                 )
-            rows = self._conn.execute(
-                "SELECT id FROM chat_queue WHERE session_id = ? ORDER BY position, created_at, id",
-                (session_id,),
-            ).fetchall()
-            for position, row in enumerate(rows):
-                self._conn.execute(
-                    "UPDATE chat_queue SET position = ? WHERE session_id = ? AND id = ?",
-                    (position, session_id, str(row["id"])),
-                )
-            self._conn.commit()
+            self._renumber_queue(conn, session_id, now=None)
 
     def claim_recovery_command(self, session_id: str, command_id: str) -> bool:
         """Atomically claim one recovery command; False when already claimed.
@@ -1665,16 +1518,16 @@ class ConversationStore:
         if not command_id:
             raise ValueError("recovery command requires command_id")
         now = datetime.now(UTC).isoformat()
-        with self._lock:
-            cursor = self._conn.execute(
+        with self._lock, self._tx() as conn:
+            cursor = conn.execute(
                 """
-                INSERT OR IGNORE INTO recovery_commands
-                    (session_id, command_id, created_at)
-                VALUES (?, ?, ?)
+                INSERT INTO recovery_commands
+                    (user_id, session_id, command_id, created_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
                 """,
-                (session_id, command_id, now),
+                (self._user_id, session_id, command_id, now),
             )
-            self._conn.commit()
         return cursor.rowcount == 1
 
     def apply_queue_command(
@@ -1687,10 +1540,13 @@ class ConversationStore:
         item_id = str(command.get("item_id") or "").strip()
         if not command_id or not command_type:
             raise ValueError("queue command requires type and command_id")
-        with self._lock:
-            existing = self._conn.execute(
-                "SELECT acknowledgement FROM queue_commands WHERE session_id = ? AND command_id = ?",
-                (session_id, command_id),
+        with self._lock, self._tx() as conn:
+            self._lock_queue(conn, session_id)
+            existing = _query(
+                conn,
+                "SELECT acknowledgement FROM queue_commands "
+                "WHERE user_id = %s AND session_id = %s AND command_id = %s",
+                (self._user_id, session_id, command_id),
             ).fetchone()
             if existing is not None:
                 return json.loads(str(existing["acknowledgement"]))
@@ -1700,19 +1556,23 @@ class ConversationStore:
                 text = str(command.get("text") or "").strip()
                 if not item_id or not text:
                     raise ValueError("queue_add requires item_id and text")
-                position_row = self._conn.execute(
-                    "SELECT COALESCE(MAX(position), -1) + 1 AS position FROM chat_queue WHERE session_id = ?",
-                    (session_id,),
+                position_row = _query(
+                    conn,
+                    "SELECT COALESCE(MAX(position), -1) + 1 AS position FROM chat_queue "
+                    "WHERE user_id = %s AND session_id = %s",
+                    (self._user_id, session_id),
                 ).fetchone()
                 position = int(position_row["position"])
                 now = datetime.now(UTC).isoformat()
-                self._conn.execute(
+                conn.execute(
                     """
-                    INSERT OR IGNORE INTO chat_queue
-                        (session_id, id, text, position, state, error, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, 'waiting', NULL, ?, ?)
+                    INSERT INTO chat_queue
+                        (user_id, session_id, id, text, position, state, error,
+                         created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, 'waiting', NULL, %s, %s)
+                    ON CONFLICT DO NOTHING
                     """,
-                    (session_id, item_id, text, position, now, now),
+                    (self._user_id, session_id, item_id, text, position, now, now),
                 )
                 status = "accepted"
             elif command_type == "queue_edit":
@@ -1720,24 +1580,21 @@ class ConversationStore:
                 if not item_id or not text:
                     raise ValueError("queue_edit requires item_id and text")
                 now = datetime.now(UTC).isoformat()
-                cursor = self._conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE chat_queue
-                    SET text = ?, updated_at = ?
-                    WHERE session_id = ? AND id = ? AND state != 'sending'
+                    SET text = %s, updated_at = %s
+                    WHERE user_id = %s AND session_id = %s AND id = %s
+                      AND state != 'sending'
                     """,
-                    (text, now, session_id, item_id),
+                    (text, now, self._user_id, session_id, item_id),
                 )
                 status = "accepted" if cursor.rowcount else "rejected"
             elif command_type == "queue_move":
                 if not item_id:
                     raise ValueError("queue_move requires item_id")
                 ordered = [
-                    str(row["id"])
-                    for row in self._conn.execute(
-                        "SELECT id FROM chat_queue WHERE session_id = ? ORDER BY position, created_at, id",
-                        (session_id,),
-                    ).fetchall()
+                    str(row["id"]) for row in self._queue_items(conn, session_id)
                 ]
                 if item_id in ordered:
                     ordered.remove(item_id)
@@ -1751,99 +1608,82 @@ class ConversationStore:
                         ordered.append(item_id)
                     now = datetime.now(UTC).isoformat()
                     for position, ordered_id in enumerate(ordered):
-                        self._conn.execute(
-                            "UPDATE chat_queue SET position = ?, updated_at = ? WHERE session_id = ? AND id = ?",
-                            (position, now, session_id, ordered_id),
+                        conn.execute(
+                            "UPDATE chat_queue SET position = %s, updated_at = %s "
+                            "WHERE user_id = %s AND session_id = %s AND id = %s",
+                            (position, now, self._user_id, session_id, ordered_id),
                         )
                     status = "accepted"
             elif command_type == "queue_remove":
                 if not item_id:
                     raise ValueError("queue_remove requires item_id")
-                cursor = self._conn.execute(
-                    "DELETE FROM chat_queue WHERE session_id = ? AND id = ? AND state != 'sending'",
-                    (session_id, item_id),
+                cursor = conn.execute(
+                    "DELETE FROM chat_queue WHERE user_id = %s AND session_id = %s "
+                    "AND id = %s AND state != 'sending'",
+                    (self._user_id, session_id, item_id),
                 )
                 if cursor.rowcount:
-                    rows = self._conn.execute(
-                        "SELECT id FROM chat_queue WHERE session_id = ? ORDER BY position, created_at, id",
-                        (session_id,),
-                    ).fetchall()
-                    now = datetime.now(UTC).isoformat()
-                    for position, row in enumerate(rows):
-                        self._conn.execute(
-                            "UPDATE chat_queue SET position = ?, updated_at = ? WHERE session_id = ? AND id = ?",
-                            (position, now, session_id, str(row["id"])),
-                        )
+                    self._renumber_queue(
+                        conn, session_id, now=datetime.now(UTC).isoformat()
+                    )
                     status = "accepted"
             elif command_type == "queue_resume":
                 now = datetime.now(UTC).isoformat()
-                self._conn.execute(
+                conn.execute(
                     """
-                    INSERT INTO queue_sessions (session_id, paused, updated_at)
-                    VALUES (?, 0, ?)
-                    ON CONFLICT(session_id) DO UPDATE SET
+                    INSERT INTO queue_sessions (user_id, session_id, paused, updated_at)
+                    VALUES (%s, %s, 0, %s)
+                    ON CONFLICT (user_id, session_id) DO UPDATE SET
                         paused = 0,
                         updated_at = excluded.updated_at
                     """,
-                    (session_id, now),
+                    (self._user_id, session_id, now),
                 )
                 # Items parked by a socket loss come back as reconnecting,
                 # which the drain claims like waiting.
-                self._conn.execute(
+                conn.execute(
                     """
                     UPDATE chat_queue
-                    SET state = 'reconnecting', error = NULL, updated_at = ?
-                    WHERE session_id = ? AND state = 'offline'
+                    SET state = 'reconnecting', error = NULL, updated_at = %s
+                    WHERE user_id = %s AND session_id = %s AND state = 'offline'
                     """,
-                    (now, session_id),
+                    (now, self._user_id, session_id),
                 )
                 status = "accepted"
             elif command_type == "queue_retry":
                 if not item_id:
                     raise ValueError("queue_retry requires item_id")
                 now = datetime.now(UTC).isoformat()
-                cursor = self._conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE chat_queue
-                    SET state = 'waiting', error = NULL, updated_at = ?
-                    WHERE session_id = ? AND id = ?
+                    SET state = 'waiting', error = NULL, updated_at = %s
+                    WHERE user_id = %s AND session_id = %s AND id = %s
                       AND state IN ('failed', 'interrupted', 'offline', 'reconnecting')
                     """,
-                    (now, session_id, item_id),
+                    (now, self._user_id, session_id, item_id),
                 )
                 status = "accepted" if cursor.rowcount else "rejected"
 
-            items = [
-                dict(row)
-                for row in self._conn.execute(
-                    """
-                    SELECT id, session_id, text, position, state, error,
-                           created_at, updated_at
-                    FROM chat_queue
-                    WHERE session_id = ?
-                    ORDER BY position, created_at, id
-                    """,
-                    (session_id,),
-                ).fetchall()
-            ]
             acknowledgement = {
                 "version": 2,
                 "type": "queue_snapshot",
                 "session_id": session_id,
                 "command_id": command_id,
                 "status": status,
-                "paused": self.queue_paused(session_id),
-                "items": items,
+                "paused": self._queue_paused(conn, session_id),
+                "items": self._queue_items(conn, session_id),
             }
             now = datetime.now(UTC).isoformat()
-            self._conn.execute(
+            conn.execute(
                 """
                 INSERT INTO queue_commands
-                    (session_id, command_id, command_type, item_id,
+                    (user_id, session_id, command_id, command_type, item_id,
                      acknowledgement, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
+                    self._user_id,
                     session_id,
                     command_id,
                     command_type,
@@ -1852,41 +1692,37 @@ class ConversationStore:
                     now,
                 ),
             )
-            self._conn.commit()
         return acknowledgement
 
     def get_job(self, job_id: int) -> dict[str, Any] | None:
-        with self._lock:
-            row = self._conn.execute(
-                """
-                SELECT id, cron, prompt, created_at, next_run_at, name,
-                       template_id, cadence
-                FROM jobs WHERE id = ?
-                """,
-                (job_id,),
+        with self._lock, self._tx() as conn:
+            row = _query(
+                conn,
+                f"SELECT {_JOB_COLUMNS} FROM jobs WHERE user_id = %s AND id = %s",
+                (self._user_id, job_id),
             ).fetchone()
         return None if row is None else dict(row)
 
     def due_jobs(self, now_iso: str) -> list[dict[str, Any]]:
-        with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT id, cron, prompt, created_at, next_run_at, name,
-                       template_id, cadence
+        with self._lock, self._tx() as conn:
+            rows = _query(
+                conn,
+                f"""
+                SELECT {_JOB_COLUMNS}
                 FROM jobs
-                WHERE next_run_at IS NOT NULL AND next_run_at <= ?
+                WHERE user_id = %s AND next_run_at IS NOT NULL AND next_run_at <= %s
                 ORDER BY id
                 """,
-                (now_iso,),
+                (self._user_id, now_iso),
             ).fetchall()
         return [dict(row) for row in rows]
 
     def set_job_next_run(self, job_id: int, next_run_at: str) -> None:
-        with self._lock:
-            self._conn.execute(
-                "UPDATE jobs SET next_run_at = ? WHERE id = ?", (next_run_at, job_id)
+        with self._lock, self._tx() as conn:
+            conn.execute(
+                "UPDATE jobs SET next_run_at = %s WHERE user_id = %s AND id = %s",
+                (next_run_at, self._user_id, job_id),
             )
-            self._conn.commit()
 
     def update_job(
         self,
@@ -1899,24 +1735,23 @@ class ConversationStore:
         next_run_at: str | None,
     ) -> dict[str, Any] | None:
         """Replace a job's editable fields. A None next run pauses the job."""
-        with self._lock:
-            self._conn.execute(
+        with self._lock, self._tx() as conn:
+            conn.execute(
                 """
-                UPDATE jobs SET name = ?, prompt = ?, cadence = ?, cron = ?,
-                                next_run_at = ?
-                WHERE id = ?
+                UPDATE jobs SET name = %s, prompt = %s, cadence = %s, cron = %s,
+                                next_run_at = %s
+                WHERE user_id = %s AND id = %s
                 """,
-                (name, prompt, cadence, cron, next_run_at, job_id),
+                (name, prompt, cadence, cron, next_run_at, self._user_id, job_id),
             )
-            self._conn.commit()
         return self.get_job(job_id)
 
     def memory_forget(self, memory_id: int) -> bool:
-        with self._lock:
-            cursor = self._conn.execute(
-                "DELETE FROM memories WHERE id = ?", (memory_id,)
+        with self._lock, self._tx() as conn:
+            cursor = conn.execute(
+                "DELETE FROM memories WHERE user_id = %s AND id = %s",
+                (self._user_id, memory_id),
             )
-            self._conn.commit()
         gone = cursor.rowcount > 0
         if gone:
             path = self.memory_dir / f"{memory_id}.md"
@@ -1951,7 +1786,7 @@ class ConversationStore:
         os.chmod(path, 0o600)
 
 
-def _inbox_row(row: sqlite3.Row) -> dict[str, Any]:
+def _inbox_row(row: dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     raw = item.get("arguments") or "{}"
     try:
@@ -1992,7 +1827,7 @@ def _inbox_row(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
-def _run_row(row: sqlite3.Row) -> dict[str, Any]:
+def _run_row(row: dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     item.pop("event_offset", None)
     raw = item.get("artifacts") or "[]"
@@ -2005,7 +1840,7 @@ def _run_row(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
-def _session_row(row: sqlite3.Row) -> dict[str, Any]:
+def _session_row(row: dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     item["pinned"] = bool(item.get("pinned"))
     return item

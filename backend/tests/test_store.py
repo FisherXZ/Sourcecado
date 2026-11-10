@@ -1,4 +1,3 @@
-import sqlite3
 import threading
 
 import pytest
@@ -75,7 +74,7 @@ def test_append_event_once_is_atomic_for_matching_receipts(tmp_path):
     assert store.load_events("main") == [outcomes[0][0]]
 
 
-def test_sqlite_index_tracks_title_and_count(tmp_path):
+def test_index_tracks_title_and_count(tmp_path):
     store = ConversationStore(tmp_path)
     store.append("main", {"role": "user", "content": "what time is it?"})
     store.append("main", {"role": "assistant", "content": "noon"})
@@ -84,7 +83,6 @@ def test_sqlite_index_tracks_title_and_count(tmp_path):
     assert row["session_id"] == "main"
     assert row["title"] == "what time is it?"
     assert row["n_msgs"] == 2
-    assert (tmp_path / "club.db").is_file()
 
 
 def test_replace_all_rewrites_jsonl(tmp_path):
@@ -184,29 +182,6 @@ def test_list_sessions_returns_boolean_pin_metadata(tmp_path):
     store.set_session_pinned("s1", True)
 
     assert store.list_sessions()[0]["pinned"] is True
-
-
-def test_existing_sessions_table_migrates_pin_state(tmp_path):
-    db = sqlite3.connect(tmp_path / "club.db")
-    db.execute(
-        """
-        CREATE TABLE sessions (
-            session_id TEXT PRIMARY KEY,
-            title TEXT,
-            n_msgs INTEGER DEFAULT 0,
-            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    db.execute(
-        "INSERT INTO sessions (session_id, title, n_msgs) VALUES ('legacy', 'Legacy chat', 2)"
-    )
-    db.commit()
-    db.close()
-
-    store = ConversationStore(tmp_path)
-
-    assert store.index("legacy")["pinned"] is False
 
 
 def test_list_sessions_hides_scheduler_runs(tmp_path):

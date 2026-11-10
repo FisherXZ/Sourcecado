@@ -259,5 +259,4 @@ class EvalEnvironment:
         )
 
     def close(self) -> None:
-        self.store._conn.close()
         self.people._conn.close()
