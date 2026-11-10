@@ -39,3 +39,8 @@ create table meeting_candidates (
 
 create index meeting_candidates_user_person_idx
     on meeting_candidates (user_id, person_id);
+
+-- Row-level security on, with no policy: the public API keys see no rows.
+-- The backend connects as the table owner, so it is not affected.
+alter table meeting_evidence enable row level security;
+alter table meeting_candidates enable row level security;

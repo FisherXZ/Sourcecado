@@ -76,3 +76,10 @@ create table drive_ingestion_proposals (
 
 create index drive_ingestion_proposals_user_job_idx
     on drive_ingestion_proposals (user_id, job_id, created_at, id);
+
+-- Row-level security on, with no policy: the public API keys see no rows.
+-- The backend connects as the table owner, so it is not affected.
+alter table drive_ingestion_jobs enable row level security;
+alter table drive_ingestion_folders enable row level security;
+alter table drive_ingestion_sources enable row level security;
+alter table drive_ingestion_proposals enable row level security;
