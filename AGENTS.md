@@ -19,7 +19,8 @@ The active runtime is `backend/` (Python) and `frontend/` (React and Tauri). The
 - Keep Gmail, Drive, Calendar, Granola, Apollo, and web work attached to the relevant person and run ledger.
 - Store secrets and runtime state outside the repository. Never log tokens, API keys, or raw authorization headers.
 - Preserve tool calls, artifacts, source references, permission decisions, rationale summaries, and failures in the local ledger.
-- Do not reintroduce the hosted app, Postgres, Next.js, or team tenancy without a new product decision.
+- Sourcecado is moving to a hosted, shared club workspace (Vercel, Railway, Supabase Postgres) under [ADR 0007](docs/engineering/adr/0007-hosted-club-workspace.md). Do that work only through the numbered slices in [the slice plan](docs/superpowers/plans/2026-11-09-hosted-migration-slices.md). Until a store's slice merges, its local implementation is still the live one.
+- Every hosted query is scoped by `workspace_id`, text columns are `COLLATE "C"` in migrations, and every table has RLS. Do not reintroduce Next.js or `archive/hosted-web/`.
 - Do not make OpenClaw, Hermes, or MCP the core product dependency. Borrow useful patterns behind Sourcecado-owned boundaries.
 
 ## Repository map
@@ -34,6 +35,7 @@ The active runtime is `backend/` (Python) and `frontend/` (React and Tauri). The
 ## Documentation precedence
 
 1. `docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md` — current product source of truth
+   - For runtime, hosting, tenancy and persistence, `docs/superpowers/specs/2026-11-09-hosted-migration.md` and ADR 0007 take precedence over older local-first guidance.
 2. `README.md`, this file, `docs/domain.md`, `docs/design.md`, and `CONTRIBUTING.md` — current operating guidance
 3. Current dated implementation plans and ADRs listed in `docs/README.md`
 4. Older dated specs and plans — historical context only

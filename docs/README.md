@@ -5,6 +5,7 @@ Sourcecado's dated documents record several product shapes. They are intentional
 ## Current source of truth
 
 - [Sourcing director spring specification](superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md) — current product job, use cases, scope, and locked conditions
+- [Hosted migration specification](superpowers/specs/2026-11-09-hosted-migration.md) and [slice plan](superpowers/plans/2026-11-09-hosted-migration-slices.md) — move to Vercel, Railway and Supabase as a shared club workspace
 - [Root README](../README.md) — setup, commands, repository map, and local-state policy
 - [Your first contribution](../CONTRIBUTING.md) — isolated setup, browser/native development, code map, and first-PR workflow
 - [Agent context](../AGENTS.md) — engineering guardrails and documentation precedence
@@ -68,6 +69,7 @@ The [engineering index](engineering/README.md) maps the active backend and front
 - [0003 macOS preview packaging](engineering/adr/0003-macos-preview-artifact-packaging.md)
 - [0005 Tracked mail evidence](engineering/adr/0005-tracked-mail-evidence.md)
 - [0006 Patched frontend tooling](engineering/adr/0006-patched-frontend-tooling.md)
+- [0007 Hosted club workspace](engineering/adr/0007-hosted-club-workspace.md)
 
 ## Current execution records
 
