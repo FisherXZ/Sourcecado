@@ -158,3 +158,11 @@ $$;
 create trigger agent_run_effects_are_never_deleted
   before delete on agent_run_effects
   for each row execute function agent_run_effects_refuse_delete();
+
+-- Row-level security on, with no policy yet (slice S18 adds the policies). On
+-- hosted Supabase a public table with it off is readable and writable through
+-- the public API key. The backend connects as the table owner, which this
+-- does not restrict.
+alter table agent_runs enable row level security;
+alter table agent_run_checkpoints enable row level security;
+alter table agent_run_effects enable row level security;
