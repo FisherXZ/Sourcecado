@@ -142,7 +142,7 @@ Rules:
 - The backend verifies the JWT on each REST request and on the WebSocket handshake.
 - The WebSocket accepts the token in the `Sec-WebSocket-Protocol` list, as `_ws_token_ok` does today (`server.py:391`). The `?token=` query path is removed, because URLs appear in logs.
 - Authentication is one global middleware, as `gate` is today (`server.py:1221`). It is not a per-route dependency, because mounted routers would be missed. The only exceptions are `OPTIONS`, the two OAuth callbacks, and the health route.
-- An email that is not in `allowed_emails` gets a 403 and no rows are created.
+- Supabase can create an `auth.users` row at the first Google sign-in, before the backend sees a request. So the allowlist is enforced in two places. A Supabase before-user-created hook checks `allowed_emails` and refuses an email that is not listed; no account is created. The backend check stays, and returns 403, for a user whose access was removed after sign-up.
 - The two OAuth callback routes (`/v1/gmail/callback`, `/v1/mcp/oauth/callback`) have no session header. Today each keeps one process-wide pending state (`server.py:2139`, `mcp_oauth.py:105`), so two users who connect at the same time collide. On hosted, each connect attempt is a row in `oauth_pending`: user id, provider, `state`, PKCE verifier, expiry, and a used flag. The callback finds the user from that row only. Callback error pages show fixed text, not the provider's error text.
 
 ## Data model
@@ -180,6 +180,18 @@ All five merge into one schema in one database.
 | `PRAGMA table_info` column probes | Removed; the migration files define the schema |
 | `executescript` | One transaction with separate statements |
 | SQLite online backup API | Removed; Supabase backups |
+
+### Lookups that have no user yet
+
+Three operations start with no user id, so they cannot pass a `user_id` policy:
+
+| Operation | What it must find |
+| --- | --- |
+| OAuth callback | The `oauth_pending` row for a `state` value, and its user |
+| Scheduler tick | The due jobs of all users |
+| `crm_refresh` loop | The users who have a connected Google account |
+
+Each one is a SQL function that the migration role owns. It is `security definer` with a fixed `search_path`. It returns ids only: a user id and a row id, never content. Postgres lets every role execute a new function by default, so each migration revokes `EXECUTE` from `PUBLIC` and grants it to the backend role only. The functions are in a schema that the Supabase API does not expose. The backend then opens `tx(user_id)` and does the work under RLS. The RLS coverage check holds the list of these functions by name, and tests assert that each one returns no content column and that the Supabase `anon` and `authenticated` roles cannot execute it. Ordinary queries have no such path.
 
 ### New tables
 
@@ -288,7 +300,9 @@ Names only. Values live in Railway variables and Vercel environment variables. N
 - Platform keys pay for the LLM, Apollo, and Tavily.
 - `user_spend` holds one counter for each user and month.
 - The cap covers each call that spends on a platform key: LLM requests, `web_search` (Tavily), `apollo_search_people`, and Apollo enrichment.
-- The check is a reservation. One SQL statement adds an estimate to the counter only if the total stays under the cap. After the call, the backend replaces the estimate with the real amount. Two calls at the same time cannot both pass. Today the cost is recorded after the request (`turn.py:1486`), which is not a cap.
+- The check is a reservation of the maximum that the call can cost, not an estimate. For a model request, the maximum is the price of the input tokens plus the price of the output-token limit of the request. For a search or an enrichment, it is the fixed price of one call. One SQL statement adds the maximum to the counter only if the total stays under the cap. Two calls at the same time cannot both pass. Today the cost is recorded after the request (`turn.py:1486`), which is not a cap.
+- After the call, the backend replaces the reservation with the real amount, which cannot be more than the maximum. A call that fails before it reaches the provider releases its reservation. A reservation that is never settled, for example after a crash, is settled at its maximum when it expires.
+- A model with no price entry cannot run on a platform key, because the cap cannot bind on it.
 - At the cap, the call does not run, and the user sees a clear message.
 - The per-run budget in `run_budget.py` stays. The monthly cap is a second, wider limit.
 - This is a launch gate.
@@ -296,7 +310,7 @@ Names only. Values live in Railway variables and Vercel environment variables. N
 ## Data import
 
 - A script, run by the operator, for one state directory and one user email.
-- Imports: people, person files, tasks, CRM history, memories, and chat transcripts.
+- Imports: people, person files, tasks, CRM history, memories, and chat transcripts. A transcript refers to attachments by id, and the bytes are in `attachments/`. The script imports each attachment that an imported transcript refers to, with its metadata, into Storage.
 - Skips: active runs, queues, workspace grants, and all tokens.
 - It has a dry-run mode and prints row counts for each table. A second run does not duplicate rows.
 
@@ -320,6 +334,7 @@ No second user is invited until each line is true.
 - [ ] Local file and shell tools are not in the deployed image.
 - [ ] Per-user tokens are encrypted, and the key is not in the database.
 - [ ] The monthly spend cap stops a call in a test and on staging, and two concurrent calls cannot both pass at the limit.
+- [ ] A Google account that is not on the allowlist cannot create an Auth user.
 - [ ] The data notice shows at first sign-in.
 - [ ] Delete-account removes the allowlist entry, the Google grant, the files, the Supabase Auth user, and all rows. The old identity cannot sign in again.
 - [ ] Sentry receives a test error, and the scrubber test passes.
@@ -375,6 +390,7 @@ These are counts from the repository on 2026-11-09. They are not time estimates.
 | 11 | The working tree has uncommitted changes in 12 files. | Open | Land them before the `desktop-final` tag. |
 | 12 | The domain name is not chosen. | Open | Fisher picks it before phase 3. |
 | 13 | The course material in `docs/course/` describes the local app. | Open | The cohort uses the `desktop-final` tag. Course updates are not in this migration. |
+| 16 | The Supabase before-user-created hook and its behavior for Google sign-in. | Not verified | Phase 2, first task. Read the current Supabase docs. |
 | 14 | No tool fetches a user-supplied URL from the server today. `web_search` sends a query to Tavily. | Checked in `tools.py` and `web.py` | If a URL-fetch tool is added later, it needs a guard against requests to private addresses. |
 | 15 | No rate limit by IP address. All routes except the two callbacks and the health route need a valid token for an allowed email. | Accepted for 10 invited users | Add before open signup. |
 

@@ -8,12 +8,10 @@ import {
   type Connector,
   type ProviderVerification,
   type Settings,
-  type WorkspaceDiagnostics,
 } from "../api";
 import { connectorStatus } from "../connectorStatus";
 import { DiagnosticBundle } from "./DiagnosticBundle";
 import { ReleaseChannelSettings } from "./UpdateChannel";
-import { WorkspaceSettings } from "./WorkspaceSettings";
 
 type SettingsState =
   | { status: "loading" }
@@ -32,23 +30,6 @@ const PERSONA_CHOICES = [
     description: "General local help, memory, and review-only drafts.",
   },
 ] as const;
-
-const EMPTY_WORKSPACE: WorkspaceDiagnostics = {
-  docker: {
-    cli_available: false,
-    daemon_available: false,
-    image_available: false,
-    available: false,
-    image: "python:3.13-slim",
-    network: "unrestricted",
-  },
-  execution_target: "host_fallback",
-  host_fallback_enabled: true,
-  grants: [],
-  directory_requests: [],
-  host_approvals: [],
-  tasks: [],
-};
 
 function providerLabel(provider: ProviderVerification["provider"]): string {
   return {
@@ -285,20 +266,6 @@ export function SettingsPage() {
               })}
             </ul>
           </section>
-
-          <WorkspaceSettings
-            workspace={state.settings.workspace ?? EMPTY_WORKSPACE}
-            onChange={(workspace) =>
-              setState((current) =>
-                current.status === "loaded"
-                  ? {
-                      ...current,
-                      settings: { ...current.settings, workspace },
-                    }
-                  : current,
-              )
-            }
-          />
 
           <ReleaseChannelSettings />
 

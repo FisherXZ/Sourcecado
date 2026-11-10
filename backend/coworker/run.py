@@ -9,7 +9,19 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from coworker.provider import FakeProvider
 from coworker.server import TOKEN_ENV, create_app, state_dir
+
+MOCK_REPLY = ("This is the mock model. ", "No provider was called.")
+
+
+def provider_overrides(mock: bool) -> dict:
+    """Arguments for `create_app` that select the model provider.
+
+    The mock answers every chat with one fixed reply. It needs no model key and
+    makes no network call. It is for QA of everything around the model.
+    """
+    return {"provider": FakeProvider(deltas=MOCK_REPLY)} if mock else {}
 
 
 def _exit_when_orphaned() -> None:
@@ -78,6 +90,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="club-server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--mock-provider",
+        action="store_true",
+        help="answer every chat with a fixed reply; no model key, no network call",
+    )
     args = parser.parse_args(argv)
 
     if args.host not in ("127.0.0.1", "localhost"):
@@ -87,7 +104,11 @@ def main(argv: list[str] | None = None) -> None:
     _load_dotenv(state_dir() / ".env")
     _load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     token, token_path = ensure_token(args.port)
-    app = create_app(token=token, public_url=f"http://{args.host}:{args.port}")
+    app = create_app(
+        token=token,
+        public_url=f"http://{args.host}:{args.port}",
+        **provider_overrides(args.mock_provider),
+    )
     if not app.state.store.list_schedule()["jobs"]:
         from coworker.automation.scheduler import next_monday_0900
 
@@ -98,6 +119,8 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     print(f"Club backend  http://{args.host}:{args.port}")
+    if args.mock_provider:
+        print("MOCK PROVIDER: every chat gets one fixed reply. No model is called.")
     print(f"token file    {token_path or '(from ' + TOKEN_ENV + ')'}")
     print("window talks with header X-Club-Token. chat is /ws/chat.")
 
@@ -121,7 +144,6 @@ def main(argv: list[str] | None = None) -> None:
         _exit_when_orphaned()
         uvicorn.run(app, host=args.host, port=args.port)
     finally:
-        app.state.workspace_runtime.close()
         if token_path is not None:
             token_path.unlink(missing_ok=True)
             os.environ.pop(TOKEN_ENV, None)

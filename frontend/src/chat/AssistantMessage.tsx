@@ -26,7 +26,6 @@ import {
   thinkingElapsedMs,
   thoughtLabel,
 } from "./thinking";
-import { resolveInbox } from "../api";
 import type { RunBudgetStatus } from "./protocol";
 
 function AssistantText({ text }: TextMessagePartProps) {
@@ -72,12 +71,7 @@ function SafeToolFallback(part: ToolCallMessagePartProps) {
   return (
     <ApprovalCard
       part={part}
-      onDecision={async (approved, scope = "once") => {
-        if (approved && scope === "always") {
-          await resolveInbox(part.approval!.id, "allow", "always");
-          window.dispatchEvent(new Event("sourcecado:inbox-changed"));
-          return;
-        }
+      onDecision={async (approved) => {
         // assistant-ui's respondToApproval bridge discards the adapter's
         // return value, so the real delivery outcome is read back out of
         // lastDelivery (see approvalDelivery.tsx) right after this

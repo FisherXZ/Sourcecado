@@ -114,12 +114,6 @@ def test_registry_names_every_active_durable_store():
         "conversation_transcripts",
         "presentation_events",
         "memory_notes",
-        "workspace_receipts",
-        "workspace_grants",
-        "shell_tasks",
-        "host_command_approvals",
-        "directory_requests",
-        "workspace_trash",
         "secrets",
         "mcp_config",
         "dotenv",
@@ -130,21 +124,11 @@ def test_registry_reuses_the_version_constant_owned_by_each_store_module():
     from coworker.people import SCHEMA_VERSION as people_version
     from coworker.secrets import SCHEMA_VERSION as secrets_version
     from coworker.store import SCHEMA_VERSION as conversation_version
-    from coworker.workspace import WorkspaceGrantStore
-    from coworker.workspace_audit import SCHEMA_VERSION as receipts_version
-    from coworker.workspace_policy import HostApprovalStore
-    from coworker.workspace_runtime import DirectoryRequestStore
-    from coworker.workspace_shell import ShellTaskStore
 
     expected = {
         "conversation_db": conversation_version,
         "people_db": people_version,
         "secrets": secrets_version,
-        "workspace_receipts": receipts_version,
-        "workspace_grants": WorkspaceGrantStore.VERSION,
-        "shell_tasks": ShellTaskStore.VERSION,
-        "host_command_approvals": HostApprovalStore.VERSION,
-        "directory_requests": DirectoryRequestStore.VERSION,
     }
     for store_id, version in expected.items():
         assert migrations.spec_for(store_id).current_version == version
@@ -446,22 +430,6 @@ def test_people_v3_adds_the_description_table_to_an_existing_v2_database(tmp_pat
     assert _user_version(db) == migrations.spec_for("people_db").current_version
 
 
-def test_legacy_json_documents_are_stamped_without_losing_records(tmp_path):
-    root = build_legacy_state(tmp_path / "state")
-    grants_path = root / "workspace_grants.json"
-    assert "version" not in json.loads(grants_path.read_text(encoding="utf-8"))
-
-    store_plan = _plan_for(migrations.plan_migrations(root), "workspace_grants")
-    assert store_plan.status is StoreStatus.PENDING
-    assert store_plan.record_count == 1
-
-    assert migrations.apply_migrations(root).error is None
-    data = json.loads(grants_path.read_text(encoding="utf-8"))
-    assert data["version"] == 1
-    assert len(data["grants"]) == 1
-    assert data["grants"][0]["id"] == "grant_legacy_1"
-
-
 def test_legacy_jsonl_and_opaque_stores_adopt_a_version_in_the_manifest(tmp_path):
     root = build_legacy_state(tmp_path / "state")
     assert migrations.apply_migrations(root).error is None
@@ -471,7 +439,6 @@ def test_legacy_jsonl_and_opaque_stores_adopt_a_version_in_the_manifest(tmp_path
     for store_id in (
         "conversation_transcripts",
         "presentation_events",
-        "workspace_receipts",
         "secrets",
         "mcp_config",
     ):
@@ -481,7 +448,6 @@ def test_legacy_jsonl_and_opaque_stores_adopt_a_version_in_the_manifest(tmp_path
 def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
     from coworker.people import PersonStore
     from coworker.store import ConversationStore
-    from coworker.workspace import WorkspaceGrantStore
 
     root = build_legacy_state(tmp_path / "state")
     assert migrations.apply_migrations(root).error is None
@@ -493,7 +459,6 @@ def test_state_is_readable_by_the_real_stores_after_a_restart(tmp_path):
     people = PersonStore(root)
     assert people.get(LEGACY_PERSON_ID)["first_name"] == "Dana"
     assert people.person_for_session("main") == LEGACY_PERSON_ID
-    assert len(WorkspaceGrantStore(root).list_all()) == 1
 
     # Constructing the stores must not knock the recorded version off current.
     assert _user_version(root / "club.db") == 2
@@ -842,49 +807,23 @@ def test_unknown_future_sqlite_version_fails_closed_without_modifying_state(tmp_
     assert _tree_digest(root) == before
 
 
-def test_unknown_future_json_version_fails_closed_without_modifying_state(tmp_path):
-    root = build_current_state(tmp_path / "state")
-    path = root / "shell_tasks.json"
-    data = json.loads(path.read_text(encoding="utf-8"))
-    data["version"] = 7
-    path.write_text(json.dumps(data), encoding="utf-8")
-    before = _tree_digest(root)
-
-    plan = migrations.plan_migrations(root)
-    assert plan.blocked is True
-    assert _plan_for(plan, "shell_tasks").status is StoreStatus.UNSUPPORTED_FUTURE
-    assert migrations.apply_migrations(root).applied == ()
-    assert _tree_digest(root) == before
-
-
 def test_a_missing_migration_step_is_reported_rather_than_silently_skipped(
     tmp_path, monkeypatch
 ):
     root = build_current_state(tmp_path / "state")
-    original = migrations.spec_for("shell_tasks")
+    original = migrations.spec_for("conversation_transcripts")
     gapped = migrations.dataclasses.replace(original, current_version=3)
     monkeypatch.setattr(
         migrations,
         "REGISTRY",
-        tuple(gapped if item.store_id == "shell_tasks" else item for item in migrations.REGISTRY),
+        tuple(gapped if item.store_id == "conversation_transcripts" else item for item in migrations.REGISTRY),
     )
     before = _tree_digest(root)
 
     plan = migrations.plan_migrations(root)
-    assert _plan_for(plan, "shell_tasks").status is StoreStatus.MIGRATION_PATH_MISSING
+    assert _plan_for(plan, "conversation_transcripts").status is StoreStatus.MIGRATION_PATH_MISSING
     assert plan.blocked is True
     assert migrations.apply_migrations(root).applied == ()
-    assert _tree_digest(root) == before
-
-
-def test_an_unreadable_json_store_is_reported_and_never_migrated(tmp_path):
-    root = build_current_state(tmp_path / "state")
-    (root / "directory_requests.json").write_text("{ not json", encoding="utf-8")
-    before = _tree_digest(root)
-
-    plan = migrations.plan_migrations(root)
-    assert _plan_for(plan, "directory_requests").status is StoreStatus.UNREADABLE
-    assert plan.blocked is True
     assert _tree_digest(root) == before
 
 
@@ -903,41 +842,41 @@ def test_migration_takes_a_timestamped_backup_before_changing_state(tmp_path):
     manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["reason"] == "migration"
     backed_up = {entry["store_id"] for entry in manifest["entries"]}
-    assert {"conversation_db", "people_db", "workspace_grants"} <= backed_up
+    assert {"conversation_db", "people_db", "conversation_transcripts"} <= backed_up
     assert _user_version(backup_dir / "club.db") == 0
 
 
 def test_backups_can_be_listed_and_restored(tmp_path):
     root = build_current_state(tmp_path / "state")
     migrations.apply_migrations(root)
-    grants_path = root / "workspace_grants.json"
-    original = grants_path.read_bytes()
+    note_path = root / "memory" / "1.md"
+    original = note_path.read_bytes()
 
-    backup = migrations.create_backup(root, ["workspace_grants"], reason="manual")
-    grants_path.write_text(json.dumps({"version": 1, "grants": []}), encoding="utf-8")
-    assert grants_path.read_bytes() != original
+    backup = migrations.create_backup(root, ["memory_notes"], reason="manual")
+    note_path.write_bytes(b"replaced")
+    assert note_path.read_bytes() != original
 
     listed = migrations.list_backups(root)
     assert backup.backup_id in {item["backup_id"] for item in listed}
     assert all("store_id" in entry for item in listed for entry in item["entries"])
 
     result = migrations.restore_backup(root, backup.backup_id)
-    assert result["restored"] == ["workspace_grants"]
-    assert grants_path.read_bytes() == original
+    assert result["restored"] == ["memory_notes"]
+    assert note_path.read_bytes() == original
 
 
 def test_restore_backs_up_the_current_state_before_overwriting_it(tmp_path):
     root = build_current_state(tmp_path / "state")
     migrations.apply_migrations(root)
-    backup = migrations.create_backup(root, ["workspace_grants"], reason="manual")
-    replaced = json.dumps({"version": 1, "grants": []})
-    (root / "workspace_grants.json").write_text(replaced, encoding="utf-8")
+    backup = migrations.create_backup(root, ["memory_notes"], reason="manual")
+    replaced = b"replaced"
+    (root / "memory" / "1.md").write_bytes(replaced)
 
     result = migrations.restore_backup(root, backup.backup_id)
     safety = result["safety_backup_id"]
     assert safety != backup.backup_id
-    safety_copy = root / migrations.BACKUPS_DIR_NAME / safety / "workspace_grants.json"
-    assert safety_copy.read_text(encoding="utf-8") == replaced
+    safety_copy = root / migrations.BACKUPS_DIR_NAME / safety / "memory" / "1.md"
+    assert safety_copy.read_bytes() == replaced
 
 
 def test_secret_bearing_stores_are_never_copied_into_a_backup(tmp_path):
@@ -1053,26 +992,25 @@ def test_a_sqlite_migration_that_fails_halfway_leaves_the_database_as_it_was(
     assert "next_run_at" not in jobs_ddl
 
 
-def test_a_json_migration_that_fails_halfway_is_restored_from_the_backup(
+def test_a_file_migration_that_fails_halfway_is_restored_from_the_backup(
     tmp_path, monkeypatch
 ):
-    """A JSON document has no transaction, so the backup is the only way back."""
+    """A file store has no transaction, so the backup is the only way back."""
     root = build_legacy_state(tmp_path / "state")
-    path = root / "workspace_grants.json"
+    path = root / "conversations" / "main.jsonl"
     before = path.read_bytes()
 
     def corrupt_then_explode(context):
-        context.path.write_text("{ half written", encoding="utf-8")
+        (context.path / "main.jsonl").write_text("{ half written", encoding="utf-8")
         raise RuntimeError("migration step failed halfway")
 
-    _break_step("workspace_grants", monkeypatch, corrupt_then_explode)
+    _break_step("conversation_transcripts", monkeypatch, corrupt_then_explode)
 
     outcome = migrations.apply_migrations(root)
     assert outcome.error is not None
-    assert outcome.rolled_back == ("workspace_grants",)
+    assert outcome.rolled_back == ("conversation_transcripts",)
 
     assert path.read_bytes() == before
-    assert json.loads(path.read_text(encoding="utf-8"))["grants"][0]["id"] == "grant_legacy_1"
     assert oct(path.stat().st_mode & 0o777) == "0o600"
 
 

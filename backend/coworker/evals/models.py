@@ -87,7 +87,6 @@ class RunMeasurements:
 class RunArtifacts:
     root: str
     state_dir: str
-    workspace_dir: str
     conversation_jsonl: str
     events_jsonl: str
     telemetry_jsonl: str

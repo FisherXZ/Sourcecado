@@ -72,7 +72,6 @@ def test_each_environment_has_unique_credential_free_state_and_connector_fakes(
     try:
         assert first.root != second.root
         assert first.state_dir != second.state_dir
-        assert first.workspace_dir != second.workspace_dir
         assert first.home_dir != second.home_dir
         assert first.store.db_path != second.store.db_path
         assert first.people.db_path != second.people.db_path
@@ -85,71 +84,13 @@ def test_each_environment_has_unique_credential_free_state_and_connector_fakes(
             "KEY" in name or "TOKEN" in name or "SECRET" in name
             for name in first.credential_environment
         )
-        assert first.workspace_grant["path"] == str(first.workspace_dir.resolve())
-        assert first.workspace_grant["access"] == "read_write"
-        assert first.workspace_grant["allow_shell"] is False
-        assert first.workspace_runtime.grants.list_active() == [first.workspace_grant]
         assert first.state_dir.is_dir()
-        assert first.workspace_dir.is_dir()
         assert first.home_dir.is_dir()
+        # No local file tools exist, so a run gets no workspace folder.
+        assert not (first.root / "workspace").exists()
     finally:
         first.close()
         second.close()
-
-
-def test_run_local_workspace_grant_allows_effects_and_rejects_escape(tmp_path):
-    from coworker.evals.environment import EvalEnvironment
-
-    environment = EvalEnvironment.create(tmp_path, label="workspace")
-    outside = environment.root / "outside.txt"
-    outside.write_text("host sentinel")
-    try:
-        ok, created = environment.workspace_runtime.execute_tool(
-            "fs_write",
-            {
-                "grant_id": environment.workspace_grant["id"],
-                "path": "notes/eval.txt",
-                "content": "inside only",
-                "create_parents": True,
-            },
-            actor="assistant",
-            session_id="eval-workspace",
-            run_id="run-workspace",
-        )
-        escaped, escape_result = environment.workspace_runtime.execute_tool(
-            "fs_read",
-            {
-                "grant_id": environment.workspace_grant["id"],
-                "path": "../outside.txt",
-            },
-            actor="assistant",
-            session_id="eval-workspace",
-            run_id="run-workspace",
-        )
-        absolute, absolute_result = environment.workspace_runtime.execute_tool(
-            "fs_read",
-            {
-                "grant_id": environment.workspace_grant["id"],
-                "path": str(outside.resolve()),
-            },
-            actor="assistant",
-            session_id="eval-workspace",
-            run_id="run-workspace",
-        )
-
-        assert ok, created
-        assert (environment.workspace_dir / "notes" / "eval.txt").read_text() == (
-            "inside only"
-        )
-        assert not escaped
-        assert "escape" in str(escape_result).lower() or "outside" in str(
-            escape_result
-        ).lower()
-        assert not absolute
-        assert "relative" in str(absolute_result).lower()
-        assert outside.read_text() == "host sentinel"
-    finally:
-        environment.close()
 
 
 def test_fake_scenario_asserts_native_artifacts_effects_terminal_and_telemetry(
@@ -785,38 +726,6 @@ def test_spawned_run_hides_host_secrets_from_provider_and_tool_probes(
     assert "OPENAI_API_KEY" not in result.execution_environment["applied"]
     assert "SESSION_TOKEN" not in result.execution_environment["applied"]
     assert result.execution_environment["process_isolated"] is True
-    assert result.execution_environment["workspace_grant"]["path"] == (
-        result.artifacts.workspace_dir
-    )
-    assert result.execution_environment["workspace_grant"]["allow_shell"] is False
-
-
-def test_workspace_scenario_writes_only_through_run_local_grant(tmp_path):
-    from coworker.evals.models import EvalVariant
-    from coworker.evals.runner import EvalRunner
-    from coworker.evals.scenarios import workspace_write_scenario
-
-    result = EvalRunner(tmp_path).run_fake(
-        workspace_write_scenario(),
-        EvalVariant(
-            name="workspace",
-            prompt_version="workspace-v1",
-            system_prompt="Write only inside the granted workspace.",
-            tool_catalog=("fs_write",),
-            provider="fake",
-            model="sourcecado-workspace-v1",
-        ),
-        repetition=1,
-    )
-
-    assert result.passed
-    assert result.tool_sequence == ("fs_write",)
-    assert result.persisted_effects["workspace_files"] == [
-        {"path": "notes/eval.txt", "content": "isolated workspace effect"}
-    ]
-    assert Path(result.artifacts.workspace_dir, "notes", "eval.txt").read_text() == (
-        "isolated workspace effect"
-    )
 
 
 def test_unexpected_extra_person_is_enumerated_and_fails_exact_effect_set(tmp_path):
@@ -874,61 +783,6 @@ def test_unexpected_extra_person_is_enumerated_and_fails_exact_effect_set(tmp_pa
     )
     assert not effect_set.passed
     assert "eval-invented" in effect_set.detail
-    assert not result.passed
-
-
-def test_unexpected_workspace_file_is_enumerated_and_fails_exact_effect_set(
-    tmp_path,
-):
-    from dataclasses import replace
-
-    from coworker.evals.models import EvalVariant
-    from coworker.evals.runner import EvalRunner
-    from coworker.evals.scenarios import workspace_write_scenario
-    from coworker.provider import ToolCall
-
-    scenario = workspace_write_scenario()
-    expected_call = scenario.provider_steps[0].tool_calls[0]
-    extra_call = ToolCall(
-        id="eval-workspace-extra",
-        name="fs_write",
-        arguments={
-            "grant_id": "$EVAL_WORKSPACE_GRANT",
-            "path": "extra/unexpected.txt",
-            "content": "unintended effect",
-            "create_parents": True,
-        },
-    )
-    first_step = replace(
-        scenario.provider_steps[0],
-        tool_calls=(expected_call, extra_call),
-    )
-    result = EvalRunner(tmp_path).run_fake(
-        replace(
-            scenario,
-            provider_steps=(first_step, *scenario.provider_steps[1:]),
-            expected_tool_sequence=("fs_write", "fs_write"),
-        ),
-        EvalVariant(
-            name="extra-workspace-effect",
-            prompt_version="v1",
-            system_prompt="Write only the requested note.",
-            tool_catalog=("fs_write",),
-            provider="fake",
-            model="scenario-v1",
-        ),
-        repetition=1,
-    )
-
-    assert {item["path"] for item in result.persisted_effects["workspace_files"]} == {
-        "notes/eval.txt",
-        "extra/unexpected.txt",
-    }
-    effect_set = next(
-        item for item in result.invariants if item.name == "workspace_effect_set"
-    )
-    assert not effect_set.passed
-    assert "extra/unexpected.txt" in effect_set.detail
     assert not result.passed
 
 

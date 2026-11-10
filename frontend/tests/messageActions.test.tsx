@@ -469,18 +469,6 @@ describe("Message actions", () => {
         "remember",
         "memory_update",
         "memory_forget",
-        // Workspace tools that change files or run commands.
-        "shell_exec",
-        "shell_write_stdin",
-        "shell_kill",
-        "shell_poll",
-        "fs_mkdir",
-        "fs_write",
-        "fs_patch",
-        "fs_copy",
-        "fs_move",
-        "fs_trash",
-        "request_directory",
         // A tool the list has never seen.
         "mcp__granola__list_meetings",
         "some_new_tool",
@@ -492,35 +480,6 @@ describe("Message actions", () => {
         expect(retry).toHaveAttribute("aria-disabled", "true");
         expect(retry).toHaveAttribute("data-tooltip", expect.stringContaining(WRITE_REASON));
         fireEvent.click(retry);
-        expect(chatSend).not.toHaveBeenCalled();
-      });
-
-      it("is off for a shell command that ran after Always allow", async () => {
-        // The operator allowed this exact command earlier, so this turn has a
-        // finished shell step and no permission event at all.
-        open(
-          exchange(1, "Run the script", "The script ran.", [
-            {
-              type: "tool_started",
-              id: "call-1",
-              name: "shell_exec",
-              arguments: { command: "python3 run.py", cwd: "." },
-            },
-            {
-              type: "tool_finished",
-              id: "call-1",
-              name: "shell_exec",
-              ok: true,
-              result: { status: "completed", exit_code: 0 },
-            },
-          ]),
-        );
-
-        await screen.findByText("The script ran.");
-        expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
-        expect(retryButton()).toHaveAttribute("aria-disabled", "true");
-        expect(retryButton()).toHaveAttribute("data-tooltip", expect.stringContaining(WRITE_REASON));
-        fireEvent.click(retryButton());
         expect(chatSend).not.toHaveBeenCalled();
       });
 

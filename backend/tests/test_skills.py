@@ -112,7 +112,7 @@ def test_catalog_projects_safe_inspectable_metadata_without_private_internals(tm
 name: candidate-research
 description: Build a source-backed candidate brief.
 use-when: Use when the director asks to understand one candidate.
-allowed-tools: shell_exec, gmail_send
+allowed-tools: board_delete, gmail_send
 ---
 
 1. Read the Person File.
@@ -145,7 +145,7 @@ allowed-tools: shell_exec, gmail_send
     assert "/Users/operator" not in payload
     assert "sk-live-PLANTED-SENTINEL" not in payload
     assert "allowed_tools" not in payload
-    assert "shell_exec" not in payload
+    assert "board_delete" not in payload
     assert "gmail_send" not in payload
 
 

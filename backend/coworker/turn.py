@@ -331,31 +331,9 @@ def approval_resource(
     name: str,
     arguments: dict[str, Any],
     gmail: Any,
-    workspace_runtime: Any = None,
 ) -> dict[str, Any] | None:
     """The few fields an operator needs to judge a gmail_send: recipient,
     subject, account. Never the body, tokens, or raw headers (DU-12)."""
-    if name == "shell_exec" and workspace_runtime is not None:
-        try:
-            return workspace_runtime.shell.approval_resource(
-                grant_id=str(arguments.get("grant_id") or ""),
-                command=str(arguments.get("command") or ""),
-                cwd=str(arguments.get("cwd") or "."),
-                environment=(
-                    arguments.get("environment")
-                    if isinstance(arguments.get("environment"), dict)
-                    else {}
-                ),
-            )
-        except Exception:
-            return {
-                "kind": "shell_command",
-                "execution_target": "unknown",
-                "command_summary": "Command details unavailable",
-                "cwd": None,
-                "fingerprint": None,
-                "unsandboxed": True,
-            }
     if name != "gmail_send":
         return None
     draft_id = str(arguments.get("draft_id") or "")
@@ -785,15 +763,12 @@ def _persist_closed(
     store: ConversationStore,
     sid: str,
     history: list[dict[str, Any]],
-    workspace_runtime: Any = None,
 ) -> None:
     closed = close_open_tool_calls(history)
     if closed == history:
         return
     history[:] = closed
     messages = [m for m in closed if m.get("role") != "system"]
-    if workspace_runtime is not None:
-        messages = [workspace_runtime.sanitize_message(message) for message in messages]
     store.replace_all(sid, messages)
 
 
@@ -827,14 +802,10 @@ async def run_turn(
     run_trigger: str = "chat",
     attachments: AttachmentStore | None = None,
 ) -> dict[str, Any]:
-    workspace_runtime = execute_kwargs.get("workspace_runtime")
     events = TurnEventStream(
         identity=identity or new_turn_identity(sid),
         store=store,
         emit=emit,
-        persist_transform=(
-            workspace_runtime.sanitize_event if workspace_runtime is not None else None
-        ),
     )
     if control is not None:
         await control.attach(events)
@@ -901,31 +872,7 @@ async def run_turn(
         return message
 
     def _persist_message(message: dict[str, Any]) -> None:
-        store.append(
-            sid,
-            workspace_runtime.sanitize_message(message)
-            if workspace_runtime is not None
-            else message,
-        )
-
-    def _persist_tool_result(
-        call: ToolCall, result: dict[str, Any], ok: bool, message: dict[str, Any]
-    ) -> None:
-        """Persist a tool result with the workspace runtime's own redaction.
-
-        `sanitize_message` strips a workspace body from the field it used to
-        live in. Fencing moves that body into the evidence block, so the
-        redaction has to happen before the block is built, not after. The
-        model still sees the full text this turn; the disk still does not.
-        """
-        runtime = execute_kwargs.get("workspace_runtime")
-        if runtime is None or not runtime.owns_tool(call.name):
-            _persist_message(message)
-            return
-        redacted = runtime.sanitize_result(call.name, result)
-        _persist_message(
-            _stamp(_evidence_message(call, evidence_for(call.name, redacted, ok=ok)))
-        )
+        store.append(sid, message)
 
     def _record_call_outcome(
         call: ToolCall, ok: bool, result: dict[str, Any]
@@ -1003,7 +950,6 @@ async def run_turn(
             await control.send_terminal(event)
 
     async def _approval_receipt(item: dict[str, Any], *, resolution: str) -> None:
-        workspace_runtime = execute_kwargs.get("workspace_runtime")
         event = build_event(
             events.identity,
             "approval_resolved",
@@ -1021,31 +967,19 @@ async def run_turn(
             execution_status=str(item.get("execution_status") or "pending"),
             execution_error=item.get("execution_error"),
         )
-        persisted = (
-            workspace_runtime.sanitize_event(event)
-            if workspace_runtime is not None
-            else event
-        )
         canonical, created = store.append_event_once(
             sid,
-            persisted,
+            event,
             matching_fields=("type", "id", "resolved_at"),
         )
-        if created and workspace_runtime is not None:
-            workspace_runtime.record_permission_decision(item)
         if emit is not None:
             await emit(event if created else canonical)
-        if workspace_runtime is not None and (
-            resolution != "allowed"
-            or str(item.get("execution_status") or "") == "succeeded"
-        ):
-            workspace_runtime.discard_parked_arguments(str(item.get("id") or ""))
 
     async def _stopped(
         history: list[dict[str, Any]], text_so_far: str
     ) -> dict[str, Any]:
         turn_span.cancel()
-        _persist_closed(store, sid, history, workspace_runtime)
+        _persist_closed(store, sid, history)
         _end_run("stopped", text_so_far)
         if control is not None:
             await control.finish_stopped(text_so_far)
@@ -1203,7 +1137,7 @@ async def run_turn(
                         ),
                     },
                 )
-            _persist_closed(store, sid, history, workspace_runtime)
+            _persist_closed(store, sid, history)
             # The canonical view. Compaction reads it and never writes it; the
             # transcript on disk stays the record of what actually happened.
             canonical_messages = [
@@ -1565,17 +1499,9 @@ async def run_turn(
                     _persist_message(unavailable)
                     _record_call_outcome(call, False, result)
                     continue
-                workspace_runtime = execute_kwargs.get("workspace_runtime")
-                if workspace_runtime is not None and workspace_runtime.owns_tool(
-                    call.name
-                ):
-                    workspace_runtime.park_arguments(
-                        call.id, call.name, call.arguments
-                    )
                 gate = decide(
                     call.name,
                     call.arguments,
-                    workspace_runtime=execute_kwargs.get("workspace_runtime"),
                     actor=str(execute_kwargs.get("actor") or "assistant"),
                     session_id=sid,
                     run_id=events.identity.run_id,
@@ -1613,7 +1539,7 @@ async def run_turn(
                                 raise ActionRefused("monid_quote_required", str(exc)) from None
                         else:
                             resource = approval_resource(call.name, call.arguments,
-                                execute_kwargs.get("gmail"), execute_kwargs.get("workspace_runtime"))
+                                execute_kwargs.get("gmail"))
                     except ActionRefused as exc:
                         result = {"error":str(exc),"code":exc.code}
                         had_tool_failure = True
@@ -1634,27 +1560,16 @@ async def run_turn(
                             "evidence_origin": "external",
                             "evidence_refs": list(derived_refs),
                         }
-                    persisted_arguments = call.arguments
-                    if workspace_runtime is not None and workspace_runtime.owns_tool(
-                        call.name
-                    ):
-                        persisted_arguments = workspace_runtime.park_arguments(
-                            call.id, call.name, call.arguments
-                        )
                     parked = inbox.park(
                         call.name,
-                        persisted_arguments,
+                        call.arguments,
                         item_id=call.id,
                         reason=gate.reason,
                         session_id=sid,
                         run_id=events.identity.run_id,
                         message_id=events.identity.message_id,
                         part_id=events.identity.part_id,
-                        resource=(
-                            workspace_runtime.sanitize_resource(resource)
-                            if workspace_runtime is not None
-                            else resource
-                        ),
+                        resource=resource,
                     )
                     await _emit(
                         {
@@ -1775,7 +1690,7 @@ async def run_turn(
                         )
                         tool_result = _stamp(_evidence_message(call, parts))
                         history.append(tool_result)
-                        _persist_tool_result(call, result, ok, tool_result)
+                        _persist_message(tool_result)
                         _record_call_outcome(call, ok, result)
                         if receipt is not None and receipt.get(
                             "execution_status"
@@ -1917,7 +1832,7 @@ async def run_turn(
                 )
                 tool_result = _stamp(_evidence_message(call, parts))
                 history.append(tool_result)
-                _persist_tool_result(call, result, ok, tool_result)
+                _persist_message(tool_result)
                 _record_call_outcome(call, ok, result)
                 if approval_claimant is not None:
                     receipt = inbox.complete_execution(
@@ -1937,7 +1852,7 @@ async def run_turn(
             # A run that ran out of budget did not finish. It says so, lists
             # what it actually completed, names what it had queued and did
             # not run, and leaves continuing to the director.
-            _persist_closed(store, sid, history, workspace_runtime)
+            _persist_closed(store, sid, history)
             turn_span.partial(ErrorKind.POLICY)
             stop_notice = active_compactor.notice()
             await _terminal(
@@ -1964,7 +1879,7 @@ async def run_turn(
         # a send failed is an operator who sends it again. The effect is on the
         # review queue; the terminal points at it and stops.
         turn_span.partial(ErrorKind.TOOL)
-        _persist_closed(store, sid, history, workspace_runtime)
+        _persist_closed(store, sid, history)
         await _terminal(
             {
                 "type": "error",
@@ -1980,7 +1895,7 @@ async def run_turn(
         return {"status": "held", "text": last_text}
     except Exception as exc:
         turn_span.fail(turn_error_kind)
-        _persist_closed(store, sid, history, workspace_runtime)
+        _persist_closed(store, sid, history)
         await _terminal(
             {
                 "type": "error",

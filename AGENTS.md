@@ -14,7 +14,7 @@ The active runtime is `backend/` (Python) and `frontend/` (React; the Tauri shel
 
 - Build the hosted Sourcecado service: Python/FastAPI backend plus React/Vite UI. Follow the migration spec and work one slice at a time.
 - Do not add desktop-only features: Tauri, packaging, the update channel, doctor, or tools that read the user's disk or run a shell.
-- Each user sees only their own data. Every new table has `user_id`, and every new query filters by it.
+- Each user sees only their own data. Every new table has `user_id`, and every new query filters by it. The one exception is `allowed_emails`, the invite list that the operator manages: it has no `user_id`, and the backend can read it but cannot write it.
 - Optimize for one sourcing director per account while keeping person files intelligible to a later officer.
 - A sequence is a person being worked through Open, In conversation, and Done. A company is context, not a deal.
 - A kept person remains durable before outreach. The Contacts people table shows every live saved person: Open, In conversation, Done, or Not started (kept without a sequence). Its Tasks view includes the same people. Saving a task leaves sequence membership unchanged.
