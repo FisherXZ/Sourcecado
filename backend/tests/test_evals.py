@@ -2,6 +2,9 @@ from pathlib import Path
 
 import pytest
 
+# Eval children are spawned processes; they open their stores in the test database.
+pytestmark = pytest.mark.usefixtures("eval_children_use_the_test_database")
+
 
 def test_eval_package_exists():
     package = Path(__file__).parents[1] / "coworker" / "evals" / "__init__.py"
@@ -73,7 +76,7 @@ def test_each_environment_has_unique_credential_free_state_and_connector_fakes(
         assert first.root != second.root
         assert first.state_dir != second.state_dir
         assert first.home_dir != second.home_dir
-        assert first.store.db_path != second.store.db_path
+        assert first.store._user_id != second.store._user_id
         assert first.people.db_path != second.people.db_path
         assert first.connectors is not second.connectors
         assert first.connectors.gmail is not second.connectors.gmail

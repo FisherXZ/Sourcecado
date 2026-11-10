@@ -74,7 +74,7 @@ def test_finds_a_planted_registered_secret_in_several_stores_without_printing_it
 
     # Non-vacuous: prove real stores actually matched before checking output.
     found_ids = {item.store_id for item in report.findings}
-    expected = {"conversation_db", "memory_notes"}
+    expected = {"memory_notes", "presentation_events"}
     assert expected <= found_ids, found_ids
     assert not report.clean
 
@@ -179,7 +179,7 @@ def test_a_truncated_store_that_still_holds_the_value_is_not_reported_clean(
     """A store that cannot be read is not a proof the value is absent.
 
     Public seam: scan_state / ScanReport.clean / ScanReport.render / main.
-    A garbage club.db can still contain the planted bytes. The structured
+    A garbage people.db can still contain the planted bytes. The structured
     SQLite walk reports it unreadable. That must not print
     'clean -- no match found' or exit 0 -- those feed the remediation receipt.
     """
@@ -187,13 +187,13 @@ def test_a_truncated_store_that_still_holds_the_value_is_not_reported_clean(
     root.mkdir()
     probe = _probe_value()
     _write_secrets(root, {"probe": {"api_key": probe}})
-    (root / "club.db").write_bytes(
+    (root / "people.db").write_bytes(
         b"not-a-database " + probe.encode() + b" trailing-garbage"
     )
 
     report = scan_state(root, secret_key="probe")
 
-    assert report.unreadable == ("conversation_db",)
+    assert report.unreadable == ("people_db",)
     assert not report.clean
     rendered = report.render()
     assert "clean -- no match found" not in rendered

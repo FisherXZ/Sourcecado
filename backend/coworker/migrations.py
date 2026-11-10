@@ -51,7 +51,6 @@ from coworker.person_identity import (
     without_apollo_name_masks,
 )
 from coworker.secrets import SCHEMA_VERSION as SECRETS_VERSION
-from coworker.store import SCHEMA_VERSION as CONVERSATION_DB_VERSION
 from coworker.store import TRANSCRIPT_VERSION
 
 MANIFEST_NAME = "state_versions.json"
@@ -361,102 +360,6 @@ def _write_version(root: Path, spec: StoreSpec, version: int) -> None:
 
 # --- migration steps -----------------------------------------------------
 
-# The conversation schema that store.py's constructor grew column by column. It
-# is restated here because the registry, not the constructor, is the release
-# contract for what version 1 means.
-_CONVERSATION_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
-    ("jobs", "next_run_at", "TEXT"),
-    ("jobs", "name", "TEXT"),
-    ("jobs", "template_id", "TEXT"),
-    ("jobs", "cadence", "TEXT"),
-    ("runs", "started_at", "TEXT"),
-    ("runs", "finished_at", "TEXT"),
-    ("runs", "duration_ms", "INTEGER"),
-    ("runs", "summary", "TEXT"),
-    ("runs", "artifacts", "TEXT"),
-    ("runs", "session_id", "TEXT"),
-    ("runs", "waiting_approval_count", "INTEGER DEFAULT 0"),
-    ("sessions", "pinned", "INTEGER NOT NULL DEFAULT 0"),
-    ("sessions", "opened_at", "TEXT"),
-    ("inbox", "actor", "TEXT"),
-    ("inbox", "requested_at", "TEXT"),
-    ("inbox", "resolved_at", "TEXT"),
-    ("inbox", "scope", "TEXT DEFAULT 'once'"),
-    ("inbox", "execution_status", "TEXT DEFAULT 'pending'"),
-    ("inbox", "execution_error", "TEXT"),
-    ("inbox", "execution_claimant", "TEXT"),
-    ("inbox", "execution_result", "TEXT"),
-    ("inbox", "expires_at", "TEXT"),
-    ("inbox", "reason", "TEXT"),
-    ("inbox", "session_id", "TEXT"),
-    ("inbox", "run_id", "TEXT"),
-    ("inbox", "message_id", "TEXT"),
-    ("inbox", "part_id", "TEXT"),
-    ("inbox", "recovery_command_id", "TEXT"),
-    ("inbox", "original_call_id", "TEXT"),
-    ("inbox", "resource", "TEXT"),
-)
-
-_CONVERSATION_ADDED_TABLES = {
-    "chat_queue": """
-        CREATE TABLE IF NOT EXISTS chat_queue (
-            session_id TEXT NOT NULL,
-            id TEXT NOT NULL,
-            text TEXT NOT NULL,
-            position INTEGER NOT NULL,
-            state TEXT NOT NULL,
-            error TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (session_id, id)
-        );
-        CREATE INDEX IF NOT EXISTS chat_queue_session_position
-            ON chat_queue(session_id, position);
-    """,
-    "queue_commands": """
-        CREATE TABLE IF NOT EXISTS queue_commands (
-            session_id TEXT NOT NULL,
-            command_id TEXT NOT NULL,
-            command_type TEXT NOT NULL,
-            item_id TEXT,
-            acknowledgement TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (session_id, command_id)
-        );
-    """,
-    "queue_sessions": """
-        CREATE TABLE IF NOT EXISTS queue_sessions (
-            session_id TEXT PRIMARY KEY,
-            paused INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL
-        );
-    """,
-    "recovery_commands": """
-        CREATE TABLE IF NOT EXISTS recovery_commands (
-            session_id TEXT NOT NULL,
-            command_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (session_id, command_id)
-        );
-    """,
-}
-
-# The context-projection-v1 metadata a memory row needs (issue #58): its
-# category, its scope, its Source Reference, when it changed, its freshness
-# window, its sensitivity, and the claim it competes on. Restated here because
-# the registry, not the constructor, is the release contract for version 2.
-_MEMORY_CLASSIFICATION_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("category", "TEXT"),
-    ("classification_status", "TEXT"),
-    ("person_id", "TEXT"),
-    ("session_id", "TEXT"),
-    ("source_ref", "TEXT"),
-    ("updated_at", "TEXT"),
-    ("fresh_until", "TEXT"),
-    ("sensitivity", "TEXT"),
-    ("claim_key", "TEXT"),
-)
-
 _PEOPLE_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("people", "version", "INTEGER NOT NULL DEFAULT 1"),
     ("people", "outcome", "TEXT"),
@@ -533,110 +436,6 @@ def _sqlite_add_columns_and_tables(
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
     for table, ddl in added_tables.items():
         conn.executescript(ddl)
-
-
-def _adopt_conversation_db(context: MigrationContext) -> int:
-    conn = context.connection
-    assert conn is not None
-    touched = _sqlite_adoption_count(
-        context, _CONVERSATION_ADDED_COLUMNS, _CONVERSATION_ADDED_TABLES
-    )
-    _sqlite_add_columns_and_tables(
-        conn, _CONVERSATION_ADDED_COLUMNS, _CONVERSATION_ADDED_TABLES
-    )
-    conn.execute(
-        """
-        UPDATE jobs SET
-            name = COALESCE(name, prompt),
-            template_id = COALESCE(template_id, 'legacy'),
-            cadence = COALESCE(cadence, cron)
-        """
-    )
-    conn.execute(
-        """
-        UPDATE runs SET
-            started_at = COALESCE(started_at, created_at),
-            finished_at = CASE
-                WHEN status = 'running' THEN finished_at
-                ELSE COALESCE(finished_at, created_at)
-            END,
-            duration_ms = COALESCE(duration_ms, 0),
-            summary = COALESCE(summary, result, ''),
-            artifacts = COALESCE(artifacts, '[]'),
-            session_id = COALESCE(session_id, 'sched-' || job_id),
-            waiting_approval_count = COALESCE(waiting_approval_count, 0)
-        """
-    )
-    conn.execute("UPDATE sessions SET opened_at = updated_at WHERE opened_at IS NULL")
-    conn.execute(
-        """
-        UPDATE inbox SET
-            requested_at = COALESCE(requested_at, created_at),
-            scope = COALESCE(scope, 'once'),
-            execution_status = COALESCE(execution_status, 'pending')
-        """
-    )
-    return touched
-
-
-def _count_conversation_db(context: MigrationContext) -> int:
-    return _sqlite_adoption_count(
-        context, _CONVERSATION_ADDED_COLUMNS, _CONVERSATION_ADDED_TABLES
-    )
-
-
-def _count_memory_classification(context: MigrationContext) -> int:
-    """How many memory rows still have no classification of their own."""
-    conn = context.connection
-    assert conn is not None
-    if "memories" not in table_names(conn):
-        return 0
-    if "classification_status" not in column_names(conn, "memories"):
-        return _row_count(conn, "memories")
-    return int(
-        conn.execute(
-            "SELECT COUNT(*) FROM memories WHERE classification_status IS NULL"
-        ).fetchone()[0]
-    )
-
-
-def _classify_legacy_memories(context: MigrationContext) -> int:
-    """Move every memory row written before context-projection-v1 to review.
-
-    The category is assigned by where the row came from, never by what it says.
-    A row worded like a global preference and a row stating a fact about one
-    Person are indistinguishable as text, so both land in `legacy_unclassified`
-    with `classification_status = needs_review` and stay out of model context
-    until the director says which is which.
-
-    Ids, content, and `created_at` are untouched, and `MEMORY.md` and the
-    per-row Markdown files are left exactly as they are.
-
-    Executed one statement at a time, never through `executescript`, which
-    issues a COMMIT before it runs. Inside the transaction `_apply_store` opens,
-    that COMMIT would end the transaction and leave the rollback with nothing to
-    undo -- silently, and with the store half migrated.
-    """
-    conn = context.connection
-    assert conn is not None
-    touched = _count_memory_classification(context)
-    present = column_names(conn, "memories")
-    for column, definition in _MEMORY_CLASSIFICATION_COLUMNS:
-        if column in present:
-            continue
-        conn.execute(f"ALTER TABLE memories ADD COLUMN {column} {definition}")
-    conn.execute(
-        """
-        UPDATE memories SET
-            category = 'legacy_unclassified',
-            classification_status = 'needs_review',
-            source_ref = 'sourcecado:memory/' || id,
-            updated_at = COALESCE(updated_at, created_at),
-            sensitivity = COALESCE(sensitivity, 'standard')
-        WHERE classification_status IS NULL
-        """
-    )
-    return touched
 
 
 def _adopt_people_db(context: MigrationContext) -> int:
@@ -946,39 +745,6 @@ def _adopt(description: str, count: Callable, apply: Callable) -> tuple[Migratio
 # --- the registry --------------------------------------------------------
 
 REGISTRY: tuple[StoreSpec, ...] = (
-    StoreSpec(
-        store_id="conversation_db",
-        kind=StoreKind.SQLITE,
-        relative_path="club.db",
-        current_version=CONVERSATION_DB_VERSION,
-        version_channel=VersionChannel.SQLITE_USER_VERSION,
-        description="Sessions, memories, schedule, approvals, and the chat queue.",
-        migrations=_adopt(
-            "Adopt the conversation schema shipped before the registry existed.",
-            _count_conversation_db,
-            _adopt_conversation_db,
-        )
-        + (
-            Migration(
-                from_version=1,
-                to_version=2,
-                description=(
-                    "Give every memory row a category, a scope, a Source "
-                    "Reference, and a freshness window, and withhold the "
-                    "unclassified ones from model context."
-                ),
-                count=_count_memory_classification,
-                apply=_classify_legacy_memories,
-            ),
-        ),
-        json_columns=(
-            ("inbox", "arguments"),
-            ("inbox", "execution_result"),
-            ("inbox", "resource"),
-            ("runs", "artifacts"),
-            ("queue_commands", "acknowledgement"),
-        ),
-    ),
     StoreSpec(
         store_id="people_db",
         kind=StoreKind.SQLITE,

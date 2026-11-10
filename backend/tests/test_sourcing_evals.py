@@ -40,6 +40,9 @@ from coworker.permissions import model_approval_class
 from coworker.prompt_contract import SOURCING_DIRECTOR_V1
 from coworker.provider import ToolCall
 
+# Eval children are spawned processes; they open their stores in the test database.
+pytestmark = pytest.mark.usefixtures("eval_children_use_the_test_database")
+
 # Same policy, different words, different structure. A suite that pins prose
 # instead of behaviour cannot survive this prompt.
 REWORDED_PROMPT = """\
