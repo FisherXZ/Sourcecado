@@ -10,6 +10,12 @@ Chat is home. Contacts lists every saved person with their sequence: Open,
 In conversation, Done, or Not started. Apollo enrichment spends credits and Gmail sending reaches real people;
 both require explicit approval.
 
+> **Direction.** Sourcecado is moving to a hosted web service on Vercel, Railway,
+> and Supabase. [ADR 0007](docs/engineering/adr/0007-hosted-web-service.md) records
+> the decision, and the [slices document](docs/superpowers/plans/2026-11-09-hosted-migration-slices.md)
+> tracks the work. The desktop app stops at the `desktop-final` tag. Until the
+> migration slices land, the commands below still run the local stack.
+
 ## Start here
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) to install dependencies, run with isolated
@@ -51,6 +57,7 @@ names intact when changing source layout.
 
 - [Documentation index](docs/README.md)
 - [Product specification](docs/superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md)
+- [Hosted migration specification](docs/superpowers/specs/2026-11-09-hosted-migration-spec.md)
 - [Domain language](docs/domain.md)
 - [Design system](docs/design.md)
 - [Active and deferred work](docs/BACKLOG.md)

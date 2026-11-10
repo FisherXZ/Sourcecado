@@ -61,6 +61,7 @@ an explicit director command and goes through the app's own writer and change hi
 - [Manual runs preserve the weekly slot](adr/0001-manual-run-does-not-consume-weekly-slot.md)
 - [Workspace authority and shell execution](adr/0002-sourcecado-workspace-runtime.md)
 - [macOS preview packaging](adr/0003-macos-preview-artifact-packaging.md)
+- [Hosted web service replaces the desktop app](adr/0007-hosted-web-service.md) — supersedes the two decisions above
 
 Product language in [domain.md](../domain.md) takes precedence over runtime and
 course terminology. The [product specification](../superpowers/specs/2026-08-25-sourcecado-sourcing-director-spring.md)

@@ -1,6 +1,8 @@
 # Sourcecado owns the workspace filesystem and shell runtime
 
-Status: Accepted — 2026-08-26
+Status: Superseded by [ADR 0007](0007-hosted-web-service.md) — 2026-11-09. The code stays until migration slice S23 removes it.
+
+Original status: Accepted — 2026-08-26
 
 ## Context
 
