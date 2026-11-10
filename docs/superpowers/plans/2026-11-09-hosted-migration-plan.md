@@ -37,7 +37,7 @@ The review changed four things that touch a settled decision or need a number. E
 | A | When are `doctor.py` and `migrations.py` deleted? Decision 15 said the final PR. | End of phase 1 (task 1.16). Their tests need the SQLite stores, so they cannot stay green through phase 1. | Keep them to phase 6 and skip their tests. Not recommended: skipped tests hide the dead code. |
 | B | How many concurrent runs for each user? | 2 (task 3.4). | 1, which is the safest for spend. |
 | C | Are user skills and per-user MCP settings in the launch? Decision 19 said yes. | Yes (task 1.13). It is the first item to cut. | Codex proposes to defer it: ship built-in skills and the fixed Granola endpoint only. |
-| D | When does the spend cap land? | Phase 5. Staging has one allowed email (Fisher) until then, and the per-run budget of 2.00 USD applies. | Codex proposes before the first staging deploy. |
+| D | When does the spend cap land? | Phase 5. Until then, staging allows only Fisher and one test account that Fisher controls, and the per-run budget of 2.00 USD applies. | Codex proposes before the first staging deploy. |
 
 ## Phase 0: Decision record
 
@@ -101,7 +101,7 @@ Steps for each store PR:
 | 1.12 | Remove the `memory/` markdown mirror. | The memory route tests pass. No `memory/` directory is created. |
 | 1.13 | Move `mcp.json` and user skills to per-user rows. First item to cut; see question C. | The skills and MCP tests pass with two users who have different skills. |
 | 1.14 | Port the evals harness. Each evaluation gets a new user in the test database. Today each gets a new state directory (`evals/environment.py:231-240`). | `python -m coworker.evals --suite sourcing` is green, and no `.db` file exists under the artifact directory. |
-| 1.15 | `secret_scan.py` reads SQLite files (`secret_scan.py:57, 191, 282`). Read `docs/engineering/secret-scan.md`, then remove the SQLite path or port it. | Its tests pass with no `sqlite3` import. |
+| 1.15 | `secret_scan.py` reads SQLite files (`secret_scan.py:57, 191, 282`) to confirm that a revoked secret is absent from conversations and events. Port that scan to the Postgres tables. If a table is not covered, the result must say "incomplete", not "absent". | A test stores a secret value in a ported row, and the scan reports it. The module has no `sqlite3` import. |
 | 1.16 | Delete `doctor.py`, `migrations.py`, and their remaining tests. See question A. | `make doctor` no longer exists. CI is green. |
 
 Exit for phase 1:
@@ -117,15 +117,15 @@ Goal: two accounts can use one local backend. Neither can read the other's data,
 
 | # | Task | Verify |
 | --- | --- | --- |
-| 2.1 | Read the current Supabase docs for JWT verification. Record the method in the PR. | The PR cites the doc page. |
+| 2.1 | Read the current Supabase docs for JWT verification and for the before-user-created hook. Record both methods in the PR. | The PR cites the doc pages. |
 | 2.2 | Replace the `gate` middleware with a global auth middleware: verify the JWT, check the allowlist, attach the user id to the request. It stays global. Exceptions: `OPTIONS`, the two OAuth callbacks, the health route. In the same PR, add a route-inventory test that walks `app.routes`, including mounted routers. | Each HTTP route outside the exception list returns 401 with no token. A new route with no auth makes the test red. |
-| 2.3 | Add `allowed_emails`: no `user_id`, read-only for the backend role, written by the operator only. | A valid token for an email that is not listed gets 403, and a row count over all tables does not change. An insert by the backend role fails. |
+| 2.3 | Add `allowed_emails`: no `user_id`, read-only for the backend role, written by the operator only. Add a Supabase before-user-created hook that refuses an email that is not listed. Keep the backend check for a user whose access was removed later. | A Google account that is not listed cannot create an `auth.users` row. A valid token for an email that was removed from the list gets 403. An insert by the backend role fails. |
 | 2.4 | WebSocket: verify the JWT from the `Sec-WebSocket-Protocol` list. Remove the `?token=` path. | A socket with no token closes with code 1008. A socket with the token in the query string also closes. |
 | 2.5 | `user_secrets` with AES-GCM. Keep the `SecretStore` interface and change its backend. | A raw row read shows no token text. A wrong key fails to decrypt. User B cannot read user A's secret through the interface. |
 | 2.6 | Per-request user context. Replace the fixed development user with the real user id. Make the `app.state.*` stores stateless. | No route reads a store that is bound to one user. |
 | 2.7 | User-scoped connectors. Build Gmail, Drive, Calendar, Granola, Monid, the connector probes, and CRM refresh for each user from that user's grants. Use them in routes, in runs (`server.py:4014-4026`), and in scheduled jobs. Remove the process-wide instances (`server.py:499-532`, `2228`). | Two users with two different fake Google grants: a read, a draft, and an approved send by user A use A's grant only. User B with no grant gets "not connected" while A is connected. |
 | 2.8 | Scope in-memory state by user: `live_event_senders` and `RunCoordinator`. `_publish_live_events` sends only to the owner's sockets. Give the telemetry adapter a size bound. | Two sockets for two users: B receives no event of A. After many runs, the adapter's record count stays under the bound. |
-| 2.9 | Add an RLS policy to each table. Create the backend role without `BYPASSRLS`. | A query with the wrong `app.user_id` and no `WHERE` clause returns zero rows. |
+| 2.9 | Add an RLS policy to each table. Create the backend role without `BYPASSRLS`. Add the lookup functions for operations that have no user yet (spec, "Lookups that have no user yet"): `security definer`, fixed `search_path`, ids only. | A query with the wrong `app.user_id` and no `WHERE` clause returns zero rows. Each lookup function returns no content column. The OAuth callback and the scheduler tests pass with the backend role. |
 | 2.10 | RLS coverage check in CI. It reads the catalog. `allowed_emails` is the one named exception. | Removing one policy in a scratch branch makes CI red. |
 | 2.11 | Two-user gate test. It reads the route list from the app and fails on a route with no case. It runs in two modes: with the backend role, and with a role that bypasses RLS. The second mode tests the `WHERE user_id` filters alone. | Removing one `WHERE user_id` in a scratch branch makes the bypass-mode run red. |
 | 2.12 | OAuth connect state in `oauth_pending` rows: user id, provider, `state`, PKCE verifier, expiry, used flag. The callback finds the user from the row. Callback error pages show fixed text. | Two users start a connect at the same time, and both finish. A replayed `state`, an expired `state`, and an unknown `state` are each rejected. The error page contains no provider error text. |
@@ -166,7 +166,7 @@ Rate limits by IP address are not in this plan. All routes except the two callba
 | 3.12 | Create the staging Google Cloud project and OAuth client. Set publishing status to In production. Add the redirect URIs. | Gmail connects on staging. Start the 8-day refresh-token check and write the start date here. |
 | 3.13 | GitHub Actions: on merge to main, run tests, apply migrations to staging, then deploy. Add a manual promote workflow for production. | A merge deploys staging with no manual step. |
 
-Fisher does these steps by hand, because they need account credentials: create the Supabase, Railway, Vercel, and Google Cloud projects, and enter the secret values. Until phase 5, `allowed_emails` on staging holds Fisher's email only.
+Fisher does these steps by hand, because they need account credentials: create the Supabase, Railway, Vercel, and Google Cloud projects, and enter the secret values. Until phase 5, `allowed_emails` on staging holds two entries: Fisher's email, and one test account that Fisher controls. The test account is for the two-user smoke step.
 
 Exit: a chat run completes on staging with the mock provider, then with a real provider.
 
@@ -193,8 +193,8 @@ Goal: each line of the spec's launch-gate list is true on staging.
 
 | # | Task | Verify |
 | --- | --- | --- |
-| 5.1 | `user_spend` and the monthly cap. One SQL statement reserves an estimate only if the total stays under the cap. After the call, replace the estimate with the real amount. Cover LLM requests, `web_search`, `apollo_search_people`, and Apollo enrichment. Show the remaining amount and a clear stop message. | A user with a cap of zero cannot start any of the four call types. Two concurrent calls, with room for one, give one call and one refusal. |
-| 5.2 | Import script: one state directory, one user email, dry-run mode, row counts, safe to run two times. | Import Fisher's local data to staging. The counts match the SQLite counts. A second run adds zero rows. |
+| 5.1 | `user_spend` and the monthly cap. One SQL statement reserves the maximum that the call can cost, only if the total stays under the cap. After the call, replace the reservation with the real amount. Release it when the call fails before dispatch. Settle it at its maximum when it expires unsettled. Cover LLM requests, `web_search`, `apollo_search_people`, and Apollo enrichment. Refuse a model with no price entry. Show the remaining amount and a clear stop message. | A user with a cap of zero cannot start any of the four call types. Two concurrent calls, with room for one, give one call and one refusal. A call whose maximum does not fit is refused, even when a typical cost would fit. An unsettled reservation counts at its maximum after expiry. |
+| 5.2 | Import script: one state directory, one user email, dry-run mode, row counts, safe to run two times. It imports the attachments that imported transcripts refer to. | Import Fisher's local data to staging. The counts match the SQLite counts. A second run adds zero rows. An imported message opens its attachment. |
 | 5.3 | Delete-account, in this order: remove the allowlist entry, revoke the Google grant, delete the Storage objects, delete the Supabase Auth user. The rows go with the Auth user through `ON DELETE CASCADE`. | A count of rows for that `user_id` over all tables is zero. The Storage prefix is empty. The old identity gets 403 at sign-in. |
 | 5.4 | Data notice at first sign-in. | A new user sees it one time. |
 | 5.5 | Sentry on backend and frontend with the scrubber. | A test raises an error that contains a fake token and a fake mail body. The captured event contains neither. |
@@ -209,6 +209,7 @@ Exit: all launch gates except the parity run are checked.
 | 6.1 | Delete `frontend/src-tauri/`, `backend/packaging/`, `update_channel/`, the diagnostic bundle, the macos-preview CI job, and the related Makefile targets. | CI is green. `grep -rn "tauri" frontend/src` returns nothing. `grep -rn "sqlite3" backend/coworker` returns the import script only. |
 | 6.2 | Update `CONTRIBUTING.md` and `docs/engineering/`. Retire `packaging.md`, `update-channel.md`, `doctor.md`, and `diagnostic-bundle.md`. | A new contributor can run the stack from the docs. |
 | 6.3 | Parity run in production with Fisher's account. | Each step of the parity list has a run-ledger entry. |
+| 6.3a | Import Fisher's local data to production. | The count report matches the SQLite counts, and five person files match the desktop app. |
 | 6.4 | Fisher uses production alone for one week. | No open isolation or spend defect. |
 | 6.5 | Import the director's data and invite the director. | The director confirms their person files. |
 | 6.6 | Invite the other officers through `allowed_emails`. | Each invited user completes one run. |
